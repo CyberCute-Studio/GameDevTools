@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -13,6 +14,7 @@ import (
 )
 
 func main() {
+	runtime.LockOSThread()
 	selfTest := flag.Bool("self-test", false, "exercise real Windows integration and exit")
 	output := flag.String("output", "fnd01-capture.png", "PNG path for F9 capture")
 	width := flag.Int("width", 640, "overlay width in physical pixels")
@@ -58,6 +60,10 @@ func runInteractive(output string, x, y, width, height int, positionSet bool) er
 	if !positionSet {
 		x = int(primary.Bounds.Left + (primary.Bounds.width()-int32(width))/2)
 		y = int(primary.Bounds.Top + (primary.Bounds.height()-int32(height))/2)
+	}
+	if x < -1<<31 || x > 1<<31-1 || y < -1<<31 || y > 1<<31-1 ||
+		int64(x)+int64(width) > 1<<31-1 || int64(y)+int64(height) > 1<<31-1 {
+		return fmt.Errorf("overlay origin and edges must fit signed 32-bit physical coordinates")
 	}
 	if err := registerWindowClass(); err != nil {
 		return err

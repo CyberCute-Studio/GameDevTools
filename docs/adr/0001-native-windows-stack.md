@@ -15,6 +15,7 @@ Use Go with direct Win32 calls through `golang.org/x/sys/windows`. Use the Go st
 The spike uses:
 
 - `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` before creating windows.
+- A UI goroutine locked to one OS thread so window creation, callbacks, and message retrieval use the same thread message queue.
 - Physical virtual-desktop coordinates for `CreateWindowExW`, `SetWindowPos`, `GetWindowRect`, mouse movement, and capture. No logical-coordinate value is used as capture geometry.
 - `WS_EX_TOPMOST | WS_EX_LAYERED`, a color key, a border-only window region, and explicit `WM_NCHITTEST` handling. The interior is unobscured and returns `HTTRANSPARENT`; the border accepts input.
 - Mouse capture and physical cursor deltas for border dragging.
