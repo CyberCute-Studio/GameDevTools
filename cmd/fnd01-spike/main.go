@@ -20,6 +20,12 @@ func main() {
 	x := flag.Int("x", 0, "overlay X in virtual-desktop physical pixels")
 	y := flag.Int("y", 0, "overlay Y in virtual-desktop physical pixels")
 	flag.Parse()
+	positionSet := false
+	flag.Visit(func(current *flag.Flag) {
+		if current.Name == "x" || current.Name == "y" {
+			positionSet = true
+		}
+	})
 	if err := enablePerMonitorDPI(); err != nil {
 		fatal(err)
 	}
@@ -29,7 +35,7 @@ func main() {
 		}
 		return
 	}
-	if err := runInteractive(*output, *x, *y, *width, *height); err != nil {
+	if err := runInteractive(*output, *x, *y, *width, *height, positionSet); err != nil {
 		fatal(err)
 	}
 }
@@ -39,7 +45,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func runInteractive(output string, x, y, width, height int) error {
+func runInteractive(output string, x, y, width, height int, positionSet bool) error {
 	if width <= 0 || height <= 0 || width > 16384 || height > 16384 {
 		return fmt.Errorf("width and height must be between 1 and 16384 physical pixels")
 	}
@@ -49,7 +55,7 @@ func runInteractive(output string, x, y, width, height int) error {
 	}
 	printDisplays(displays)
 	primary := primaryDisplay(displays)
-	if x == 0 && y == 0 {
+	if !positionSet {
 		x = int(primary.Bounds.Left + (primary.Bounds.width()-int32(width))/2)
 		y = int(primary.Bounds.Top + (primary.Bounds.height()-int32(height))/2)
 	}
