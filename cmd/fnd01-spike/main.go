@@ -117,6 +117,10 @@ func runSelfTest() error {
 		return err
 	}
 	printDisplays(displays)
+	if lowWord(0x0000ffff) != -1 || highWord(0xffff0000) != -1 {
+		return fmt.Errorf("coordinate decoding: signed 16-bit values were not preserved")
+	}
+	fmt.Println("PASS coordinate decoding: signed 16-bit hit-test values remain negative")
 	if err := registerWindowClass(); err != nil {
 		return err
 	}
@@ -148,7 +152,10 @@ func runSelfTest() error {
 		if err := window.move(x+17, y-13); err != nil {
 			return err
 		}
-		bounds, _ = getWindowRect(window.hwnd)
+		bounds, err = getWindowRect(window.hwnd)
+		if err != nil {
+			return err
+		}
 		if bounds.Left != x+17 || bounds.Top != y-13 || bounds.width() != width || bounds.height() != height {
 			return fmt.Errorf("%s physical move changed bounds unexpectedly: %+v", item.Name, bounds)
 		}
@@ -159,6 +166,35 @@ func runSelfTest() error {
 	fmt.Printf("mixed-DPI configurations observed: %t\n", mixedDPI)
 
 	primary := primaryDisplay(displays)
+	if err := func() error {
+		tiny, err := createNativeWindow(rect{Left: primary.Bounds.Left, Top: primary.Bounds.Top, Right: primary.Bounds.Left + 1, Bottom: primary.Bounds.Top + 1}, true, false)
+		if err != nil {
+			return err
+		}
+		defer procDestroyWindow.Call(uintptr(tiny.hwnd))
+		region, _, err := procCreateRectRgn.Call(0, 0, 0, 0)
+		if region == 0 {
+			return callError("CreateRectRgn(verification)", err)
+		}
+		defer procDeleteObject.Call(region)
+		r, _, err := procGetWindowRgn.Call(uintptr(tiny.hwnd), region)
+		if r == 0 {
+			return callError("GetWindowRgn", err)
+		}
+		var regionBounds rect
+		kind, _, err := procGetRgnBox.Call(region, uintptr(unsafe.Pointer(&regionBounds)))
+		if kind == 0 {
+			return callError("GetRgnBox", err)
+		}
+		if kind == 1 || regionBounds != (rect{Left: 0, Top: 0, Right: 1, Bottom: 1}) {
+			return fmt.Errorf("1 × 1 overlay region: kind %d, bounds %+v", kind, regionBounds)
+		}
+		return nil
+	}(); err != nil {
+		return err
+	}
+	fmt.Println("PASS minimum overlay: 1 × 1 window retains a non-empty interactive region")
+
 	const width, height = int32(320), int32(240)
 	x := primary.Bounds.Left + (primary.Bounds.width()-width)/2
 	y := primary.Bounds.Top + (primary.Bounds.height()-height)/2
@@ -187,7 +223,14 @@ func runSelfTest() error {
 	if !underlying.clicked {
 		return fmt.Errorf("click-through: underlying Win32 window did not receive the real mouse click")
 	}
-	fmt.Println("PASS click-through: underlying Win32 window received a real interior click")
+	clickedBounds, err := getWindowRect(overlay.hwnd)
+	if err != nil {
+		return err
+	}
+	if clickedBounds != bounds {
+		return fmt.Errorf("click-through: overlay moved or resized from %+v to %+v", bounds, clickedBounds)
+	}
+	fmt.Println("PASS click-through: underlying Win32 window received a real interior click and overlay geometry was unchanged")
 
 	if err := setWindowPos(overlay.hwnd, x, y, width, height, swpShowWindow); err != nil {
 		return err
@@ -196,6 +239,12 @@ func runSelfTest() error {
 		return fmt.Errorf("SetCursorPos failed before border drag")
 	}
 	procMouseEvent.Call(mouseEventFLeftDown, 0, 0, 0, 0)
+	injectedButtonDown := true
+	defer func() {
+		if injectedButtonDown {
+			procMouseEvent.Call(mouseEventFLeftUp, 0, 0, 0, 0)
+		}
+	}()
 	time.Sleep(50 * time.Millisecond)
 	pumpMessages()
 	if !overlay.dragging {
@@ -206,6 +255,7 @@ func runSelfTest() error {
 	time.Sleep(100 * time.Millisecond)
 	pumpMessages()
 	procMouseEvent.Call(mouseEventFLeftUp, 0, 0, 0, 0)
+	injectedButtonDown = false
 	pumpMessages()
 	moved, err := getWindowRect(overlay.hwnd)
 	if err != nil {
@@ -226,11 +276,10 @@ func runSelfTest() error {
 		procUnregisterHotKey.Call(uintptr(overlay.hwnd), 91)
 		return fmt.Errorf("hotkey conflict: second registration unexpectedly succeeded")
 	}
-	if errors.Is(conflictErr, windows.Errno(errorHotkeyAlreadyRegistered)) {
-		fmt.Println("PASS hotkey conflict: Windows returned ERROR_HOTKEY_ALREADY_REGISTERED")
-	} else {
-		fmt.Printf("PASS hotkey conflict: second registration rejected: %v\n", conflictErr)
+	if !errors.Is(conflictErr, windows.Errno(errorHotkeyAlreadyRegistered)) {
+		return fmt.Errorf("hotkey conflict: got %v, want ERROR_HOTKEY_ALREADY_REGISTERED", conflictErr)
 	}
+	fmt.Println("PASS hotkey conflict: Windows returned ERROR_HOTKEY_ALREADY_REGISTERED")
 
 	if err := overlay.move(x, y); err != nil {
 		return err
@@ -247,11 +296,15 @@ func runSelfTest() error {
 	if img.Bounds().Dx() != int(width) || img.Bounds().Dy() != int(height) {
 		return fmt.Errorf("capture dimensions: got %v", img.Bounds())
 	}
-	center := img.RGBAAt(int(width)/2, int(height)/2)
-	if center.R != 19 || center.G != 87 || center.B != 153 || center.A != 255 {
-		return fmt.Errorf("capture content: center pixel is %#v, want RGBA(19,87,153,255)", center)
+	for py := 0; py < int(height); py++ {
+		for px := 0; px < int(width); px++ {
+			pixel := img.RGBAAt(px, py)
+			if pixel.R != 19 || pixel.G != 87 || pixel.B != 153 || pixel.A != 255 {
+				return fmt.Errorf("capture content: pixel (%d,%d) is %#v, want RGBA(19,87,153,255)", px, py, pixel)
+			}
+		}
 	}
-	fmt.Printf("PASS raw capture: %d × %d physical pixels and known RGB content\n", width, height)
+	fmt.Printf("PASS raw capture: %d × %d physical pixels and every pixel has known RGB content\n", width, height)
 	if err := setClipboardImage(overlay.hwnd, img); err != nil {
 		return err
 	}

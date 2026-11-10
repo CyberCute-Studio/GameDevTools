@@ -30,7 +30,9 @@ type nativeWindow struct {
 var (
 	windowStates       = map[windows.Handle]*nativeWindow{}
 	procSetWindowRgn   = user32.NewProc("SetWindowRgn")
+	procGetWindowRgn   = user32.NewProc("GetWindowRgn")
 	procCreateRectRgn  = gdi32.NewProc("CreateRectRgn")
+	procGetRgnBox      = gdi32.NewProc("GetRgnBox")
 	procCombineRgn     = gdi32.NewProc("CombineRgn")
 	procSetCapture     = user32.NewProc("SetCapture")
 	procReleaseCapture = user32.NewProc("ReleaseCapture")
@@ -41,7 +43,15 @@ func applyBorderRegion(hwnd uintptr, width, height int32) error {
 	if outer == 0 {
 		return callError("CreateRectRgn(outer)", err)
 	}
-	inner, _, err := procCreateRectRgn.Call(overlayBorder, overlayBorder, uintptr(width-overlayBorder), uintptr(height-overlayBorder))
+	innerRight := width - overlayBorder
+	if innerRight < overlayBorder {
+		innerRight = overlayBorder
+	}
+	innerBottom := height - overlayBorder
+	if innerBottom < overlayBorder {
+		innerBottom = overlayBorder
+	}
+	inner, _, err := procCreateRectRgn.Call(overlayBorder, overlayBorder, uintptr(innerRight), uintptr(innerBottom))
 	if inner == 0 {
 		procDeleteObject.Call(outer)
 		return callError("CreateRectRgn(inner)", err)

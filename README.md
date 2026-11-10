@@ -54,7 +54,7 @@ The compiled executable accepts the same flags directly.
 go run ./cmd/fnd01-spike -self-test
 ```
 
-The self-test checks every connected display, exact physical overlay bounds and movement, a real click through the interior into a separate Win32 window, a real border drag, hotkey conflict reporting, capture dimensions and known RGB content, clipboard round-trip dimensions, and PNG decoding. It prints the temporary PNG path and leaves the captured image on the clipboard for interoperability checks.
+The self-test checks every connected display, signed hit-test coordinate decoding, exact physical overlay bounds and movement, a non-empty 1 × 1 overlay region, a real click through the interior into a separate Win32 window without moving the overlay, a real border drag, the specific hotkey conflict error, capture dimensions and known RGB content at every pixel, clipboard round-trip dimensions, and PNG decoding. It prints the temporary PNG path and leaves the captured image on the clipboard for interoperability checks.
 
 To verify clipboard consumption through Windows Forms on PowerShell:
 

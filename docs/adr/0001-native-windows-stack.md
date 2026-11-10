@@ -42,10 +42,10 @@ Verified with Go `1.26.5 windows/arm64`, without CGO, on two connected displays:
 | Capability | Result |
 |---|---|
 | Physical display geometry | `DISPLAY1`: 1920 × 1200 at (3440,623); `DISPLAY2`: 3440 × 1440 at (0,0), primary. Both matched native monitor bounds. |
-| Overlay geometry and movement | Passed on both displays with 321 × 241 physical-pixel windows; a 17 × -13 move preserved dimensions exactly. |
-| Transparent, interactive overlay | A real interior mouse click reached a separate underlying Win32 window. A real border drag moved exactly 40 × 30 physical pixels without resizing. |
-| Hotkey conflict | A second registration was rejected with `ERROR_HOTKEY_ALREADY_REGISTERED` (1409). |
-| Raw capture | A 320 × 240 capture had exact dimensions and the expected known RGB pixel content after the overlay was hidden. |
+| Overlay geometry and movement | Passed on both displays with 321 × 241 physical-pixel windows; a 17 × -13 move preserved dimensions exactly. A 1 × 1 window retained its complete non-empty region. Signed 16-bit hit-test coordinate decoding was checked explicitly; a negative-coordinate display was not available. |
+| Transparent, interactive overlay | A real interior mouse click reached a separate underlying Win32 window without changing overlay geometry. A real border drag moved exactly 40 × 30 physical pixels without resizing. |
+| Hotkey conflict | A second registration was rejected with the required `ERROR_HOTKEY_ALREADY_REGISTERED` (1409). |
+| Raw capture | A 320 × 240 capture had exact dimensions and every pixel had the expected known RGB content after the overlay was hidden. |
 | Clipboard | Native `CF_DIB` round-trip passed. Windows Forms returned a 320 × 240 `Format32bppRgb` image through `Clipboard.GetImage()`. |
 | PNG | The written file decoded successfully at 320 × 240. |
 | Target build | Native `windows/arm64` build and `windows/amd64` CGO-free cross-build succeeded. `gofmt`, `go vet ./...`, and `go test ./...` succeeded. |

@@ -233,11 +233,11 @@ func utf16(value string) *uint16 {
 }
 
 func lowWord(value uintptr) int32 {
-	return int32(uint16(value & 0xffff))
+	return int32(int16(uint16(value & 0xffff)))
 }
 
 func highWord(value uintptr) int32 {
-	return int32(uint16((value >> 16) & 0xffff))
+	return int32(int16(uint16((value >> 16) & 0xffff)))
 }
 
 func colorRef(r, g, b uint8) uint32 {

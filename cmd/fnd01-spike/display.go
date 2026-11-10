@@ -18,11 +18,13 @@ type display struct {
 
 func enumerateDisplays() ([]display, error) {
 	var displays []display
+	var callbackErr error
 	callback := windows.NewCallback(func(monitor windows.Handle, _ windows.Handle, bounds *rect, _ uintptr) uintptr {
 		info := monitorInfoEx{CbSize: uint32(unsafe.Sizeof(monitorInfoEx{}))}
-		r, _, _ := procGetMonitorInfoW.Call(uintptr(monitor), uintptr(unsafe.Pointer(&info)))
+		r, _, err := procGetMonitorInfoW.Call(uintptr(monitor), uintptr(unsafe.Pointer(&info)))
 		if r == 0 {
-			return 1
+			callbackErr = callError("GetMonitorInfoW", err)
+			return 0
 		}
 		item := display{
 			Name:    windows.UTF16ToString(info.Device[:]),
@@ -32,13 +34,16 @@ func enumerateDisplays() ([]display, error) {
 		}
 		hr, _, _ := procGetDpiForMonitor.Call(uintptr(monitor), mdtEffectiveDPI, uintptr(unsafe.Pointer(&item.DPIX)), uintptr(unsafe.Pointer(&item.DPIY)))
 		if int32(hr) < 0 {
-			item.DPIX = 96
-			item.DPIY = 96
+			callbackErr = fmt.Errorf("GetDpiForMonitor(%s): HRESULT %#x", item.Name, uint32(hr))
+			return 0
 		}
 		displays = append(displays, item)
 		return 1
 	})
 	r, _, err := procEnumDisplayMonitors.Call(0, 0, callback, 0)
+	if callbackErr != nil {
+		return nil, callbackErr
+	}
 	if r == 0 {
 		return nil, callError("EnumDisplayMonitors", err)
 	}
