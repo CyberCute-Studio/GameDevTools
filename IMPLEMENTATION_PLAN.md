@@ -41,7 +41,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Select a viable Go/Windows GUI stack and establish the production application, CI, shared UI, local settings, and module-scoped preset infrastructure.
 
 1. **FND-01 — Validate the Go/Windows GUI and native integration stack**
-   - **Status:** In Progress | **PR:** TBD | **Depends on:** None
+   - **Status:** In Progress | **PR:** [#1](https://github.com/CyberCute-Studio/GameDevTools/pull/1) | **Depends on:** None
    - **Requirements:** TECH-001, TECH-002, TECH-003, TECH-007.
    - **Deliver:** A minimal Go technical spike and an architecture decision record comparing viable GUI approaches. Demonstrate a topmost transparent overlay, click-through interior with interactive border, physical-pixel coordinates, mixed-DPI behavior, screen capture, clipboard image output, and global hotkey registration. Record selected libraries, versions, licenses, limitations, and rejected alternatives.
    - **Verify:** Run the spike on Windows with two different DPI settings where available. Confirm exact pixel coordinates, click-through hit testing, capture output, clipboard interoperability, and hotkey conflict reporting. Document any unverified capability as a blocker rather than assuming support.
