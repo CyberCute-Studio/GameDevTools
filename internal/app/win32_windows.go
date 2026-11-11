@@ -35,6 +35,9 @@ const (
 	swHide = 0
 	swShow = 5
 
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
+
 	cwUseDefault = 0x80000000
 
 	colorWindow = 5
@@ -56,12 +59,14 @@ var (
 	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
 	procDestroyWindow                 = user32.NewProc("DestroyWindow")
+	procSetWindowPos                  = user32.NewProc("SetWindowPos")
 	procShowWindow                    = user32.NewProc("ShowWindow")
 	procUpdateWindow                  = user32.NewProc("UpdateWindow")
 	procMoveWindow                    = user32.NewProc("MoveWindow")
 	procGetClientRect                 = user32.NewProc("GetClientRect")
 	procLoadCursorW                   = user32.NewProc("LoadCursorW")
 	procGetMessageW                   = user32.NewProc("GetMessageW")
+	procIsDialogMessageW              = user32.NewProc("IsDialogMessageW")
 	procTranslateMessage              = user32.NewProc("TranslateMessage")
 	procDispatchMessageW              = user32.NewProc("DispatchMessageW")
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")

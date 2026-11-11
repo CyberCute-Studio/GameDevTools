@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestDispatchQueueRunsTasksInOrderOnDrain(t *testing.T) {
@@ -62,6 +63,42 @@ func TestDispatchQueueAcceptsNilTask(t *testing.T) {
 	queue.Drain()
 	if notified {
 		t.Fatal("Post(nil) sent a notification")
+	}
+}
+
+func TestDispatchQueueNotificationFailureDoesNotRaceDrain(t *testing.T) {
+	notifyErr := errors.New("window unavailable")
+	notifyStarted := make(chan struct{})
+	finishNotify := make(chan struct{})
+	queue := NewDispatchQueue(func() error {
+		close(notifyStarted)
+		<-finishNotify
+		return notifyErr
+	})
+	ran := false
+	postDone := make(chan error, 1)
+	go func() {
+		postDone <- queue.Post(func() { ran = true })
+	}()
+	<-notifyStarted
+	drainDone := make(chan struct{})
+	go func() {
+		queue.Drain()
+		close(drainDone)
+	}()
+	drainedEarly := false
+	select {
+	case <-drainDone:
+		drainedEarly = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(finishNotify)
+	if err := <-postDone; !errors.Is(err, notifyErr) {
+		t.Fatalf("Post() error = %v, want notification error", err)
+	}
+	<-drainDone
+	if drainedEarly || ran {
+		t.Fatal("task became available to Drain before its notification succeeded")
 	}
 }
 

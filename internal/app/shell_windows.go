@@ -80,6 +80,9 @@ func runShell(navigator *core.Navigator) error {
 		if r == 0 {
 			return nil
 		}
+		if handled, _, _ := procIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&message))); handled != 0 {
+			continue
+		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
 	}
@@ -245,7 +248,7 @@ func (s *nativeShell) scale(value int32) int32 {
 	return int32((int64(value)*int64(s.dpi) + 48) / 96)
 }
 
-func shellWindowProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintptr {
+func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
 	case wmCommand:
@@ -266,6 +269,18 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr
 		if shell != nil {
 			shell.dpi = uint32(lowWord(wParam))
 			shell.updateFonts()
+			if lParam != nil {
+				suggested := (*rect)(lParam)
+				procSetWindowPos.Call(
+					uintptr(hwnd),
+					0,
+					uintptr(suggested.Left),
+					uintptr(suggested.Top),
+					uintptr(suggested.Right-suggested.Left),
+					uintptr(suggested.Bottom-suggested.Top),
+					swpNoZOrder|swpNoActivate,
+				)
+			}
 			shell.layout()
 			return 0
 		}
@@ -294,6 +309,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr
 		}
 		return 0
 	}
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
 	return r
 }

@@ -6,15 +6,9 @@ type Dispatcher interface {
 	Post(task func()) error
 }
 
-type dispatchTask struct {
-	id  uint64
-	run func()
-}
-
 type DispatchQueue struct {
 	mu     sync.Mutex
-	nextID uint64
-	tasks  []dispatchTask
+	tasks  []func()
 	notify func() error
 }
 
@@ -27,19 +21,10 @@ func (q *DispatchQueue) Post(task func()) error {
 		return nil
 	}
 	q.mu.Lock()
-	q.nextID++
-	id := q.nextID
-	q.tasks = append(q.tasks, dispatchTask{id: id, run: task})
-	q.mu.Unlock()
+	defer q.mu.Unlock()
+	q.tasks = append(q.tasks, task)
 	if err := q.notify(); err != nil {
-		q.mu.Lock()
-		for i, queued := range q.tasks {
-			if queued.id == id {
-				q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
-				break
-			}
-		}
-		q.mu.Unlock()
+		q.tasks = q.tasks[:len(q.tasks)-1]
 		return err
 	}
 	return nil
@@ -51,6 +36,6 @@ func (q *DispatchQueue) Drain() {
 	q.tasks = nil
 	q.mu.Unlock()
 	for _, task := range tasks {
-		task.run()
+		task()
 	}
 }
