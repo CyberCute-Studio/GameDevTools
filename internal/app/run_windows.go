@@ -9,6 +9,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
+	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -24,6 +25,7 @@ func runNative() error {
 
 	paths, pathErr := settings.LocalPaths()
 	store := settings.NewStore(paths)
+	preset.RegisterValidators(store)
 	loaded := settings.LoadResult{Settings: settings.Default()}
 	if pathErr == nil {
 		loaded = store.Load()

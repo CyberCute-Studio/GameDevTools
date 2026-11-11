@@ -76,7 +76,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** Feature-specific validation remains in the owning module.
 
 6. **FND-06 — Implement module-scoped preset domain and persistence**
-   - **Status:** Pending | **PR:** TBD | **Depends on:** FND-04
+   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-04
    - **Requirements:** PRESET-001, PRESET-003, PRESET-004, PRESET-005, PRESET-006, PRESET-008.
    - **Deliver:** Stable preset identifiers, separate Screenshot and Image Resizer namespaces, built-in definitions, custom-preset storage, dimension limits, unique-name rules, module-specific option payloads, and corrupt-preset recovery.
    - **Verify:** Unit-test all validation boundaries, case-insensitive name conflicts, persistence, built-in immutability, independent namespaces, stable IDs after rename, and malformed stored data.
