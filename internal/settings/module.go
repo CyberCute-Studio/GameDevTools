@@ -29,7 +29,7 @@ func (v *View) Title() string {
 }
 
 func (v *View) Description() string {
-	return "Configure application preferences and module options. Versioned local settings will be added by FND-04."
+	return "Application preferences are stored locally in a versioned per-user settings file. Diagnostic logs rotate automatically and exclude image, clipboard, and filename data."
 }
 
 func (v *View) PrimaryAction() string {

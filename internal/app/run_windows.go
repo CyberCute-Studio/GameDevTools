@@ -3,8 +3,11 @@
 package app
 
 import (
+	"fmt"
 	"runtime"
+	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
@@ -17,11 +20,33 @@ func runNative() error {
 	if err := enablePerMonitorDPI(); err != nil {
 		return err
 	}
+
+	paths, pathErr := settings.LocalPaths()
+	store := settings.NewStore(paths)
+	loaded := settings.LoadResult{Settings: settings.Default()}
+	if pathErr == nil {
+		loaded = store.Load()
+	} else {
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf("Local settings are unavailable: %v. Changes will remain in memory for this session.", pathErr))
+	}
+	logger, loggerErr := diagnostics.Open(paths.LogFile)
+	if loggerErr != nil {
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf("Diagnostic logging is unavailable: %v.", loggerErr))
+	} else {
+		defer logger.Close()
+	}
+	if len(loaded.Warnings) > 0 && logger != nil {
+		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
+	}
+
 	navigator := shell.NewNavigator()
 	for _, module := range []shell.Module{screenshot.New(), imageresizer.New(), settings.New()} {
 		if err := navigator.Register(module); err != nil {
 			return err
 		}
 	}
-	return runShell(navigator)
+	if err := navigator.Select(shell.ModuleID(loaded.Settings.Shell.SelectedModule)); err != nil {
+		return err
+	}
+	return runShell(navigator, store, loaded.Settings, logger, strings.Join(loaded.Warnings, "\n"))
 }

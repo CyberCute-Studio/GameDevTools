@@ -62,7 +62,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** Placeholder views are not feature-complete module implementations.
 
 4. **FND-04 — Add versioned settings, local data paths, and diagnostic logging**
-   - **Status:** Pending | **PR:** TBD | **Depends on:** FND-03
+   - **Status:** In Progress | **PR:** [#4](https://github.com/CyberCute-Studio/GameDevTools/pull/4) | **Depends on:** FND-03
    - **Requirements:** APP-003, SET-001, SET-002, SET-003, SET-004, SET-006, TECH-008, NFR-024.
    - **Deliver:** Per-user configuration and log locations, versioned settings format, safe read/write behavior, defaults, migration interface, malformed-settings backup/recovery, write-failure reporting, log redaction boundaries, and log rotation. Persist the selected module and window preferences supported by the shell.
    - **Verify:** Test fresh start, normal restart, malformed data, unavailable paths, failed writes, migration fixtures, and rotation. Confirm recovery does not silently delete the original settings file and saved images are never touched.

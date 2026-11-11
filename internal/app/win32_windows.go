@@ -52,8 +52,9 @@ const (
 	sifPos   = 0x0004
 	sifAll   = sifRange | sifPage | sifPos | 0x0010
 
-	swHide = 0
-	swShow = 5
+	swHide          = 0
+	swShowMaximized = 3
+	swShow          = 5
 
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
@@ -74,6 +75,10 @@ const (
 	dtWordBreak = 0x0010
 	dtCalcRect  = 0x0400
 	dtNoPrefix  = 0x0800
+
+	mbYesNo       = 0x0004
+	mbIconWarning = 0x0030
+	idYes         = 6
 )
 
 var (
@@ -92,6 +97,8 @@ var (
 	procMoveWindow                    = user32.NewProc("MoveWindow")
 	procGetClientRect                 = user32.NewProc("GetClientRect")
 	procGetWindowRect                 = user32.NewProc("GetWindowRect")
+	procGetWindowPlacement            = user32.NewProc("GetWindowPlacement")
+	procIsZoomed                      = user32.NewProc("IsZoomed")
 	procMonitorFromWindow             = user32.NewProc("MonitorFromWindow")
 	procGetMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
 	procGetScrollInfo                 = user32.NewProc("GetScrollInfo")
@@ -105,6 +112,7 @@ var (
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
+	procMessageBoxW                   = user32.NewProc("MessageBoxW")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	procGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
@@ -130,6 +138,15 @@ type monitorInfo struct {
 	Monitor rect
 	Work    rect
 	Flags   uint32
+}
+
+type windowPlacement struct {
+	Length         uint32
+	Flags          uint32
+	ShowCmd        uint32
+	MinPosition    point
+	MaxPosition    point
+	NormalPosition rect
 }
 
 type scrollInfo struct {

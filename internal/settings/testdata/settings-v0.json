@@ -1,0 +1,10 @@
+{
+  "version": 0,
+  "module": "image-resizer",
+  "window": {
+    "x": -100,
+    "y": 50,
+    "width": 1280,
+    "height": 720
+  }
+}
