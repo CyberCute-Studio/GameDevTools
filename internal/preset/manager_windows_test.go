@@ -157,16 +157,60 @@ func TestNativeManagerLayoutExpandsForWrappedMessages(t *testing.T) {
 		}
 		return 120
 	}
-	baseline := manager.NativeHeight(240, scale, measure)
+	baseline := manager.NativeHeight(480, scale, measure)
 	manager.width.Error.SetText("A wrapped dimension validation message")
 	manager.status.SetText("A wrapped persistence warning")
-	expanded := manager.NativeHeight(240, scale, measure)
+	expanded := manager.NativeHeight(480, scale, measure)
 	if expanded-baseline != 152 {
 		t.Fatalf("height increase = %d, want 152", expanded-baseline)
 	}
-	manager.NativeLayout(0, 0, 240, scale, measure)
+	manager.NativeLayout(0, 0, 480, scale, measure)
 	if got := manager.width.Error.Text(); got == "" || manager.status.Text() == "" {
 		t.Fatal("layout discarded validation or persistence text")
+	}
+}
+
+func TestNativeManagerLayoutStacksNarrowControls(t *testing.T) {
+	parent := newPresetTestParent(t)
+	value := settings.Default()
+	manager := newNativeManagerForTest(t, shell.ModuleScreenshot, settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")}), &value, parent)
+	scale := func(value int32) int32 { return (value*129 + 48) / 96 }
+	measure := func(string, int32) int32 { return 0 }
+
+	narrowHeight := manager.NativeHeight(240, scale, measure)
+	wideHeight := manager.NativeHeight(480, scale, measure)
+	if narrowHeight <= wideHeight {
+		t.Fatalf("narrow manager height = %d, wide manager height = %d; narrow controls were not stacked", narrowHeight, wideHeight)
+	}
+	manager.NativeLayout(0, 0, 240, scale, measure)
+	getWindowRect := windows.NewLazySystemDLL("user32.dll").NewProc("GetWindowRect")
+	type windowBounds struct{ Left, Top, Right, Bottom int32 }
+	controlBounds := func(handle windows.Handle) windowBounds {
+		t.Helper()
+		bounds := windowBounds{}
+		result, _, err := getWindowRect.Call(uintptr(handle), uintptr(unsafe.Pointer(&bounds)))
+		if result == 0 {
+			t.Fatalf("GetWindowRect(%v): %v", handle, err)
+		}
+		return bounds
+	}
+	for name, handle := range map[string]windows.Handle{
+		"width edit":       manager.width.Edit.Handle(),
+		"height edit":      manager.height.Edit.Handle(),
+		"create button":    manager.create.Handle(),
+		"update button":    manager.update.Handle(),
+		"duplicate button": manager.duplicate.Handle(),
+		"delete button":    manager.remove.Handle(),
+	} {
+		bounds := controlBounds(handle)
+		if got := bounds.Right - bounds.Left; got != 240 {
+			t.Errorf("%s width = %d, want full narrow-layout width 240", name, got)
+		}
+	}
+	top := controlBounds(manager.listLabel.Handle()).Top
+	bottom := controlBounds(manager.status.Handle()).Bottom
+	if got := bottom - top; got != narrowHeight {
+		t.Fatalf("laid-out manager height = %d, calculated height = %d", got, narrowHeight)
 	}
 }
 

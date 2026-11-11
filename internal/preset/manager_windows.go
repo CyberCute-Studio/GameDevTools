@@ -136,36 +136,61 @@ func (n *NativeManager) NativeShow(visible bool) {
 
 func (n *NativeManager) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
 	nameMetrics, dimensionMetrics, statusHeight := n.metrics(width, scale, measure)
+	stacked := stackedPresetLayout(width, scale)
 	height := scale(66) + nameMetrics.Height() + scale(12) + dimensionMetrics.Height() + scale(12)
+	if stacked {
+		height += dimensionMetrics.Height() + scale(12)
+	}
 	if n.mode != nil {
 		height += scale(66)
 	}
-	return height + scale(140) - scale(48) + statusHeight
+	buttonHeight := scale(44) + scale(48)
+	if stacked {
+		buttonHeight += 2 * scale(44)
+	}
+	return height + buttonHeight + statusHeight
 }
 
 func (n *NativeManager) NativeLayout(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) {
 	nameMetrics, dimensionMetrics, statusHeight := n.metrics(width, scale, measure)
+	stacked := stackedPresetLayout(width, scale)
 	n.listLabel.Move(x, y, width, scale(20))
 	n.list.Move(x, y+scale(24), width, scale(200))
 	y += scale(66)
 	n.name.Move(x, y, width, nameMetrics)
 	y += nameMetrics.Height() + scale(12)
 	gap := scale(12)
-	columnWidth := max(int32(1), (width-gap)/2)
-	n.width.Move(x, y, columnWidth, dimensionMetrics)
-	n.height.Move(x+columnWidth+gap, y, max(int32(1), width-columnWidth-gap), dimensionMetrics)
+	if stacked {
+		n.width.Move(x, y, width, dimensionMetrics)
+		y += dimensionMetrics.Height() + scale(12)
+		n.height.Move(x, y, width, dimensionMetrics)
+	} else {
+		columnWidth := max(int32(1), (width-gap)/2)
+		n.width.Move(x, y, columnWidth, dimensionMetrics)
+		n.height.Move(x+columnWidth+gap, y, max(int32(1), width-columnWidth-gap), dimensionMetrics)
+	}
 	y += dimensionMetrics.Height() + scale(12)
 	if n.mode != nil {
 		n.modeLabel.Move(x, y, width, scale(20))
 		n.mode.Move(x, y+scale(24), width, scale(200))
 		y += scale(66)
 	}
-	buttonWidth := max(int32(1), (width-gap)/2)
-	n.create.Move(x, y, buttonWidth, scale(36))
-	n.update.Move(x+buttonWidth+gap, y, max(int32(1), width-buttonWidth-gap), scale(36))
-	y += scale(44)
-	n.duplicate.Move(x, y, buttonWidth, scale(36))
-	n.remove.Move(x+buttonWidth+gap, y, max(int32(1), width-buttonWidth-gap), scale(36))
+	if stacked {
+		n.create.Move(x, y, width, scale(36))
+		y += scale(44)
+		n.update.Move(x, y, width, scale(36))
+		y += scale(44)
+		n.duplicate.Move(x, y, width, scale(36))
+		y += scale(44)
+		n.remove.Move(x, y, width, scale(36))
+	} else {
+		buttonWidth := max(int32(1), (width-gap)/2)
+		n.create.Move(x, y, buttonWidth, scale(36))
+		n.update.Move(x+buttonWidth+gap, y, max(int32(1), width-buttonWidth-gap), scale(36))
+		y += scale(44)
+		n.duplicate.Move(x, y, buttonWidth, scale(36))
+		n.remove.Move(x+buttonWidth+gap, y, max(int32(1), width-buttonWidth-gap), scale(36))
+	}
 	y += scale(48)
 	n.status.Move(x, y, width, statusHeight)
 }
@@ -173,12 +198,19 @@ func (n *NativeManager) NativeLayout(x, y, width int32, scale func(int32) int32,
 func (n *NativeManager) metrics(width int32, scale func(int32) int32, measure func(string, int32) int32) (ui.DimensionMetrics, ui.DimensionMetrics, int32) {
 	nameMetrics := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
 	nameMetrics.ErrorHeight = max(nameMetrics.ErrorHeight, measure(n.name.Error.Text(), width))
-	columnWidth := max(int32(1), (width-scale(12))/2)
+	dimensionWidth := width
+	if !stackedPresetLayout(width, scale) {
+		dimensionWidth = max(int32(1), (width-scale(12))/2)
+	}
 	dimensionMetrics := nameMetrics
-	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.width.Error.Text(), columnWidth))
-	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.height.Error.Text(), columnWidth))
+	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.width.Error.Text(), dimensionWidth))
+	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.height.Error.Text(), dimensionWidth))
 	statusHeight := max(scale(48), measure(n.status.Text(), width))
 	return nameMetrics, dimensionMetrics, statusHeight
+}
+
+func stackedPresetLayout(width int32, scale func(int32) int32) bool {
+	return width < scale(320)
 }
 
 func (n *NativeManager) NativeCommand(id int32, notification uint16) bool {
