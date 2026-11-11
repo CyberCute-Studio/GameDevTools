@@ -8,6 +8,8 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
+	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 )
 
@@ -18,20 +20,25 @@ const (
 )
 
 type nativeShell struct {
-	navigator   *core.Navigator
-	dispatcher  *core.DispatchQueue
-	hwnd        windows.Handle
-	dpi         uint32
-	scrollY     int32
-	navHeading  windows.Handle
-	navButtons  map[core.ModuleID]windows.Handle
-	navIDs      map[uint16]core.ModuleID
-	title       windows.Handle
-	description windows.Handle
-	action      windows.Handle
-	note        windows.Handle
-	headingFont windows.Handle
-	bodyFont    windows.Handle
+	navigator     *core.Navigator
+	dispatcher    *core.DispatchQueue
+	store         *settings.Store
+	settings      settings.Settings
+	logger        *diagnostics.Logger
+	startupNotice string
+	notice        string
+	hwnd          windows.Handle
+	dpi           uint32
+	scrollY       int32
+	navHeading    windows.Handle
+	navButtons    map[core.ModuleID]windows.Handle
+	navIDs        map[uint16]core.ModuleID
+	title         windows.Handle
+	description   windows.Handle
+	action        windows.Handle
+	note          windows.Handle
+	headingFont   windows.Handle
+	bodyFont      windows.Handle
 }
 
 type shellLayout struct {
@@ -60,22 +67,32 @@ type shellTextHeights struct {
 
 var shellStates = map[windows.Handle]*nativeShell{}
 
-func runShell(navigator *core.Navigator) error {
+func runShell(navigator *core.Navigator, store *settings.Store, initial settings.Settings, logger *diagnostics.Logger, notice string) error {
 	if err := registerShellClass(); err != nil {
 		return err
 	}
 	shell := &nativeShell{
-		navigator:  navigator,
-		dpi:        96,
-		navButtons: make(map[core.ModuleID]windows.Handle),
-		navIDs:     make(map[uint16]core.ModuleID),
+		navigator:     navigator,
+		store:         store,
+		settings:      initial,
+		logger:        logger,
+		startupNotice: notice,
+		notice:        notice,
+		dpi:           96,
+		navButtons:    make(map[core.ModuleID]windows.Handle),
+		navIDs:        make(map[uint16]core.ModuleID),
+	}
+	window := initial.Shell.Window
+	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
+	if window.HasPosition {
+		x, y = uintptr(uint32(window.X)), uintptr(uint32(window.Y))
 	}
 	hwnd, _, err := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(utf16(shellClassName))),
 		uintptr(unsafe.Pointer(utf16("GameDevTools"))),
 		wsOverlappedWindow|wsClipChildren|wsVScroll,
-		cwUseDefault, cwUseDefault, 1100, 700,
+		x, y, uintptr(window.Width), uintptr(window.Height),
 		0, 0, 0, 0,
 	)
 	if hwnd == 0 {
@@ -97,7 +114,11 @@ func runShell(navigator *core.Navigator) error {
 	shell.updateView()
 	shell.fitInitialWindow()
 	shell.layout()
-	procShowWindow.Call(hwnd, swShow)
+	showCommand := uintptr(swShow)
+	if initial.Shell.Window.Maximized {
+		showCommand = swShowMaximized
+	}
+	procShowWindow.Call(hwnd, showCommand)
 	procUpdateWindow.Call(hwnd)
 	var message msg
 	for {
@@ -228,6 +249,7 @@ func (s *nativeShell) updateView() {
 	setWindowText(s.title, view.Title())
 	setWindowText(s.description, view.Description())
 	setWindowText(s.action, view.PrimaryAction())
+	setWindowText(s.note, s.noteText())
 	showAction := int32(swHide)
 	if view.PrimaryAction() != "" {
 		showAction = swShow
@@ -242,9 +264,20 @@ func (s *nativeShell) updateView() {
 	}
 }
 
+func (s *nativeShell) noteText() string {
+	if s.notice != "" {
+		return s.notice
+	}
+	return placeholderNote
+}
+
 func (s *nativeShell) fitInitialWindow() {
 	width := s.scale(1100)
 	height := s.scale(700)
+	if s.settings.Shell.Window.HasPosition {
+		width = s.settings.Shell.Window.Width
+		height = s.settings.Shell.Window.Height
+	}
 	flags := uintptr(swpNoZOrder | swpNoActivate | swpNoMove)
 	var x, y int32
 	var current rect
@@ -353,7 +386,7 @@ func (s *nativeShell) layout() {
 	plan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{
 		title:       s.measureText(view.Title(), basePlan.contentWidth, s.headingFont),
 		description: s.measureText(view.Description(), basePlan.contentWidth, s.bodyFont),
-		note:        s.measureText(placeholderNote, basePlan.contentWidth, s.bodyFont),
+		note:        s.measureText(s.noteText(), basePlan.contentWidth, s.bodyFont),
 	})
 	info := scrollInfo{
 		CbSize: uint32(unsafe.Sizeof(scrollInfo{})),
@@ -476,6 +509,41 @@ func (s *nativeShell) scale(value int32) int32 {
 	return int32((int64(value)*int64(s.dpi) + 48) / 96)
 }
 
+func (s *nativeShell) saveSettings(captureWindow bool) error {
+	value := s.settings
+	value.Shell.SelectedModule = string(s.navigator.Current().ID())
+	if captureWindow {
+		placement := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
+		if r, _, _ := procGetWindowPlacement.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&placement))); r != 0 {
+			normal := placement.NormalPosition
+			width := normal.Right - normal.Left
+			height := normal.Bottom - normal.Top
+			if width >= 320 && height >= 240 {
+				value.Shell.Window.X = normal.Left
+				value.Shell.Window.Y = normal.Top
+				value.Shell.Window.Width = width
+				value.Shell.Window.Height = height
+				value.Shell.Window.HasPosition = true
+			}
+		}
+		maximized, _, _ := procIsZoomed.Call(uintptr(s.hwnd))
+		value.Shell.Window.Maximized = maximized != 0
+	}
+	s.settings = value
+	err := s.store.Save(value)
+	if err != nil {
+		s.notice = fmt.Sprintf("Settings could not be saved: %v. Your current in-memory session has not been discarded.", err)
+		if s.logger != nil {
+			_ = s.logger.Record(diagnostics.Event{Level: diagnostics.LevelError, Operation: "settings.save", Code: "write-failed"})
+		}
+	} else {
+		s.notice = s.startupNotice
+	}
+	s.updateView()
+	s.layout()
+	return err
+}
+
 func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
@@ -487,8 +555,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		if shell != nil && highWord(wParam) == 0 {
 			if id, exists := shell.navIDs[lowWord(wParam)]; exists {
 				if shell.navigator.Select(id) == nil {
-					shell.updateView()
-					shell.layout()
+					_ = shell.saveSettings(false)
 				}
 				if lParam != nil {
 					shell.ensureControlVisible(windows.Handle(lParam))
@@ -548,6 +615,17 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			return 0
 		}
 	case wmClose:
+		if shell != nil && shell.saveSettings(true) != nil {
+			answer, _, _ := procMessageBoxW.Call(
+				uintptr(hwnd),
+				uintptr(unsafe.Pointer(utf16("Settings could not be saved. Close anyway and keep these changes only for the current session?"))),
+				uintptr(unsafe.Pointer(utf16("GameDevTools — Settings not saved"))),
+				mbYesNo|mbIconWarning,
+			)
+			if answer != idYes {
+				return 0
+			}
+		}
 		procDestroyWindow.Call(uintptr(hwnd))
 		return 0
 	case wmDestroy:
