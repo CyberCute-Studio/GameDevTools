@@ -43,29 +43,44 @@ func TestFitStartupBounds(t *testing.T) {
 
 func TestCalculateShellLayout(t *testing.T) {
 	t.Run("standard window keeps navigation beside content", func(t *testing.T) {
-		plan := calculateShellLayout(rect{Right: 1100, Bottom: 700}, 96, 3)
-		if plan.horizontalNav {
-			t.Fatal("standard window uses horizontal navigation")
+		plan := calculateShellLayout(rect{Right: 1100, Bottom: 700}, 96, 3, shellTextHeights{})
+		if plan.compact {
+			t.Fatal("standard window uses compact navigation")
 		}
 		if plan.virtualHeight != 700 {
 			t.Fatalf("virtual height = %d, want 700", plan.virtualHeight)
 		}
 	})
 
-	t.Run("high DPI makes navigation and primary action reachable", func(t *testing.T) {
+	t.Run("high DPI uses full-width navigation and scrolling", func(t *testing.T) {
 		client := rect{Right: 1920, Bottom: 970}
-		plan := calculateShellLayout(client, 480, 3)
-		if !plan.horizontalNav {
-			t.Fatal("high-DPI compact window retains clipped side navigation")
+		plan := calculateShellLayout(client, 480, 3, shellTextHeights{})
+		if !plan.compact {
+			t.Fatal("high-DPI window retains clipped side navigation")
 		}
-		if plan.navY < 0 || plan.navY+plan.navHeight > client.Bottom {
-			t.Fatalf("navigation bounds = %d..%d, client height %d", plan.navY, plan.navY+plan.navHeight, client.Bottom)
+		if plan.navWidth != plan.contentWidth {
+			t.Fatalf("navigation width = %d, content width = %d", plan.navWidth, plan.contentWidth)
 		}
-		if actionBottom := plan.actionY + 220; actionBottom > client.Bottom {
-			t.Fatalf("primary action bottom = %d, client height %d", actionBottom, client.Bottom)
+		navBottom := plan.navY + 3*plan.navHeight + 2*40
+		if navBottom > plan.virtualHeight-plan.margin {
+			t.Fatalf("navigation bottom = %d, scrollable bottom = %d", navBottom, plan.virtualHeight-plan.margin)
+		}
+		if actionBottom := plan.actionY + 220; actionBottom > plan.virtualHeight-plan.margin {
+			t.Fatalf("primary action bottom = %d, scrollable bottom = %d", actionBottom, plan.virtualHeight-plan.margin)
 		}
 		if plan.virtualHeight <= client.Bottom {
 			t.Fatalf("virtual height = %d, want scrolling beyond client height %d", plan.virtualHeight, client.Bottom)
+		}
+	})
+
+	t.Run("wrapped text contributes its measured height", func(t *testing.T) {
+		text := shellTextHeights{title: 240, description: 900, note: 400}
+		plan := calculateShellLayout(rect{Right: 1280, Bottom: 650}, 480, 3, text)
+		if plan.titleHeight != text.title || plan.descriptionHeight != text.description || plan.noteHeight != text.note {
+			t.Fatalf("layout text heights = %+v, want %+v", plan, text)
+		}
+		if noteBottom := plan.noteY + plan.noteHeight; noteBottom != plan.virtualHeight-plan.margin {
+			t.Fatalf("note bottom = %d, scrollable bottom = %d", noteBottom, plan.virtualHeight-plan.margin)
 		}
 	})
 }

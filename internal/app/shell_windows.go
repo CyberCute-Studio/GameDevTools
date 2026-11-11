@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	shellClassName = "GameDevToolsMainWindow"
-	navCommandBase = 100
+	shellClassName  = "GameDevToolsMainWindow"
+	navCommandBase  = 100
+	placeholderNote = "Placeholder view. No files or images are changed."
 )
 
 type nativeShell struct {
@@ -34,19 +35,27 @@ type nativeShell struct {
 }
 
 type shellLayout struct {
-	horizontalNav bool
-	margin        int32
-	navY          int32
-	navWidth      int32
-	navHeight     int32
-	contentX      int32
-	contentY      int32
-	contentWidth  int32
-	titleHeight   int32
-	descriptionY  int32
-	actionY       int32
-	noteY         int32
-	virtualHeight int32
+	compact           bool
+	margin            int32
+	navY              int32
+	navWidth          int32
+	navHeight         int32
+	contentX          int32
+	contentY          int32
+	contentWidth      int32
+	titleHeight       int32
+	descriptionY      int32
+	descriptionHeight int32
+	actionY           int32
+	noteY             int32
+	noteHeight        int32
+	virtualHeight     int32
+}
+
+type shellTextHeights struct {
+	title       int32
+	description int32
+	note        int32
 }
 
 var shellStates = map[windows.Handle]*nativeShell{}
@@ -162,7 +171,7 @@ func (s *nativeShell) createControls() error {
 	if err != nil {
 		return err
 	}
-	s.note, err = s.createControl("STATIC", "Placeholder view. No files or images are changed.", wsChild|wsVisible, 0)
+	s.note, err = s.createControl("STATIC", placeholderNote, wsChild|wsVisible, 0)
 	if err != nil {
 		return err
 	}
@@ -278,48 +287,56 @@ func fitStartupBounds(x, y, width, height int32, work rect) (int32, int32, int32
 	return x, y, width, height
 }
 
-func calculateShellLayout(client rect, dpi uint32, moduleCount int) shellLayout {
+func calculateShellLayout(client rect, dpi uint32, moduleCount int, text shellTextHeights) shellLayout {
 	scale := func(value int32) int32 {
 		return int32((int64(value)*int64(dpi) + 48) / 96)
 	}
+	if text.title <= 0 {
+		text.title = scale(48)
+	}
+	if text.description <= 0 {
+		text.description = scale(90)
+	}
+	if text.note <= 0 {
+		text.note = scale(28)
+	}
 	plan := shellLayout{
-		margin:       scale(32),
-		navY:         scale(80),
-		navWidth:     scale(210),
-		navHeight:    scale(44),
-		contentY:     scale(32),
-		titleHeight:  scale(48),
-		descriptionY: scale(92),
-		actionY:      scale(198),
-		noteY:        scale(254),
+		margin:            scale(32),
+		navY:              scale(80),
+		navWidth:          scale(210),
+		navHeight:         scale(44),
+		contentY:          scale(32),
+		titleHeight:       text.title,
+		descriptionHeight: text.description,
+		noteHeight:        text.note,
 	}
 	plan.contentX = plan.margin + plan.navWidth + scale(40)
-	plan.horizontalNav = client.Right < scale(524) || client.Right-plan.contentX-plan.margin < scale(190)
-	if plan.horizontalNav {
+	plan.compact = client.Right < scale(524) || client.Right-plan.contentX-plan.margin < scale(190)
+	if plan.compact {
 		plan.margin = scale(16)
-		plan.navY = plan.margin
-		available := max(int32(1), client.Right-2*plan.margin)
-		gap := scale(8)
-		plan.navWidth = max(int32(1), (available-int32(moduleCount-1)*gap)/int32(moduleCount))
 		plan.contentX = plan.margin
-		plan.contentY = plan.margin + scale(60)
-		plan.contentWidth = available
-		plan.descriptionY = plan.contentY + scale(116)
-		plan.actionY = plan.contentY + scale(60)
-		plan.noteY = plan.contentY + scale(218)
+		plan.contentY = plan.margin
+		plan.contentWidth = max(int32(1), client.Right-2*plan.margin)
+		plan.navWidth = plan.contentWidth
+		plan.actionY = plan.contentY + plan.titleHeight + scale(12)
+		plan.navY = plan.actionY + scale(44) + scale(16)
+		navBottom := plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*scale(8)
+		plan.descriptionY = navBottom + scale(16)
+		plan.noteY = plan.descriptionY + plan.descriptionHeight + scale(12)
+		plan.virtualHeight = plan.noteY + plan.noteHeight + plan.margin
 	} else {
 		plan.contentWidth = max(scale(190), client.Right-plan.contentX-plan.margin)
+		plan.descriptionY = plan.contentY + plan.titleHeight + scale(12)
+		plan.actionY = plan.descriptionY + plan.descriptionHeight + scale(16)
+		plan.noteY = plan.actionY + scale(44) + scale(12)
 		navBottom := plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*scale(8)
-		contentBottom := plan.noteY + scale(28)
+		contentBottom := plan.noteY + plan.noteHeight
 		if client.Bottom >= contentBottom+plan.margin && client.Bottom >= navBottom+plan.margin {
-			plan.noteY = client.Bottom - plan.margin - scale(28)
+			plan.noteY = client.Bottom - plan.margin - plan.noteHeight
 			plan.virtualHeight = client.Bottom
 		} else {
 			plan.virtualHeight = max(contentBottom, navBottom) + plan.margin
 		}
-	}
-	if plan.horizontalNav {
-		plan.virtualHeight = plan.noteY + scale(28) + plan.margin
 	}
 	return plan
 }
@@ -331,7 +348,13 @@ func (s *nativeShell) layout() {
 		return
 	}
 	modules := s.navigator.Modules()
-	plan := calculateShellLayout(client, s.dpi, len(modules))
+	basePlan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{})
+	view := s.navigator.Current().View()
+	plan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{
+		title:       s.measureText(view.Title(), basePlan.contentWidth, s.headingFont),
+		description: s.measureText(view.Description(), basePlan.contentWidth, s.bodyFont),
+		note:        s.measureText(placeholderNote, basePlan.contentWidth, s.bodyFont),
+	})
 	info := scrollInfo{
 		CbSize: uint32(unsafe.Sizeof(scrollInfo{})),
 		FMask:  sifRange | sifPage | sifPos,
@@ -342,25 +365,20 @@ func (s *nativeShell) layout() {
 	position, _, _ := procSetScrollInfo.Call(uintptr(s.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
 	s.scrollY = int32(position)
 	headingVisibility := int32(swShow)
-	if plan.horizontalNav {
+	if plan.compact {
 		headingVisibility = swHide
 	}
 	procShowWindow.Call(uintptr(s.navHeading), uintptr(headingVisibility))
 	moveWindow(s.navHeading, plan.margin, plan.margin-s.scrollY, plan.navWidth, s.scale(24))
 	for i, module := range modules {
-		x := plan.margin
 		y := plan.navY + int32(i)*(plan.navHeight+s.scale(8))
-		if plan.horizontalNav {
-			x += int32(i) * (plan.navWidth + s.scale(8))
-			y = plan.navY
-		}
-		moveWindow(s.navButtons[module.ID()], x, y-s.scrollY, plan.navWidth, plan.navHeight)
+		moveWindow(s.navButtons[module.ID()], plan.margin, y-s.scrollY, plan.navWidth, plan.navHeight)
 	}
 	contentY := func(y int32) int32 { return y - s.scrollY }
 	moveWindow(s.title, plan.contentX, contentY(plan.contentY), plan.contentWidth, plan.titleHeight)
-	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, s.scale(90))
+	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, plan.descriptionHeight)
 	moveWindow(s.action, plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
-	moveWindow(s.note, plan.contentX, contentY(plan.noteY), plan.contentWidth, s.scale(28))
+	moveWindow(s.note, plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
 }
 
 func (s *nativeShell) setScrollPosition(position int32) {
@@ -427,6 +445,33 @@ func (s *nativeShell) ensureControlVisible(control windows.Handle) {
 	}
 }
 
+func (s *nativeShell) measureText(text string, width int32, font windows.Handle) int32 {
+	if width <= 0 {
+		return 0
+	}
+	dc, _, _ := procGetDC.Call(uintptr(s.hwnd))
+	if dc == 0 {
+		return 0
+	}
+	previous := uintptr(0)
+	if font != 0 {
+		previous, _, _ = procSelectObject.Call(dc, uintptr(font))
+	}
+	bounds := rect{Right: width}
+	height, _, _ := procDrawTextW.Call(
+		dc,
+		uintptr(unsafe.Pointer(utf16(text))),
+		^uintptr(0),
+		uintptr(unsafe.Pointer(&bounds)),
+		dtWordBreak|dtCalcRect|dtNoPrefix,
+	)
+	if previous != 0 {
+		procSelectObject.Call(dc, previous)
+	}
+	procReleaseDC.Call(uintptr(s.hwnd), dc)
+	return int32(height)
+}
+
 func (s *nativeShell) scale(value int32) int32 {
 	return int32((int64(value)*int64(s.dpi) + 48) / 96)
 }
@@ -443,6 +488,10 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			if id, exists := shell.navIDs[lowWord(wParam)]; exists {
 				if shell.navigator.Select(id) == nil {
 					shell.updateView()
+					shell.layout()
+				}
+				if lParam != nil {
+					shell.ensureControlVisible(windows.Handle(lParam))
 				}
 				return 0
 			}

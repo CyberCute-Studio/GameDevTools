@@ -70,6 +70,10 @@ const (
 
 	defaultCharset   = 1
 	clearTypeQuality = 5
+
+	dtWordBreak = 0x0010
+	dtCalcRect  = 0x0400
+	dtNoPrefix  = 0x0800
 )
 
 var (
@@ -104,8 +108,12 @@ var (
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	procGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
+	procGetDC                         = user32.NewProc("GetDC")
+	procReleaseDC                     = user32.NewProc("ReleaseDC")
+	procDrawTextW                     = user32.NewProc("DrawTextW")
 	procGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
 	procCreateFontIndirectW           = gdi32.NewProc("CreateFontIndirectW")
+	procSelectObject                  = gdi32.NewProc("SelectObject")
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")
 	procSetBkMode                     = gdi32.NewProc("SetBkMode")
 )

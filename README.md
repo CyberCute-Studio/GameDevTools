@@ -14,7 +14,7 @@ Start the application shell with:
 go run ./cmd/gamedevtools
 ```
 
-Use the left navigation or keyboard focus to switch between Screenshot, Image Resizer, and Settings. Each module retains its view object while another module is selected. Shared registration, navigation, and GUI-dispatch contracts live in `internal/shell`; module placeholders live in their own packages under `internal`.
+Use the navigation controls or keyboard focus to switch between Screenshot, Image Resizer, and Settings. Each module retains its view object while another module is selected. Shared registration, navigation, and GUI-dispatch contracts live in `internal/shell`; module placeholders live in their own packages under `internal`.
 
 Run formatting, static analysis, and unit tests from the repository root with:
 
