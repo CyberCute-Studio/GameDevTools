@@ -1,5 +1,5 @@
 package app
 
 func Run() error {
-	return nil
+	return runNative()
 }

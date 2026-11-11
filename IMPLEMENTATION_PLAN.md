@@ -55,7 +55,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** Proceeding with the production foundation by explicit request while FND-01's mixed-DPI validation blocker remains open; dependent Screenshot capture work remains blocked.
 
 3. **FND-03 — Create the application shell and module boundaries**
-   - **Status:** Pending | **PR:** TBD | **Depends on:** FND-02
+   - **Status:** In Progress | **PR:** [#3](https://github.com/CyberCute-Studio/GameDevTools/pull/3) | **Depends on:** FND-02
    - **Requirements:** APP-001, APP-002, TECH-004, TECH-005.
    - **Deliver:** Main window, navigation to Screenshot, Image Resizer, and Settings, placeholder module views, shared navigation/service interfaces, and GUI-thread dispatch mechanism. Establish module ownership so feature code does not leak into unrelated modules.
    - **Verify:** Navigate repeatedly between all views without losing in-memory view state or blocking the GUI thread. Unit-test module registration and navigation state where practical.
