@@ -48,11 +48,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** Native Win32 via `golang.org/x/sys/windows` is selected. Two physical displays passed at 100% scaling; mixed-DPI runtime validation remains a blocker because different scaling settings were unavailable. See ADR-0001.
 
 2. **FND-02 — Bootstrap the production Go project and quality gates**
-   - **Status:** Pending | **PR:** TBD | **Depends on:** FND-01
+   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-01
    - **Requirements:** TECH-001, TECH-009, TECH-010.
    - **Deliver:** Go module, production package structure, Windows application entry point, debug/release build commands, unit-test setup, formatting and static-analysis checks, and Windows CI. Separate production code from the FND-01 spike.
    - **Verify:** A clean checkout builds and tests successfully on Windows using documented commands. CI runs the same checks and produces a basic Windows executable artifact.
-   - **Notes:** None.
+   - **Notes:** Proceeding with the production foundation by explicit request while FND-01's mixed-DPI validation blocker remains open; dependent Screenshot capture work remains blocked.
 
 3. **FND-03 — Create the application shell and module boundaries**
    - **Status:** Pending | **PR:** TBD | **Depends on:** FND-02

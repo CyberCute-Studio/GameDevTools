@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        shell: pwsh
+        run: |
+          $changed = go fmt ./...
+          if ($LASTEXITCODE -ne 0) { throw "go fmt failed with exit code $LASTEXITCODE" }
+          if ($changed) {
+            $changed
+            throw "Formatting changes are required. Run 'go fmt ./...'."
+          }
+
+      - name: Run static analysis
+        run: go vet ./...
+
+      - name: Run unit tests
+        run: go test -count=1 ./...
+
+      - name: Build Windows AMD64 release executable
+        shell: pwsh
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: ./scripts/build.ps1 -Configuration Release -OutputPath bin/gamedevtools-windows-amd64.exe
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamedevtools-windows-amd64
+          path: bin/gamedevtools-windows-amd64.exe
+          if-no-files-found: error

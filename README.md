@@ -1,32 +1,61 @@
 # GameDevTools
 
-GameDevTools is a Windows desktop application implemented in Go. The repository currently contains the **FND-01 technical spike**, not the production application.
+GameDevTools is a Windows desktop application implemented in Go. The repository contains the production project foundation under `cmd/gamedevtools` and `internal`, plus the separate **FND-01 technical spike** under `cmd/fnd01-spike`.
 
-The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open validation blocker.
+The production entry point is a bootstrap placeholder; FND-03 adds the application shell and navigation. The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open mixed-DPI validation blocker.
 
-## Build
+## Production application
 
-Go 1.24 or newer is required. No C compiler or CGO is needed.
+Go 1.24 or newer is required for development. No C compiler or CGO is needed. Built executables run without a Go installation or development toolchain.
+
+Run formatting, static analysis, and unit tests from the repository root with:
+
+```bash
+go fmt ./...
+go vet ./...
+go test -count=1 ./...
+```
+
+Build a debug executable with symbols, optimizations disabled, and a console attached:
+
+```powershell
+./scripts/build.ps1 -Configuration Debug
+```
+
+Build the smaller Windows GUI release executable:
+
+```powershell
+./scripts/build.ps1 -Configuration Release
+```
+
+The default outputs are `bin/gamedevtools-debug.exe` and `bin/gamedevtools.exe`. Override the destination with `-OutputPath`; relative paths are resolved from the repository root.
+
+To build the initial 64-bit Intel/AMD target from another Windows architecture:
+
+```powershell
+$env:GOOS = "windows"
+$env:GOARCH = "amd64"
+$env:CGO_ENABLED = "0"
+./scripts/build.ps1 -Configuration Release -OutputPath bin/gamedevtools-windows-amd64.exe
+```
+
+Windows CI runs the same formatting, static-analysis, test, and release-build checks and uploads the AMD64 executable as an artifact.
+
+## FND-01 technical spike
+
+Build the spike directly with:
 
 ```bash
 go build -o bin/fnd01-spike.exe ./cmd/fnd01-spike
 ```
 
-Cross-compile the initial 64-bit Intel/AMD target from another Windows architecture:
+Cross-compile its initial 64-bit Intel/AMD target from another Windows architecture:
 
 ```bash
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o bin/fnd01-spike-amd64.exe ./cmd/fnd01-spike
 ```
 
-Run formatting, static analysis, and package checks with:
-
-```bash
-gofmt -w cmd/fnd01-spike/*.go
-go vet ./...
-go test ./...
-```
-
-## Interactive demonstration
+### Interactive demonstration
 
 ```bash
 go run ./cmd/fnd01-spike
