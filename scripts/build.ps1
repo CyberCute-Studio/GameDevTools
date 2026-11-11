@@ -21,7 +21,7 @@ New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 
 $buildArgs = @("build", "-o", $OutputPath)
 if ($Configuration -eq "Debug") {
-    $buildArgs += "-gcflags=all=-N -l"
+    $buildArgs += "-gcflags=github.com/CyberCute-Studio/GameDevTools/...=-N -l"
 } else {
     $buildArgs += "-ldflags=-s -w -H=windowsgui"
 }
