@@ -140,6 +140,30 @@ func TestNativeManagerFailedSaveKeepsInMemoryWorkflow(t *testing.T) {
 	}
 }
 
+func TestNativeManagerLayoutExpandsForWrappedMessages(t *testing.T) {
+	parent := newPresetTestParent(t)
+	value := settings.Default()
+	manager := newNativeManagerForTest(t, shell.ModuleScreenshot, settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")}), &value, parent)
+	scale := func(value int32) int32 { return value }
+	measure := func(text string, width int32) int32 {
+		if text == "" {
+			return 0
+		}
+		return 120
+	}
+	baseline := manager.NativeHeight(240, scale, measure)
+	manager.width.Error.SetText("A wrapped dimension validation message")
+	manager.status.SetText("A wrapped persistence warning")
+	expanded := manager.NativeHeight(240, scale, measure)
+	if expanded-baseline != 152 {
+		t.Fatalf("height increase = %d, want 152", expanded-baseline)
+	}
+	manager.NativeLayout(0, 0, 240, scale, measure)
+	if got := manager.width.Error.Text(); got == "" || manager.status.Text() == "" {
+		t.Fatal("layout discarded validation or persistence text")
+	}
+}
+
 func newNativeManagerForTest(t *testing.T, module shell.ModuleID, store *settings.Store, value *settings.Settings, parent windows.Handle) *NativeManager {
 	t.Helper()
 	repository, err := NewRepository(module, store)

@@ -134,40 +134,51 @@ func (n *NativeManager) NativeShow(visible bool) {
 	n.status.Label.Show(visible)
 }
 
-func (n *NativeManager) NativeHeight(scale func(int32) int32) int32 {
-	height := scale(20+4+30+12) + inputHeight(scale) + scale(12) + inputHeight(scale) + scale(12)
+func (n *NativeManager) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
+	nameMetrics, dimensionMetrics, statusHeight := n.metrics(width, scale, measure)
+	height := scale(66) + nameMetrics.Height() + scale(12) + dimensionMetrics.Height() + scale(12)
 	if n.mode != nil {
-		height += scale(20 + 4 + 30 + 12)
+		height += scale(66)
 	}
-	height += scale(36 + 8 + 36 + 12 + 48)
-	return height
+	return height + scale(140) - scale(48) + statusHeight
 }
 
-func (n *NativeManager) NativeLayout(x, y, width int32, scale func(int32) int32) {
+func (n *NativeManager) NativeLayout(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) {
+	nameMetrics, dimensionMetrics, statusHeight := n.metrics(width, scale, measure)
 	n.listLabel.Move(x, y, width, scale(20))
 	n.list.Move(x, y+scale(24), width, scale(200))
 	y += scale(66)
-	metrics := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
-	n.name.Move(x, y, width, metrics)
-	y += inputHeight(scale) + scale(12)
+	n.name.Move(x, y, width, nameMetrics)
+	y += nameMetrics.Height() + scale(12)
 	gap := scale(12)
-	columnWidth := (width - gap) / 2
-	n.width.Move(x, y, columnWidth, metrics)
-	n.height.Move(x+columnWidth+gap, y, width-columnWidth-gap, metrics)
-	y += inputHeight(scale) + scale(12)
+	columnWidth := max(int32(1), (width-gap)/2)
+	n.width.Move(x, y, columnWidth, dimensionMetrics)
+	n.height.Move(x+columnWidth+gap, y, max(int32(1), width-columnWidth-gap), dimensionMetrics)
+	y += dimensionMetrics.Height() + scale(12)
 	if n.mode != nil {
 		n.modeLabel.Move(x, y, width, scale(20))
 		n.mode.Move(x, y+scale(24), width, scale(200))
 		y += scale(66)
 	}
-	buttonWidth := (width - gap) / 2
+	buttonWidth := max(int32(1), (width-gap)/2)
 	n.create.Move(x, y, buttonWidth, scale(36))
-	n.update.Move(x+buttonWidth+gap, y, width-buttonWidth-gap, scale(36))
+	n.update.Move(x+buttonWidth+gap, y, max(int32(1), width-buttonWidth-gap), scale(36))
 	y += scale(44)
 	n.duplicate.Move(x, y, buttonWidth, scale(36))
-	n.remove.Move(x+buttonWidth+gap, y, width-buttonWidth-gap, scale(36))
+	n.remove.Move(x+buttonWidth+gap, y, max(int32(1), width-buttonWidth-gap), scale(36))
 	y += scale(48)
-	n.status.Move(x, y, width, scale(48))
+	n.status.Move(x, y, width, statusHeight)
+}
+
+func (n *NativeManager) metrics(width int32, scale func(int32) int32, measure func(string, int32) int32) (ui.DimensionMetrics, ui.DimensionMetrics, int32) {
+	nameMetrics := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
+	nameMetrics.ErrorHeight = max(nameMetrics.ErrorHeight, measure(n.name.Error.Text(), width))
+	columnWidth := max(int32(1), (width-scale(12))/2)
+	dimensionMetrics := nameMetrics
+	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.width.Error.Text(), columnWidth))
+	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.height.Error.Text(), columnWidth))
+	statusHeight := max(scale(48), measure(n.status.Text(), width))
+	return nameMetrics, dimensionMetrics, statusHeight
 }
 
 func (n *NativeManager) NativeCommand(id int32, notification uint16) bool {
@@ -372,8 +383,4 @@ func (n *NativeManager) presentResult(err error, success string) {
 		return
 	}
 	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.PresetOperationFailed, err)}, 0)
-}
-
-func inputHeight(scale func(int32) int32) int32 {
-	return scale(20 + 28 + 40 + 8)
 }

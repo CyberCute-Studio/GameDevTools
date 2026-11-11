@@ -27,10 +27,11 @@ const (
 	wsOverlappedWindow = 0x00cf0000
 	wsVScroll          = 0x00200000
 
-	bmSetCheck = 0x00f1
-	bstChecked = 1
-	bnSetFocus = 9
-	enSetFocus = 0x0100
+	bmSetCheck  = 0x00f1
+	bstChecked  = 1
+	bnSetFocus  = 9
+	enSetFocus  = 0x0100
+	cbnSetFocus = 3
 
 	sbVert          = 1
 	sbLineUp        = 0

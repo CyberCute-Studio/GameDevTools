@@ -46,8 +46,8 @@ type nativeView interface {
 	NativeCreate(windows.Handle) error
 	NativeFont(windows.Handle)
 	NativeShow(bool)
-	NativeHeight(func(int32) int32) int32
-	NativeLayout(int32, int32, int32, func(int32) int32)
+	NativeHeight(int32, func(int32) int32, func(string, int32) int32) int32
+	NativeLayout(int32, int32, int32, func(int32) int32, func(string, int32) int32)
 	NativeCommand(int32, uint16) bool
 	NativeDestroy()
 }
@@ -423,14 +423,17 @@ func (s *nativeShell) layout() {
 	modules := s.navigator.Modules()
 	basePlan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{})
 	view := s.navigator.Current().View()
+	measureModuleText := func(text string, width int32) int32 {
+		return s.measureText(text, width, s.bodyFont)
+	}
 	moduleHeight := int32(0)
 	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
-		moduleHeight = native.NativeHeight(s.scale)
+		moduleHeight = native.NativeHeight(basePlan.contentWidth, s.scale, measureModuleText)
 	}
 	plan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{
 		title:        s.measureText(view.Title(), basePlan.contentWidth, s.headingFont),
-		description:  s.measureText(view.Description(), basePlan.contentWidth, s.bodyFont),
-		note:         s.measureText(s.noteText(), basePlan.contentWidth, s.bodyFont),
+		description:  measureModuleText(view.Description(), basePlan.contentWidth),
+		note:         measureModuleText(s.noteText(), basePlan.contentWidth),
 		moduleHeight: moduleHeight,
 	})
 	info := scrollInfo{
@@ -457,7 +460,7 @@ func (s *nativeShell) layout() {
 	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, plan.descriptionHeight)
 	moveWindow(s.action, plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
 	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
-		native.NativeLayout(plan.contentX, contentY(plan.moduleY), plan.contentWidth, s.scale)
+		native.NativeLayout(plan.contentX, contentY(plan.moduleY), plan.contentWidth, s.scale, measureModuleText)
 	}
 	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
 }
@@ -605,7 +608,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	switch message {
 	case wmCommand:
 		notification := highWord(wParam)
-		if shell != nil && (notification == bnSetFocus || notification == enSetFocus) && lParam != nil {
+		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus) && lParam != nil {
 			shell.ensureControlVisible(windows.Handle(lParam))
 			return 0
 		}
@@ -622,6 +625,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 		if shell != nil {
 			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists && native.NativeCommand(int32(lowWord(wParam)), notification) {
+				shell.layout()
 				return 0
 			}
 		}
