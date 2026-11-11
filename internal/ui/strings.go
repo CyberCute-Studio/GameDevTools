@@ -33,4 +33,10 @@ const (
 	SettingsSaveFailed            = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
 	SettingsCloseTitle            = "GameDevTools — Settings not saved"
 	SettingsCloseConfirmation     = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
+
+	PresetNameRequired         = "Preset name is required. Enter a name."
+	PresetDimensionRange       = "%s must be between 1 and 16,384 pixels. Enter a whole number in that range."
+	PresetResizePixelLimit     = "Resize presets must not exceed 100 megapixels (100,000,000 pixels). Reduce the width or height."
+	PresetResizeMode           = "Choose Fit, Stretch, or Crop to Fill for the Image Resizer preset."
+	PresetScreenshotResizeMode = "Screenshot presets do not have a resize fitting mode."
 )

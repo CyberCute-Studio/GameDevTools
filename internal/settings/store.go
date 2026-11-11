@@ -46,6 +46,8 @@ type Migration interface {
 	Migrate(json.RawMessage) (json.RawMessage, error)
 }
 
+type ModuleValidator func(json.RawMessage) error
+
 type LoadResult struct {
 	Settings Settings
 	Warnings []string
@@ -54,6 +56,7 @@ type LoadResult struct {
 type Store struct {
 	path       string
 	migrations map[int]Migration
+	validators map[string]ModuleValidator
 	blocked    error
 	now        func() time.Time
 }
@@ -91,6 +94,7 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 	store := &Store{
 		path:       paths.ConfigFile,
 		migrations: make(map[int]Migration),
+		validators: make(map[string]ModuleValidator),
 		now:        time.Now,
 	}
 	for _, migration := range migrations {
@@ -99,6 +103,14 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 		}
 	}
 	return store
+}
+
+func (s *Store) RegisterModuleValidator(name string, validator ModuleValidator) {
+	if validator == nil {
+		delete(s.validators, name)
+		return
+	}
+	s.validators[name] = validator
 }
 
 func (s *Store) Load() LoadResult {
@@ -159,6 +171,9 @@ func (s *Store) save(value Settings) error {
 		return errors.New("settings path is unavailable")
 	}
 	if err := validate(value); err != nil {
+		return err
+	}
+	if err := s.validateModules(value); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(value, "", "  ")
@@ -241,7 +256,23 @@ func (s *Store) decode(data []byte) (Settings, bool, error) {
 	if err := validate(decoded); err != nil {
 		return Settings{}, false, err
 	}
+	if err := s.validateModules(decoded); err != nil {
+		return Settings{}, false, err
+	}
 	return decoded, migrated, nil
+}
+
+func (s *Store) validateModules(value Settings) error {
+	for name, validator := range s.validators {
+		section, exists := value.Modules[name]
+		if !exists {
+			continue
+		}
+		if err := validator(section); err != nil {
+			return fmt.Errorf("module settings %q are invalid: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func validate(value Settings) error {

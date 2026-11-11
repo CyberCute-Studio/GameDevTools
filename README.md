@@ -18,6 +18,8 @@ Use the navigation controls or keyboard focus to switch between Screenshot, Imag
 
 The selected module and normal window bounds persist across restarts. Settings use a versioned JSON file with atomic writes, migration hooks, and backup-before-recovery behavior. Diagnostic logs contain structured event metadata only and rotate by size. See [Local settings and diagnostics](docs/settings.md) for paths, schema, recovery, and redaction boundaries.
 
+Independent Screenshot and Image Resizer preset libraries live in `internal/preset`. Built-in dimensions are immutable; custom presets have stable local identifiers, validated module-specific options, and persistent storage within their owning module's settings section. Malformed preset data uses the same backup-and-recovery flow as the rest of the settings file.
+
 Shared Win32 controls, dimension validation, confirmations, inline notifications, centralized strings, and accessibility conventions live in `internal/ui`. See [Shared UI and accessibility conventions](docs/ui.md) for keyboard, status, theme, and contrast guidance.
 
 Run formatting, static analysis, and unit tests from the repository root with:
