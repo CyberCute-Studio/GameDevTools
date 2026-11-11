@@ -14,8 +14,10 @@ const (
 	wmSize           = 0x0005
 	wmClose          = 0x0010
 	wmCommand        = 0x0111
+	wmVScroll        = 0x0115
 	wmCtlColorStatic = 0x0138
 	wmSetFont        = 0x0030
+	wmMouseWheel     = 0x020a
 	wmDPIChanged     = 0x02e0
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1
@@ -27,10 +29,28 @@ const (
 	wsGroup            = 0x00020000
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000
+	wsVScroll          = 0x00200000
 
 	bsAutoRadioButton = 0x0000009
+	bsNotify          = 0x00004000
 	bmSetCheck        = 0x00f1
 	bstChecked        = 1
+	bnSetFocus        = 9
+
+	sbVert          = 1
+	sbLineUp        = 0
+	sbLineDown      = 1
+	sbPageUp        = 2
+	sbPageDown      = 3
+	sbThumbPosition = 4
+	sbThumbTrack    = 5
+	sbTop           = 6
+	sbBottom        = 7
+
+	sifRange = 0x0001
+	sifPage  = 0x0002
+	sifPos   = 0x0004
+	sifAll   = sifRange | sifPage | sifPos | 0x0010
 
 	swHide = 0
 	swShow = 5
@@ -70,6 +90,9 @@ var (
 	procGetWindowRect                 = user32.NewProc("GetWindowRect")
 	procMonitorFromWindow             = user32.NewProc("MonitorFromWindow")
 	procGetMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
+	procGetScrollInfo                 = user32.NewProc("GetScrollInfo")
+	procSetScrollInfo                 = user32.NewProc("SetScrollInfo")
+	procMapWindowPoints               = user32.NewProc("MapWindowPoints")
 	procLoadCursorW                   = user32.NewProc("LoadCursorW")
 	procGetMessageW                   = user32.NewProc("GetMessageW")
 	procIsDialogMessageW              = user32.NewProc("IsDialogMessageW")
@@ -99,6 +122,16 @@ type monitorInfo struct {
 	Monitor rect
 	Work    rect
 	Flags   uint32
+}
+
+type scrollInfo struct {
+	CbSize    uint32
+	FMask     uint32
+	NMin      int32
+	NMax      int32
+	NPage     uint32
+	NPos      int32
+	NTrackPos int32
 }
 
 type point struct {
