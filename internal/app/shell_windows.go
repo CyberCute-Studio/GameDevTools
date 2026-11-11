@@ -48,7 +48,7 @@ func runShell(navigator *core.Navigator) error {
 		0,
 		uintptr(unsafe.Pointer(utf16(shellClassName))),
 		uintptr(unsafe.Pointer(utf16("GameDevTools"))),
-		wsOverlappedWindow|wsClipChildren|wsVisible,
+		wsOverlappedWindow|wsClipChildren,
 		cwUseDefault, cwUseDefault, 1100, 700,
 		0, 0, 0, 0,
 	)
@@ -69,7 +69,9 @@ func runShell(navigator *core.Navigator) error {
 	}
 	shell.updateFonts()
 	shell.updateView()
+	shell.fitInitialWindow()
 	shell.layout()
+	procShowWindow.Call(hwnd, swShow)
 	procUpdateWindow.Call(hwnd)
 	var message msg
 	for {
@@ -212,6 +214,46 @@ func (s *nativeShell) updateView() {
 		}
 		procSendMessageW.Call(uintptr(button), bmSetCheck, checked, 0)
 	}
+}
+
+func (s *nativeShell) fitInitialWindow() {
+	width := s.scale(1100)
+	height := s.scale(700)
+	flags := uintptr(swpNoZOrder | swpNoActivate | swpNoMove)
+	var x, y int32
+	var current rect
+	if r, _, _ := procGetWindowRect.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&current))); r != 0 {
+		x = current.Left
+		y = current.Top
+		flags &^= swpNoMove
+		monitor, _, _ := procMonitorFromWindow.Call(uintptr(s.hwnd), monitorDefaultToNearest)
+		if monitor != 0 {
+			info := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+			if r, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); r != 0 {
+				workWidth := info.Work.Right - info.Work.Left
+				workHeight := info.Work.Bottom - info.Work.Top
+				if width > workWidth {
+					width = workWidth
+				}
+				if height > workHeight {
+					height = workHeight
+				}
+				if x+width > info.Work.Right {
+					x = info.Work.Right - width
+				}
+				if y+height > info.Work.Bottom {
+					y = info.Work.Bottom - height
+				}
+				if x < info.Work.Left {
+					x = info.Work.Left
+				}
+				if y < info.Work.Top {
+					y = info.Work.Top
+				}
+			}
+		}
+	}
+	procSetWindowPos.Call(uintptr(s.hwnd), 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), flags)
 }
 
 func (s *nativeShell) layout() {

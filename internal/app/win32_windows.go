@@ -35,8 +35,11 @@ const (
 	swHide = 0
 	swShow = 5
 
+	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+
+	monitorDefaultToNearest = 2
 
 	cwUseDefault = 0x80000000
 
@@ -64,6 +67,9 @@ var (
 	procUpdateWindow                  = user32.NewProc("UpdateWindow")
 	procMoveWindow                    = user32.NewProc("MoveWindow")
 	procGetClientRect                 = user32.NewProc("GetClientRect")
+	procGetWindowRect                 = user32.NewProc("GetWindowRect")
+	procMonitorFromWindow             = user32.NewProc("MonitorFromWindow")
+	procGetMonitorInfoW               = user32.NewProc("GetMonitorInfoW")
 	procLoadCursorW                   = user32.NewProc("LoadCursorW")
 	procGetMessageW                   = user32.NewProc("GetMessageW")
 	procIsDialogMessageW              = user32.NewProc("IsDialogMessageW")
@@ -86,6 +92,13 @@ type rect struct {
 	Top    int32
 	Right  int32
 	Bottom int32
+}
+
+type monitorInfo struct {
+	CbSize  uint32
+	Monitor rect
+	Work    rect
+	Flags   uint32
 }
 
 type point struct {
