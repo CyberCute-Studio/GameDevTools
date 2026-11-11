@@ -69,7 +69,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** Feature modules add their own versioned settings sections through this shared service.
 
 5. **FND-05 — Establish shared UI, validation, notification, and accessibility primitives**
-   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-03
+   - **Status:** In Progress | **PR:** [#5](https://github.com/CyberCute-Studio/GameDevTools/pull/5) | **Depends on:** FND-03
    - **Requirements:** UX-001, UX-002, UX-003, UX-004, UX-005, UX-006, UX-007, UX-009, UX-010.
    - **Deliver:** Shared buttons, numeric dimension inputs, validation presentation, confirmation dialogs, status/error presentation, non-blocking notifications, keyboard focus behavior, centralized user-facing strings, and theme/contrast conventions.
    - **Verify:** Exercise shared controls using keyboard only and with invalid input. Check visible focus, readable errors, non-color-only statuses, dimension labels, and confirmation behavior.
