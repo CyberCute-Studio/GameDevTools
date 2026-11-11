@@ -151,6 +151,22 @@ func TestShellWindowProcScrollsFocusedComboIntoView(t *testing.T) {
 	}
 }
 
+func TestShellWindowProcScrollsFocusedButtonIntoView(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	button, err := ui.NewButton(shell.hwnd, "Create Preset", ui.ButtonOptions{ID: 206})
+	if err != nil {
+		t.Fatal(err)
+	}
+	button.Move(0, 500, 200, 36)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	const bnSetFocusNotification = 6
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(206)|uintptr(bnSetFocusNotification)<<16, uintptr(button.Handle()))
+	if shell.scrollY == 0 {
+		t.Fatal("button focus did not scroll the control into view")
+	}
+}
+
 type commandTestView struct{}
 
 func (commandTestView) Title() string         { return "Test" }

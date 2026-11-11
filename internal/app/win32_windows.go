@@ -29,7 +29,7 @@ const (
 
 	bmSetCheck  = 0x00f1
 	bstChecked  = 1
-	bnSetFocus  = 9
+	bnSetFocus  = 6
 	enSetFocus  = 0x0100
 	cbnSetFocus = 3
 

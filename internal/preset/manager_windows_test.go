@@ -90,6 +90,12 @@ func TestNativeManagerCRUDIndependenceAndRestart(t *testing.T) {
 	if got := restartedResizer.manager.library.SelectedID(); got != resizerCreated.ID {
 		t.Fatalf("restored Image Resizer selection = %q, want %q", got, resizerCreated.ID)
 	}
+	if selected, exists := restartedScreenshot.selected(); !exists || selected.ID != duplicated.ID || restartedScreenshot.name.Edit.Text() != "HD copy" {
+		t.Fatalf("restored Screenshot UI selection = %+v, exists = %v, name = %q", selected, exists, restartedScreenshot.name.Edit.Text())
+	}
+	if selected, exists := restartedResizer.selected(); !exists || selected.ID != resizerCreated.ID || restartedResizer.name.Edit.Text() != "Shared name" || restartedResizer.mode.Selected() != 2 {
+		t.Fatalf("restored Image Resizer UI selection = %+v, exists = %v, name = %q, mode = %d", selected, exists, restartedResizer.name.Edit.Text(), restartedResizer.mode.Selected())
+	}
 	if restartedScreenshot.manager.library.Custom()[0].Name != "HD copy" || restartedResizer.manager.library.Custom()[0].Name != "Shared name" {
 		t.Fatal("restart did not preserve independent custom libraries")
 	}
