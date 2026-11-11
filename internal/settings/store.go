@@ -234,16 +234,6 @@ func (s *Store) decode(data []byte) (Settings, bool, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return Settings{}, false, errors.New("settings contain trailing JSON values")
 	}
-	defaults := Default()
-	if decoded.Shell.SelectedModule == "" {
-		decoded.Shell.SelectedModule = defaults.Shell.SelectedModule
-	}
-	if decoded.Shell.Window.Width == 0 {
-		decoded.Shell.Window.Width = defaults.Shell.Window.Width
-	}
-	if decoded.Shell.Window.Height == 0 {
-		decoded.Shell.Window.Height = defaults.Shell.Window.Height
-	}
 	if decoded.Modules == nil {
 		decoded.Modules = make(map[string]json.RawMessage)
 	}
@@ -272,8 +262,12 @@ func validate(value Settings) error {
 		if name == "" {
 			return errors.New("module settings name is empty")
 		}
-		if !json.Valid(section) {
+		trimmed := bytes.TrimSpace(section)
+		if !json.Valid(trimmed) {
 			return fmt.Errorf("module settings %q are malformed", name)
+		}
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			return fmt.Errorf("module settings %q must be a JSON object", name)
 		}
 	}
 	return nil

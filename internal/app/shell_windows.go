@@ -618,7 +618,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		if shell != nil && shell.saveSettings(true) != nil {
 			answer, _, _ := procMessageBoxW.Call(
 				uintptr(hwnd),
-				uintptr(unsafe.Pointer(utf16("Settings could not be saved. Close anyway and keep these changes only for the current session?"))),
+				uintptr(unsafe.Pointer(utf16("Settings could not be saved. Close anyway? These changes will not be available after the application closes."))),
 				uintptr(unsafe.Pointer(utf16("GameDevTools — Settings not saved"))),
 				mbYesNo|mbIconWarning,
 			)

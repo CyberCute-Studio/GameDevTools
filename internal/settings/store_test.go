@@ -200,6 +200,10 @@ func TestStoreRejectsInvalidAndFutureDataWithoutLosingIt(t *testing.T) {
 	}{
 		{name: "unknown field", data: `{"version":1,"shell":{"selectedModule":"screenshot","window":{"width":1100,"height":700}},"unexpected":true}`},
 		{name: "unknown module", data: `{"version":1,"shell":{"selectedModule":"other","window":{"width":1100,"height":700}}}`},
+		{name: "empty module", data: `{"version":1,"shell":{"selectedModule":"","window":{"width":1100,"height":700}}}`},
+		{name: "zero window width", data: `{"version":1,"shell":{"selectedModule":"screenshot","window":{"width":0,"height":700}}}`},
+		{name: "zero window height", data: `{"version":1,"shell":{"selectedModule":"screenshot","window":{"width":1100,"height":0}}}`},
+		{name: "non-object module payload", data: `{"version":1,"shell":{"selectedModule":"screenshot","window":{"width":1100,"height":700}},"modules":{"screenshot":"png"}}`},
 		{name: "future version", data: `{"version":2,"shell":{"selectedModule":"screenshot","window":{"width":1100,"height":700}}}`},
 	}
 	for _, test := range tests {
