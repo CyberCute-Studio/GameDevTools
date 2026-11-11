@@ -35,6 +35,7 @@ var (
 	user32 = windows.NewLazySystemDLL("user32.dll")
 
 	procCreateWindowExW      = user32.NewProc("CreateWindowExW")
+	procDestroyWindow        = user32.NewProc("DestroyWindow")
 	procSetWindowTextW       = user32.NewProc("SetWindowTextW")
 	procGetWindowTextW       = user32.NewProc("GetWindowTextW")
 	procGetWindowTextLengthW = user32.NewProc("GetWindowTextLengthW")

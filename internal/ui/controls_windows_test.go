@@ -13,10 +13,7 @@ import (
 
 const wsOverlappedWindow = 0x00cf0000
 
-var (
-	procDestroyWindow     = user32.NewProc("DestroyWindow")
-	procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
-)
+var procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
 
 func TestDimensionInputPresentsValidation(t *testing.T) {
 	parent := newTestParent(t)
@@ -88,6 +85,17 @@ func TestStatusAreaPresentsAndClearsNotice(t *testing.T) {
 	area.Show(Notice{Kind: NoticeSuccess, Message: "Saved"}, time.Second)
 	if area.timer == 0 {
 		t.Fatal("timed notice did not create a timer")
+	}
+	expiredTimer := area.timer
+	area.Show(Notice{Kind: NoticeSuccess, Message: "Still visible"}, time.Hour)
+	if area.timer == expiredTimer {
+		t.Fatal("replacement notice reused the expired timer ID")
+	}
+	if area.HandleTimer(expiredTimer) {
+		t.Fatal("stale timer cleared the replacement notice")
+	}
+	if got := area.Text(); got != "Success: Still visible" {
+		t.Fatalf("replacement status text = %q", got)
 	}
 	if !area.HandleTimer(area.timer) {
 		t.Fatal("notice timer was not handled")

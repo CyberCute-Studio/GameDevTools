@@ -4,11 +4,14 @@ package ui
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+var nextTimerID atomic.Uintptr
 
 type Control struct {
 	hwnd windows.Handle
@@ -125,10 +128,13 @@ func NewDimensionInput(parent windows.Handle, field string, id int32) (*Dimensio
 	}
 	edit, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll, wsExClientEdge, id)
 	if err != nil {
+		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
 	validation, err := NewLabel(parent, "")
 	if err != nil {
+		procDestroyWindow.Call(uintptr(edit))
+		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
 	return &DimensionInput{
@@ -208,7 +214,11 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) {
 	if milliseconds > int64(^uint32(0)) {
 		milliseconds = int64(^uint32(0))
 	}
-	s.timer, _, _ = procSetTimer.Call(uintptr(s.parent), 0, uintptr(milliseconds), 0)
+	timerID := nextTimerID.Add(1)
+	if timerID == 0 {
+		timerID = nextTimerID.Add(1)
+	}
+	s.timer, _, _ = procSetTimer.Call(uintptr(s.parent), timerID, uintptr(milliseconds), 0)
 }
 
 func (s *StatusArea) Clear() {

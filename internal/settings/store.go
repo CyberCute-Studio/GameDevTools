@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 const CurrentVersion = 1
@@ -103,7 +104,7 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 func (s *Store) Load() LoadResult {
 	result := LoadResult{Settings: Default()}
 	if s.path == "" {
-		result.Warnings = append(result.Warnings, "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session.")
+		result.Warnings = append(result.Warnings, ui.SettingsPathUnavailable)
 		return result
 	}
 	data, err := os.ReadFile(s.path)
@@ -112,7 +113,7 @@ func (s *Store) Load() LoadResult {
 	}
 	if err != nil {
 		s.blocked = err
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file.", s.path, err))
+		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsReadFailed, s.path, err))
 		return result
 	}
 
@@ -121,12 +122,12 @@ func (s *Store) Load() LoadResult {
 		backup, backupErr := s.backup(data, "corrupt")
 		if backupErr != nil {
 			s.blocked = backupErr
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Settings in %s are invalid (%v), and a backup could not be created: %v. Defaults are in use and saving is disabled to protect the original file.", s.path, err, backupErr))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsInvalidBackupFailed, s.path, err, backupErr))
 			return result
 		}
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Settings were invalid (%v). The original was backed up to %s and defaults are now in use.", err, backup))
+		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup))
 		if saveErr := s.save(result.Settings); saveErr != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Default settings could not be written: %v. Defaults remain in memory.", saveErr))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.DefaultSettingsWriteFailed, saveErr))
 		}
 		return result
 	}
@@ -136,11 +137,11 @@ func (s *Store) Load() LoadResult {
 		backup, backupErr := s.backup(data, "migration")
 		if backupErr != nil {
 			s.blocked = backupErr
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Settings were migrated in memory, but the original could not be backed up: %v. Saving is disabled to protect %s.", backupErr, s.path))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsMigrationBackupFailed, backupErr, s.path))
 			return result
 		}
 		if saveErr := s.save(decoded); saveErr != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Migrated settings could not be written: %v. The original remains at %s.", saveErr, backup))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.MigratedSettingsWriteFailed, saveErr, backup))
 		}
 	}
 	return result

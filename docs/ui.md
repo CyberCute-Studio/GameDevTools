@@ -18,6 +18,6 @@ Use `ui.Confirm` for destructive confirmation. Its safe answer is the default. C
 
 ## Theme and contrast
 
-Controls use the active Windows system colors and fonts. Do not hard-code text, background, border, or focus colors. The shell uses the system window brush and transparent static-text backgrounds, while native buttons and edits retain their system theme rendering. This preserves legibility in light, dark, and high-contrast configurations supported by Windows. Any future custom drawing must verify WCAG 2.1 AA contrast: 4.5:1 for normal text, 3:1 for large text, and 3:1 for essential control boundaries and focus indicators.
+Controls use the active Windows system colors. Do not hard-code text, background, border, or focus colors. The shell uses the system window brush, transparent static-text backgrounds, and a DPI-scaled Segoe UI font, while native buttons and edits retain their system theme rendering. This preserves legibility in light, dark, and high-contrast configurations supported by Windows. Any future custom drawing must verify WCAG 2.1 AA contrast: 4.5:1 for normal text, 3:1 for large text, and 3:1 for essential control boundaries and focus indicators.
 
 User-facing text belongs in `internal/ui/strings.go`; shared validation and status prefixes live beside their presentation code. Feature packages may format dynamic details with those centralized strings rather than defining competing labels.
