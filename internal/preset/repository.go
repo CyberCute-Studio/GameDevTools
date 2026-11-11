@@ -17,8 +17,9 @@ const (
 )
 
 type storedPresets struct {
-	Version int      `json:"version"`
-	Custom  []Preset `json:"custom"`
+	Version    int      `json:"version"`
+	Custom     []Preset `json:"custom"`
+	SelectedID string   `json:"selectedPresetId,omitempty"`
 }
 
 type Repository struct {
@@ -45,11 +46,20 @@ func NewRepository(module shell.ModuleID, store *settings.Store) (*Repository, e
 }
 
 func (r *Repository) Load(value settings.Settings) (*Library, error) {
-	custom, err := decodeSection(r.module, value.Modules[string(r.module)])
+	stored, err := decodeSection(r.module, value.Modules[string(r.module)])
 	if err != nil {
 		return nil, err
 	}
-	return NewLibrary(r.module, custom)
+	library, err := NewLibrary(r.module, stored.Custom)
+	if err != nil {
+		return nil, err
+	}
+	if stored.SelectedID != "" {
+		if err := library.Select(stored.SelectedID); err != nil {
+			return nil, fmt.Errorf("validate selected preset: %w", err)
+		}
+	}
+	return library, nil
 }
 
 func (r *Repository) Save(value *settings.Settings, library *Library) error {
@@ -65,7 +75,10 @@ func (r *Repository) Save(value *settings.Settings, library *Library) error {
 	if _, err := NewLibrary(r.module, library.custom); err != nil {
 		return fmt.Errorf("validate preset library: %w", err)
 	}
-	section, err := encodeSection(r.module, value.Modules[string(r.module)], library.custom)
+	if _, exists := library.Get(library.selectedID); !exists {
+		return fmt.Errorf("validate selected preset: %w", ErrNotFound)
+	}
+	section, err := encodeSection(r.module, value.Modules[string(r.module)], library.custom, library.selectedID)
 	if err != nil {
 		return err
 	}
@@ -83,41 +96,48 @@ func validatorFor(module shell.ModuleID) settings.ModuleValidator {
 	}
 }
 
-func decodeSection(module shell.ModuleID, section json.RawMessage) ([]Preset, error) {
+func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPresets, error) {
+	empty := storedPresets{Version: CurrentVersion, Custom: []Preset{}}
 	if len(section) == 0 {
-		return []Preset{}, nil
+		return empty, nil
 	}
 	fields, err := decodeSectionFields(section)
 	if err != nil {
-		return nil, err
+		return storedPresets{}, err
 	}
 	data, exists := fields[sectionKey]
 	if !exists {
-		return []Preset{}, nil
+		return empty, nil
 	}
 	var stored storedPresets
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&stored); err != nil {
-		return nil, fmt.Errorf("decode stored presets: %w", err)
+		return storedPresets{}, fmt.Errorf("decode stored presets: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return nil, errors.New("stored presets contain trailing JSON values")
+		return storedPresets{}, errors.New("stored presets contain trailing JSON values")
 	}
 	if stored.Version != CurrentVersion {
-		return nil, fmt.Errorf("unsupported preset version %d", stored.Version)
+		return storedPresets{}, fmt.Errorf("unsupported preset version %d", stored.Version)
 	}
 	if stored.Custom == nil {
-		return nil, errors.New("stored custom presets must be an array")
+		return storedPresets{}, errors.New("stored custom presets must be an array")
 	}
 	library, err := NewLibrary(module, stored.Custom)
 	if err != nil {
-		return nil, fmt.Errorf("validate stored presets: %w", err)
+		return storedPresets{}, fmt.Errorf("validate stored presets: %w", err)
 	}
-	return library.Custom(), nil
+	if stored.SelectedID != "" {
+		if err := library.Select(stored.SelectedID); err != nil {
+			return storedPresets{}, fmt.Errorf("validate selected preset: %w", err)
+		}
+	}
+	stored.Custom = library.Custom()
+	return stored, nil
 }
 
-func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Preset) (json.RawMessage, error) {
+func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Preset, selectedID string) (json.RawMessage, error) {
 	fields, err := decodeSectionFields(section)
 	if err != nil {
 		return nil, err
@@ -126,7 +146,10 @@ func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Pres
 	if err != nil {
 		return nil, fmt.Errorf("validate presets for storage: %w", err)
 	}
-	data, err := json.Marshal(storedPresets{Version: CurrentVersion, Custom: library.Custom()})
+	if err := library.Select(selectedID); err != nil {
+		return nil, fmt.Errorf("validate selected preset: %w", err)
+	}
+	data, err := json.Marshal(storedPresets{Version: CurrentVersion, Custom: library.Custom(), SelectedID: selectedID})
 	if err != nil {
 		return nil, fmt.Errorf("encode stored presets: %w", err)
 	}

@@ -42,8 +42,25 @@ func runNative() error {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}
 
+	value := loaded.Settings
+	screenshotRepository, err := preset.NewRepository(shell.ModuleScreenshot, store)
+	if err != nil {
+		return err
+	}
+	resizerRepository, err := preset.NewRepository(shell.ModuleImageResizer, store)
+	if err != nil {
+		return err
+	}
+	screenshotModule, err := screenshot.New(screenshotRepository, &value)
+	if err != nil {
+		return err
+	}
+	resizerModule, err := imageresizer.New(resizerRepository, &value)
+	if err != nil {
+		return err
+	}
 	navigator := shell.NewNavigator()
-	for _, module := range []shell.Module{screenshot.New(), imageresizer.New(), settings.New()} {
+	for _, module := range []shell.Module{screenshotModule, resizerModule, settings.New()} {
 		if err := navigator.Register(module); err != nil {
 			return err
 		}
@@ -51,5 +68,5 @@ func runNative() error {
 	if err := navigator.Select(shell.ModuleID(loaded.Settings.Shell.SelectedModule)); err != nil {
 		return err
 	}
-	return runShell(navigator, store, loaded.Settings, logger, strings.Join(loaded.Warnings, "\n"))
+	return runShell(navigator, store, &value, logger, strings.Join(loaded.Warnings, "\n"))
 }

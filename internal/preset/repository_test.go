@@ -89,8 +89,14 @@ func TestRepositoryPersistsIndependentLibrariesAndStableIdentifiers(t *testing.T
 	if string(screenshotSection["format"]) != `"png"` {
 		t.Fatalf("unrelated module option was not preserved: %s", screenshotSection["format"])
 	}
-	if strings.Contains(string(screenshotSection[sectionKey]), "builtin.") {
-		t.Fatal("built-in definitions were persisted as custom data")
+	var stored storedPresets
+	if err := json.Unmarshal(screenshotSection[sectionKey], &stored); err != nil {
+		t.Fatal(err)
+	}
+	for _, custom := range stored.Custom {
+		if strings.HasPrefix(custom.ID, "builtin.") {
+			t.Fatal("built-in definitions were persisted as custom data")
+		}
 	}
 
 	if err := screenshotLibrary.Rename(screenshotPreset.ID, "Renamed"); err != nil {
@@ -199,6 +205,7 @@ func TestRepositoryRejectsMalformedStoredData(t *testing.T) {
 		{name: "null custom array", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":null}}`},
 		{name: "unsupported version", module: shell.ModuleScreenshot, section: `{"presets":{"version":2,"custom":[]}}`},
 		{name: "unknown library field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"extra":true}}`},
+		{name: "unknown selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"selectedPresetId":"custom.missing"}}`},
 		{name: "unknown preset field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1,"extra":true}]}}`},
 		{name: "fractional dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1.5,"height":1}]}}`},
 		{name: "non-numeric dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":"one","height":1}]}}`},

@@ -41,9 +41,10 @@ type Preset struct {
 }
 
 type Library struct {
-	module   shell.ModuleID
-	builtIns []Preset
-	custom   []Preset
+	module     shell.ModuleID
+	builtIns   []Preset
+	custom     []Preset
+	selectedID string
 }
 
 func BuiltIns(module shell.ModuleID) ([]Preset, error) {
@@ -78,7 +79,7 @@ func NewLibrary(module shell.ModuleID, custom []Preset) (*Library, error) {
 	if err != nil {
 		return nil, err
 	}
-	library := &Library{module: module, builtIns: builtIns, custom: make([]Preset, 0, len(custom))}
+	library := &Library{module: module, builtIns: builtIns, custom: make([]Preset, 0, len(custom)), selectedID: builtIns[0].ID}
 	for _, candidate := range custom {
 		if candidate.BuiltIn {
 			return nil, fmt.Errorf("custom preset %q is marked built-in", candidate.ID)
@@ -114,6 +115,18 @@ func (l *Library) Get(id string) (Preset, bool) {
 		}
 	}
 	return Preset{}, false
+}
+
+func (l *Library) SelectedID() string {
+	return l.selectedID
+}
+
+func (l *Library) Select(id string) error {
+	if _, exists := l.Get(id); !exists {
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	l.selectedID = id
+	return nil
 }
 
 func (l *Library) Create(name string, width, height int, mode ResizeMode) (Preset, error) {
@@ -191,6 +204,9 @@ func (l *Library) Delete(id string) error {
 		return err
 	}
 	l.custom = append(l.custom[:index], l.custom[index+1:]...)
+	if l.selectedID == id {
+		l.selectedID = l.builtIns[0].ID
+	}
 	return nil
 }
 

@@ -15,13 +15,20 @@ const (
 
 	wsExClientEdge = 0x00000200
 
-	bsNotify          = 0x00004000
-	bsDefPushButton   = 0x00000001
-	bsAutoRadioButton = 0x00000009
-	ssNoPrefix        = 0x00000080
-	esAutoHScroll     = 0x00000080
-	enChange          = 0x0300
-	enKillFocus       = 0x0200
+	bsNotify            = 0x00004000
+	bsDefPushButton     = 0x00000001
+	bsAutoRadioButton   = 0x00000009
+	ssNoPrefix          = 0x00000080
+	esAutoHScroll       = 0x00000080
+	enChange            = 0x0300
+	enKillFocus         = 0x0200
+	cbsDropDownList     = 0x0003
+	cbsNoIntegralHeight = 0x0400
+	cbAddString         = 0x0143
+	cbResetContent      = 0x014b
+	cbGetCurSel         = 0x0147
+	cbSetCurSel         = 0x014e
+	cbnSelChange        = 1
 
 	swHide = 0
 	swShow = 5

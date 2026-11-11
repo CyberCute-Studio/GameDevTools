@@ -2,7 +2,7 @@
 
 GameDevTools is a Windows desktop application implemented in Go. The repository contains the production project foundation under `cmd/gamedevtools` and `internal`, plus the separate **FND-01 technical spike** under `cmd/fnd01-spike`.
 
-The production application provides a native Win32 main window with Screenshot, Image Resizer, and Settings navigation. These are placeholder module views; capture, resize, and settings behavior belongs to their later implementation items. The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open mixed-DPI validation blocker.
+The production application provides a native Win32 main window with Screenshot, Image Resizer, and Settings navigation. Both feature modules include independent preset management; capture, resize, and settings behavior belongs to their later implementation items. The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open mixed-DPI validation blocker.
 
 ## Production application
 
@@ -14,7 +14,7 @@ Start the application shell with:
 go run ./cmd/gamedevtools
 ```
 
-Use the navigation controls or keyboard focus to switch between Screenshot, Image Resizer, and Settings. Each module retains its view object while another module is selected. Shared registration, navigation, and GUI-dispatch contracts live in `internal/shell`; module placeholders live in their own packages under `internal`.
+Use the navigation controls or keyboard focus to switch between Screenshot, Image Resizer, and Settings. Each module retains its view object while another module is selected. In either feature module, use the preset fields to create a custom preset, Rename / Save to update the selected custom preset, Duplicate to copy any preset, and Delete to remove a custom preset after confirmation. Shared registration, navigation, and GUI-dispatch contracts live in `internal/shell`.
 
 The selected module and normal window bounds persist across restarts. Settings use a versioned JSON file with atomic writes, migration hooks, and backup-before-recovery behavior. Diagnostic logs contain structured event metadata only and rotate by size. See [Local settings and diagnostics](docs/settings.md) for paths, schema, recovery, and redaction boundaries.
 
