@@ -1,6 +1,9 @@
 package screenshot
 
-import app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+import (
+	app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+)
 
 type Module struct {
 	view *View
@@ -17,7 +20,7 @@ func (m *Module) ID() app.ModuleID {
 }
 
 func (m *Module) NavigationLabel() string {
-	return "Screenshot"
+	return ui.ScreenshotNavigation
 }
 
 func (m *Module) View() app.View {
@@ -25,13 +28,13 @@ func (m *Module) View() app.View {
 }
 
 func (v *View) Title() string {
-	return "Screenshot"
+	return ui.ScreenshotTitle
 }
 
 func (v *View) Description() string {
-	return "Capture a free rectangle, an exact preset rectangle, or one full display. Capture tools will be added by the Screenshot module items."
+	return ui.ScreenshotDescription
 }
 
 func (v *View) PrimaryAction() string {
-	return "Start Capture"
+	return ui.StartCaptureAction
 }

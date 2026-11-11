@@ -12,6 +12,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func runNative() error {
@@ -27,11 +28,11 @@ func runNative() error {
 	if pathErr == nil {
 		loaded = store.Load()
 	} else {
-		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf("Local settings are unavailable: %v. Changes will remain in memory for this session.", pathErr))
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.LocalSettingsUnavailable, pathErr))
 	}
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
-		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf("Diagnostic logging is unavailable: %v.", loggerErr))
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
 	} else {
 		defer logger.Close()
 	}

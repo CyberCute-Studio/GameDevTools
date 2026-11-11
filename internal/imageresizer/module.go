@@ -1,6 +1,9 @@
 package imageresizer
 
-import app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+import (
+	app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+)
 
 type Module struct {
 	view *View
@@ -17,7 +20,7 @@ func (m *Module) ID() app.ModuleID {
 }
 
 func (m *Module) NavigationLabel() string {
-	return "Image Resizer"
+	return ui.ImageResizerNavigation
 }
 
 func (m *Module) View() app.View {
@@ -25,13 +28,13 @@ func (m *Module) View() app.View {
 }
 
 func (v *View) Title() string {
-	return "Image Resizer"
+	return ui.ImageResizerTitle
 }
 
 func (v *View) Description() string {
-	return "Resize PNG and JPEG images with reusable dimensions and fitting modes. Image selection and resize tools will be added by the Image Resizer module items."
+	return ui.ImageResizerDescription
 }
 
 func (v *View) PrimaryAction() string {
-	return "Start Resize"
+	return ui.StartResizeAction
 }

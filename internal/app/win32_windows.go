@@ -18,6 +18,7 @@ const (
 	wmCtlColorStatic = 0x0138
 	wmSetFont        = 0x0030
 	wmMouseWheel     = 0x020a
+	wmTimer          = 0x0113
 	wmDPIChanged     = 0x02e0
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1
@@ -36,6 +37,7 @@ const (
 	bmSetCheck        = 0x00f1
 	bstChecked        = 1
 	bnSetFocus        = 9
+	enSetFocus        = 0x0100
 
 	sbVert          = 1
 	sbLineUp        = 0

@@ -1,6 +1,9 @@
 package settings
 
-import app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+import (
+	app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+)
 
 type Module struct {
 	view *View
@@ -17,7 +20,7 @@ func (m *Module) ID() app.ModuleID {
 }
 
 func (m *Module) NavigationLabel() string {
-	return "Settings"
+	return ui.SettingsNavigation
 }
 
 func (m *Module) View() app.View {
@@ -25,11 +28,11 @@ func (m *Module) View() app.View {
 }
 
 func (v *View) Title() string {
-	return "Settings"
+	return ui.SettingsTitle
 }
 
 func (v *View) Description() string {
-	return "Application preferences are stored locally in a versioned per-user settings file. Diagnostic logs rotate automatically and exclude image, clipboard, and filename data."
+	return ui.SettingsDescription
 }
 
 func (v *View) PrimaryAction() string {

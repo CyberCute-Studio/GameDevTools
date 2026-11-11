@@ -11,12 +11,12 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 const (
-	shellClassName  = "GameDevToolsMainWindow"
-	navCommandBase  = 100
-	placeholderNote = "Placeholder view. No files or images are changed."
+	shellClassName = "GameDevToolsMainWindow"
+	navCommandBase = 100
 )
 
 type nativeShell struct {
@@ -36,7 +36,7 @@ type nativeShell struct {
 	title         windows.Handle
 	description   windows.Handle
 	action        windows.Handle
-	note          windows.Handle
+	note          *ui.StatusArea
 	headingFont   windows.Handle
 	bodyFont      windows.Handle
 }
@@ -90,7 +90,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial settings
 	hwnd, _, err := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(utf16(shellClassName))),
-		uintptr(unsafe.Pointer(utf16("GameDevTools"))),
+		uintptr(unsafe.Pointer(utf16(ui.AppName))),
 		wsOverlappedWindow|wsClipChildren|wsVScroll,
 		x, y, uintptr(window.Width), uintptr(window.Height),
 		0, 0, 0, 0,
@@ -162,56 +162,44 @@ func registerShellClass() error {
 }
 
 func (s *nativeShell) createControls() error {
-	var err error
-	s.navHeading, err = s.createControl("STATIC", "TOOLS", wsChild|wsVisible, 0)
+	heading, err := ui.NewLabel(s.hwnd, ui.ToolsHeading)
 	if err != nil {
 		return err
 	}
+	s.navHeading = heading.Handle()
 	for i, module := range s.navigator.Modules() {
-		style := uintptr(wsChild | wsVisible | wsTabStop | bsAutoRadioButton | bsNotify)
-		if i == 0 {
-			style |= wsGroup
-		}
 		id := uint16(navCommandBase + i)
-		button, err := s.createControl("BUTTON", module.NavigationLabel(), style, id)
+		button, err := ui.NewButton(s.hwnd, module.NavigationLabel(), ui.ButtonOptions{
+			ID:    int32(id),
+			Group: i == 0,
+			Radio: true,
+		})
 		if err != nil {
 			return err
 		}
-		s.navButtons[module.ID()] = button
+		s.navButtons[module.ID()] = button.Handle()
 		s.navIDs[id] = module.ID()
 	}
-	s.title, err = s.createControl("STATIC", "", wsChild|wsVisible, 0)
+	title, err := ui.NewLabel(s.hwnd, "")
 	if err != nil {
 		return err
 	}
-	s.description, err = s.createControl("STATIC", "", wsChild|wsVisible, 0)
+	s.title = title.Handle()
+	description, err := ui.NewLabel(s.hwnd, "")
 	if err != nil {
 		return err
 	}
-	s.action, err = s.createControl("BUTTON", "", wsChild|wsVisible|wsDisabled|wsGroup|wsTabStop|bsNotify, 0)
+	s.description = description.Handle()
+	action, err := ui.NewButton(s.hwnd, "", ui.ButtonOptions{Primary: true, Group: true, Disabled: true})
 	if err != nil {
 		return err
 	}
-	s.note, err = s.createControl("STATIC", placeholderNote, wsChild|wsVisible, 0)
+	s.action = action.Handle()
+	s.note, err = ui.NewStatusArea(s.hwnd)
 	if err != nil {
 		return err
 	}
 	return nil
-}
-
-func (s *nativeShell) createControl(className, text string, style uintptr, id uint16) (windows.Handle, error) {
-	hwnd, _, err := procCreateWindowExW.Call(
-		0,
-		uintptr(unsafe.Pointer(utf16(className))),
-		uintptr(unsafe.Pointer(utf16(text))),
-		style,
-		0, 0, 0, 0,
-		uintptr(s.hwnd), uintptr(id), 0, 0,
-	)
-	if hwnd == 0 {
-		return 0, callError(fmt.Sprintf("CreateWindowExW(%s)", className), err)
-	}
-	return windows.Handle(hwnd), nil
 }
 
 func (s *nativeShell) updateFonts() {
@@ -235,7 +223,7 @@ func (s *nativeShell) updateFonts() {
 		}
 	}
 	setControlFont(s.title, s.headingFont)
-	for _, control := range []windows.Handle{s.navHeading, s.description, s.action, s.note} {
+	for _, control := range []windows.Handle{s.navHeading, s.description, s.action, s.note.Handle()} {
 		setControlFont(control, s.bodyFont)
 	}
 	for _, button := range s.navButtons {
@@ -249,7 +237,7 @@ func (s *nativeShell) updateView() {
 	setWindowText(s.title, view.Title())
 	setWindowText(s.description, view.Description())
 	setWindowText(s.action, view.PrimaryAction())
-	setWindowText(s.note, s.noteText())
+	s.note.SetText(s.noteText())
 	showAction := int32(swHide)
 	if view.PrimaryAction() != "" {
 		showAction = swShow
@@ -266,9 +254,9 @@ func (s *nativeShell) updateView() {
 
 func (s *nativeShell) noteText() string {
 	if s.notice != "" {
-		return s.notice
+		return ui.Notice{Kind: ui.NoticeWarning, Message: s.notice}.Text()
 	}
-	return placeholderNote
+	return ui.PlaceholderNote
 }
 
 func (s *nativeShell) fitInitialWindow() {
@@ -411,7 +399,7 @@ func (s *nativeShell) layout() {
 	moveWindow(s.title, plan.contentX, contentY(plan.contentY), plan.contentWidth, plan.titleHeight)
 	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, plan.descriptionHeight)
 	moveWindow(s.action, plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
-	moveWindow(s.note, plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
+	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
 }
 
 func (s *nativeShell) setScrollPosition(position int32) {
@@ -532,7 +520,7 @@ func (s *nativeShell) saveSettings(captureWindow bool) error {
 	s.settings = value
 	err := s.store.Save(value)
 	if err != nil {
-		s.notice = fmt.Sprintf("Settings could not be saved: %v. Your current in-memory session has not been discarded.", err)
+		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
 		if s.logger != nil {
 			_ = s.logger.Record(diagnostics.Event{Level: diagnostics.LevelError, Operation: "settings.save", Code: "write-failed"})
 		}
@@ -548,7 +536,8 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	shell := shellStates[hwnd]
 	switch message {
 	case wmCommand:
-		if shell != nil && highWord(wParam) == bnSetFocus && lParam != nil {
+		notification := highWord(wParam)
+		if shell != nil && (notification == bnSetFocus || notification == enSetFocus) && lParam != nil {
 			shell.ensureControlVisible(windows.Handle(lParam))
 			return 0
 		}
@@ -609,6 +598,12 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		procSetBkMode.Call(wParam, transparent)
 		brush, _, _ := procGetSysColorBrush.Call(colorWindow)
 		return brush
+	case wmTimer:
+		if shell != nil && shell.note.HandleTimer(wParam) {
+			shell.updateView()
+			shell.layout()
+			return 0
+		}
 	case wmAppDispatch:
 		if shell != nil {
 			shell.dispatcher.Drain()
@@ -616,13 +611,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 	case wmClose:
 		if shell != nil && shell.saveSettings(true) != nil {
-			answer, _, _ := procMessageBoxW.Call(
-				uintptr(hwnd),
-				uintptr(unsafe.Pointer(utf16("Settings could not be saved. Close anyway? These changes will not be available after the application closes."))),
-				uintptr(unsafe.Pointer(utf16("GameDevTools — Settings not saved"))),
-				mbYesNo|mbIconWarning,
-			)
-			if answer != idYes {
+			if !ui.Confirm(hwnd, ui.SettingsCloseTitle, ui.SettingsCloseConfirmation) {
 				return 0
 			}
 		}
@@ -631,6 +620,9 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDestroy:
 		if shell != nil {
 			delete(shellStates, hwnd)
+			if shell.note != nil {
+				shell.note.Destroy()
+			}
 			if shell.headingFont != 0 {
 				procDeleteObject.Call(uintptr(shell.headingFont))
 			}
