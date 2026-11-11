@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+var (
+	procGetBkMode    = gdi32.NewProc("GetBkMode")
+	procGetTextColor = gdi32.NewProc("GetTextColor")
+)
+
 func TestFitStartupBounds(t *testing.T) {
 	tests := []struct {
 		name                  string
@@ -38,6 +43,30 @@ func TestFitStartupBounds(t *testing.T) {
 				t.Fatalf("fitStartupBounds() = (%d, %d, %d, %d), want (%d, %d, %d, %d)", x, y, width, height, test.wantX, test.wantY, test.wantWidth, test.wantHeight)
 			}
 		})
+	}
+}
+
+func TestStaticTextBrushUsesSystemColors(t *testing.T) {
+	dc, _, err := procGetDC.Call(0)
+	if dc == 0 {
+		t.Fatalf("GetDC(desktop): %v", err)
+	}
+	defer procReleaseDC.Call(0, dc)
+	previousColor, _, _ := procSetTextColor.Call(dc, 0x00010203)
+	defer procSetTextColor.Call(dc, previousColor)
+	previousMode, _, _ := procSetBkMode.Call(dc, transparent)
+	defer procSetBkMode.Call(dc, previousMode)
+
+	if brush := staticTextBrush(dc); brush == 0 {
+		t.Fatal("staticTextBrush() returned a null brush")
+	}
+	wantColor, _, _ := procGetSysColor.Call(colorWindowText)
+	gotColor, _, _ := procGetTextColor.Call(dc)
+	if gotColor != wantColor {
+		t.Fatalf("text color = %#x, want system COLOR_WINDOWTEXT %#x", gotColor, wantColor)
+	}
+	if gotMode, _, _ := procGetBkMode.Call(dc); gotMode != transparent {
+		t.Fatalf("background mode = %d, want TRANSPARENT", gotMode)
 	}
 }
 

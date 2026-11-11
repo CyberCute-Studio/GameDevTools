@@ -56,9 +56,9 @@ func ParseDimension(field, input string) (int, error) {
 			return 0, fmt.Errorf("%s must be a whole number of pixels greater than 0.", field)
 		}
 	}
-	parsed, err := strconv.ParseUint(value, 10, strconv.IntSize)
+	parsed, err := strconv.ParseInt(value, 10, strconv.IntSize)
 	if err != nil {
-		maximum := uint64(^uint(0) >> 1)
+		maximum := int64(^uint(0) >> 1)
 		return 0, fmt.Errorf("%s is too large. Enter a whole number no greater than %d pixels.", field, maximum)
 	}
 	if parsed == 0 {

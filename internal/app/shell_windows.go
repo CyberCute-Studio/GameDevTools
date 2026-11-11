@@ -532,6 +532,14 @@ func (s *nativeShell) saveSettings(captureWindow bool) error {
 	return err
 }
 
+func staticTextBrush(dc uintptr) uintptr {
+	procSetBkMode.Call(dc, transparent)
+	textColor, _, _ := procGetSysColor.Call(colorWindowText)
+	procSetTextColor.Call(dc, textColor)
+	brush, _, _ := procGetSysColorBrush.Call(colorWindow)
+	return brush
+}
+
 func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
@@ -595,9 +603,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			return 0
 		}
 	case wmCtlColorStatic:
-		procSetBkMode.Call(wParam, transparent)
-		brush, _, _ := procGetSysColorBrush.Call(colorWindow)
-		return brush
+		return staticTextBrush(wParam)
 	case wmTimer:
 		if shell != nil && shell.note.HandleTimer(wParam) {
 			shell.updateView()

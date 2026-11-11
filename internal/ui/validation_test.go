@@ -54,6 +54,14 @@ func TestParseDimensionMaximumInt(t *testing.T) {
 	}
 }
 
+func TestParseDimensionRejectsValuesAboveMaximumInt(t *testing.T) {
+	maximum := uint64(^uint(0) >> 1)
+	_, err := ParseDimension("Width", strconv.FormatUint(maximum+1, 10))
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("ParseDimension(maximum+1) error = %v, want too large", err)
+	}
+}
+
 func TestFormatDimensions(t *testing.T) {
 	if got := FormatDimensions(1280, 720); got != "1280 × 720 px" {
 		t.Fatalf("FormatDimensions() = %q", got)

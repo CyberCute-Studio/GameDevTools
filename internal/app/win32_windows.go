@@ -23,21 +23,14 @@ const (
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1
 
-	wsChild            = 0x40000000
-	wsVisible          = 0x10000000
-	wsDisabled         = 0x08000000
-	wsTabStop          = 0x00010000
-	wsGroup            = 0x00020000
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000
 	wsVScroll          = 0x00200000
 
-	bsAutoRadioButton = 0x0000009
-	bsNotify          = 0x00004000
-	bmSetCheck        = 0x00f1
-	bstChecked        = 1
-	bnSetFocus        = 9
-	enSetFocus        = 0x0100
+	bmSetCheck = 0x00f1
+	bstChecked = 1
+	bnSetFocus = 9
+	enSetFocus = 0x0100
 
 	sbVert          = 1
 	sbLineUp        = 0
@@ -66,10 +59,11 @@ const (
 
 	cwUseDefault = 0x80000000
 
-	colorWindow = 5
-	transparent = 1
-	fwNormal    = 400
-	fwSemiBold  = 600
+	colorWindow     = 5
+	colorWindowText = 8
+	transparent     = 1
+	fwNormal        = 400
+	fwSemiBold      = 600
 
 	defaultCharset   = 1
 	clearTypeQuality = 5
@@ -77,10 +71,6 @@ const (
 	dtWordBreak = 0x0010
 	dtCalcRect  = 0x0400
 	dtNoPrefix  = 0x0800
-
-	mbYesNo       = 0x0004
-	mbIconWarning = 0x0030
-	idYes         = 6
 )
 
 var (
@@ -114,9 +104,9 @@ var (
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
-	procMessageBoxW                   = user32.NewProc("MessageBoxW")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
+	procGetSysColor                   = user32.NewProc("GetSysColor")
 	procGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
 	procGetDC                         = user32.NewProc("GetDC")
 	procReleaseDC                     = user32.NewProc("ReleaseDC")
@@ -126,6 +116,7 @@ var (
 	procSelectObject                  = gdi32.NewProc("SelectObject")
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")
 	procSetBkMode                     = gdi32.NewProc("SetBkMode")
+	procSetTextColor                  = gdi32.NewProc("SetTextColor")
 )
 
 type rect struct {

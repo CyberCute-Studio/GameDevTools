@@ -61,7 +61,15 @@ type Label struct {
 }
 
 func NewLabel(parent windows.Handle, text string) (*Label, error) {
-	hwnd, err := createControl(parent, "STATIC", text, wsChild|wsVisible, 0, 0)
+	return newLabel(parent, text, ssNoPrefix)
+}
+
+func newMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
+	return newLabel(parent, text, 0)
+}
+
+func newLabel(parent windows.Handle, text string, style uintptr) (*Label, error) {
+	hwnd, err := createControl(parent, "STATIC", text, wsChild|wsVisible|style, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +130,7 @@ type DimensionInput struct {
 }
 
 func NewDimensionInput(parent windows.Handle, field string, id int32) (*DimensionInput, error) {
-	label, err := NewLabel(parent, field+" (px)")
+	label, err := newMnemonicLabel(parent, field+" (px)")
 	if err != nil {
 		return nil, err
 	}
@@ -201,11 +209,11 @@ func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
 	return &StatusArea{Label: label, parent: parent}, nil
 }
 
-func (s *StatusArea) Show(notice Notice, timeout time.Duration) {
+func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 	s.stopTimer()
 	s.SetText(notice.Text())
-	if timeout <= 0 {
-		return
+	if notice.Text() == "" || timeout <= 0 {
+		return nil
 	}
 	milliseconds := timeout.Milliseconds()
 	if milliseconds < 1 {
@@ -218,7 +226,12 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) {
 	if timerID == 0 {
 		timerID = nextTimerID.Add(1)
 	}
-	s.timer, _, _ = procSetTimer.Call(uintptr(s.parent), timerID, uintptr(milliseconds), 0)
+	timer, _, err := procSetTimer.Call(uintptr(s.parent), timerID, uintptr(milliseconds), 0)
+	if timer == 0 {
+		return callError("SetTimer", err)
+	}
+	s.timer = timer
+	return nil
 }
 
 func (s *StatusArea) Clear() {
@@ -286,4 +299,11 @@ func boolPointer(value bool) uintptr {
 		return 1
 	}
 	return 0
+}
+
+func callError(operation string, err error) error {
+	if err == windows.ERROR_SUCCESS {
+		return fmt.Errorf("%s failed", operation)
+	}
+	return fmt.Errorf("%s: %w", operation, err)
 }

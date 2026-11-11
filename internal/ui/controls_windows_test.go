@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,32 @@ func TestDimensionInputPresentsValidation(t *testing.T) {
 	}
 }
 
+func TestLabelsControlMnemonicHandling(t *testing.T) {
+	parent := newTestParent(t)
+	input, err := NewDimensionInput(parent, "&Width", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelStyle, _, _ := procGetWindowLongPtrW.Call(uintptr(input.Label.Handle()), ^uintptr(15))
+	if labelStyle&ssNoPrefix != 0 {
+		t.Fatal("dimension label disabled its keyboard mnemonic")
+	}
+	status, err := NewStatusArea(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusStyle, _, _ := procGetWindowLongPtrW.Call(uintptr(status.Handle()), ^uintptr(15))
+	if statusStyle&ssNoPrefix == 0 {
+		t.Fatal("status label interprets ampersands as mnemonics")
+	}
+	if err := status.Show(Notice{Message: `Saved C:\Images & Captures`}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Text(); got != `Information: Saved C:\Images & Captures` {
+		t.Fatalf("status text = %q", got)
+	}
+}
+
 func TestSharedButtonOptions(t *testing.T) {
 	parent := newTestParent(t)
 	button, err := NewButton(parent, "Delete", ButtonOptions{Primary: true, Disabled: true})
@@ -74,7 +101,9 @@ func TestStatusAreaPresentsAndClearsNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	area.Show(Notice{Kind: NoticeWarning, Message: "Clipboard unavailable"}, 0)
+	if err := area.Show(Notice{Kind: NoticeWarning, Message: "Clipboard unavailable"}, 0); err != nil {
+		t.Fatal(err)
+	}
 	if got := area.Text(); got != "Warning: Clipboard unavailable" {
 		t.Fatalf("status text = %q", got)
 	}
@@ -82,12 +111,16 @@ func TestStatusAreaPresentsAndClearsNotice(t *testing.T) {
 	if got := area.Text(); got != "" {
 		t.Fatalf("cleared status text = %q", got)
 	}
-	area.Show(Notice{Kind: NoticeSuccess, Message: "Saved"}, time.Second)
+	if err := area.Show(Notice{Kind: NoticeSuccess, Message: "Saved"}, time.Second); err != nil {
+		t.Fatal(err)
+	}
 	if area.timer == 0 {
 		t.Fatal("timed notice did not create a timer")
 	}
 	expiredTimer := area.timer
-	area.Show(Notice{Kind: NoticeSuccess, Message: "Still visible"}, time.Hour)
+	if err := area.Show(Notice{Kind: NoticeSuccess, Message: "Still visible"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
 	if area.timer == expiredTimer {
 		t.Fatal("replacement notice reused the expired timer ID")
 	}
@@ -106,10 +139,30 @@ func TestStatusAreaPresentsAndClearsNotice(t *testing.T) {
 	if area.HandleTimer(1234) {
 		t.Fatal("unexpected timer was handled")
 	}
+	if err := area.Show(Notice{}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if area.timer != 0 {
+		t.Fatal("empty notice created a timer")
+	}
+}
+
+func TestStatusAreaReportsTimerFailure(t *testing.T) {
+	area := &StatusArea{Label: &Label{Control{hwnd: 1}}, parent: 1}
+	if err := area.Show(Notice{Message: "Saved"}, time.Second); err == nil {
+		t.Fatal("Show() error = nil for an invalid parent window")
+	}
+	if area.timer != 0 {
+		t.Fatalf("failed timer = %d, want 0", area.timer)
+	}
 }
 
 func newTestParent(t *testing.T) windows.Handle {
 	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(func() {
+		runtime.UnlockOSThread()
+	})
 	hwnd, _, err := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(utf16("STATIC"))),
