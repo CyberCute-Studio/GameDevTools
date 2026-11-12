@@ -111,11 +111,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** This is a native service PR; the user-facing display picker is completed in SCR-05. The `internal/display` service enumerates physical-pixel bounds, effective DPI, device and friendly monitor names, and primary status; assigns deterministic picker numbers (primary first, then device name); resolves the cursor display with a nearest-display fallback; and forwards `WM_DISPLAYCHANGE` through the shell to subscribers. Integration-tested on two physical displays at 100% scaling; mixed-scaling and rotated-display hardware remains unavailable (see the FND-01 blocker), so those paths are covered by unit-level conversion and bounds tests only.
 
 10. **SCR-03 — Implement raw Windows display and region capture**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-02
+    - **Status:** In Progress | **PR:** [#10](https://github.com/CyberCute-Studio/GameDevTools/pull/10) | **Depends on:** SCR-02
     - **Requirements:** SCR-042, SCR-044, SCR-068, TECH-005.
     - **Deliver:** Off-GUI-thread capture service for one display and arbitrary virtual-desktop rectangles, including regions spanning monitors. Return physical-pixel images and typed capture errors. Ensure app-owned capture surfaces can be excluded by hiding them before capture.
     - **Verify:** Validate output dimensions and representative pixel content on different DPI settings, secondary displays, display boundaries, and invalid/disconnected regions. Verify no GUI deadlock occurs.
-    - **Notes:** Protected-content and graphics API limitations must be surfaced, not converted into blank success results.
+    - **Notes:** Protected-content and graphics API limitations must be surfaced, not converted into blank success results. The `internal/screenshot/capture` service captures `internal/display` topology by rectangle or device name with typed validation/display/native errors, and excludes app-owned surfaces through a hide-flush-restore exclusion that preserves each window's prior visibility and activation. Integration-tested on two physical displays at 100% scaling, including a cross-display rectangle; mixed-scaling and negative-coordinate hardware remains unavailable (see the FND-01 blocker), and GDI composites DRM-protected content as black without an error, a limitation documented in the package and README for SCR-10 to present.
 
 11. **SCR-04 — Implement clipboard and atomic screenshot file output**
     - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-01, SCR-03, FND-04
