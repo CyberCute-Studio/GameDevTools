@@ -19,6 +19,7 @@ const (
 	wmSetFont        = 0x0030
 	wmMouseWheel     = 0x020a
 	wmTimer          = 0x0113
+	wmDisplayChange  = 0x007e
 	wmDPIChanged     = 0x02e0
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1

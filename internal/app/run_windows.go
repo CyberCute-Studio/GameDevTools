@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
+	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
@@ -80,5 +81,5 @@ func runNative() error {
 	if err := navigator.Select(shell.ModuleID(loaded.Settings.Shell.SelectedModule)); err != nil {
 		return err
 	}
-	return runShell(navigator, store, &value, logger, strings.Join(loaded.Warnings, "\n"))
+	return runShell(navigator, store, &value, logger, display.NewMonitor(), strings.Join(loaded.Warnings, "\n"))
 }
