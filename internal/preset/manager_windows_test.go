@@ -173,6 +173,13 @@ func TestNativeManagerLayoutExpandsForWrappedMessages(t *testing.T) {
 	if got := manager.width.Error.Text(); got == "" || manager.status.Text() == "" {
 		t.Fatal("layout discarded validation or persistence text")
 	}
+
+	manager.width.Error.SetText("")
+	manager.status.SetText("")
+	manager.name.Error.SetText("A wrapped name validation message")
+	if got := manager.NativeHeight(480, scale, measure) - baseline; got != 80 {
+		t.Fatalf("name-only height increase = %d, want 80", got)
+	}
 }
 
 func TestNativeManagerLayoutStacksNarrowControls(t *testing.T) {

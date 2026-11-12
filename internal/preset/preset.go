@@ -3,6 +3,7 @@ package preset
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +25,18 @@ const (
 	ResizeStretch    ResizeMode = "stretch"
 	ResizeCropToFill ResizeMode = "crop-to-fill"
 )
+
+func (m *ResizeMode) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return errors.New("resize mode cannot be null")
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*m = ResizeMode(value)
+	return nil
+}
 
 var (
 	ErrBuiltIn       = errors.New("built-in presets cannot be edited or deleted")

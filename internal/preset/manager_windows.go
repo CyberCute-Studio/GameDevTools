@@ -196,13 +196,14 @@ func (n *NativeManager) NativeLayout(x, y, width int32, scale func(int32) int32,
 }
 
 func (n *NativeManager) metrics(width int32, scale func(int32) int32, measure func(string, int32) int32) (ui.DimensionMetrics, ui.DimensionMetrics, int32) {
-	nameMetrics := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
+	baseMetrics := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
+	nameMetrics := baseMetrics
 	nameMetrics.ErrorHeight = max(nameMetrics.ErrorHeight, measure(n.name.Error.Text(), width))
 	dimensionWidth := width
 	if !stackedPresetLayout(width, scale) {
 		dimensionWidth = max(int32(1), (width-scale(12))/2)
 	}
-	dimensionMetrics := nameMetrics
+	dimensionMetrics := baseMetrics
 	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.width.Error.Text(), dimensionWidth))
 	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.height.Error.Text(), dimensionWidth))
 	statusHeight := max(scale(48), measure(n.status.Text(), width))

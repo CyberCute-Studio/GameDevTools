@@ -124,6 +124,14 @@ func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPreset
 	if stored.Custom == nil {
 		return storedPresets{}, errors.New("stored custom presets must be an array")
 	}
+	var storedFields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &storedFields); err != nil {
+		return storedPresets{}, fmt.Errorf("decode stored preset fields: %w", err)
+	}
+	_, hasSelectedID := storedFields["selectedPresetId"]
+	if hasSelectedID && stored.SelectedID == "" {
+		return storedPresets{}, errors.New("stored selectedPresetId must be a non-empty string when present")
+	}
 	library, err := NewLibrary(module, stored.Custom)
 	if err != nil {
 		return storedPresets{}, fmt.Errorf("validate stored presets: %w", err)
