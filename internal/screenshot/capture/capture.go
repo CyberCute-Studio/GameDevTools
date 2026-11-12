@@ -158,8 +158,19 @@ func findDisplay(displays []display.Display, deviceName string) (display.Display
 }
 
 // Exclusion tracks app-owned windows hidden through Hide so captures
-// exclude them. Restore shows them again.
+// exclude them. Restore puts each window back the way Hide found it:
+// windows that were visible are shown again, minimized windows are shown
+// minimized again, and windows that were already hidden stay hidden.
 type Exclusion struct {
-	windows  []uintptr
+	windows  []hiddenWindow
 	restored atomic.Bool
+}
+
+// hiddenWindow records one window's state before Hide so Restore does not
+// resurrect a window some other flow hid, or pop open a window the user
+// had minimized.
+type hiddenWindow struct {
+	hwnd         uintptr
+	wasVisible   bool
+	wasMinimized bool
 }

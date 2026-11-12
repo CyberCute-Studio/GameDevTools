@@ -20,11 +20,13 @@ const (
 	dibRGBColors = 0
 
 	swHide = 0
-	swShow = 5
 
 	// swShowNoActivate restores a hidden window without activating it, so
 	// Restore never moves input focus to the revealed window.
 	swShowNoActivate = 4
+	// swShowMinNoActivate restores a window that was minimized when Hide
+	// ran to the minimized state, without activating it.
+	swShowMinNoActivate = 7
 )
 
 var (
@@ -35,6 +37,7 @@ var (
 	procGetDC              = user32.NewProc("GetDC")
 	procReleaseDC          = user32.NewProc("ReleaseDC")
 	procShowWindow         = user32.NewProc("ShowWindow")
+	procIsIconic           = user32.NewProc("IsIconic")
 	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	procDeleteDC           = gdi32.NewProc("DeleteDC")
 	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
@@ -141,16 +144,25 @@ func convertDIB(pixels unsafe.Pointer, width, height int) *image.RGBA {
 // Hide hides the given app-owned windows and waits for the desktop
 // compositor to settle, so a following capture cannot contain them
 // (SCR-044). It returns the Exclusion that restores the windows; callers
-// typically defer Restore.
+// typically defer Restore. Hide records each window's prior visibility,
+// and ShowWindow's return value doubles as the failure signal: a window
+// that cannot be hidden reports itself as previously hidden, so Restore
+// leaves it alone rather than forcing it visible.
 //
 // ShowWindow acts through each window's owner thread, so that thread must
 // keep pumping messages while Hide runs. Calling Hide while the GUI
 // thread is blocked — for example synchronously waiting for the capture
 // result, which TECH-005 forbids — deadlocks the caller.
 func Hide(hwnd ...uintptr) (*Exclusion, error) {
-	exclusion := &Exclusion{windows: append([]uintptr(nil), hwnd...)}
+	exclusion := &Exclusion{windows: make([]hiddenWindow, 0, len(hwnd))}
 	for _, window := range hwnd {
-		procShowWindow.Call(window, swHide)
+		minimized, _, _ := procIsIconic.Call(window)
+		shown, _, _ := procShowWindow.Call(window, swHide)
+		exclusion.windows = append(exclusion.windows, hiddenWindow{
+			hwnd:         window,
+			wasVisible:   shown != 0,
+			wasMinimized: minimized != 0,
+		})
 	}
 	if hr, _, _ := procDwmFlush.Call(); int32(hr) < 0 {
 		exclusion.Restore()
@@ -160,17 +172,28 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 	return exclusion, nil
 }
 
-// Restore shows the hidden windows again without activating them, so
-// restoring a window after capture never moves input focus to it. It is
-// idempotent and safe for concurrent use, so a deferred Restore is
-// harmless after an earlier explicit call. Like Hide, Restore acts
-// through each window's owner thread, which must keep pumping messages.
+// Restore returns each window to the state Hide found it in: windows that
+// were visible are shown again, minimized windows are shown minimized
+// again, and windows that were already hidden stay hidden, so Restore
+// never resurrects a window another flow hid or pops open one the user
+// minimized. Nothing is activated, so restoring after capture never moves
+// input focus. Restore is idempotent and safe for concurrent use, so a
+// deferred Restore is harmless after an earlier explicit call. Like Hide,
+// Restore acts through each window's owner thread, which must keep
+// pumping messages.
 func (e *Exclusion) Restore() {
 	if !e.restored.CompareAndSwap(false, true) {
 		return
 	}
 	for _, window := range e.windows {
-		procShowWindow.Call(window, swShowNoActivate)
+		switch {
+		case !window.wasVisible:
+			// Already hidden before Hide; leave it hidden.
+		case window.wasMinimized:
+			procShowWindow.Call(window.hwnd, swShowMinNoActivate)
+		default:
+			procShowWindow.Call(window.hwnd, swShowNoActivate)
+		}
 	}
 }
 

@@ -56,7 +56,11 @@ func TestMain(m *testing.M) {
 	proc := user32.NewProc("SetProcessDpiAwarenessContext")
 	r, _, err := proc.Call(dpiAwarenessContextPerMonitorAwareV2)
 	if r == 0 {
-		fmt.Fprintf(os.Stderr, "TestMain: SetProcessDpiAwarenessContext failed, tests run DPI-unaware: %v\n", err)
+		// Running DPI-unaware would virtualize every coordinate these
+		// tests observe and could pass while capturing scaled regions,
+		// defeating the physical-pixel contract under test.
+		fmt.Fprintf(os.Stderr, "TestMain: SetProcessDpiAwarenessContext failed, aborting: %v\n", err)
+		os.Exit(1)
 	}
 	os.Exit(m.Run())
 }
@@ -186,6 +190,7 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 		LpszClassName: className,
 	}
 	atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class)))
+	atom &= 0xffff // the ATOM is 16 bits; the rest of the return register is unspecified
 	if atom == 0 {
 		t.Fatalf("RegisterClassExW: %v", err)
 	}
@@ -209,7 +214,10 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 			createErr = callErr
 			return
 		}
-		procShowWindow.Call(hwnd, swShow)
+		// SW_SHOWNOACTIVATE keeps the test window from taking activation
+		// away from the user's foreground window on interactive runs; the
+		// topmost popup composites either way.
+		procShowWindow.Call(hwnd, swShowNoActivate)
 		procUpdateWindow.Call(hwnd)
 	})
 	if hwnd == 0 {
@@ -417,6 +425,25 @@ func TestHideExcludesWindowFromCapture(t *testing.T) {
 		t.Fatal("Restore did not show the window again")
 	}
 	awaitColor(t, monitor, region, want)
+}
+
+func TestHideKeepsPreviouslyHiddenWindowHidden(t *testing.T) {
+	monitor := display.NewMonitor()
+	want := color.RGBA{R: 0x77, G: 0x33, B: 0x11, A: 0xFF}
+	hwnd, _ := createSolidWindow(t, monitor, 240, 180, want)
+
+	// Hide the window outside the Exclusion, as a second capture session
+	// or an already-hidden main window would. Restore must not resurrect
+	// a window it did not hide.
+	procShowWindow.Call(uintptr(hwnd), swHide)
+	exclusion, err := Hide(uintptr(hwnd))
+	if err != nil {
+		t.Fatalf("Hide: %v", err)
+	}
+	exclusion.Restore()
+	if r, _, _ := procIsWindowVisible.Call(uintptr(hwnd)); r != 0 {
+		t.Fatal("Restore showed a window that was already hidden before Hide")
+	}
 }
 
 func TestCaptureConcurrentCallsDoNotDeadlock(t *testing.T) {
