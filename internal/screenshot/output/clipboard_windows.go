@@ -4,7 +4,6 @@ package output
 
 import (
 	"errors"
-	"fmt"
 	"image"
 	"time"
 	"unsafe"
@@ -27,7 +26,6 @@ var (
 	procOpenClipboard    = user32.NewProc("OpenClipboard")
 	procEmptyClipboard   = user32.NewProc("EmptyClipboard")
 	procSetClipboardData = user32.NewProc("SetClipboardData")
-	procGetClipboardData = user32.NewProc("GetClipboardData")
 	procCloseClipboard   = user32.NewProc("CloseClipboard")
 	procGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
 	procGlobalFree       = kernel32.NewProc("GlobalFree")
@@ -63,11 +61,11 @@ type bitmapInfoHeader struct {
 // unavailable.
 func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	bounds := img.Bounds()
-	width, height := int32(bounds.Dx()), int32(bounds.Dy())
+	width, height := bounds.Dx(), bounds.Dy()
 	header := bitmapInfoHeader{
 		Size:      uint32(unsafe.Sizeof(bitmapInfoHeader{})),
-		Width:     width,
-		Height:    height, // positive height stores rows bottom-up
+		Width:     int32(width),
+		Height:    int32(height), // positive height stores rows bottom-up
 		Planes:    1,
 		BitCount:  32,
 		SizeImage: uint32(width * height * 4),
@@ -90,11 +88,11 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 		return err
 	}
 	procRtlMoveMemory.Call(destination, uintptr(unsafe.Pointer(&header)), unsafe.Sizeof(header))
-	pixels := make([]byte, int(width*height*4))
-	for y := int32(0); y < height; y++ {
-		sourceRow := img.PixOffset(bounds.Min.X, bounds.Min.Y+int(height-1-y))
-		destinationRow := int(y*width) * 4
-		for x := 0; x < int(width); x++ {
+	pixels := make([]byte, width*height*4)
+	for y := 0; y < height; y++ {
+		sourceRow := img.PixOffset(bounds.Min.X, bounds.Min.Y+height-1-y)
+		destinationRow := y * width * 4
+		for x := 0; x < width; x++ {
 			source := sourceRow + x*4
 			target := destinationRow + x*4
 			pixels[target+0] = img.Pix[source+2]
@@ -112,7 +110,9 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 			opened = true
 			break
 		}
-		time.Sleep(clipboardOpenRetryWait)
+		if attempt+1 < clipboardOpenAttempts {
+			time.Sleep(clipboardOpenRetryWait)
+		}
 	}
 	if !opened {
 		return kindError(KindClipboard, "OpenClipboard",
@@ -137,60 +137,6 @@ func lockGlobalMemory(handle uintptr) (uintptr, error) {
 		return 0, kindError(KindClipboard, "GlobalLock", callError(err))
 	}
 	return address, nil
-}
-
-// clipboardImageSize reads back the dimensions of the CF_DIB image on the
-// clipboard. It exists for tests that verify the round trip into a common
-// Windows destination format.
-func clipboardImageSize() (int32, int32, error) {
-	r, _, err := procOpenClipboard.Call(0)
-	if r == 0 {
-		return 0, 0, fmt.Errorf("OpenClipboard: %w", callError(err))
-	}
-	defer procCloseClipboard.Call()
-	allocation, _, err := procGetClipboardData.Call(cfDIB, 0)
-	if allocation == 0 {
-		return 0, 0, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(err))
-	}
-	data, err := lockGlobalMemory(allocation)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer procGlobalUnlock.Call(allocation)
-	var header bitmapInfoHeader
-	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
-	if header.Size != uint32(unsafe.Sizeof(bitmapInfoHeader{})) || header.BitCount != 32 {
-		return 0, 0, errors.New("unexpected clipboard DIB header")
-	}
-	return header.Width, header.Height, nil
-}
-
-// clipboardPixel reads back one pixel of the CF_DIB image on the clipboard
-// as RGBA. It exists for tests that verify pixel content survives the
-// round trip without JPEG degradation.
-func clipboardPixel(x, y int) (r, g, b, a uint8, err error) {
-	res, _, callErr := procOpenClipboard.Call(0)
-	if res == 0 {
-		return 0, 0, 0, 0, fmt.Errorf("OpenClipboard: %w", callError(callErr))
-	}
-	defer procCloseClipboard.Call()
-	allocation, _, callErr := procGetClipboardData.Call(cfDIB, 0)
-	if allocation == 0 {
-		return 0, 0, 0, 0, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(callErr))
-	}
-	data, err := lockGlobalMemory(allocation)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	defer procGlobalUnlock.Call(allocation)
-	var header bitmapInfoHeader
-	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
-	// Positive header height stores rows bottom-up.
-	row := int(header.Height) - 1 - y
-	address := data + unsafe.Sizeof(header) + uintptr(row*int(header.Width)+x)*4
-	var value [4]byte
-	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&value[0])), address, 4)
-	return value[2], value[1], value[0], value[3], nil
 }
 
 func callError(err error) error {

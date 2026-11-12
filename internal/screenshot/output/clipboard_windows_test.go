@@ -4,12 +4,15 @@ package output
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
+	"unsafe"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 )
@@ -17,18 +20,34 @@ import (
 // clipboardMu-free note: clipboard tests are intentionally not parallel.
 // The clipboard is a single shared desktop resource.
 
-var procGetDesktopWindow = user32.NewProc("GetDesktopWindow")
+var (
+	procGetDesktopWindow = user32.NewProc("GetDesktopWindow")
+	procGetClipboardData = user32.NewProc("GetClipboardData")
+)
+
+// openClipboardWithRetry opens the clipboard, retrying briefly while
+// another application holds it, mirroring the retry setClipboardImage
+// performs. Clipboard-aware services on the desktop transiently hold the
+// clipboard, and an unretried open makes clipboard tests flaky.
+func openClipboardWithRetry(owner uintptr) error {
+	for attempt := 0; attempt < clipboardOpenAttempts; attempt++ {
+		r, _, _ := procOpenClipboard.Call(owner)
+		if r != 0 {
+			return nil
+		}
+		time.Sleep(clipboardOpenRetryWait)
+	}
+	return errors.New("the clipboard remained in use by another application")
+}
 
 // holdClipboard opens the clipboard and keeps it open until the returned
-// function runs, forcing every other window's OpenClipboard to fail. It
-// simulates a clipboard held by another application (AC-S09). The open is
-// associated with the desktop window: opening with a NULL handle only
-// associates with the calling process and would not conflict with the
-// NULL-handle open Deliver performs.
+// function runs, forcing every other OpenClipboard to fail. It simulates a
+// clipboard held by another application (AC-S09). The open is associated
+// with the desktop window so the hold registers against a real window.
 func holdClipboard(t *testing.T) (release func()) {
 	t.Helper()
 	desktop, _, _ := procGetDesktopWindow.Call()
-	locked := make(chan struct{})
+	locked := make(chan error, 1)
 	releaseChan := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
@@ -36,19 +55,19 @@ func holdClipboard(t *testing.T) (release func()) {
 		// goroutine holding the clipboard must stay on one thread.
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		r, _, err := procOpenClipboard.Call(desktop)
-		if r == 0 {
-			close(locked)
-			t.Errorf("hold clipboard: OpenClipboard: %v", callError(err))
+		if err := openClipboardWithRetry(desktop); err != nil {
+			locked <- fmt.Errorf("hold clipboard: OpenClipboard: %w", err)
 			close(done)
 			return
 		}
-		close(locked)
+		locked <- nil
 		<-releaseChan
 		procCloseClipboard.Call()
 		close(done)
 	}()
-	<-locked
+	if err := <-locked; err != nil {
+		t.Fatal(err)
+	}
 	return func() {
 		close(releaseChan)
 		<-done
@@ -57,14 +76,65 @@ func holdClipboard(t *testing.T) (release func()) {
 
 func emptyClipboardForTest(t *testing.T) {
 	t.Helper()
-	r, _, err := procOpenClipboard.Call(0)
-	if r == 0 {
-		t.Fatalf("OpenClipboard: %v", callError(err))
+	if err := openClipboardWithRetry(0); err != nil {
+		t.Fatalf("OpenClipboard: %v", err)
 	}
 	defer procCloseClipboard.Call()
 	if r, _, err := procEmptyClipboard.Call(); r == 0 {
 		t.Fatalf("EmptyClipboard: %v", callError(err))
 	}
+}
+
+// clipboardImageSize reads back the dimensions of the CF_DIB image on the
+// clipboard, verifying the round trip into a common Windows destination
+// format.
+func clipboardImageSize() (int32, int32, error) {
+	if err := openClipboardWithRetry(0); err != nil {
+		return 0, 0, fmt.Errorf("OpenClipboard: %w", err)
+	}
+	defer procCloseClipboard.Call()
+	allocation, _, err := procGetClipboardData.Call(cfDIB, 0)
+	if allocation == 0 {
+		return 0, 0, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(err))
+	}
+	data, err := lockGlobalMemory(allocation)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer procGlobalUnlock.Call(allocation)
+	var header bitmapInfoHeader
+	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
+	if header.Size != uint32(unsafe.Sizeof(bitmapInfoHeader{})) || header.BitCount != 32 {
+		return 0, 0, errors.New("unexpected clipboard DIB header")
+	}
+	return header.Width, header.Height, nil
+}
+
+// clipboardPixel reads back one pixel of the CF_DIB image on the clipboard
+// as RGBA, verifying pixel content survives the round trip without JPEG
+// degradation.
+func clipboardPixel(x, y int) (r, g, b, a uint8, err error) {
+	if callErr := openClipboardWithRetry(0); callErr != nil {
+		return 0, 0, 0, 0, fmt.Errorf("OpenClipboard: %w", callErr)
+	}
+	defer procCloseClipboard.Call()
+	allocation, _, callErr := procGetClipboardData.Call(cfDIB, 0)
+	if allocation == 0 {
+		return 0, 0, 0, 0, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(callErr))
+	}
+	data, err := lockGlobalMemory(allocation)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer procGlobalUnlock.Call(allocation)
+	var header bitmapInfoHeader
+	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
+	// Positive header height stores rows bottom-up.
+	row := int(header.Height) - 1 - y
+	address := data + unsafe.Sizeof(header) + uintptr(row*int(header.Width)+x)*4
+	var value [4]byte
+	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&value[0])), address, 4)
+	return value[2], value[1], value[0], value[3], nil
 }
 
 func TestSetClipboardImageRoundTrip(t *testing.T) {
