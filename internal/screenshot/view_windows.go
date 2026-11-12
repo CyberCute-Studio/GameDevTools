@@ -137,8 +137,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.displays != nil {
 		n.displays.Subscribe(n.refreshDisplays)
 	}
-	n.refreshDisplays()
+	// refresh clears the status area, so it runs before refreshDisplays:
+	// a display-enumeration failure at startup must stay visible.
 	n.refresh()
+	n.refreshDisplays()
 	return nil
 }
 
@@ -305,6 +307,10 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 			n.folder.SetText(n.options.Options().OutputFolder)
 		}
 		n.presentResult(err, fmt.Sprintf(ui.OutputFolderSaved, folder))
+	case displayCommand:
+		// The selection lives in the control and is read at capture time;
+		// nothing commits on selection change.
+		return true
 	case openFolderCommand:
 		if notification != 0 || n.savedPath == "" {
 			return true
@@ -336,6 +342,16 @@ func (n *NativeView) NativeAction() {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureInProgress}, 0)
 		return
 	}
+	// The quality field otherwise commits only when it loses focus, and
+	// keyboard activation of Start Capture never moves focus; the capture
+	// must not run with stale or invalid quality text.
+	if _, err := ParseJPEGQuality(n.quality.Edit.Text()); err != nil {
+		n.quality.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		return
+	}
+	n.commitQuality()
+	options = n.options.Options()
 	if err := options.Validate(); err != nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 		return

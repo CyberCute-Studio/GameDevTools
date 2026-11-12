@@ -309,3 +309,66 @@ func TestNativeViewOpenFolderRevealsSavedFile(t *testing.T) {
 		t.Fatalf("status after failed reveal = %q", got)
 	}
 }
+
+func TestNativeViewCaptureCommitsUnsavedQuality(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	// Keyboard activation of Start Capture never moves focus out of the
+	// quality field, so the capture must commit the field itself.
+	view.quality.Edit.SetText("80")
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	var request CaptureRequest
+	view.capture = func(got CaptureRequest) CaptureResult {
+		request = got
+		return CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}
+	}
+
+	view.NativeAction()
+	dispatcher.runNext(t)
+
+	if request.Options.JPEGQuality != 80 {
+		t.Fatalf("capture quality = %d, want the committed 80", request.Options.JPEGQuality)
+	}
+	if got := view.options.Options().JPEGQuality; got != 80 {
+		t.Fatalf("persisted quality = %d, want 80", got)
+	}
+}
+
+func TestNativeViewCaptureRejectsUnsavedInvalidQuality(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.quality.Edit.SetText("0")
+
+	captureCalled := false
+	view.capture = func(CaptureRequest) CaptureResult {
+		captureCalled = true
+		return CaptureResult{}
+	}
+
+	view.NativeAction()
+
+	if captureCalled {
+		t.Fatal("capture ran with invalid quality text")
+	}
+	if view.inProgress {
+		t.Fatal("capture marked in progress after rejected quality")
+	}
+	if view.quality.Error.Text() == "" {
+		t.Fatal("quality field shows no validation error")
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") {
+		t.Fatalf("status for invalid quality = %q", got)
+	}
+}
