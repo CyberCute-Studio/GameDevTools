@@ -105,9 +105,13 @@ func rawDisplays() ([]Display, error) {
 // its description. It returns an empty string when Windows provides none,
 // which callers present as "where Windows provides it" per SCR-041.
 func friendlyName(deviceName string) string {
+	name, err := windows.UTF16PtrFromString(deviceName)
+	if err != nil {
+		return ""
+	}
 	device := displayDevice{Cb: uint32(unsafe.Sizeof(displayDevice{}))}
 	r, _, _ := procEnumDisplayDevicesW.Call(
-		uintptr(unsafe.Pointer(utf16(deviceName))),
+		uintptr(unsafe.Pointer(name)),
 		0,
 		uintptr(unsafe.Pointer(&device)),
 		0,
@@ -134,12 +138,4 @@ func callError(operation string, err error) error {
 		return fmt.Errorf("%s failed", operation)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
-}
-
-func utf16(value string) *uint16 {
-	result, err := windows.UTF16PtrFromString(value)
-	if err != nil {
-		panic(err)
-	}
-	return result
 }

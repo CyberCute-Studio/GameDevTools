@@ -3,6 +3,8 @@
 package display
 
 import (
+	"fmt"
+	"os"
 	"testing"
 	"unsafe"
 )
@@ -14,7 +16,25 @@ const (
 	smCYVirtualScreen = 79
 )
 
-var procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
+var (
+	procGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
+	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
+)
+
+// TestMain puts the test process into the same per-monitor DPI awareness V2
+// context the production shell establishes in internal/app before any
+// display call. Without it the test binary is DPI-unaware and Windows
+// virtualizes every coordinate these tests observe, so on any display not
+// running at 100% scaling they would validate scaled coordinates instead of
+// the physical pixels the package contract promises.
+func TestMain(m *testing.M) {
+	const dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3)
+	r, _, err := procSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorAwareV2)
+	if r == 0 {
+		fmt.Fprintf(os.Stderr, "TestMain: SetProcessDpiAwarenessContext failed, tests run DPI-unaware: %v\n", err)
+	}
+	os.Exit(m.Run())
+}
 
 // The tests below exercise the real Windows display stack on the machine
 // running them, including every connected display, its effective DPI, and
