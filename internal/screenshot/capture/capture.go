@@ -6,7 +6,9 @@
 // All functions are safe to call from any goroutine. They never touch the
 // GUI thread, so callers run them off the GUI thread and deliver results
 // through the shell dispatcher, per TECH-005. Concurrent captures are
-// serialized internally because they share the screen device context.
+// serialized internally: every capture reads the shared composed desktop,
+// and serialization also bounds peak memory when several large captures
+// are requested at once.
 //
 // The mouse cursor is never part of the output: GDI screen captures read
 // the composed desktop without the cursor sprite (SCR-068). App-owned
@@ -16,20 +18,26 @@
 //
 // Failures are reported as *Error values with a Kind, so callers can
 // distinguish invalid geometry from a disconnected display and from native
-// graphics failures such as protected or exclusive content. A failed
-// capture never returns a blank image as success.
+// graphics failures. A failed capture never returns a blank image as
+// success. One class of content cannot be reported this way: windows the
+// compositor excludes from capture, such as DRM-protected video or
+// surfaces marked with WDA_EXCLUDEFROMCAPTURE, composite as black while
+// BitBlt still succeeds, and the GDI path cannot distinguish that from a
+// genuinely black screen. ADR-0001 records this limitation; presenting it
+// to the user is SCR-10 scope.
 package capture
 
 import (
 	"errors"
 	"fmt"
 	"image"
+	"sync/atomic"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
 
 // maxPixels bounds one capture's pixel count. At 4 bytes per pixel this
-// caps a single capture's source bitmap near 1 GiB; larger requests are
+// caps a single capture's source bitmap at 1 GiB; larger requests are
 // rejected as validation errors instead of exhausting memory.
 const maxPixels = 1 << 28
 
@@ -46,10 +54,11 @@ const (
 	// the selected display disconnected, or the topology could not be
 	// enumerated at all.
 	KindDisplay
-	// KindNative means the operating system rejected the capture. Protected
-	// or exclusive content, remote-session restrictions, and graphics
-	// driver failures surface this way; the capture must not be treated as
-	// a blank success.
+	// KindNative means the operating system rejected the capture. Graphics
+	// driver failures, remote-session restrictions, and compositor errors
+	// surface this way; the capture must not be treated as a blank success.
+	// Content the compositor excludes from capture produces no error; see
+	// the package documentation.
 	KindNative
 )
 
@@ -125,7 +134,7 @@ func validateRegion(desktop, region display.Rect) error {
 	case int64(region.Width())*int64(region.Height()) > maxPixels:
 		return kindError(KindValidation, "validate region",
 			fmt.Errorf("capture rectangle %d × %d exceeds the %d-megapixel limit",
-				region.Width(), region.Height(), maxPixels/1024/1024))
+				region.Width(), region.Height(), maxPixels/1_000_000))
 	case region.Left < desktop.Left || region.Top < desktop.Top ||
 		region.Right > desktop.Right || region.Bottom > desktop.Bottom:
 		return kindError(KindValidation, "validate region",
@@ -152,5 +161,5 @@ func findDisplay(displays []display.Display, deviceName string) (display.Display
 // exclude them. Restore shows them again.
 type Exclusion struct {
 	windows  []uintptr
-	restored bool
+	restored atomic.Bool
 }

@@ -21,6 +21,10 @@ const (
 
 	swHide = 0
 	swShow = 5
+
+	// swShowNoActivate restores a hidden window without activating it, so
+	// Restore never moves input focus to the revealed window.
+	swShowNoActivate = 4
 )
 
 var (
@@ -138,6 +142,11 @@ func convertDIB(pixels unsafe.Pointer, width, height int) *image.RGBA {
 // compositor to settle, so a following capture cannot contain them
 // (SCR-044). It returns the Exclusion that restores the windows; callers
 // typically defer Restore.
+//
+// ShowWindow acts through each window's owner thread, so that thread must
+// keep pumping messages while Hide runs. Calling Hide while the GUI
+// thread is blocked — for example synchronously waiting for the capture
+// result, which TECH-005 forbids — deadlocks the caller.
 func Hide(hwnd ...uintptr) (*Exclusion, error) {
 	exclusion := &Exclusion{windows: append([]uintptr(nil), hwnd...)}
 	for _, window := range hwnd {
@@ -151,15 +160,17 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 	return exclusion, nil
 }
 
-// Restore shows the hidden windows again. It is idempotent, so a deferred
-// Restore is harmless after an earlier explicit call.
+// Restore shows the hidden windows again without activating them, so
+// restoring a window after capture never moves input focus to it. It is
+// idempotent and safe for concurrent use, so a deferred Restore is
+// harmless after an earlier explicit call. Like Hide, Restore acts
+// through each window's owner thread, which must keep pumping messages.
 func (e *Exclusion) Restore() {
-	if e.restored {
+	if !e.restored.CompareAndSwap(false, true) {
 		return
 	}
-	e.restored = true
 	for _, window := range e.windows {
-		procShowWindow.Call(window, swShow)
+		procShowWindow.Call(window, swShowNoActivate)
 	}
 }
 

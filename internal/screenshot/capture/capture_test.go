@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
@@ -114,24 +113,5 @@ func TestKindString(t *testing.T) {
 	}
 	if got := Kind(42).String(); got != "Kind(42)" {
 		t.Fatalf("unknown kind renders as %q", got)
-	}
-}
-
-func TestConvertDIB(t *testing.T) {
-	// Two pixels of top-down 32-bit BGRA data: blue then a color with a
-	// nonzero source alpha byte, which the capture contract discards.
-	source := []byte{
-		0x30, 0x20, 0x10, 0x00,
-		0xC0, 0xA0, 0x80, 0x7F,
-	}
-	img := convertDIB(unsafe.Pointer(&source[0]), 2, 1)
-	if got := img.Bounds(); got.Dx() != 2 || got.Dy() != 1 {
-		t.Fatalf("converted bounds = %v, want 2 × 1", got)
-	}
-	want := []byte{0x10, 0x20, 0x30, 0xFF, 0x80, 0xA0, 0xC0, 0xFF}
-	for i, b := range want {
-		if img.Pix[i] != b {
-			t.Fatalf("pixel byte %d = %#x, want %#x (full image % x)", i, img.Pix[i], b, img.Pix)
-		}
 	}
 }

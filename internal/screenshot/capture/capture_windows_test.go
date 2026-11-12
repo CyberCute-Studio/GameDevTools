@@ -7,6 +7,8 @@ import (
 	"image"
 	"image/color"
 	"os"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +23,8 @@ const (
 	wsPopup        = 0x80000000
 	wsExTopmost    = 0x00000008
 	wsExToolWindow = 0x00000080
+
+	pmRemove = 0x0001
 )
 
 var (
@@ -33,6 +37,9 @@ var (
 	procDestroyWindow    = user32.NewProc("DestroyWindow")
 	procUpdateWindow     = user32.NewProc("UpdateWindow")
 	procIsWindowVisible  = user32.NewProc("IsWindowVisible")
+	procPeekMessageW     = user32.NewProc("PeekMessageW")
+	procTranslateMessage = user32.NewProc("TranslateMessage")
+	procDispatchMessageW = user32.NewProc("DispatchMessageW")
 
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
@@ -71,6 +78,68 @@ type wndClassEx struct {
 
 var classCounter atomic.Uint32
 
+// win32Message mirrors the Win32 MSG struct. The pump below never reads
+// the message contents, so only the layout has to be right.
+type win32Message struct {
+	Hwnd    uintptr
+	Message uint32
+	_       uint32
+	WParam  uintptr
+	LParam  uintptr
+	Time    uint32
+	Pt      struct{ X, Y int32 }
+}
+
+var (
+	windowThreadOnce sync.Once
+	windowThreadJobs = make(chan func())
+)
+
+// startWindowThread launches one locked OS thread that owns every test
+// window and pumps its message queue. ShowWindow delivers window messages
+// synchronously through the owning thread, so a cross-thread ShowWindow
+// from Hide or Restore blocks until the owner pumps. The test process has
+// no message loop of its own, and a Go goroutine migrates between OS
+// threads, so without this pump Hide deadlocks whenever the runtime
+// schedules the caller onto a thread other than the window's creator —
+// the same contract the production GUI thread satisfies by pumping.
+func startWindowThread() {
+	windowThreadOnce.Do(func() {
+		go func() {
+			runtime.LockOSThread()
+			var msg win32Message
+			for {
+				select {
+				case job := <-windowThreadJobs:
+					job()
+				default:
+					time.Sleep(time.Millisecond)
+				}
+				for {
+					r, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, pmRemove)
+					if r == 0 {
+						break
+					}
+					procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+					procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+				}
+			}
+		}()
+	})
+}
+
+// runOnWindowThread runs job on the window-owning thread and blocks until
+// it finishes. job must not call t.Fatal or its siblings: FailNow is only
+// legal on the test's own goroutine.
+func runOnWindowThread(job func()) {
+	done := make(chan struct{})
+	windowThreadJobs <- func() {
+		job()
+		close(done)
+	}
+	<-done
+}
+
 func colorRef(c color.RGBA) uint32 {
 	return uint32(c.R) | uint32(c.G)<<8 | uint32(c.B)<<16
 }
@@ -81,6 +150,7 @@ func colorRef(c color.RGBA) uint32 {
 // otherwise pollute the sampled pixels.
 func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int32, fill color.RGBA) (windows.Handle, display.Rect) {
 	t.Helper()
+	startWindowThread()
 	primary, err := monitor.PrimaryDisplay()
 	if err != nil {
 		t.Fatal(err)
@@ -120,18 +190,32 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 		t.Fatalf("RegisterClassExW: %v", err)
 	}
 	t.Cleanup(func() { procUnregisterClassW.Call(uintptr(atom), module) })
-	hwnd, _, err := procCreateWindowExW.Call(
-		wsExTopmost|wsExToolWindow,
-		uintptr(unsafe.Pointer(className)), 0, wsPopup,
-		uintptr(region.Left), uintptr(region.Top), uintptr(width), uintptr(height),
-		0, 0, module, 0,
-	)
+
+	// The window is created, shown, and eventually destroyed on the
+	// window-owning thread so that its message queue is pumped; a window
+	// created on the test goroutine would be owned by an arbitrary runtime
+	// thread that never pumps.
+	var hwnd uintptr
+	var createErr error
+	runOnWindowThread(func() {
+		var callErr error
+		hwnd, _, callErr = procCreateWindowExW.Call(
+			wsExTopmost|wsExToolWindow,
+			uintptr(unsafe.Pointer(className)), 0, wsPopup,
+			uintptr(region.Left), uintptr(region.Top), uintptr(width), uintptr(height),
+			0, 0, module, 0,
+		)
+		if hwnd == 0 {
+			createErr = callErr
+			return
+		}
+		procShowWindow.Call(hwnd, swShow)
+		procUpdateWindow.Call(hwnd)
+	})
 	if hwnd == 0 {
-		t.Fatalf("CreateWindowExW: %v", err)
+		t.Fatalf("CreateWindowExW: %v", createErr)
 	}
-	t.Cleanup(func() { procDestroyWindow.Call(hwnd) })
-	procShowWindow.Call(hwnd, swShow)
-	procUpdateWindow.Call(hwnd)
+	t.Cleanup(func() { runOnWindowThread(func() { procDestroyWindow.Call(hwnd) }) })
 	return windows.Handle(hwnd), region
 }
 
@@ -386,5 +470,24 @@ func TestBitmapInfoStructLayout(t *testing.T) {
 	// allocate a corrupt bitmap or fail outright.
 	if got := unsafe.Sizeof(bitmapInfoHeader{}); got != 40 {
 		t.Fatalf("bitmapInfoHeader size = %d, want 40", got)
+	}
+}
+
+func TestConvertDIB(t *testing.T) {
+	// Two pixels of top-down 32-bit BGRA data: blue then a color with a
+	// nonzero source alpha byte, which the capture contract discards.
+	source := []byte{
+		0x30, 0x20, 0x10, 0x00,
+		0xC0, 0xA0, 0x80, 0x7F,
+	}
+	img := convertDIB(unsafe.Pointer(&source[0]), 2, 1)
+	if got := img.Bounds(); got.Dx() != 2 || got.Dy() != 1 {
+		t.Fatalf("converted bounds = %v, want 2 × 1", got)
+	}
+	want := []byte{0x10, 0x20, 0x30, 0xFF, 0x80, 0xA0, 0xC0, 0xFF}
+	for i, b := range want {
+		if img.Pix[i] != b {
+			t.Fatalf("pixel byte %d = %#x, want %#x (full image % x)", i, img.Pix[i], b, img.Pix)
+		}
 	}
 }
