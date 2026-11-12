@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
+	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -25,6 +26,7 @@ type nativeShell struct {
 	store         *settings.Store
 	settings      *settings.Settings
 	logger        *diagnostics.Logger
+	displays      *display.Monitor
 	startupNotice string
 	notice        string
 	hwnd          windows.Handle
@@ -85,7 +87,7 @@ type shellTextHeights struct {
 
 var shellStates = map[windows.Handle]*nativeShell{}
 
-func runShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, notice string) error {
+func runShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, displays *display.Monitor, notice string) error {
 	if err := registerShellClass(); err != nil {
 		return err
 	}
@@ -94,6 +96,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 		store:         store,
 		settings:      initial,
 		logger:        logger,
+		displays:      displays,
 		startupNotice: notice,
 		notice:        notice,
 		dpi:           96,
@@ -650,6 +653,11 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmSize:
 		if shell != nil {
 			shell.layout()
+			return 0
+		}
+	case wmDisplayChange:
+		if shell != nil && shell.displays != nil {
+			shell.displays.HandleDisplayChange()
 			return 0
 		}
 	case wmDPIChanged:

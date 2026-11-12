@@ -104,11 +104,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** The display picker is completed in SCR-05. This item does not perform captures. Capture options persist in a versioned `capture` object inside the Screenshot module section, validated independently from and preserved alongside the module's `presets` data.
 
 9. **SCR-02 — Implement display topology and physical-pixel coordinate services**
-   - **Status:** Pending | **PR:** TBD | **Depends on:** FND-02
+   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-02
    - **Requirements:** SCR-041, SCR-043, NFR-003, TECH-003.
    - **Deliver:** DPI-aware display enumeration, display identifiers/names, native resolutions, primary-display metadata, cursor-display selection, virtual-desktop bounds, negative-coordinate support, and explicit logical/physical conversion utilities. Expose display-change notifications.
    - **Verify:** Unit-test coordinate conversion and bounds calculations. Integration-test primary/secondary displays, mixed scaling, rotated displays where available, negative coordinates, and display changes.
-   - **Notes:** This is a native service PR; the user-facing display picker is completed in SCR-05.
+   - **Notes:** This is a native service PR; the user-facing display picker is completed in SCR-05. The `internal/display` service enumerates physical-pixel bounds, effective DPI, device and friendly monitor names, and primary status; assigns deterministic picker numbers (primary first, then device name); resolves the cursor display with a nearest-display fallback; and forwards `WM_DISPLAYCHANGE` through the shell to subscribers. Integration-tested on two physical displays at 100% scaling; mixed-scaling and rotated-display hardware remains unavailable (see the FND-01 blocker), so those paths are covered by unit-level conversion and bounds tests only.
 
 10. **SCR-03 — Implement raw Windows display and region capture**
     - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-02

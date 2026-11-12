@@ -24,6 +24,8 @@ Independent Screenshot and Image Resizer preset libraries live in `internal/pres
 
 Shared Win32 controls, dimension validation, confirmations, inline notifications, centralized strings, and accessibility conventions live in `internal/ui`. See [Shared UI and accessibility conventions](docs/ui.md) for keyboard, status, theme, and contrast guidance.
 
+Display topology and physical-pixel coordinate services live in `internal/display`. The package enumerates connected displays with their device names, friendly monitor names where Windows provides them, native physical-pixel bounds, effective DPI, and primary status; assigns deterministic picker numbers (primary first); resolves the display under the cursor; computes virtual-desktop bounds with negative-coordinate support; converts explicitly between logical 96-DPI and physical-pixel measurements; and forwards `WM_DISPLAYCHANGE` notifications to subscribers through the shell window.
+
 Run formatting, static analysis, and unit tests from the repository root with:
 
 ```bash

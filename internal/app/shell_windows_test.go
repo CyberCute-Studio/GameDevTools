@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -133,6 +134,23 @@ func TestShellWindowProcRoutesNativeCommandsAndRelayouts(t *testing.T) {
 	}
 	if native.layouts == 0 {
 		t.Fatal("native command did not trigger a layout")
+	}
+}
+
+func TestShellWindowProcForwardsDisplayChanges(t *testing.T) {
+	shell := newCommandTestShell(t, nil)
+	monitor := display.NewMonitor()
+	shell.displays = monitor
+	calls := 0
+	monitor.Subscribe(func() { calls++ })
+	shellWindowProc(shell.hwnd, wmDisplayChange, 0, nil)
+	if calls != 1 {
+		t.Fatalf("display-change callback invocations = %d, want 1", calls)
+	}
+	shell.displays = nil
+	shellWindowProc(shell.hwnd, wmDisplayChange, 0, nil)
+	if calls != 1 {
+		t.Fatalf("nil monitor panicked or renotified: %d calls", calls)
 	}
 }
 
