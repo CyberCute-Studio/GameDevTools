@@ -12,6 +12,7 @@ const (
 	bifReturnOnlyFsDirs     = 0x0001
 	bifNewDialogStyle       = 0x0040
 	coinitApartmentThreaded = 0x2
+	swShowNormal            = 1
 )
 
 var (
@@ -20,6 +21,7 @@ var (
 
 	procSHBrowseForFolderW   = shell32.NewProc("SHBrowseForFolderW")
 	procSHGetPathFromIDListW = shell32.NewProc("SHGetPathFromIDListW")
+	procShellExecuteW        = shell32.NewProc("ShellExecuteW")
 	procCoInitializeEx       = ole32.NewProc("CoInitializeEx")
 	procCoUninitialize       = ole32.NewProc("CoUninitialize")
 	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
@@ -64,4 +66,22 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 		return "", false, callError("SHGetPathFromIDListW", err)
 	}
 	return windows.UTF16ToString(path), true, nil
+}
+
+// RevealInFolder opens File Explorer with the given file selected. It runs
+// only on explicit user request: the application never opens folders on its
+// own after an operation completes.
+func RevealInFolder(path string) error {
+	parameters := `/select,"` + path + `"`
+	// ShellExecuteW reports success as a value greater than 32.
+	result, _, err := procShellExecuteW.Call(
+		0, 0,
+		uintptr(unsafe.Pointer(utf16("explorer.exe"))),
+		uintptr(unsafe.Pointer(utf16(parameters))),
+		0, swShowNormal,
+	)
+	if result <= 32 {
+		return callError("ShellExecuteW(explorer.exe)", err)
+	}
+	return nil
 }

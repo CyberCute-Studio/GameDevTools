@@ -18,6 +18,9 @@ import (
 const (
 	shellClassName = "GameDevToolsMainWindow"
 	navCommandBase = 100
+	// actionCommand identifies the primary action button; it stays clear of
+	// the navigation commands and module command bases.
+	actionCommand = 99
 )
 
 type nativeShell struct {
@@ -56,6 +59,18 @@ type nativeView interface {
 
 type nativeViewProvider interface {
 	NativeView() any
+}
+
+// nativeActionHandler is implemented by module views that run the shell's
+// primary action button, such as the Screenshot module's Start Capture.
+type nativeActionHandler interface {
+	NativeAction()
+}
+
+// nativeDispatcherAware is implemented by module views that post background
+// results back to the GUI thread through the shell dispatcher.
+type nativeDispatcherAware interface {
+	NativeDispatcher(core.Dispatcher)
 }
 
 type shellLayout struct {
@@ -212,7 +227,7 @@ func (s *nativeShell) createControls() error {
 		return err
 	}
 	s.description = description.Handle()
-	action, err := ui.NewButton(s.hwnd, "", ui.ButtonOptions{Primary: true, Group: true, Disabled: true})
+	action, err := ui.NewButton(s.hwnd, "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true})
 	if err != nil {
 		return err
 	}
@@ -232,6 +247,9 @@ func (s *nativeShell) createControls() error {
 		}
 		if err := native.NativeCreate(s.hwnd); err != nil {
 			return err
+		}
+		if aware, ok := native.(nativeDispatcherAware); ok {
+			aware.NativeDispatcher(s.dispatcher)
 		}
 		native.NativeShow(false)
 		s.nativeViews[module.ID()] = native
@@ -283,6 +301,13 @@ func (s *nativeShell) updateView() {
 		showAction = swShow
 	}
 	procShowWindow.Call(uintptr(s.action), uintptr(showAction))
+	enabled := uintptr(0)
+	if native, exists := s.nativeViews[current.ID()]; exists && view.PrimaryAction() != "" {
+		if _, actionable := native.(nativeActionHandler); actionable {
+			enabled = 1
+		}
+	}
+	procEnableWindow.Call(uintptr(s.action), enabled)
 	for id, button := range s.navButtons {
 		checked := uintptr(0)
 		if id == current.ID() {
@@ -615,6 +640,15 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			shell.ensureControlVisible(windows.Handle(lParam))
 			return 0
 		}
+		if shell != nil && notification == 0 && lowWord(wParam) == actionCommand {
+			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists {
+				if handler, actionable := native.(nativeActionHandler); actionable {
+					handler.NativeAction()
+					shell.layout()
+					return 0
+				}
+			}
+		}
 		if shell != nil && highWord(wParam) == 0 {
 			if id, exists := shell.navIDs[lowWord(wParam)]; exists {
 				if shell.navigator.Select(id) == nil {
@@ -690,6 +724,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmAppDispatch:
 		if shell != nil {
 			shell.dispatcher.Drain()
+			shell.layout()
 			return 0
 		}
 	case wmClose:

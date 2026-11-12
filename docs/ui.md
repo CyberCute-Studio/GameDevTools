@@ -16,7 +16,7 @@ Show validation next to the relevant field and explain how to correct it. Errors
 
 Use `ui.StatusArea` for non-blocking results. Notices include a textual severity such as `Success`, `Warning`, or `Error`, remain in the window instead of stealing focus, and can expire through a window timer. A zero timeout keeps a notice visible until it is replaced or cleared. Handle timer-creation errors returned by `Show`; the notice remains visible if its timer cannot be created. Replace or clear obsolete results rather than stacking notifications.
 
-Use `ui.Confirm` for destructive confirmation. Its safe answer is the default. Confirmations are modal because they require a decision before an operation; routine status must not use a message box.
+Use `ui.Confirm` for destructive confirmation. Its safe answer is the default. Confirmations are modal because they require a decision before an operation; routine status must not use a message box. Result actions such as opening a saved file's folder run only on explicit user request through `ui.RevealInFolder`; the application never opens folders or editors on its own after an operation completes.
 
 ## Theme and contrast
 

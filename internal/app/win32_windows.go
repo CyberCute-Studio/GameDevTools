@@ -106,6 +106,7 @@ var (
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
+	procEnableWindow                  = user32.NewProc("EnableWindow")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	procGetSysColor                   = user32.NewProc("GetSysColor")

@@ -7,7 +7,7 @@ const (
 
 	ScreenshotNavigation    = "Screenshot"
 	ScreenshotTitle         = "Screenshot"
-	ScreenshotDescription   = "Choose the capture mode, manage exact-dimension presets, and configure the save format, JPEG quality, and output folder. Capturing itself is added by later Screenshot module items."
+	ScreenshotDescription   = "Choose the capture mode, manage exact-dimension presets, and configure the save format, JPEG quality, and output folder. Full Display capture runs from Start Capture; rectangle capture modes arrive with later Screenshot items."
 	StartCaptureAction      = "Start Capture"
 	CaptureAction           = "Capture"
 	CancelAction            = "Cancel"
@@ -93,4 +93,20 @@ const (
 	OutputFolderSaved      = "Screenshots are saved in %s."
 	OptionsSaveFailed      = "The capture setting change remains in memory, but settings could not be saved: %v"
 	OptionsOperationFailed = "Capture setting operation failed: %v"
+
+	DisplayLabel           = "&Display"
+	DisplayListItem        = "%d — %s — %d × %d (%d%%)"
+	DisplayListItemPrimary = "%d — %s — %d × %d (%d%%, primary)"
+	DisplayUnavailable     = "The display list is unavailable: %v"
+	DisplayRequired        = "Choose a display before capturing."
+	OpenFolderAction       = "Open Folder"
+	OpenFolderFailed       = "The folder of the saved screenshot could not be opened: %v"
+
+	CaptureRectanglePending = "Free Rectangle and Preset Rectangle capture arrive with later Screenshot items. Full Display capture is available."
+	CaptureInProgress       = "A capture is already in progress. Wait for it to finish."
+	CaptureFailed           = "The display could not be captured: %v"
+	CaptureSucceeded        = "Display captured. Saved to %s and copied to the clipboard."
+	CaptureSaveFailed       = "Display captured and copied to the clipboard, but saving failed: %v"
+	CaptureClipboardFailed  = "Display captured and saved to %s, but copying to the clipboard failed: %v"
+	CaptureOutputsFailed    = "Display captured, but saving failed (%v) and copying to the clipboard failed (%v)."
 )
