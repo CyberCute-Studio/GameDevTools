@@ -104,7 +104,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** The display picker is completed in SCR-05. This item does not perform captures. Capture options persist in a versioned `capture` object inside the Screenshot module section, validated independently from and preserved alongside the module's `presets` data.
 
 9. **SCR-02 — Implement display topology and physical-pixel coordinate services**
-   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-02
+   - **Status:** In Progress | **PR:** [#9](https://github.com/CyberCute-Studio/GameDevTools/pull/9) | **Depends on:** FND-02
    - **Requirements:** SCR-041, SCR-043, NFR-003, TECH-003.
    - **Deliver:** DPI-aware display enumeration, display identifiers/names, native resolutions, primary-display metadata, cursor-display selection, virtual-desktop bounds, negative-coordinate support, and explicit logical/physical conversion utilities. Expose display-change notifications.
    - **Verify:** Unit-test coordinate conversion and bounds calculations. Integration-test primary/secondary displays, mixed scaling, rotated displays where available, negative coordinates, and display changes.
