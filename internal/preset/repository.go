@@ -109,6 +109,22 @@ func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPreset
 	if !exists {
 		return empty, nil
 	}
+	storedFields, err := decodeObjectFields(data)
+	if err != nil {
+		return storedPresets{}, fmt.Errorf("decode stored preset fields: %w", err)
+	}
+	for field := range storedFields {
+		switch field {
+		case "version", "custom", "selectedPresetId":
+		default:
+			return storedPresets{}, fmt.Errorf("unknown stored preset field %q", field)
+		}
+	}
+	if custom, exists := storedFields["custom"]; exists {
+		if err := validateStoredPresetFields(custom); err != nil {
+			return storedPresets{}, fmt.Errorf("decode stored custom presets: %w", err)
+		}
+	}
 	var stored storedPresets
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -123,10 +139,6 @@ func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPreset
 	}
 	if stored.Custom == nil {
 		return storedPresets{}, errors.New("stored custom presets must be an array")
-	}
-	var storedFields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &storedFields); err != nil {
-		return storedPresets{}, fmt.Errorf("decode stored preset fields: %w", err)
 	}
 	_, hasSelectedID := storedFields["selectedPresetId"]
 	if hasSelectedID && stored.SelectedID == "" {
@@ -143,6 +155,27 @@ func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPreset
 	}
 	stored.Custom = library.Custom()
 	return stored, nil
+}
+
+func validateStoredPresetFields(data json.RawMessage) error {
+	var records []json.RawMessage
+	if err := json.Unmarshal(data, &records); err != nil {
+		return err
+	}
+	for _, record := range records {
+		fields, err := decodeObjectFields(record)
+		if err != nil {
+			return err
+		}
+		for field := range fields {
+			switch field {
+			case "id", "name", "width", "height", "resizeMode":
+			default:
+				return fmt.Errorf("unknown custom preset field %q", field)
+			}
+		}
+	}
+	return nil
 }
 
 func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Preset, selectedID string) (json.RawMessage, error) {
@@ -170,16 +203,49 @@ func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Pres
 }
 
 func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, error) {
-	fields := make(map[string]json.RawMessage)
 	if len(section) == 0 {
-		return fields, nil
+		return make(map[string]json.RawMessage), nil
 	}
-	trimmed := bytes.TrimSpace(section)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil, errors.New("module preset section must be a JSON object")
-	}
-	if err := json.Unmarshal(section, &fields); err != nil {
+	fields, err := decodeObjectFields(section)
+	if err != nil {
 		return nil, fmt.Errorf("decode module preset section: %w", err)
+	}
+	return fields, nil
+}
+
+func decodeObjectFields(data json.RawMessage) (map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errors.New("preset data must be a JSON object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, errors.New("preset object field name must be a string")
+		}
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("duplicate preset object field %q", name)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[name] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("preset object contains trailing JSON values")
 	}
 	return fields, nil
 }
