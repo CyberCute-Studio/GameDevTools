@@ -39,7 +39,7 @@ func (m *Module) View() app.View {
 	return m.view
 }
 
-func (v *View) NativePresetManager() any {
+func (v *View) NativeView() any {
 	return v.native
 }
 

@@ -16,7 +16,7 @@ const (
 	optionsKey     = "capture"
 )
 
-var moduleID = shell.ModuleScreenshot
+const moduleID = shell.ModuleScreenshot
 
 type storedOptions struct {
 	Version      int         `json:"version"`
@@ -46,12 +46,16 @@ func (s *OptionsStore) Load(value settings.Settings) (CaptureOptions, error) {
 	if err != nil {
 		return CaptureOptions{}, err
 	}
-	if exists {
-		options.Mode = stored.Mode
-		options.Format = stored.Format
-		options.JPEGQuality = stored.JPEGQuality
-		options.OutputFolder = stored.OutputFolder
+	if !exists {
+		// The default folder is not validated here: when the Pictures folder
+		// cannot be resolved the application must still start so the user can
+		// choose an output folder, as the startup warning announces.
+		return options, nil
 	}
+	options.Mode = stored.Mode
+	options.Format = stored.Format
+	options.JPEGQuality = stored.JPEGQuality
+	options.OutputFolder = stored.OutputFolder
 	return options, options.Validate()
 }
 
@@ -89,6 +93,9 @@ func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
 	data, exists := fields[optionsKey]
 	if !exists {
 		return storedOptions{}, false, nil
+	}
+	if _, err := decodeObjectFields("stored capture options", data); err != nil {
+		return storedOptions{}, false, err
 	}
 	var stored storedOptions
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -138,12 +145,16 @@ func encodeOptions(section json.RawMessage, options CaptureOptions) (json.RawMes
 }
 
 func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, error) {
+	return decodeObjectFields("screenshot settings section", section)
+}
+
+func decodeObjectFields(object string, section json.RawMessage) (map[string]json.RawMessage, error) {
 	if len(section) == 0 {
 		return make(map[string]json.RawMessage), nil
 	}
 	trimmed := bytes.TrimSpace(section)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil, errors.New("screenshot settings section must be a JSON object")
+		return nil, fmt.Errorf("%s must be a JSON object", object)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(trimmed))
 	if _, err := decoder.Token(); err != nil {
@@ -157,10 +168,10 @@ func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, e
 		}
 		name, ok := token.(string)
 		if !ok {
-			return nil, errors.New("screenshot settings field name must be a string")
+			return nil, fmt.Errorf("%s field name must be a string", object)
 		}
 		if _, exists := fields[name]; exists {
-			return nil, fmt.Errorf("duplicate screenshot settings field %q", name)
+			return nil, fmt.Errorf("duplicate %s field %q", object, name)
 		}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
@@ -172,7 +183,7 @@ func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, e
 		return nil, err
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return nil, errors.New("screenshot settings section contains trailing JSON values")
+		return nil, fmt.Errorf("%s contains trailing JSON values", object)
 	}
 	return fields, nil
 }

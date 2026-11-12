@@ -263,7 +263,7 @@ func (n *NativeView) selectMode(notification uint16, mode CaptureMode) {
 	}
 	err := n.options.SetMode(mode)
 	n.refreshMode()
-	n.presentResult(err, fmt.Sprintf(ui.CaptureModeSelected, modeLabel(mode)))
+	n.presentResult(err, fmt.Sprintf(ui.CaptureModeSelected, captureModeLabel(mode)))
 }
 
 func (n *NativeView) commitQuality() {
@@ -328,7 +328,7 @@ func (n *NativeView) presentResult(err error, success string) {
 	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}, 0)
 }
 
-func modeLabel(mode CaptureMode) string {
+func captureModeLabel(mode CaptureMode) string {
 	switch mode {
 	case ModePresetRectangle:
 		return ui.CaptureModePresetRectangle

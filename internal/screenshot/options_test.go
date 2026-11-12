@@ -182,6 +182,32 @@ func TestOptionsManagerKeepsMemoryChangeWhenSaveFails(t *testing.T) {
 	}
 }
 
+func TestOptionsManagerStartsWithoutDefaultFolder(t *testing.T) {
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	optionsStore, err := NewOptionsStore(store, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := settings.Default()
+	manager, err := NewOptionsManager(optionsStore, &value)
+	if err != nil {
+		t.Fatalf("NewOptionsManager() with an unavailable default folder: %v", err)
+	}
+	if manager.Options().OutputFolder != "" {
+		t.Fatalf("default folder = %q, want empty", manager.Options().OutputFolder)
+	}
+	if err := manager.SetMode(ModePresetRectangle); err == nil {
+		t.Fatal("SetMode persisted options without an output folder")
+	}
+	folder := testFolder(t)
+	if err := manager.SetOutputFolder(folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetMode(ModePresetRectangle); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newTestOptionsManager(t *testing.T, configPath, folder string) (*OptionsManager, *settings.Store) {
 	t.Helper()
 	store := settings.NewStore(settings.Paths{ConfigFile: configPath})

@@ -282,3 +282,37 @@ func TestNativeViewPersistenceFailureStaysInMemory(t *testing.T) {
 		t.Fatalf("status after failed save = %q", got)
 	}
 }
+
+func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	scale := func(value int32) int32 { return value }
+	measure := func(text string, width int32) int32 {
+		if text == "" {
+			return 0
+		}
+		return 120
+	}
+
+	narrow := view.NativeHeight(400, scale, measure)
+	wide := view.NativeHeight(600, scale, measure)
+	if narrow != wide+52 {
+		t.Fatalf("stacked radio rows should add two rows: narrow = %d, wide = %d", narrow, wide)
+	}
+
+	baseline := view.NativeHeight(600, scale, measure)
+	view.quality.Error.SetText("A wrapped quality validation message")
+	view.status.SetText("A wrapped persistence warning")
+	expanded := view.NativeHeight(600, scale, measure)
+	if expanded-baseline != 152 {
+		t.Fatalf("height increase = %d, want 152", expanded-baseline)
+	}
+	view.NativeLayout(0, 0, 600, scale, measure)
+	if view.quality.Error.Text() == "" || view.status.Text() == "" {
+		t.Fatal("layout discarded validation or persistence text")
+	}
+}

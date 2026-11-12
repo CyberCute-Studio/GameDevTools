@@ -123,6 +123,7 @@ func TestOptionsStoreRejectsMalformedSections(t *testing.T) {
 	}{
 		{name: "section is not an object", section: `[1]`, wantErr: "JSON object"},
 		{name: "duplicate section field", section: `{"capture":{},"capture":{}}`, wantErr: "duplicate"},
+		{name: "duplicate capture field", section: `{"capture":{"version":1,"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `}}`, wantErr: "duplicate"},
 		{name: "trailing values", section: `{"capture":{}} null`, wantErr: "trailing"},
 		{name: "unsupported version", section: `{"capture":{"version":2,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `}}`, wantErr: "version"},
 		{name: "unknown field", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"display":1}}`, wantErr: "unknown field"},
