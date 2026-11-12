@@ -3,6 +3,7 @@ package preset
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,18 @@ const (
 	ResizeCropToFill ResizeMode = "crop-to-fill"
 )
 
+func (m *ResizeMode) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return errors.New("resize mode cannot be null")
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*m = ResizeMode(value)
+	return nil
+}
+
 var (
 	ErrBuiltIn       = errors.New("built-in presets cannot be edited or deleted")
 	ErrNotFound      = errors.New("preset not found")
@@ -41,9 +54,10 @@ type Preset struct {
 }
 
 type Library struct {
-	module   shell.ModuleID
-	builtIns []Preset
-	custom   []Preset
+	module     shell.ModuleID
+	builtIns   []Preset
+	custom     []Preset
+	selectedID string
 }
 
 func BuiltIns(module shell.ModuleID) ([]Preset, error) {
@@ -78,7 +92,7 @@ func NewLibrary(module shell.ModuleID, custom []Preset) (*Library, error) {
 	if err != nil {
 		return nil, err
 	}
-	library := &Library{module: module, builtIns: builtIns, custom: make([]Preset, 0, len(custom))}
+	library := &Library{module: module, builtIns: builtIns, custom: make([]Preset, 0, len(custom)), selectedID: builtIns[0].ID}
 	for _, candidate := range custom {
 		if candidate.BuiltIn {
 			return nil, fmt.Errorf("custom preset %q is marked built-in", candidate.ID)
@@ -114,6 +128,18 @@ func (l *Library) Get(id string) (Preset, bool) {
 		}
 	}
 	return Preset{}, false
+}
+
+func (l *Library) SelectedID() string {
+	return l.selectedID
+}
+
+func (l *Library) Select(id string) error {
+	if _, exists := l.Get(id); !exists {
+		return fmt.Errorf("%w: %q", ErrNotFound, id)
+	}
+	l.selectedID = id
+	return nil
 }
 
 func (l *Library) Create(name string, width, height int, mode ResizeMode) (Preset, error) {
@@ -191,6 +217,9 @@ func (l *Library) Delete(id string) error {
 		return err
 	}
 	l.custom = append(l.custom[:index], l.custom[index+1:]...)
+	if l.selectedID == id {
+		l.selectedID = l.builtIns[0].ID
+	}
 	return nil
 }
 
@@ -227,6 +256,9 @@ func validatePreset(module shell.ModuleID, candidate Preset) (Preset, error) {
 	candidate.Name = strings.TrimSpace(candidate.Name)
 	if candidate.Name == "" {
 		return Preset{}, errors.New(ui.PresetNameRequired)
+	}
+	if strings.ContainsRune(candidate.Name, '\x00') {
+		return Preset{}, errors.New(ui.PresetNameInvalid)
 	}
 	if candidate.Width < MinDimension || candidate.Width > MaxDimension {
 		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, "Width")

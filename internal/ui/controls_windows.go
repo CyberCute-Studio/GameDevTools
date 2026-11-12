@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -64,8 +65,12 @@ func NewLabel(parent windows.Handle, text string) (*Label, error) {
 	return newLabel(parent, text, ssNoPrefix)
 }
 
-func newMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
+func NewMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
 	return newLabel(parent, text, 0)
+}
+
+func newMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
+	return NewMnemonicLabel(parent, text)
 }
 
 func newLabel(parent windows.Handle, text string, style uintptr) (*Label, error) {
@@ -109,6 +114,96 @@ func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Butt
 	return &Button{Control{hwnd: hwnd}}, nil
 }
 
+type ComboBox struct {
+	Control
+}
+
+func NewComboBox(parent windows.Handle, id int32) (*ComboBox, error) {
+	hwnd, err := createControl(parent, "COMBOBOX", "", wsChild|wsVisible|wsTabStop|cbsDropDownList|cbsNoIntegralHeight, 0, id)
+	if err != nil {
+		return nil, err
+	}
+	return &ComboBox{Control{hwnd: hwnd}}, nil
+}
+
+func (c *ComboBox) Add(text string) {
+	procSendMessageW.Call(uintptr(c.hwnd), cbAddString, 0, uintptr(unsafe.Pointer(utf16(text))))
+}
+
+func (c *ComboBox) Reset() {
+	procSendMessageW.Call(uintptr(c.hwnd), cbResetContent, 0, 0)
+}
+
+func (c *ComboBox) Select(index int) {
+	procSendMessageW.Call(uintptr(c.hwnd), cbSetCurSel, uintptr(index), 0)
+}
+
+func (c *ComboBox) Selected() int {
+	index, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetCurSel, 0, 0)
+	return int(int32(index))
+}
+
+type TextInput struct {
+	Label *Label
+	Edit  Control
+	Error *Label
+
+	id int32
+}
+
+func NewTextInput(parent windows.Handle, field string, id int32) (*TextInput, error) {
+	label, err := newMnemonicLabel(parent, field)
+	if err != nil {
+		return nil, err
+	}
+	edit, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll, wsExClientEdge, id)
+	if err != nil {
+		procDestroyWindow.Call(uintptr(label.Handle()))
+		return nil, err
+	}
+	validation, err := NewLabel(parent, "")
+	if err != nil {
+		procDestroyWindow.Call(uintptr(edit))
+		procDestroyWindow.Call(uintptr(label.Handle()))
+		return nil, err
+	}
+	return &TextInput{Label: label, Edit: Control{hwnd: edit}, Error: validation, id: id}, nil
+}
+
+func (t *TextInput) SetFont(font windows.Handle) {
+	t.Label.SetFont(font)
+	t.Edit.SetFont(font)
+	t.Error.SetFont(font)
+}
+
+func (t *TextInput) Move(x, y, width int32, metrics DimensionMetrics) {
+	t.Label.Move(x, y, width, metrics.LabelHeight)
+	t.Edit.Move(x, y+metrics.LabelHeight+metrics.Gap, width, metrics.EditHeight)
+	t.Error.Move(x, y+metrics.LabelHeight+metrics.Gap+metrics.EditHeight+metrics.Gap, width, metrics.ErrorHeight)
+}
+
+func (t *TextInput) Show(visible bool) {
+	t.Label.Show(visible)
+	t.Edit.Show(visible)
+	t.Error.Show(visible)
+}
+
+func (t *TextInput) Enable(enabled bool) {
+	t.Edit.Enable(enabled)
+}
+
+func (t *TextInput) Focus() {
+	t.Edit.Focus()
+}
+
+func (t *TextInput) HandleCommand(id int32, notification uint16) bool {
+	if id != t.id || (notification != enChange && notification != enKillFocus) {
+		return false
+	}
+	t.Error.SetText("")
+	return true
+}
+
 type DimensionMetrics struct {
 	LabelHeight int32
 	EditHeight  int32
@@ -149,7 +244,7 @@ func NewDimensionInput(parent windows.Handle, field string, id int32) (*Dimensio
 		Label: label,
 		Edit:  Control{hwnd: edit},
 		Error: validation,
-		field: field,
+		field: strings.ReplaceAll(field, "&", ""),
 		id:    id,
 	}, nil
 }
@@ -174,6 +269,10 @@ func (d *DimensionInput) Show(visible bool) {
 
 func (d *DimensionInput) Focus() {
 	d.Edit.Focus()
+}
+
+func (d *DimensionInput) Enable(enabled bool) {
+	d.Edit.Enable(enabled)
 }
 
 func (d *DimensionInput) Validate() (int, error) {

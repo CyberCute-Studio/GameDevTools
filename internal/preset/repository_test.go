@@ -89,8 +89,14 @@ func TestRepositoryPersistsIndependentLibrariesAndStableIdentifiers(t *testing.T
 	if string(screenshotSection["format"]) != `"png"` {
 		t.Fatalf("unrelated module option was not preserved: %s", screenshotSection["format"])
 	}
-	if strings.Contains(string(screenshotSection[sectionKey]), "builtin.") {
-		t.Fatal("built-in definitions were persisted as custom data")
+	var stored storedPresets
+	if err := json.Unmarshal(screenshotSection[sectionKey], &stored); err != nil {
+		t.Fatal(err)
+	}
+	for _, custom := range stored.Custom {
+		if strings.HasPrefix(custom.ID, "builtin.") {
+			t.Fatal("built-in definitions were persisted as custom data")
+		}
 	}
 
 	if err := screenshotLibrary.Rename(screenshotPreset.ID, "Renamed"); err != nil {
@@ -199,17 +205,32 @@ func TestRepositoryRejectsMalformedStoredData(t *testing.T) {
 		{name: "null custom array", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":null}}`},
 		{name: "unsupported version", module: shell.ModuleScreenshot, section: `{"presets":{"version":2,"custom":[]}}`},
 		{name: "unknown library field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"extra":true}}`},
+		{name: "unknown selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"selectedPresetId":"custom.missing"}}`},
+		{name: "empty selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"selectedPresetId":""}}`},
+		{name: "null selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"selectedPresetId":null}}`},
+		{name: "case-variant null selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"SelectedPresetId":null}}`},
+		{name: "case-variant library field", module: shell.ModuleScreenshot, section: `{"presets":{"Version":1,"custom":[]}}`},
+		{name: "case-variant preset field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"ID":"custom.one","name":"One","width":1,"height":1}]}}`},
+		{name: "duplicate selected preset field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[],"selectedPresetId":"","selectedPresetId":"builtin.screenshot.hd"}}`},
+		{name: "duplicate presets field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1}]},"presets":{"version":1,"custom":[]}}`},
+		{name: "duplicate custom field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1}],"custom":[]}}`},
+		{name: "duplicate preset field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"","name":"One","width":1,"height":1}]}}`},
 		{name: "unknown preset field", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1,"extra":true}]}}`},
 		{name: "fractional dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1.5,"height":1}]}}`},
 		{name: "non-numeric dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":"one","height":1}]}}`},
 		{name: "zero dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":0,"height":1}]}}`},
 		{name: "empty name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":" ","width":1,"height":1}]}}`},
+		{name: "null in name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"bad\u0000name","width":1,"height":1}]}}`},
+		{name: "unpaired high surrogate in name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"bad\ud800name","width":1,"height":1}]}}`},
+		{name: "unpaired low surrogate in selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.\udc00","name":"One","width":1,"height":1}],"selectedPresetId":"custom.\udc00"}}`},
+		{name: "invalid UTF-8 in name", module: shell.ModuleScreenshot, section: "{\"presets\":{\"version\":1,\"custom\":[{\"id\":\"custom.one\",\"name\":\"bad\xffname\",\"width\":1,\"height\":1}]}}"},
 		{name: "empty identifier", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"","name":"One","width":1,"height":1}]}}`},
 		{name: "duplicate identifiers", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1},{"id":"custom.one","name":"Two","width":2,"height":2}]}}`},
 		{name: "duplicate names", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1},{"id":"custom.two","name":" one ","width":2,"height":2}]}}`},
 		{name: "built-in identifier collision", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"builtin.screenshot.hd","name":"Custom","width":1,"height":1}]}}`},
 		{name: "built-in name collision", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":" hd ","width":1,"height":1}]}}`},
 		{name: "Screenshot resize mode", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1,"resizeMode":"fit"}]}}`},
+		{name: "Screenshot null resize mode", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1,"resizeMode":null}]}}`},
 		{name: "resizer missing mode", module: shell.ModuleImageResizer, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1}]}}`},
 		{name: "resizer invalid mode", module: shell.ModuleImageResizer, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1,"resizeMode":"unknown"}]}}`},
 		{name: "resizer pixel limit", module: shell.ModuleImageResizer, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":10000,"height":10001,"resizeMode":"fit"}]}}`},
@@ -226,6 +247,23 @@ func TestRepositoryRejectsMalformedStoredData(t *testing.T) {
 				t.Fatal("Load() accepted malformed stored presets")
 			}
 		})
+	}
+}
+
+func TestRepositoryAcceptsValidUnicode(t *testing.T) {
+	repository, err := NewRepository(shell.ModuleScreenshot, settings.NewStore(settings.Paths{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := settings.Default()
+	value.Modules[string(shell.ModuleScreenshot)] = json.RawMessage(`{"presets":{"version":1,"custom":[{"id":"custom.unicode","name":"Emoji \ud83d\ude00 and \ufffd replacement","width":1,"height":1}]}}`)
+	library, err := repository.Load(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, exists := library.Get("custom.unicode")
+	if !exists || created.Name != "Emoji 😀 and \ufffd replacement" {
+		t.Fatalf("valid Unicode preset name = %q, exists = %v", created.Name, exists)
 	}
 }
 

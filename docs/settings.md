@@ -39,7 +39,8 @@ Settings are UTF-8 JSON. Unknown fields, unsupported versions, invalid module id
             "width": 640,
             "height": 480
           }
-        ]
+        ],
+        "selectedPresetId": "custom.64e35e29d28b49f8a13c06a20949a319"
       }
     },
     "image-resizer": {
@@ -69,11 +70,11 @@ New versions are implemented through the `settings.Migration` interface. A migra
 
 ## Module presets
 
-Each feature module stores custom presets under its own `presets` object. The nested preset format version is currently `1`; unsupported versions, unknown fields, duplicate identifiers or names, invalid module options, and invalid dimensions are rejected. Saving presets preserves unrelated options in the same module section.
+Each feature module stores custom presets under its own `presets` object. The optional `selectedPresetId` records the last selected built-in or custom preset in that module; an omitted value selects the first built-in. The nested preset format version is currently `1`; unsupported versions, unknown fields, duplicate identifiers or names, unknown selected identifiers, invalid module options, and invalid dimensions are rejected. Saving presets preserves unrelated options in the same module section.
 
 Built-in definitions are code-defined and are not serialized into `custom`, so they cannot be edited or deleted through stored data. The initial built-ins are the Screenshot and Image Resizer lists in [PRD section 8.2](../PRD.md#8-application-shell-and-shared-behavior). Every Image Resizer built-in uses Fit.
 
-Custom identifiers are generated locally and remain unchanged across renames. Names are trimmed and must be non-empty and unique within their module using a case-insensitive comparison. Screenshot and Image Resizer may reuse the same name without affecting one another.
+Custom identifiers are generated locally and remain unchanged across renames. Names are trimmed and must be non-empty, cannot contain null characters, and must be unique within their module using a case-insensitive comparison. Screenshot and Image Resizer may reuse the same name without affecting one another.
 
 Width and height must each be whole numbers from 1 through 16,384 pixels. Image Resizer targets must additionally contain no more than 100,000,000 pixels. Screenshot custom records have no fitting-mode field; Image Resizer records require `resizeMode` to be `fit`, `stretch`, or `crop-to-fill`.
 

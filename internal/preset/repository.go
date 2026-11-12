@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -17,8 +18,9 @@ const (
 )
 
 type storedPresets struct {
-	Version int      `json:"version"`
-	Custom  []Preset `json:"custom"`
+	Version    int      `json:"version"`
+	Custom     []Preset `json:"custom"`
+	SelectedID string   `json:"selectedPresetId,omitempty"`
 }
 
 type Repository struct {
@@ -45,11 +47,20 @@ func NewRepository(module shell.ModuleID, store *settings.Store) (*Repository, e
 }
 
 func (r *Repository) Load(value settings.Settings) (*Library, error) {
-	custom, err := decodeSection(r.module, value.Modules[string(r.module)])
+	stored, err := decodeSection(r.module, value.Modules[string(r.module)])
 	if err != nil {
 		return nil, err
 	}
-	return NewLibrary(r.module, custom)
+	library, err := NewLibrary(r.module, stored.Custom)
+	if err != nil {
+		return nil, err
+	}
+	if stored.SelectedID != "" {
+		if err := library.Select(stored.SelectedID); err != nil {
+			return nil, fmt.Errorf("validate selected preset: %w", err)
+		}
+	}
+	return library, nil
 }
 
 func (r *Repository) Save(value *settings.Settings, library *Library) error {
@@ -65,7 +76,10 @@ func (r *Repository) Save(value *settings.Settings, library *Library) error {
 	if _, err := NewLibrary(r.module, library.custom); err != nil {
 		return fmt.Errorf("validate preset library: %w", err)
 	}
-	section, err := encodeSection(r.module, value.Modules[string(r.module)], library.custom)
+	if _, exists := library.Get(library.selectedID); !exists {
+		return fmt.Errorf("validate selected preset: %w", ErrNotFound)
+	}
+	section, err := encodeSection(r.module, value.Modules[string(r.module)], library.custom, library.selectedID)
 	if err != nil {
 		return err
 	}
@@ -83,41 +97,160 @@ func validatorFor(module shell.ModuleID) settings.ModuleValidator {
 	}
 }
 
-func decodeSection(module shell.ModuleID, section json.RawMessage) ([]Preset, error) {
+func validateStoredUnicode(data []byte) error {
+	if !utf8.Valid(data) {
+		return errors.New("stored presets must contain valid UTF-8")
+	}
+	inString := false
+	for index := 0; index < len(data); index++ {
+		switch data[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString {
+				continue
+			}
+			if index+1 >= len(data) {
+				return errors.New("stored presets contain an incomplete escape")
+			}
+			if data[index+1] != 'u' {
+				index++
+				continue
+			}
+			if index+5 >= len(data) {
+				return errors.New("stored presets contain an incomplete Unicode escape")
+			}
+			code, ok := parseHex4(data[index+2 : index+6])
+			if !ok {
+				return errors.New("stored presets contain an invalid Unicode escape")
+			}
+			if code >= 0xdc00 && code <= 0xdfff {
+				return errors.New("stored presets contain an unpaired UTF-16 surrogate")
+			}
+			if code >= 0xd800 && code <= 0xdbff {
+				if index+11 >= len(data) || data[index+6] != '\\' || data[index+7] != 'u' {
+					return errors.New("stored presets contain an unpaired UTF-16 surrogate")
+				}
+				low, ok := parseHex4(data[index+8 : index+12])
+				if !ok || low < 0xdc00 || low > 0xdfff {
+					return errors.New("stored presets contain an unpaired UTF-16 surrogate")
+				}
+				index += 11
+				continue
+			}
+			index += 5
+		}
+	}
+	return nil
+}
+
+func parseHex4(data []byte) (uint16, bool) {
+	if len(data) != 4 {
+		return 0, false
+	}
+	var value uint16
+	for _, character := range data {
+		value <<= 4
+		switch {
+		case character >= '0' && character <= '9':
+			value |= uint16(character - '0')
+		case character >= 'a' && character <= 'f':
+			value |= uint16(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			value |= uint16(character-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
+}
+
+func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPresets, error) {
+	empty := storedPresets{Version: CurrentVersion, Custom: []Preset{}}
 	if len(section) == 0 {
-		return []Preset{}, nil
+		return empty, nil
 	}
 	fields, err := decodeSectionFields(section)
 	if err != nil {
-		return nil, err
+		return storedPresets{}, err
 	}
 	data, exists := fields[sectionKey]
 	if !exists {
-		return []Preset{}, nil
+		return empty, nil
+	}
+	if err := validateStoredUnicode(data); err != nil {
+		return storedPresets{}, err
+	}
+	storedFields, err := decodeObjectFields(data)
+	if err != nil {
+		return storedPresets{}, fmt.Errorf("decode stored preset fields: %w", err)
+	}
+	for field := range storedFields {
+		switch field {
+		case "version", "custom", "selectedPresetId":
+		default:
+			return storedPresets{}, fmt.Errorf("unknown stored preset field %q", field)
+		}
+	}
+	if custom, exists := storedFields["custom"]; exists {
+		if err := validateStoredPresetFields(custom); err != nil {
+			return storedPresets{}, fmt.Errorf("decode stored custom presets: %w", err)
+		}
 	}
 	var stored storedPresets
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&stored); err != nil {
-		return nil, fmt.Errorf("decode stored presets: %w", err)
+		return storedPresets{}, fmt.Errorf("decode stored presets: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return nil, errors.New("stored presets contain trailing JSON values")
+		return storedPresets{}, errors.New("stored presets contain trailing JSON values")
 	}
 	if stored.Version != CurrentVersion {
-		return nil, fmt.Errorf("unsupported preset version %d", stored.Version)
+		return storedPresets{}, fmt.Errorf("unsupported preset version %d", stored.Version)
 	}
 	if stored.Custom == nil {
-		return nil, errors.New("stored custom presets must be an array")
+		return storedPresets{}, errors.New("stored custom presets must be an array")
+	}
+	_, hasSelectedID := storedFields["selectedPresetId"]
+	if hasSelectedID && stored.SelectedID == "" {
+		return storedPresets{}, errors.New("stored selectedPresetId must be a non-empty string when present")
 	}
 	library, err := NewLibrary(module, stored.Custom)
 	if err != nil {
-		return nil, fmt.Errorf("validate stored presets: %w", err)
+		return storedPresets{}, fmt.Errorf("validate stored presets: %w", err)
 	}
-	return library.Custom(), nil
+	if stored.SelectedID != "" {
+		if err := library.Select(stored.SelectedID); err != nil {
+			return storedPresets{}, fmt.Errorf("validate selected preset: %w", err)
+		}
+	}
+	stored.Custom = library.Custom()
+	return stored, nil
 }
 
-func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Preset) (json.RawMessage, error) {
+func validateStoredPresetFields(data json.RawMessage) error {
+	var records []json.RawMessage
+	if err := json.Unmarshal(data, &records); err != nil {
+		return err
+	}
+	for _, record := range records {
+		fields, err := decodeObjectFields(record)
+		if err != nil {
+			return err
+		}
+		for field := range fields {
+			switch field {
+			case "id", "name", "width", "height", "resizeMode":
+			default:
+				return fmt.Errorf("unknown custom preset field %q", field)
+			}
+		}
+	}
+	return nil
+}
+
+func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Preset, selectedID string) (json.RawMessage, error) {
 	fields, err := decodeSectionFields(section)
 	if err != nil {
 		return nil, err
@@ -126,7 +259,10 @@ func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Pres
 	if err != nil {
 		return nil, fmt.Errorf("validate presets for storage: %w", err)
 	}
-	data, err := json.Marshal(storedPresets{Version: CurrentVersion, Custom: library.Custom()})
+	if err := library.Select(selectedID); err != nil {
+		return nil, fmt.Errorf("validate selected preset: %w", err)
+	}
+	data, err := json.Marshal(storedPresets{Version: CurrentVersion, Custom: library.Custom(), SelectedID: selectedID})
 	if err != nil {
 		return nil, fmt.Errorf("encode stored presets: %w", err)
 	}
@@ -139,16 +275,49 @@ func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Pres
 }
 
 func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, error) {
-	fields := make(map[string]json.RawMessage)
 	if len(section) == 0 {
-		return fields, nil
+		return make(map[string]json.RawMessage), nil
 	}
-	trimmed := bytes.TrimSpace(section)
-	if len(trimmed) == 0 || trimmed[0] != '{' {
-		return nil, errors.New("module preset section must be a JSON object")
-	}
-	if err := json.Unmarshal(section, &fields); err != nil {
+	fields, err := decodeObjectFields(section)
+	if err != nil {
 		return nil, fmt.Errorf("decode module preset section: %w", err)
+	}
+	return fields, nil
+}
+
+func decodeObjectFields(data json.RawMessage) (map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, errors.New("preset data must be a JSON object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]json.RawMessage)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return nil, errors.New("preset object field name must be a string")
+		}
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("duplicate preset object field %q", name)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[name] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("preset object contains trailing JSON values")
 	}
 	return fields, nil
 }

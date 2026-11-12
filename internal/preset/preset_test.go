@@ -64,6 +64,7 @@ func TestValidationBoundaries(t *testing.T) {
 		{name: "excess height", module: shell.ModuleScreenshot, presetName: "Invalid", width: 1, height: 16385, wantError: "between 1 and 16,384"},
 		{name: "empty name", module: shell.ModuleScreenshot, presetName: "", width: 1, height: 1, wantError: "name is required"},
 		{name: "whitespace name", module: shell.ModuleScreenshot, presetName: " \t\n ", width: 1, height: 1, wantError: "name is required"},
+		{name: "null in name", module: shell.ModuleScreenshot, presetName: "bad\x00name", width: 1, height: 1, wantError: "null character"},
 		{name: "resizer missing mode", module: shell.ModuleImageResizer, presetName: "Invalid", width: 1, height: 1, wantError: "Choose Fit"},
 		{name: "resizer invalid mode", module: shell.ModuleImageResizer, presetName: "Invalid", width: 1, height: 1, mode: "unknown", wantError: "Choose Fit"},
 		{name: "resizer stretch", module: shell.ModuleImageResizer, presetName: "Stretch", width: 1, height: 1, mode: ResizeStretch},

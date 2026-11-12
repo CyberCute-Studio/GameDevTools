@@ -23,7 +23,7 @@ type nativeShell struct {
 	navigator     *core.Navigator
 	dispatcher    *core.DispatchQueue
 	store         *settings.Store
-	settings      settings.Settings
+	settings      *settings.Settings
 	logger        *diagnostics.Logger
 	startupNotice string
 	notice        string
@@ -33,12 +33,27 @@ type nativeShell struct {
 	navHeading    windows.Handle
 	navButtons    map[core.ModuleID]windows.Handle
 	navIDs        map[uint16]core.ModuleID
+	nativeViews   map[core.ModuleID]nativeView
 	title         windows.Handle
 	description   windows.Handle
 	action        windows.Handle
 	note          *ui.StatusArea
 	headingFont   windows.Handle
 	bodyFont      windows.Handle
+}
+
+type nativeView interface {
+	NativeCreate(windows.Handle) error
+	NativeFont(windows.Handle)
+	NativeShow(bool)
+	NativeHeight(int32, func(int32) int32, func(string, int32) int32) int32
+	NativeLayout(int32, int32, int32, func(int32) int32, func(string, int32) int32)
+	NativeCommand(int32, uint16) bool
+	NativeDestroy()
+}
+
+type nativeViewProvider interface {
+	NativePresetManager() any
 }
 
 type shellLayout struct {
@@ -54,20 +69,23 @@ type shellLayout struct {
 	descriptionY      int32
 	descriptionHeight int32
 	actionY           int32
+	moduleY           int32
+	moduleHeight      int32
 	noteY             int32
 	noteHeight        int32
 	virtualHeight     int32
 }
 
 type shellTextHeights struct {
-	title       int32
-	description int32
-	note        int32
+	title        int32
+	description  int32
+	note         int32
+	moduleHeight int32
 }
 
 var shellStates = map[windows.Handle]*nativeShell{}
 
-func runShell(navigator *core.Navigator, store *settings.Store, initial settings.Settings, logger *diagnostics.Logger, notice string) error {
+func runShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, notice string) error {
 	if err := registerShellClass(); err != nil {
 		return err
 	}
@@ -81,6 +99,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial settings
 		dpi:           96,
 		navButtons:    make(map[core.ModuleID]windows.Handle),
 		navIDs:        make(map[uint16]core.ModuleID),
+		nativeViews:   make(map[core.ModuleID]nativeView),
 	}
 	window := initial.Shell.Window
 	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
@@ -199,6 +218,21 @@ func (s *nativeShell) createControls() error {
 	if err != nil {
 		return err
 	}
+	for _, module := range s.navigator.Modules() {
+		provider, ok := module.View().(nativeViewProvider)
+		if !ok {
+			continue
+		}
+		native, ok := provider.NativePresetManager().(nativeView)
+		if !ok {
+			continue
+		}
+		if err := native.NativeCreate(s.hwnd); err != nil {
+			return err
+		}
+		native.NativeShow(false)
+		s.nativeViews[module.ID()] = native
+	}
 	return nil
 }
 
@@ -229,6 +263,9 @@ func (s *nativeShell) updateFonts() {
 	for _, button := range s.navButtons {
 		setControlFont(button, s.bodyFont)
 	}
+	for _, native := range s.nativeViews {
+		native.NativeFont(s.bodyFont)
+	}
 }
 
 func (s *nativeShell) updateView() {
@@ -250,11 +287,17 @@ func (s *nativeShell) updateView() {
 		}
 		procSendMessageW.Call(uintptr(button), bmSetCheck, checked, 0)
 	}
+	for id, native := range s.nativeViews {
+		native.NativeShow(id == current.ID())
+	}
 }
 
 func (s *nativeShell) noteText() string {
 	if s.notice != "" {
 		return ui.Notice{Kind: ui.NoticeWarning, Message: s.notice}.Text()
+	}
+	if _, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
+		return ""
 	}
 	return ui.PlaceholderNote
 }
@@ -329,6 +372,7 @@ func calculateShellLayout(client rect, dpi uint32, moduleCount int, text shellTe
 		contentY:          scale(32),
 		titleHeight:       text.title,
 		descriptionHeight: text.description,
+		moduleHeight:      text.moduleHeight,
 		noteHeight:        text.note,
 	}
 	plan.contentX = plan.margin + plan.navWidth + scale(40)
@@ -343,13 +387,21 @@ func calculateShellLayout(client rect, dpi uint32, moduleCount int, text shellTe
 		plan.navY = plan.actionY + scale(44) + scale(16)
 		navBottom := plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*scale(8)
 		plan.descriptionY = navBottom + scale(16)
-		plan.noteY = plan.descriptionY + plan.descriptionHeight + scale(12)
+		plan.moduleY = plan.descriptionY + plan.descriptionHeight + scale(12)
+		plan.noteY = plan.moduleY + plan.moduleHeight
+		if plan.moduleHeight > 0 {
+			plan.noteY += scale(12)
+		}
 		plan.virtualHeight = plan.noteY + plan.noteHeight + plan.margin
 	} else {
 		plan.contentWidth = max(scale(190), client.Right-plan.contentX-plan.margin)
 		plan.descriptionY = plan.contentY + plan.titleHeight + scale(12)
 		plan.actionY = plan.descriptionY + plan.descriptionHeight + scale(16)
-		plan.noteY = plan.actionY + scale(44) + scale(12)
+		plan.moduleY = plan.actionY + scale(44)
+		if plan.moduleHeight > 0 {
+			plan.moduleY += scale(16)
+		}
+		plan.noteY = plan.moduleY + plan.moduleHeight + scale(12)
 		navBottom := plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*scale(8)
 		contentBottom := plan.noteY + plan.noteHeight
 		if client.Bottom >= contentBottom+plan.margin && client.Bottom >= navBottom+plan.margin {
@@ -371,10 +423,18 @@ func (s *nativeShell) layout() {
 	modules := s.navigator.Modules()
 	basePlan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{})
 	view := s.navigator.Current().View()
+	measureModuleText := func(text string, width int32) int32 {
+		return s.measureText(text, width, s.bodyFont)
+	}
+	moduleHeight := int32(0)
+	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
+		moduleHeight = native.NativeHeight(basePlan.contentWidth, s.scale, measureModuleText)
+	}
 	plan := calculateShellLayout(client, s.dpi, len(modules), shellTextHeights{
-		title:       s.measureText(view.Title(), basePlan.contentWidth, s.headingFont),
-		description: s.measureText(view.Description(), basePlan.contentWidth, s.bodyFont),
-		note:        s.measureText(s.noteText(), basePlan.contentWidth, s.bodyFont),
+		title:        s.measureText(view.Title(), basePlan.contentWidth, s.headingFont),
+		description:  measureModuleText(view.Description(), basePlan.contentWidth),
+		note:         measureModuleText(s.noteText(), basePlan.contentWidth),
+		moduleHeight: moduleHeight,
 	})
 	info := scrollInfo{
 		CbSize: uint32(unsafe.Sizeof(scrollInfo{})),
@@ -399,6 +459,9 @@ func (s *nativeShell) layout() {
 	moveWindow(s.title, plan.contentX, contentY(plan.contentY), plan.contentWidth, plan.titleHeight)
 	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, plan.descriptionHeight)
 	moveWindow(s.action, plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
+	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
+		native.NativeLayout(plan.contentX, contentY(plan.moduleY), plan.contentWidth, s.scale, measureModuleText)
+	}
 	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
 }
 
@@ -498,7 +561,7 @@ func (s *nativeShell) scale(value int32) int32 {
 }
 
 func (s *nativeShell) saveSettings(captureWindow bool) error {
-	value := s.settings
+	value := *s.settings
 	value.Shell.SelectedModule = string(s.navigator.Current().ID())
 	if captureWindow {
 		placement := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
@@ -517,7 +580,7 @@ func (s *nativeShell) saveSettings(captureWindow bool) error {
 		maximized, _, _ := procIsZoomed.Call(uintptr(s.hwnd))
 		value.Shell.Window.Maximized = maximized != 0
 	}
-	s.settings = value
+	*s.settings = value
 	err := s.store.Save(value)
 	if err != nil {
 		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
@@ -545,7 +608,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	switch message {
 	case wmCommand:
 		notification := highWord(wParam)
-		if shell != nil && (notification == bnSetFocus || notification == enSetFocus) && lParam != nil {
+		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus) && lParam != nil {
 			shell.ensureControlVisible(windows.Handle(lParam))
 			return 0
 		}
@@ -557,6 +620,12 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				if lParam != nil {
 					shell.ensureControlVisible(windows.Handle(lParam))
 				}
+				return 0
+			}
+		}
+		if shell != nil {
+			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists && native.NativeCommand(int32(lowWord(wParam)), notification) {
+				shell.layout()
 				return 0
 			}
 		}
@@ -626,6 +695,9 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDestroy:
 		if shell != nil {
 			delete(shellStates, hwnd)
+			for _, native := range shell.nativeViews {
+				native.NativeDestroy()
+			}
 			if shell.note != nil {
 				shell.note.Destroy()
 			}

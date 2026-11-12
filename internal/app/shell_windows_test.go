@@ -4,12 +4,22 @@ package app
 
 import (
 	"math"
+	"runtime"
+	"sync"
 	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+
+	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 var (
-	procGetBkMode    = gdi32.NewProc("GetBkMode")
-	procGetTextColor = gdi32.NewProc("GetTextColor")
+	procGetBkMode             = gdi32.NewProc("GetBkMode")
+	procGetTextColor          = gdi32.NewProc("GetTextColor")
+	commandTestShellClassOnce sync.Once
+	commandTestShellClassErr  error
 )
 
 func TestFitStartupBounds(t *testing.T) {
@@ -112,4 +122,132 @@ func TestCalculateShellLayout(t *testing.T) {
 			t.Fatalf("note bottom = %d, scrollable bottom = %d", noteBottom, plan.virtualHeight-plan.margin)
 		}
 	})
+}
+
+func TestShellWindowProcRoutesNativeCommandsAndRelayouts(t *testing.T) {
+	native := &recordingNativeView{}
+	shell := newCommandTestShell(t, native)
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(206)|uintptr(1)<<16, nil)
+	if native.commandID != 206 || native.notification != 1 {
+		t.Fatalf("routed command = (%d, %d), want (206, 1)", native.commandID, native.notification)
+	}
+	if native.layouts == 0 {
+		t.Fatal("native command did not trigger a layout")
+	}
+}
+
+func TestShellWindowProcScrollsFocusedComboIntoView(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	combo, err := ui.NewComboBox(shell.hwnd, 201)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo.Move(0, 500, 200, 200)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(201)|uintptr(cbnSetFocus)<<16, uintptr(combo.Handle()))
+	if shell.scrollY == 0 {
+		t.Fatal("combo focus did not scroll the control into view")
+	}
+}
+
+func TestShellWindowProcScrollsFocusedButtonIntoView(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	button, err := ui.NewButton(shell.hwnd, "Create Preset", ui.ButtonOptions{ID: 206})
+	if err != nil {
+		t.Fatal(err)
+	}
+	button.Move(0, 500, 200, 36)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	const bnSetFocusNotification = 6
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(206)|uintptr(bnSetFocusNotification)<<16, uintptr(button.Handle()))
+	if shell.scrollY == 0 {
+		t.Fatal("button focus did not scroll the control into view")
+	}
+}
+
+type commandTestView struct{}
+
+func (commandTestView) Title() string         { return "Test" }
+func (commandTestView) Description() string   { return "Test view" }
+func (commandTestView) PrimaryAction() string { return "" }
+
+type commandTestModule struct{}
+
+func (commandTestModule) ID() core.ModuleID       { return core.ModuleScreenshot }
+func (commandTestModule) NavigationLabel() string { return "Test" }
+func (commandTestModule) View() core.View         { return commandTestView{} }
+
+type recordingNativeView struct {
+	commandID    int32
+	notification uint16
+	layouts      int
+	height       int32
+}
+
+func (*recordingNativeView) NativeCreate(windows.Handle) error { return nil }
+func (*recordingNativeView) NativeFont(windows.Handle)         {}
+func (*recordingNativeView) NativeShow(bool)                   {}
+func (n *recordingNativeView) NativeHeight(int32, func(int32) int32, func(string, int32) int32) int32 {
+	return n.height
+}
+func (n *recordingNativeView) NativeLayout(int32, int32, int32, func(int32) int32, func(string, int32) int32) {
+	n.layouts++
+}
+func (n *recordingNativeView) NativeCommand(id int32, notification uint16) bool {
+	n.commandID = id
+	n.notification = notification
+	return true
+}
+func (*recordingNativeView) NativeDestroy() {}
+
+func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
+	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+	commandTestShellClassOnce.Do(func() {
+		commandTestShellClassErr = registerShellClass()
+	})
+	if commandTestShellClassErr != nil {
+		t.Fatal(commandTestShellClassErr)
+	}
+	hwnd, _, err := procCreateWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(utf16(shellClassName))),
+		uintptr(unsafe.Pointer(utf16("GameDevTools shell command test"))),
+		wsOverlappedWindow,
+		0, 0, 400, 200,
+		0, 0, 0, 0,
+	)
+	if hwnd == 0 {
+		t.Fatalf("CreateWindowExW(test shell): %v", err)
+	}
+	navigator := core.NewNavigator()
+	if err := navigator.Register(commandTestModule{}); err != nil {
+		t.Fatal(err)
+	}
+	note, err := ui.NewStatusArea(windows.Handle(hwnd))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := &nativeShell{
+		navigator:   navigator,
+		hwnd:        windows.Handle(hwnd),
+		dpi:         96,
+		navButtons:  make(map[core.ModuleID]windows.Handle),
+		navIDs:      make(map[uint16]core.ModuleID),
+		nativeViews: make(map[core.ModuleID]nativeView),
+		note:        note,
+	}
+	if native != nil {
+		shell.nativeViews[core.ModuleScreenshot] = native
+	}
+	shellStates[shell.hwnd] = shell
+	t.Cleanup(func() {
+		delete(shellStates, shell.hwnd)
+		note.Destroy()
+		procDestroyWindow.Call(hwnd)
+	})
+	return shell
 }
