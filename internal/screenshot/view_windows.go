@@ -370,6 +370,10 @@ func (n *NativeView) NativeAction() {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 		return
 	}
+	// A stale enumeration failure must not wedge capture: retry it here,
+	// the same way selectMode retries on mode selection, so a recovered
+	// display service works without the user toggling the capture mode.
+	n.refreshDisplays()
 	if n.displayErr != nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}, 0)
 		return

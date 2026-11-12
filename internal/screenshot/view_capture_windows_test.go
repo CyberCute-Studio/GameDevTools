@@ -413,6 +413,70 @@ func TestNativeViewCaptureQualityCommitStaysQuiet(t *testing.T) {
 	dispatcher.runNext(t)
 }
 
+func TestNativeViewCaptureRetriesStaleDisplayFailure(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	// A transient enumeration failure leaves displayErr set and the picker
+	// empty; the display service recovering must be enough for the next
+	// Start Capture, without the user toggling the capture mode.
+	view.displayErr = errors.New("transient enumeration failure")
+	view.displayList = nil
+	view.displayCombo.Reset()
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	var request CaptureRequest
+	view.capture = func(got CaptureRequest) CaptureResult {
+		request = got
+		return CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}
+	}
+
+	view.NativeAction()
+	dispatcher.runNext(t)
+	if request.DeviceName == "" {
+		t.Fatal("capture stayed blocked behind a stale display error after the service recovered")
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Success:") {
+		t.Fatalf("status after retried capture = %q", got)
+	}
+}
+
+func TestNativeViewCaptureReportsUnavailableDisplayService(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.displays = nil
+	view.refreshDisplays()
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	captureCalled := make(chan struct{}, 1)
+	view.capture = func(CaptureRequest) CaptureResult {
+		captureCalled <- struct{}{}
+		return CaptureResult{}
+	}
+
+	view.NativeAction()
+
+	select {
+	case <-captureCalled:
+		t.Fatal("capture ran without a display service")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") || !strings.Contains(got, "display") {
+		t.Fatalf("status for unavailable display service = %q", got)
+	}
+}
+
 func TestNativeViewShutdownWaitsForInflightCapture(t *testing.T) {
 	parent := newViewTestParent(t)
 	folder := testFolder(t)
