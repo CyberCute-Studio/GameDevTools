@@ -372,3 +372,87 @@ func TestNativeViewCaptureRejectsUnsavedInvalidQuality(t *testing.T) {
 		t.Fatalf("status for invalid quality = %q", got)
 	}
 }
+
+func TestNativeViewFullDisplayModeSelectionKeepsSuccessNotice(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+
+	if got := view.status.Text(); !strings.HasPrefix(got, "Success:") || !strings.Contains(got, "Full Display") {
+		t.Fatalf("status after selecting Full Display = %q", got)
+	}
+}
+
+func TestNativeViewCaptureQualityCommitStaysQuiet(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.quality.Edit.SetText("80")
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	view.capture = func(CaptureRequest) CaptureResult {
+		return CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}
+	}
+
+	view.NativeAction()
+	// The capture result follows moments later, so the quality commit must
+	// not flash its own success notice first.
+	if got := view.status.Text(); strings.Contains(got, "JPEG quality") {
+		t.Fatalf("quality commit flashed a notice before the capture: %q", got)
+	}
+	dispatcher.runNext(t)
+}
+
+func TestNativeViewShutdownWaitsForInflightCapture(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	started := make(chan struct{})
+	release := make(chan struct{})
+	view.capture = func(CaptureRequest) CaptureResult {
+		close(started)
+		<-release
+		return CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}
+	}
+
+	view.NativeAction()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture did not start")
+	}
+	done := make(chan struct{})
+	go func() {
+		view.NativeShutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("NativeShutdown returned while the capture was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("NativeShutdown did not return after the capture finished")
+	}
+	dispatcher.runNext(t)
+}

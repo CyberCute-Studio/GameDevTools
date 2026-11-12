@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"golang.org/x/sys/windows"
 
@@ -42,6 +43,7 @@ type NativeView struct {
 	capture     CaptureFunc
 	dispatcher  core.Dispatcher
 	reveal      func(string) error
+	pending     sync.WaitGroup
 	displayList []display.Display
 	displayErr  error
 	inProgress  bool
@@ -255,7 +257,7 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 	height += metrics.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
-	statusHeight := max(scale(48), measure(n.status.Text(), width-scale(128)))
+	statusHeight := max(scale(48), measure(n.status.Text(), width-scale(120)-scale(8)))
 	return height + statusHeight + scale(16), metrics, statusHeight
 }
 
@@ -345,12 +347,24 @@ func (n *NativeView) NativeAction() {
 	// The quality field otherwise commits only when it loses focus, and
 	// keyboard activation of Start Capture never moves focus; the capture
 	// must not run with stale or invalid quality text.
-	if _, err := ParseJPEGQuality(n.quality.Edit.Text()); err != nil {
+	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
+	if err != nil {
 		n.quality.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 		return
 	}
-	n.commitQuality()
+	// The commit bypasses commitQuality's success notice: the capture
+	// result replaces it moments later, so the notice would only flash.
+	// Failures still surface, and a non-persistence failure aborts the
+	// capture because the new value never reached the options.
+	if quality != options.JPEGQuality {
+		if err := n.options.SetJPEGQuality(quality); err != nil {
+			n.presentResult(err, "")
+			if !errors.Is(err, ErrPersistence) {
+				return
+			}
+		}
+	}
 	options = n.options.Options()
 	if err := options.Validate(); err != nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
@@ -367,10 +381,20 @@ func (n *NativeView) NativeAction() {
 	}
 	n.inProgress = true
 	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options}
+	n.pending.Add(1)
 	go func() {
+		defer n.pending.Done()
 		result := n.capture(request)
 		n.post(func() { n.finishCapture(result) })
 	}()
+}
+
+// NativeShutdown blocks until an in-flight capture has finished delivering
+// its outputs. The shell calls it only after the message loop has ended and
+// the window is destroyed, so the worker never waits on the GUI thread here;
+// its final dispatcher post fails harmlessly against the destroyed window.
+func (n *NativeView) NativeShutdown() {
+	n.pending.Wait()
 }
 
 // finishCapture presents one capture's outcome on the GUI thread. Clipboard
@@ -412,6 +436,12 @@ func (n *NativeView) selectMode(notification uint16, mode CaptureMode) {
 	n.refreshMode()
 	if mode == ModeFullDisplay {
 		n.refreshDisplays()
+		if err == nil && n.displayErr != nil {
+			// refreshDisplays already reported that the picker could not be
+			// populated; a mode-selection success notice must not replace
+			// that failure.
+			return
+		}
 	}
 	n.presentResult(err, fmt.Sprintf(ui.CaptureModeSelected, captureModeLabel(mode)))
 }

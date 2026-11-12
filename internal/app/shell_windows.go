@@ -73,6 +73,13 @@ type nativeDispatcherAware interface {
 	NativeDispatcher(core.Dispatcher)
 }
 
+// nativeShutdown is implemented by module views with background work, such
+// as an in-flight capture, that must finish delivering before the process
+// exits.
+type nativeShutdown interface {
+	NativeShutdown()
+}
+
 type shellLayout struct {
 	compact           bool
 	margin            int32
@@ -164,6 +171,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 			return callError("GetMessageW", err)
 		}
 		if r == 0 {
+			shell.waitForBackgroundWork()
 			return nil
 		}
 		if handled, _, _ := procIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&message))); handled != 0 {
@@ -493,6 +501,19 @@ func (s *nativeShell) layout() {
 	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
 }
 
+// waitForBackgroundWork lets in-flight module work, such as a capture still
+// delivering its outputs, finish before the process exits. It runs only
+// after the message loop ended and the window was destroyed, so workers
+// never block on the GUI thread here and their completion posts fail
+// harmlessly against the destroyed window.
+func (s *nativeShell) waitForBackgroundWork() {
+	for _, native := range s.nativeViews {
+		if shutdown, ok := native.(nativeShutdown); ok {
+			shutdown.NativeShutdown()
+		}
+	}
+}
+
 func (s *nativeShell) setScrollPosition(position int32) {
 	info := scrollInfo{
 		CbSize: uint32(unsafe.Sizeof(scrollInfo{})),
@@ -692,6 +713,9 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDisplayChange:
 		if shell != nil && shell.displays != nil {
 			shell.displays.HandleDisplayChange()
+			// Subscriber callbacks can change the status area's text;
+			// remeasure so a fresh notice is not clipped.
+			shell.layout()
 			return 0
 		}
 	case wmDPIChanged:
