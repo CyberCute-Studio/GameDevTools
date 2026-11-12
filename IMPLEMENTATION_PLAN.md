@@ -83,7 +83,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
    - **Notes:** Initial PRD built-ins and Image Resizer Fit defaults are included. Domain, persistent custom storage, startup validation, and recovery are implemented; preset-management UI remains FND-07.
 
 7. **FND-07 — Build reusable preset management UI**
-   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-05, FND-06
+   - **Status:** In Progress | **PR:** [#7](https://github.com/CyberCute-Studio/GameDevTools/pull/7) | **Depends on:** FND-05, FND-06
    - **Requirements:** PRESET-002, PRESET-003, PRESET-007, UX-002, UX-003, UX-004.
    - **Deliver:** Create, rename, duplicate, delete, and select workflows for custom presets; built-in duplication; validation and confirmation dialogs; and last-selected-preset restoration. Support module-specific fields without sharing preset records between modules.
    - **Verify:** Test every CRUD workflow and restart persistence through the public UI. Confirm deleting or renaming a Screenshot preset cannot affect Image Resizer.
