@@ -118,11 +118,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** Protected-content and graphics API limitations must be surfaced, not converted into blank success results. The `internal/screenshot/capture` service captures `internal/display` topology by rectangle or device name with typed validation/display/native errors, and excludes app-owned surfaces through a hide-flush-restore exclusion that preserves each window's prior visibility and activation. Integration-tested on two physical displays at 100% scaling, including a cross-display rectangle; mixed-scaling and negative-coordinate hardware remains unavailable (see the FND-01 blocker), and GDI composites DRM-protected content as black without an error, a limitation documented in the package and README for SCR-10 to present.
 
 11. **SCR-04 — Implement clipboard and atomic screenshot file output**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-01, SCR-03, FND-04
+    - **Status:** In Progress | **PR:** [#11](https://github.com/CyberCute-Studio/GameDevTools/pull/11) | **Depends on:** SCR-01, SCR-03, FND-04
     - **Requirements:** SCR-060, SCR-061, SCR-062, SCR-063, SCR-064, SCR-065, SCR-066, SCR-067.
     - **Deliver:** Clipboard image interop, PNG/JPEG encoding, pre-compression clipboard pixels, timestamped filenames, numeric collision suffixes, temporary-file writes, and independent clipboard/save result reporting.
     - **Verify:** Test PNG/JPEG dimensions and decoding, clipboard paste into a common Windows destination, filename collisions, unwritable destinations, simulated clipboard failure, partial-write cleanup, and independent success/failure combinations.
-    - **Notes:** AC-S08 and AC-S09 failure cases are required in this PR, not deferred.
+    - **Notes:** AC-S08 and AC-S09 failure cases are required in this PR, not deferred. The `internal/screenshot/output` service delivers one capture to the clipboard (original pixels, before JPEG encoding) and to a collision-free timestamped PNG/JPEG file written through a temporary file, reporting both outcomes independently. Capture execution and the completion notification are wired in SCR-05.
 
 12. **SCR-05 — Complete Full Display capture end to end**
     - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-04
