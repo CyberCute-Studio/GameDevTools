@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,6 +226,50 @@ func TestStoreRejectsInvalidAndFutureDataWithoutLosingIt(t *testing.T) {
 				t.Fatalf("backup = %q, err = %v", backedUp, err)
 			}
 		})
+	}
+}
+
+func TestStoreComposesModuleValidators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	store := NewStore(Paths{ConfigFile: path})
+	checked := make([]string, 0, 2)
+	validator := func(name string, reject bool) ModuleValidator {
+		return func(section json.RawMessage) error {
+			checked = append(checked, name)
+			if reject {
+				return fmt.Errorf("%s rejected the section", name)
+			}
+			return nil
+		}
+	}
+	store.RegisterModuleValidator("screenshot", validator("first", false))
+	store.RegisterModuleValidator("screenshot", validator("second", false))
+
+	value := Default()
+	value.Modules["screenshot"] = json.RawMessage(`{"presets":{"version":1,"custom":[]}}`)
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	if len(checked) != 2 || checked[0] != "first" || checked[1] != "second" {
+		t.Fatalf("validators that ran = %v, want first and second", checked)
+	}
+
+	checked = checked[:0]
+	store.RegisterModuleValidator("screenshot", validator("third", true))
+	if err := store.Save(value); err == nil || !strings.Contains(err.Error(), "third rejected the section") {
+		t.Fatalf("Save() error = %v, want the failing validator", err)
+	}
+	if len(checked) != 3 {
+		t.Fatalf("validators that ran = %v, want all three", checked)
+	}
+
+	checked = checked[:0]
+	store.RegisterModuleValidator("screenshot", nil)
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	if len(checked) != 0 {
+		t.Fatalf("validators that ran after clearing = %v", checked)
 	}
 }
 

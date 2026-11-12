@@ -26,6 +26,11 @@ func runNative() error {
 	paths, pathErr := settings.LocalPaths()
 	store := settings.NewStore(paths)
 	preset.RegisterValidators(store)
+	defaultFolder, folderErr := screenshot.DefaultOutputFolder()
+	optionsStore, err := screenshot.NewOptionsStore(store, defaultFolder)
+	if err != nil {
+		return err
+	}
 	loaded := settings.LoadResult{Settings: settings.Default()}
 	if pathErr == nil {
 		loaded = store.Load()
@@ -38,9 +43,6 @@ func runNative() error {
 	} else {
 		defer logger.Close()
 	}
-	if len(loaded.Warnings) > 0 && logger != nil {
-		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
-	}
 
 	value := loaded.Settings
 	screenshotRepository, err := preset.NewRepository(shell.ModuleScreenshot, store)
@@ -51,7 +53,17 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	screenshotModule, err := screenshot.New(screenshotRepository, &value)
+	optionsManager, err := screenshot.NewOptionsManager(optionsStore, &value)
+	if err != nil {
+		return err
+	}
+	if folderErr != nil && optionsManager.Options().OutputFolder == "" {
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.OutputFolderUnavailable, folderErr))
+	}
+	if len(loaded.Warnings) > 0 && logger != nil {
+		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
+	}
+	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value)
 	if err != nil {
 		return err
 	}

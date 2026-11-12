@@ -6,6 +6,8 @@ Shared Win32 controls live in `internal/ui`. Use standard `BUTTON`, `EDIT`, and 
 
 A dimension input has an adjacent label such as `Width (px)`, a keyboard-focusable edit field, and a validation message directly below it. Field labels immediately precede their edits in tab order and retain mnemonics so Windows can associate the accessible name and keyboard shortcut. Other labels display ampersands literally. Dimension displays use `width × height px` through `ui.FormatDimensions`. Feature modules own their allowed ranges and validation rules; the shared parser only requires a positive whole number representable by `int`.
 
+Chosen paths are displayed in `ui.ReadOnlyText`: a keyboard-focusable, horizontally scrollable read-only edit that keeps long folders readable without allowing manual edits. Folder changes go through `ui.BrowseForFolder`, which wraps the Windows folder picker, returns the absolute path or a cancellation, and requires no manual path entry. `ui.Button.SetChecked` sets radio and check-box state, and feature modules commit edit-field values on the `ui.NotificationEditKillFocus` notification, the same moment shared inputs clear their validation text.
+
 ## Validation and errors
 
 Show validation next to the relevant field and explain how to correct it. Errors use `ui.FormatError` so validation, unsupported-format, read/decode, write/encode, clipboard, shortcut-registration, and capture failures remain distinguishable. Error text is always explicit; color is never the only indication of a problem.

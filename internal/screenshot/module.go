@@ -13,16 +13,17 @@ type Module struct {
 
 type View struct {
 	manager *preset.Manager
+	options *OptionsManager
 	native  any
 }
 
-func New(repository *preset.Repository, value *settings.Settings) (*Module, error) {
+func New(repository *preset.Repository, options *OptionsManager, value *settings.Settings) (*Module, error) {
 	manager, err := preset.NewManager(repository, value)
 	if err != nil {
 		return nil, err
 	}
-	view := &View{manager: manager}
-	view.native = preset.NewNativeManager(manager)
+	view := &View{manager: manager, options: options}
+	view.native = NewNativeView(manager, options)
 	return &Module{view: view}, nil
 }
 
@@ -38,7 +39,7 @@ func (m *Module) View() app.View {
 	return m.view
 }
 
-func (v *View) NativePresetManager() any {
+func (v *View) NativeView() any {
 	return v.native
 }
 

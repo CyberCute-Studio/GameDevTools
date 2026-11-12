@@ -20,8 +20,10 @@ const (
 	bsAutoRadioButton   = 0x00000009
 	ssNoPrefix          = 0x00000080
 	esAutoHScroll       = 0x00000080
+	esReadOnly          = 0x00000800
 	enChange            = 0x0300
 	enKillFocus         = 0x0200
+	bmSetCheck          = 0x00f1
 	cbsDropDownList     = 0x0003
 	cbsNoIntegralHeight = 0x0400
 	cbAddString         = 0x0143
@@ -38,6 +40,11 @@ const (
 	mbDefButton2  = 0x0100
 	idYes         = 6
 )
+
+// NotificationEditKillFocus is the edit-control notification sent when the
+// field loses keyboard focus, exported so feature modules can commit a field
+// value at the same moment the shared input clears its validation text.
+const NotificationEditKillFocus = enKillFocus
 
 var (
 	user32 = windows.NewLazySystemDLL("user32.dll")

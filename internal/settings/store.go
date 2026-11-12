@@ -56,7 +56,7 @@ type LoadResult struct {
 type Store struct {
 	path       string
 	migrations map[int]Migration
-	validators map[string]ModuleValidator
+	validators map[string][]ModuleValidator
 	blocked    error
 	now        func() time.Time
 }
@@ -94,7 +94,7 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 	store := &Store{
 		path:       paths.ConfigFile,
 		migrations: make(map[int]Migration),
-		validators: make(map[string]ModuleValidator),
+		validators: make(map[string][]ModuleValidator),
 		now:        time.Now,
 	}
 	for _, migration := range migrations {
@@ -105,12 +105,16 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 	return store
 }
 
+// RegisterModuleValidator appends a validator for a module settings section.
+// Multiple validators per module compose so independent section owners, such
+// as the preset library and capture options, each validate their own keys.
+// A nil validator removes every validator registered for the module.
 func (s *Store) RegisterModuleValidator(name string, validator ModuleValidator) {
 	if validator == nil {
 		delete(s.validators, name)
 		return
 	}
-	s.validators[name] = validator
+	s.validators[name] = append(s.validators[name], validator)
 }
 
 func (s *Store) Load() LoadResult {
@@ -263,13 +267,15 @@ func (s *Store) decode(data []byte) (Settings, bool, error) {
 }
 
 func (s *Store) validateModules(value Settings) error {
-	for name, validator := range s.validators {
+	for name, validators := range s.validators {
 		section, exists := value.Modules[name]
 		if !exists {
 			continue
 		}
-		if err := validator(section); err != nil {
-			return fmt.Errorf("module settings %q are invalid: %w", name, err)
+		for _, validator := range validators {
+			if err := validator(section); err != nil {
+				return fmt.Errorf("module settings %q are invalid: %w", name, err)
+			}
 		}
 	}
 	return nil

@@ -53,7 +53,7 @@ type nativeView interface {
 }
 
 type nativeViewProvider interface {
-	NativePresetManager() any
+	NativeView() any
 }
 
 type shellLayout struct {
@@ -223,7 +223,7 @@ func (s *nativeShell) createControls() error {
 		if !ok {
 			continue
 		}
-		native, ok := provider.NativePresetManager().(nativeView)
+		native, ok := provider.NativeView().(nativeView)
 		if !ok {
 			continue
 		}

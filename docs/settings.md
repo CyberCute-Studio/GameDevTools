@@ -29,7 +29,13 @@ Settings are UTF-8 JSON. Unknown fields, unsupported versions, invalid module id
   },
   "modules": {
     "screenshot": {
-      "format": "png",
+      "capture": {
+        "version": 1,
+        "mode": "preset-rectangle",
+        "format": "png",
+        "jpegQuality": 90,
+        "outputFolder": "C:\\Users\\Example\\Pictures\\GameDevTools\\Screenshots"
+      },
       "presets": {
         "version": 1,
         "custom": [
@@ -79,6 +85,20 @@ Custom identifiers are generated locally and remain unchanged across renames. Na
 Width and height must each be whole numbers from 1 through 16,384 pixels. Image Resizer targets must additionally contain no more than 100,000,000 pixels. Screenshot custom records have no fitting-mode field; Image Resizer records require `resizeMode` to be `fit`, `stretch`, or `crop-to-fill`.
 
 The application registers preset validators for both module sections before loading settings. Malformed preset data therefore follows the same backup-and-recovery path as every other settings error: built-ins remain available, a warning reports the backup, and the original bytes are preserved rather than silently discarded.
+
+## Screenshot capture options
+
+The Screenshot module stores capture configuration under its own `capture` object, beside and independent of `presets`. Saving either one preserves the other, and each section owner registers its own validator for the shared module section.
+
+- `capture.version` is the nested format version, currently `1`.
+- `capture.mode` is `free-rectangle`, `preset-rectangle`, or `full-display`. The default is `free-rectangle`.
+- `capture.format` is `png` or `jpeg`. The default is `png`.
+- `capture.jpegQuality` is a whole number from 1 through 100. The default is `90`. It is stored even while PNG is selected so the last quality is retained when switching formats.
+- `capture.outputFolder` is an absolute local folder path. The default is the user's Pictures folder under `GameDevTools/Screenshots`, resolved through the Windows known-folder API. The folder is created when a capture is saved, not when it is configured.
+
+Unsupported versions, unknown fields, duplicate fields, invalid enumerations, out-of-range quality values, and missing, relative, or invalid-text folders are rejected. The whole settings file then follows the standard backup-and-recovery flow, so malformed capture options cannot silently discard presets or window state.
+
+The filename pattern is fixed at `Screenshot_yyyyMMdd_HHmmssfff` with a `.png` or `.jpg` extension following the selected format; the Screenshot view displays the pattern but does not edit it.
 
 ## Recovery and writes
 
