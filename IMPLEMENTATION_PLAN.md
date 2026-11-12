@@ -97,11 +97,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Deliver exact-pixel Free Rectangle, Preset Rectangle, and Full Display capture with clipboard/save output, global invocation, safe overlay lifecycle, and mixed-DPI support.
 
 8. **SCR-01 — Add Screenshot settings and preset selection UI**
-   - **Status:** Pending | **PR:** TBD | **Depends on:** FND-07
+   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-07
    - **Requirements:** SCR-061, SCR-063, SCR-064, SCR-067, PRESET-007.
    - **Deliver:** Screenshot module view, mode selection, Screenshot preset list/custom dimensions, PNG/JPEG selection, JPEG quality, output-folder selection, and filename-pattern display. Persist all supported options.
    - **Verify:** Validate settings and preset persistence, format/quality boundaries, output-path validation, and mode/preset selection through the UI.
-   - **Notes:** The display picker is completed in SCR-05. This item does not perform captures.
+   - **Notes:** The display picker is completed in SCR-05. This item does not perform captures. Capture options persist in a versioned `capture` object inside the Screenshot module section, validated independently from and preserved alongside the module's `presets` data.
 
 9. **SCR-02 — Implement display topology and physical-pixel coordinate services**
    - **Status:** Pending | **PR:** TBD | **Depends on:** FND-02

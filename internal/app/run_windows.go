@@ -26,11 +26,19 @@ func runNative() error {
 	paths, pathErr := settings.LocalPaths()
 	store := settings.NewStore(paths)
 	preset.RegisterValidators(store)
+	defaultFolder, folderErr := screenshot.DefaultOutputFolder()
+	optionsStore, err := screenshot.NewOptionsStore(store, defaultFolder)
+	if err != nil {
+		return err
+	}
 	loaded := settings.LoadResult{Settings: settings.Default()}
 	if pathErr == nil {
 		loaded = store.Load()
 	} else {
 		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.LocalSettingsUnavailable, pathErr))
+	}
+	if folderErr != nil {
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.OutputFolderUnavailable, folderErr))
 	}
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
@@ -51,7 +59,11 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	screenshotModule, err := screenshot.New(screenshotRepository, &value)
+	optionsManager, err := screenshot.NewOptionsManager(optionsStore, &value)
+	if err != nil {
+		return err
+	}
+	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value)
 	if err != nil {
 		return err
 	}

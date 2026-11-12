@@ -114,6 +114,11 @@ func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Butt
 	return &Button{Control{hwnd: hwnd}}, nil
 }
 
+// SetChecked checks or unchecks a radio button or check box.
+func (b *Button) SetChecked(checked bool) {
+	procSendMessageW.Call(uintptr(b.hwnd), bmSetCheck, boolPointer(checked), 0)
+}
+
 type ComboBox struct {
 	Control
 }
@@ -291,6 +296,21 @@ func (d *DimensionInput) HandleCommand(id int32, notification uint16) bool {
 	}
 	d.Validate()
 	return true
+}
+
+// ReadOnlyText displays a value such as a chosen path. It is keyboard
+// focusable and horizontally scrollable so long values stay readable, but it
+// cannot be edited.
+type ReadOnlyText struct {
+	Control
+}
+
+func NewReadOnlyText(parent windows.Handle, id int32) (*ReadOnlyText, error) {
+	hwnd, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll|esReadOnly, wsExClientEdge, id)
+	if err != nil {
+		return nil, err
+	}
+	return &ReadOnlyText{Control{hwnd: hwnd}}, nil
 }
 
 type StatusArea struct {
