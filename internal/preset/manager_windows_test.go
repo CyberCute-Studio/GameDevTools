@@ -66,9 +66,14 @@ func TestNativeManagerCRUDIndependenceAndRestart(t *testing.T) {
 		t.Fatal("preset was deleted without confirmation")
 	}
 	screenshot.confirm = func(windows.Handle, string, string) bool { return true }
+	screenshot.remove.Focus()
 	screenshot.NativeCommand(200+presetDeleteCommand, 0)
 	if _, exists := screenshot.manager.library.Get(created.ID); exists {
 		t.Fatal("confirmed preset deletion did not remove the preset")
+	}
+	getFocus := windows.NewLazySystemDLL("user32.dll").NewProc("GetFocus")
+	if focus, _, _ := getFocus.Call(); windows.Handle(focus) != screenshot.list.Handle() {
+		t.Fatalf("focus after deletion = %#x, want preset list %#x", focus, screenshot.list.Handle())
 	}
 	if _, exists := resizer.manager.library.Get(resizerCreated.ID); !exists || len(resizer.manager.library.Custom()) != 1 {
 		t.Fatal("Screenshot deletion changed the Image Resizer library")

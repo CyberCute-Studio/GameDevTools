@@ -291,6 +291,7 @@ func (n *NativeManager) NativeCommand(id int32, notification uint16) bool {
 		err := n.manager.Delete(selected.ID)
 		if err == nil || errors.Is(err, ErrPersistence) {
 			n.refresh()
+			n.list.Focus()
 		}
 		n.presentResult(err, fmt.Sprintf(ui.PresetDeleted, selected.Name))
 	default:

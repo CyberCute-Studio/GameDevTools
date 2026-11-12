@@ -211,6 +211,7 @@ func TestRepositoryRejectsMalformedStoredData(t *testing.T) {
 		{name: "non-numeric dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":"one","height":1}]}}`},
 		{name: "zero dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":0,"height":1}]}}`},
 		{name: "empty name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":" ","width":1,"height":1}]}}`},
+		{name: "null in name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"bad\u0000name","width":1,"height":1}]}}`},
 		{name: "empty identifier", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"","name":"One","width":1,"height":1}]}}`},
 		{name: "duplicate identifiers", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1},{"id":"custom.one","name":"Two","width":2,"height":2}]}}`},
 		{name: "duplicate names", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1},{"id":"custom.two","name":" one ","width":2,"height":2}]}}`},

@@ -244,6 +244,9 @@ func validatePreset(module shell.ModuleID, candidate Preset) (Preset, error) {
 	if candidate.Name == "" {
 		return Preset{}, errors.New(ui.PresetNameRequired)
 	}
+	if strings.ContainsRune(candidate.Name, '\x00') {
+		return Preset{}, errors.New(ui.PresetNameInvalid)
+	}
 	if candidate.Width < MinDimension || candidate.Width > MaxDimension {
 		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, "Width")
 	}
