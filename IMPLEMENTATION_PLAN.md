@@ -97,7 +97,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Deliver exact-pixel Free Rectangle, Preset Rectangle, and Full Display capture with clipboard/save output, global invocation, safe overlay lifecycle, and mixed-DPI support.
 
 8. **SCR-01 — Add Screenshot settings and preset selection UI**
-   - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-07
+   - **Status:** In Progress | **PR:** [#8](https://github.com/CyberCute-Studio/GameDevTools/pull/8) | **Depends on:** FND-07
    - **Requirements:** SCR-061, SCR-063, SCR-064, SCR-067, PRESET-007.
    - **Deliver:** Screenshot module view, mode selection, Screenshot preset list/custom dimensions, PNG/JPEG selection, JPEG quality, output-folder selection, and filename-pattern display. Persist all supported options.
    - **Verify:** Validate settings and preset persistence, format/quality boundaries, output-path validation, and mode/preset selection through the UI.
