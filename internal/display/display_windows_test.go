@@ -135,6 +135,18 @@ func TestMonitorDisplayChangeCallback(t *testing.T) {
 	}
 }
 
+func TestRepeatedEnumerationStaysWithinCallbackLimit(t *testing.T) {
+	// The Go runtime permits 2000 distinct windows.NewCallback functions
+	// per process and never releases them. Enumeration must reuse one
+	// registered callback; a per-call closure would crash the process with
+	// "too many callback functions" once this loop passes the limit.
+	for i := 0; i < 2100; i++ {
+		if _, err := rawDisplays(); err != nil {
+			t.Fatalf("enumeration %d: %v", i, err)
+		}
+	}
+}
+
 func TestRawDisplayFriendlyNames(t *testing.T) {
 	displays, err := rawDisplays()
 	if err != nil {

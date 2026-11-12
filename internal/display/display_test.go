@@ -235,7 +235,7 @@ func TestMonitorSubscriptions(t *testing.T) {
 	}
 }
 
-func TestMonitorSubscriptionFailureIsolation(t *testing.T) {
+func TestMonitorSubscriptionDuringNotification(t *testing.T) {
 	monitor := NewMonitor()
 	calls := 0
 	monitor.Subscribe(func() {

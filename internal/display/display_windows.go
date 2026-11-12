@@ -4,6 +4,7 @@ package display
 
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -44,44 +45,60 @@ type displayDevice struct {
 	DeviceKey    [deviceStringLength]uint16
 }
 
+// enumeration serializes rawDisplays and carries one enumeration's results
+// to the shared monitor callback. The callback is registered with the Go
+// runtime exactly once: the runtime permits only 2000 distinct callback
+// functions per process and never releases them, so a fresh closure per
+// enumeration would exhaust the limit and crash the process.
+var enumeration = struct {
+	sync.Mutex
+	displays []Display
+	err      error
+}{}
+
+var monitorEnumProc = windows.NewCallback(collectMonitor)
+
+func collectMonitor(monitor windows.Handle, _ windows.Handle, _ *Rect, _ uintptr) uintptr {
+	info := monitorInfoEx{CbSize: uint32(unsafe.Sizeof(monitorInfoEx{}))}
+	r, _, err := procGetMonitorInfoW.Call(uintptr(monitor), uintptr(unsafe.Pointer(&info)))
+	if r == 0 {
+		enumeration.err = callError("GetMonitorInfoW", err)
+		return 0
+	}
+	item := Display{
+		DeviceName: windows.UTF16ToString(info.Device[:]),
+		Bounds:     info.Monitor,
+		WorkArea:   info.Work,
+		Primary:    info.Flags&monitorInfoPrimary != 0,
+	}
+	hr, _, _ := procGetDpiForMonitor.Call(uintptr(monitor), mdtEffectiveDPI, uintptr(unsafe.Pointer(&item.DPIX)), uintptr(unsafe.Pointer(&item.DPIY)))
+	if int32(hr) < 0 {
+		enumeration.err = fmt.Errorf("GetDpiForMonitor(%s): HRESULT %#x", item.DeviceName, uint32(hr))
+		return 0
+	}
+	item.Name = friendlyName(item.DeviceName)
+	enumeration.displays = append(enumeration.displays, item)
+	return 1
+}
+
 // rawDisplays enumerates connected displays in callback order; picker
 // numbers are assigned by the platform-independent Monitor.
 func rawDisplays() ([]Display, error) {
-	var displays []Display
-	var callbackErr error
-	callback := windows.NewCallback(func(monitor windows.Handle, _ windows.Handle, _ *Rect, _ uintptr) uintptr {
-		info := monitorInfoEx{CbSize: uint32(unsafe.Sizeof(monitorInfoEx{}))}
-		r, _, err := procGetMonitorInfoW.Call(uintptr(monitor), uintptr(unsafe.Pointer(&info)))
-		if r == 0 {
-			callbackErr = callError("GetMonitorInfoW", err)
-			return 0
-		}
-		item := Display{
-			DeviceName: windows.UTF16ToString(info.Device[:]),
-			Bounds:     info.Monitor,
-			WorkArea:   info.Work,
-			Primary:    info.Flags&monitorInfoPrimary != 0,
-		}
-		hr, _, _ := procGetDpiForMonitor.Call(uintptr(monitor), mdtEffectiveDPI, uintptr(unsafe.Pointer(&item.DPIX)), uintptr(unsafe.Pointer(&item.DPIY)))
-		if int32(hr) < 0 {
-			callbackErr = fmt.Errorf("GetDpiForMonitor(%s): HRESULT %#x", item.DeviceName, uint32(hr))
-			return 0
-		}
-		item.Name = friendlyName(item.DeviceName)
-		displays = append(displays, item)
-		return 1
-	})
-	r, _, err := procEnumDisplayMonitors.Call(0, 0, callback, 0)
-	if callbackErr != nil {
-		return nil, callbackErr
+	enumeration.Lock()
+	defer enumeration.Unlock()
+	enumeration.displays = nil
+	enumeration.err = nil
+	r, _, err := procEnumDisplayMonitors.Call(0, 0, monitorEnumProc, 0)
+	if enumeration.err != nil {
+		return nil, enumeration.err
 	}
 	if r == 0 {
 		return nil, callError("EnumDisplayMonitors", err)
 	}
-	if len(displays) == 0 {
+	if len(enumeration.displays) == 0 {
 		return nil, ErrNoDisplays
 	}
-	return displays, nil
+	return append([]Display(nil), enumeration.displays...), nil
 }
 
 // friendlyName queries the monitor attached to the given adapter device for
