@@ -466,7 +466,12 @@ func (n *NativeView) refreshDisplays() {
 		n.displayErr = err
 		n.displayList = nil
 		n.displayCombo.Reset()
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
+		// The picker is hidden outside Full Display mode, so a failure
+		// notice only makes sense there; NativeAction and selectMode
+		// surface displayErr when the mode is selected.
+		if n.options.Options().Mode == ModeFullDisplay {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
+		}
 		return
 	}
 	n.displayErr = nil

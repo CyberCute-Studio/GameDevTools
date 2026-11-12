@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -219,6 +220,49 @@ func (n *recordingNativeView) NativeCommand(id int32, notification uint16) bool 
 	return true
 }
 func (*recordingNativeView) NativeDestroy() {}
+
+// shutdownRecordingView records a NativeShutdown call and blocks until the
+// test releases it, so waitForBackgroundWork can be observed waiting.
+type shutdownRecordingView struct {
+	recordingNativeView
+	started chan struct{}
+	release chan struct{}
+}
+
+func (n *shutdownRecordingView) NativeShutdown() {
+	close(n.started)
+	<-n.release
+}
+
+func TestWaitForBackgroundWorkWaitsForNativeShutdown(t *testing.T) {
+	native := &shutdownRecordingView{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	shell := newCommandTestShell(t, native)
+
+	done := make(chan struct{})
+	go func() {
+		shell.waitForBackgroundWork()
+		close(done)
+	}()
+	select {
+	case <-native.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForBackgroundWork did not call NativeShutdown")
+	}
+	select {
+	case <-done:
+		t.Fatal("waitForBackgroundWork returned while NativeShutdown was blocked")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(native.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForBackgroundWork did not return after NativeShutdown finished")
+	}
+}
 
 func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	t.Helper()

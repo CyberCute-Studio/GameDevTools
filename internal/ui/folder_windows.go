@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"fmt"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -73,7 +74,9 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 // own after an operation completes.
 func RevealInFolder(path string) error {
 	parameters := `/select,"` + path + `"`
-	// ShellExecuteW reports success as a value greater than 32.
+	// ShellExecuteW reports success as a value greater than 32; a failure
+	// value IS the error code and the thread's last error is unreliable,
+	// so the code must be part of the reported error.
 	result, _, err := procShellExecuteW.Call(
 		0, 0,
 		uintptr(unsafe.Pointer(utf16("explorer.exe"))),
@@ -81,7 +84,10 @@ func RevealInFolder(path string) error {
 		0, swShowNormal,
 	)
 	if result <= 32 {
-		return callError("ShellExecuteW(explorer.exe)", err)
+		if err == windows.ERROR_SUCCESS {
+			return fmt.Errorf("ShellExecuteW(explorer.exe) failed with code %d", result)
+		}
+		return fmt.Errorf("ShellExecuteW(explorer.exe) failed with code %d: %w", result, err)
 	}
 	return nil
 }
