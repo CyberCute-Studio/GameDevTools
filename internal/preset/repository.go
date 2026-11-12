@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -96,6 +97,74 @@ func validatorFor(module shell.ModuleID) settings.ModuleValidator {
 	}
 }
 
+func validateStoredUnicode(data []byte) error {
+	if !utf8.Valid(data) {
+		return errors.New("stored presets must contain valid UTF-8")
+	}
+	inString := false
+	for index := 0; index < len(data); index++ {
+		switch data[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString {
+				continue
+			}
+			if index+1 >= len(data) {
+				return errors.New("stored presets contain an incomplete escape")
+			}
+			if data[index+1] != 'u' {
+				index++
+				continue
+			}
+			if index+5 >= len(data) {
+				return errors.New("stored presets contain an incomplete Unicode escape")
+			}
+			code, ok := parseHex4(data[index+2 : index+6])
+			if !ok {
+				return errors.New("stored presets contain an invalid Unicode escape")
+			}
+			if code >= 0xdc00 && code <= 0xdfff {
+				return errors.New("stored presets contain an unpaired UTF-16 surrogate")
+			}
+			if code >= 0xd800 && code <= 0xdbff {
+				if index+11 >= len(data) || data[index+6] != '\\' || data[index+7] != 'u' {
+					return errors.New("stored presets contain an unpaired UTF-16 surrogate")
+				}
+				low, ok := parseHex4(data[index+8 : index+12])
+				if !ok || low < 0xdc00 || low > 0xdfff {
+					return errors.New("stored presets contain an unpaired UTF-16 surrogate")
+				}
+				index += 11
+				continue
+			}
+			index += 5
+		}
+	}
+	return nil
+}
+
+func parseHex4(data []byte) (uint16, bool) {
+	if len(data) != 4 {
+		return 0, false
+	}
+	var value uint16
+	for _, character := range data {
+		value <<= 4
+		switch {
+		case character >= '0' && character <= '9':
+			value |= uint16(character - '0')
+		case character >= 'a' && character <= 'f':
+			value |= uint16(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			value |= uint16(character-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
+}
+
 func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPresets, error) {
 	empty := storedPresets{Version: CurrentVersion, Custom: []Preset{}}
 	if len(section) == 0 {
@@ -108,6 +177,9 @@ func decodeSection(module shell.ModuleID, section json.RawMessage) (storedPreset
 	data, exists := fields[sectionKey]
 	if !exists {
 		return empty, nil
+	}
+	if err := validateStoredUnicode(data); err != nil {
+		return storedPresets{}, err
 	}
 	storedFields, err := decodeObjectFields(data)
 	if err != nil {

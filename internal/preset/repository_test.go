@@ -221,6 +221,9 @@ func TestRepositoryRejectsMalformedStoredData(t *testing.T) {
 		{name: "zero dimension", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":0,"height":1}]}}`},
 		{name: "empty name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":" ","width":1,"height":1}]}}`},
 		{name: "null in name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"bad\u0000name","width":1,"height":1}]}}`},
+		{name: "unpaired high surrogate in name", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"bad\ud800name","width":1,"height":1}]}}`},
+		{name: "unpaired low surrogate in selected preset", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.\udc00","name":"One","width":1,"height":1}],"selectedPresetId":"custom.\udc00"}}`},
+		{name: "invalid UTF-8 in name", module: shell.ModuleScreenshot, section: "{\"presets\":{\"version\":1,\"custom\":[{\"id\":\"custom.one\",\"name\":\"bad\xffname\",\"width\":1,\"height\":1}]}}"},
 		{name: "empty identifier", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"","name":"One","width":1,"height":1}]}}`},
 		{name: "duplicate identifiers", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1},{"id":"custom.one","name":"Two","width":2,"height":2}]}}`},
 		{name: "duplicate names", module: shell.ModuleScreenshot, section: `{"presets":{"version":1,"custom":[{"id":"custom.one","name":"One","width":1,"height":1},{"id":"custom.two","name":" one ","width":2,"height":2}]}}`},
@@ -244,6 +247,23 @@ func TestRepositoryRejectsMalformedStoredData(t *testing.T) {
 				t.Fatal("Load() accepted malformed stored presets")
 			}
 		})
+	}
+}
+
+func TestRepositoryAcceptsValidUnicode(t *testing.T) {
+	repository, err := NewRepository(shell.ModuleScreenshot, settings.NewStore(settings.Paths{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := settings.Default()
+	value.Modules[string(shell.ModuleScreenshot)] = json.RawMessage(`{"presets":{"version":1,"custom":[{"id":"custom.unicode","name":"Emoji \ud83d\ude00 and \ufffd replacement","width":1,"height":1}]}}`)
+	library, err := repository.Load(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, exists := library.Get("custom.unicode")
+	if !exists || created.Name != "Emoji 😀 and \ufffd replacement" {
+		t.Fatalf("valid Unicode preset name = %q, exists = %v", created.Name, exists)
 	}
 }
 
