@@ -132,11 +132,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** Global invocation is added in SCR-09; this PR completes main-window invocation. The shell's primary action button is wired to modules that implement it; the new `internal/screenshot/execute` pipeline hides the main window, captures the selected display off the GUI thread, restores it on every path without stealing focus, and delivers through `internal/screenshot/output`; shutdown waits for in-flight captures. Rectangle modes report that they arrive with later items. Multi-display and mixed-DPI hardware verification remains covered by the FND-01 blocker; picker selection, cursor default, notification outcomes, and shutdown behavior are unit-tested.
 
 13. **SCR-06 — Build the rectangle overlay session foundation**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-03, SCR-05, FND-05
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** SCR-03, SCR-05, FND-05
     - **Requirements:** SCR-050, SCR-051, SCR-052, SCR-053, SCR-056.
     - **Deliver:** Single-session overlay controller, transparent virtual-desktop surface, main-window hide/show coordination, floating toolbar base, Capture/Cancel command plumbing, and reliable cleanup on cancellation, failure, and exit.
     - **Verify:** Start/cancel repeatedly, attempt concurrent sessions, simulate overlay creation failure, and exit during a session. Confirm no invisible input-capturing surface or orphaned main-window state remains.
-    - **Notes:** Drawing and exact-frame behavior are implemented in subsequent items.
+    - **Notes:** The `internal/screenshot/overlay` controller hides the main window, dims the virtual desktop with a translucent topmost overlay, and anchors a topmost toolbar (disabled Capture, Cancel) to the cursor display; the shell forwards session messages through a module filter for Escape and toolbar keyboard navigation. Cancelling, overlay-creation failure, and application exit all destroy the session windows and restore the main window. Selection drawing, exact-frame behavior, and capture execution are implemented in subsequent items.
 
 14. **SCR-07 — Complete Free Rectangle capture end to end**
     - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-06, SCR-04

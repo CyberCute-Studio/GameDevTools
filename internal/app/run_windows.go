@@ -13,6 +13,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/execute"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -67,7 +68,8 @@ func runNative() error {
 	}
 	monitor := display.NewMonitor()
 	executor := execute.NewService(monitor)
-	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value, monitor, executor.FullDisplay)
+	sessions := overlay.NewController(monitor)
+	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value, monitor, executor.FullDisplay, sessions)
 	if err != nil {
 		return err
 	}
