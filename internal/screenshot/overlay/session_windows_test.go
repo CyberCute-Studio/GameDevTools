@@ -3,6 +3,7 @@
 package overlay
 
 import (
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -21,15 +22,13 @@ const (
 )
 
 var (
-	procGetWindowLongW             = user32.NewProc("GetWindowLongW")
-	procGetWindowRect              = user32.NewProc("GetWindowRect")
-	procGetLayeredWindowAttributes = user32.NewProc("GetLayeredWindowAttributes")
-	procIsWindow                   = user32.NewProc("IsWindow")
-	procIsWindowEnabled            = user32.NewProc("IsWindowEnabled")
-	procSetFocus                   = user32.NewProc("SetFocus")
-	procGetFocus                   = user32.NewProc("GetFocus")
-	procGetDlgItem                 = user32.NewProc("GetDlgItem")
-	procSendMessageW               = user32.NewProc("SendMessageW")
+	procGetWindowLongW  = user32.NewProc("GetWindowLongW")
+	procGetWindowRect   = user32.NewProc("GetWindowRect")
+	procIsWindow        = user32.NewProc("IsWindow")
+	procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
+	procSetFocus        = user32.NewProc("SetFocus")
+	procGetDlgItem      = user32.NewProc("GetDlgItem")
+	procSendMessageW    = user32.NewProc("SendMessageW")
 )
 
 type win32Rect struct {
@@ -41,9 +40,14 @@ type win32Rect struct {
 
 // newNativeSessionController returns a controller that creates the real
 // overlay and toolbar windows but hides and restores through a fake, so the
-// test never touches real app windows.
+// test never touches real app windows. The test goroutine is locked to its
+// OS thread: window creation and the tests' SendMessage calls must share
+// one thread, or a SendMessage lands cross-thread and waits on a message
+// loop the owning thread never pumps.
 func newNativeSessionController(t *testing.T) (*Controller, *[]string) {
 	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 	log := &[]string{}
 	controller := NewController(display.NewMonitor())
 	controller.Hide = func(...uintptr) (func(), error) {
@@ -84,7 +88,7 @@ func isWindow(hwnd windows.Handle) bool {
 
 func TestNativeSessionCoversVirtualDesktop(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -102,13 +106,10 @@ func TestNativeSessionCoversVirtualDesktop(t *testing.T) {
 			t.Fatalf("overlay ex-style %#x lacks %#x", exStyle, bit)
 		}
 	}
-	var alpha byte
-	var flags uint32
-	if r, _, err := procGetLayeredWindowAttributes.Call(uintptr(native.overlay), 0, uintptr(unsafe.Pointer(&alpha)), uintptr(unsafe.Pointer(&flags))); r == 0 {
-		t.Fatalf("GetLayeredWindowAttributes: %v", err)
-	}
-	if flags&lwaAlpha == 0 || alpha != overlayTintAlpha {
-		t.Fatalf("overlay alpha = (%d, flags %#x), want %d with LWA_ALPHA so the input surface stays visible (SCR-052)", alpha, flags, overlayTintAlpha)
+	// The backing bitmap starts fully dimmed at the tint alpha, so the
+	// input-capturing surface is always visible (SCR-052).
+	if got := native.pixelSlice()[5*int(native.pixelWidth)+5]; got != dimPixel {
+		t.Fatalf("overlay pixel = %#08x, want the dimmed tint %#08x", got, dimPixel)
 	}
 
 	toolbarStyle, _, _ := procGetWindowLongW.Call(uintptr(native.toolbar), gwlExStyle)
@@ -137,7 +138,7 @@ func TestNativeSessionCoversVirtualDesktop(t *testing.T) {
 
 func TestFilterMessageEscapeCancelsSession(t *testing.T) {
 	controller, log := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -174,7 +175,7 @@ func TestFilterMessageEscapeCancelsSession(t *testing.T) {
 func TestToolbarCancelCommandCancelsSession(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	cancelled := 0
-	if err := controller.Begin(42, 0, Events{OnCancel: func() { cancelled++ }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCancel: func() { cancelled++ }}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -190,7 +191,7 @@ func TestToolbarCancelCommandCancelsSession(t *testing.T) {
 func TestToolbarCloseCancelsSession(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	cancelled := 0
-	if err := controller.Begin(42, 0, Events{OnCancel: func() { cancelled++ }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCancel: func() { cancelled++ }}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -214,7 +215,7 @@ func TestToolbarCloseCancelsSession(t *testing.T) {
 func TestToolbarCaptureCommandDeliversSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	var captured display.Rect
-	if err := controller.Begin(42, 0, Events{OnCapture: func(region display.Rect) { captured = region }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCapture: func(region display.Rect, restore func()) { captured = region; restore() }}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -234,7 +235,7 @@ func TestToolbarCaptureCommandDeliversSelection(t *testing.T) {
 
 func TestFilterMessageTabNavigatesToolbar(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -263,41 +264,4 @@ func TestFilterMessageTabNavigatesToolbar(t *testing.T) {
 		t.Fatal("Tab did not move focus within the toolbar")
 	}
 	controller.Cancel()
-}
-
-func TestToolbarPlacement(t *testing.T) {
-	desktop := display.Rect{Left: -1920, Top: -200, Right: 3840, Bottom: 1080}
-	tests := []struct {
-		name   string
-		anchor display.Rect
-		wantX  int32
-		wantY  int32
-	}{
-		{
-			name:   "centered above the cursor display work area",
-			anchor: display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1040},
-			wantX:  (1920 - 480) / 2,
-			wantY:  16,
-		},
-		{
-			name:   "negative-coordinate display",
-			anchor: display.Rect{Left: -1920, Top: -200, Right: 0, Bottom: 880},
-			wantX:  -1920 + (1920-480)/2,
-			wantY:  -184,
-		},
-		{
-			name:   "clamped into the desktop",
-			anchor: display.Rect{Left: 3800, Top: -200, Right: 3840, Bottom: -100},
-			wantX:  3840 - 480,
-			wantY:  -184,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			x, y := toolbarPlacement(desktop, test.anchor, 480, 100, 16)
-			if x != test.wantX || y != test.wantY {
-				t.Fatalf("toolbarPlacement() = (%d, %d), want (%d, %d)", x, y, test.wantX, test.wantY)
-			}
-		})
-	}
 }

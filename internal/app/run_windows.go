@@ -69,7 +69,7 @@ func runNative() error {
 	monitor := display.NewMonitor()
 	executor := execute.NewService(monitor)
 	sessions := overlay.NewController(monitor)
-	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value, monitor, executor.FullDisplay, sessions)
+	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value, monitor, executor.FullDisplay, executor.Rectangle, sessions)
 	if err != nil {
 		return err
 	}

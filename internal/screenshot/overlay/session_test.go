@@ -12,10 +12,11 @@ var testDesktop = display.Rect{Left: -1920, Top: 0, Right: 1920, Bottom: 1080}
 
 // fakeNative records the controller's calls to the session surface.
 type fakeNative struct {
-	closed    int
-	ready     []bool
-	onCapture func()
-	onCancel  func()
+	closed      int
+	ready       []bool
+	onSelection func(display.Rect)
+	onCapture   func()
+	onCancel    func()
 }
 
 func (f *fakeNative) Close()                       { f.closed++ }
@@ -27,6 +28,7 @@ func (f *fakeNative) SetSelectionReady(ready bool) { f.ready = append(f.ready, r
 type sessionFixture struct {
 	log       []string
 	native    *fakeNative
+	mode      Mode
 	hideErr   error
 	createErr error
 }
@@ -51,7 +53,12 @@ func newFixtureController() (*Controller, *sessionFixture) {
 		if fixture.createErr != nil {
 			return nil, fixture.createErr
 		}
-		fixture.native = &fakeNative{onCapture: request.OnCapture, onCancel: request.OnCancel}
+		fixture.mode = request.Mode
+		fixture.native = &fakeNative{
+			onSelection: request.OnSelection,
+			onCapture:   request.OnCapture,
+			onCancel:    request.OnCancel,
+		}
 		return fixture.native, nil
 	}
 	return controller, fixture
@@ -59,7 +66,7 @@ func newFixtureController() (*Controller, *sessionFixture) {
 
 func TestBeginHidesMainWindowBeforeCreatingOverlay(t *testing.T) {
 	controller, fixture := newFixtureController()
-	if err := controller.Begin(42, 0, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(fixture.log, []string{"hide", "create"}) {
@@ -72,10 +79,10 @@ func TestBeginHidesMainWindowBeforeCreatingOverlay(t *testing.T) {
 
 func TestBeginRejectsConcurrentSession(t *testing.T) {
 	controller, fixture := newFixtureController()
-	if err := controller.Begin(42, 0, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
 		t.Fatal(err)
 	}
-	err := controller.Begin(42, 0, Events{})
+	err := controller.Begin(42, 0, ModeFreeRectangle, Events{})
 	if !errors.Is(err, ErrSessionActive) {
 		t.Fatalf("second Begin error = %v, want ErrSessionActive (SCR-053)", err)
 	}
@@ -91,7 +98,7 @@ func TestBeginRejectsConcurrentSession(t *testing.T) {
 func TestBeginFailureRestoresMainWindow(t *testing.T) {
 	controller, fixture := newFixtureController()
 	fixture.createErr = errors.New("window class unavailable")
-	err := controller.Begin(42, 0, Events{})
+	err := controller.Begin(42, 0, ModeFreeRectangle, Events{})
 	if err == nil || !errors.Is(err, fixture.createErr) {
 		t.Fatalf("Begin error = %v, want wrapped %v", err, fixture.createErr)
 	}
@@ -108,7 +115,7 @@ func TestBeginFailureRestoresMainWindow(t *testing.T) {
 func TestBeginHideFailureSkipsOverlay(t *testing.T) {
 	controller, fixture := newFixtureController()
 	fixture.hideErr = errors.New("compositor unavailable")
-	err := controller.Begin(42, 0, Events{})
+	err := controller.Begin(42, 0, ModeFreeRectangle, Events{})
 	if err == nil || !errors.Is(err, fixture.hideErr) {
 		t.Fatalf("Begin error = %v, want wrapped %v", err, fixture.hideErr)
 	}
@@ -122,14 +129,14 @@ func TestBeginHideFailureSkipsOverlay(t *testing.T) {
 
 func TestBeginWithoutDisplayServiceFails(t *testing.T) {
 	controller := &Controller{}
-	if err := controller.Begin(42, 0, Events{}); err == nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err == nil {
 		t.Fatal("Begin succeeded without a display service")
 	}
 	controller, fixture := newFixtureController()
 	controller.DesktopBounds = func() (display.Rect, error) {
 		return display.Rect{}, errors.New("enumeration failed")
 	}
-	if err := controller.Begin(42, 0, Events{}); err == nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err == nil {
 		t.Fatal("Begin succeeded when the desktop bounds were unavailable")
 	}
 	if len(fixture.log) != 0 {
@@ -138,7 +145,7 @@ func TestBeginWithoutDisplayServiceFails(t *testing.T) {
 	controller.DesktopBounds = func() (display.Rect, error) {
 		return display.Rect{}, nil
 	}
-	if err := controller.Begin(42, 0, Events{}); err == nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err == nil {
 		t.Fatal("Begin succeeded with an empty virtual desktop")
 	}
 }
@@ -146,7 +153,7 @@ func TestBeginWithoutDisplayServiceFails(t *testing.T) {
 func TestCancelClosesOverlayBeforeRestoring(t *testing.T) {
 	controller, fixture := newFixtureController()
 	events := []string{}
-	if err := controller.Begin(42, 0, Events{OnCancel: func() { events = append(events, "cancel") }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCancel: func() { events = append(events, "cancel") }}); err != nil {
 		t.Fatal(err)
 	}
 	controller.Cancel()
@@ -178,15 +185,23 @@ func TestCompleteDeliversSelection(t *testing.T) {
 	controller, fixture := newFixtureController()
 	var captured display.Rect
 	captures := 0
-	events := Events{OnCapture: func(region display.Rect) {
+	events := Events{OnCapture: func(region display.Rect, restore func()) {
 		captures++
 		captured = region
+		// The handler owns the main-window restore so the pixels can be read
+		// before the window returns (SCR-044).
+		if !reflect.DeepEqual(fixture.log, []string{"hide", "create"}) {
+			t.Errorf("call order when OnCapture runs = %v, want the restore still pending", fixture.log)
+		}
+		restore()
 	}}
-	if err := controller.Begin(42, 0, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
 		t.Fatal(err)
 	}
 	region := display.Rect{Left: 10, Top: 20, Right: 810, Bottom: 620}
-	controller.SetSelection(region)
+	// The native session reports its live selection through the request's
+	// OnSelection, which the controller wires to SetSelection.
+	fixture.native.onSelection(region)
 	if !reflect.DeepEqual(fixture.native.ready, []bool{true}) {
 		t.Fatalf("SetSelectionReady calls = %v, want [true]", fixture.native.ready)
 	}
@@ -206,10 +221,48 @@ func TestCompleteDeliversSelection(t *testing.T) {
 	}
 }
 
+// TestCompleteTransfersRestoreToHandler pins the contract that the
+// controller does not restore the main window itself when an OnCapture
+// handler exists: the handler restores it after the capture has read the
+// selection's pixels.
+func TestCompleteTransfersRestoreToHandler(t *testing.T) {
+	controller, fixture := newFixtureController()
+	keptRestore := func() {}
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{
+		OnCapture: func(_ display.Rect, restore func()) { keptRestore = restore },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controller.SetSelection(display.Rect{Left: 1, Top: 1, Right: 5, Bottom: 5})
+	fixture.native.onCapture()
+	if !reflect.DeepEqual(fixture.log, []string{"hide", "create"}) {
+		t.Fatalf("call order after Complete = %v, want the restore left to the handler", fixture.log)
+	}
+	keptRestore()
+	if !reflect.DeepEqual(fixture.log, []string{"hide", "create", "restore"}) {
+		t.Fatalf("call order after the handler restores = %v", fixture.log)
+	}
+}
+
+func TestCompleteWithoutHandlerRestoresWindow(t *testing.T) {
+	controller, fixture := newFixtureController()
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	controller.SetSelection(display.Rect{Left: 1, Top: 1, Right: 5, Bottom: 5})
+	fixture.native.onCapture()
+	if controller.Active() {
+		t.Fatal("session is still active after Complete")
+	}
+	if !reflect.DeepEqual(fixture.log, []string{"hide", "create", "restore"}) {
+		t.Fatalf("call order after handlerless Complete = %v, want an immediate restore", fixture.log)
+	}
+}
+
 func TestCompleteWithEmptySelectionKeepsSession(t *testing.T) {
 	controller, fixture := newFixtureController()
 	captures := 0
-	if err := controller.Begin(42, 0, Events{OnCapture: func(display.Rect) { captures++ }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCapture: func(display.Rect, func()) { captures++ }}); err != nil {
 		t.Fatal(err)
 	}
 	fixture.native.onCapture()
@@ -239,9 +292,9 @@ func TestShutdownRemovesSessionSilently(t *testing.T) {
 	captured := 0
 	events := Events{
 		OnCancel:  func() { cancelled++ },
-		OnCapture: func(display.Rect) { captured++ },
+		OnCapture: func(display.Rect, func()) { captured++ },
 	}
-	if err := controller.Begin(42, 0, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
 		t.Fatal(err)
 	}
 	controller.Shutdown()
