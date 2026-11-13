@@ -73,6 +73,14 @@ type nativeDispatcherAware interface {
 	NativeDispatcher(core.Dispatcher)
 }
 
+// nativeMessageFilter is implemented by module views that own windows outside
+// the shell — the Screenshot overlay session — and must pre-handle their
+// queued messages: Escape cancels the session, and the floating toolbar
+// receives dialog navigation even though it is a popup.
+type nativeMessageFilter interface {
+	NativeFilterMessage(message unsafe.Pointer) bool
+}
+
 // nativeShutdown is implemented by module views with background work, such
 // as an in-flight capture, that must finish delivering before the process
 // exits.
@@ -173,6 +181,9 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 		if r == 0 {
 			shell.waitForBackgroundWork()
 			return nil
+		}
+		if shell.filterModuleMessage(&message) {
+			continue
 		}
 		if handled, _, _ := procIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&message))); handled != 0 {
 			continue
@@ -512,6 +523,19 @@ func (s *nativeShell) waitForBackgroundWork() {
 			shutdown.NativeShutdown()
 		}
 	}
+}
+
+// filterModuleMessage lets module views pre-handle a queued message before
+// the shell's own dialog processing. The Screenshot overlay session uses it
+// for Escape cancellation and toolbar keyboard navigation while its topmost
+// session windows own the screen and the shell window is hidden.
+func (s *nativeShell) filterModuleMessage(message *msg) bool {
+	for _, native := range s.nativeViews {
+		if filter, ok := native.(nativeMessageFilter); ok && filter.NativeFilterMessage(unsafe.Pointer(message)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *nativeShell) setScrollPosition(position int32) {

@@ -3,6 +3,7 @@ package screenshot
 import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	app "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -18,13 +19,13 @@ type View struct {
 	native  any
 }
 
-func New(repository *preset.Repository, options *OptionsManager, value *settings.Settings, displays *display.Monitor, capture CaptureFunc) (*Module, error) {
+func New(repository *preset.Repository, options *OptionsManager, value *settings.Settings, displays *display.Monitor, capture CaptureFunc, sessions *overlay.Controller) (*Module, error) {
 	manager, err := preset.NewManager(repository, value)
 	if err != nil {
 		return nil, err
 	}
 	view := &View{manager: manager, options: options}
-	view.native = NewNativeView(manager, options, displays, capture)
+	view.native = NewNativeView(manager, options, displays, capture, sessions)
 	return &Module{view: view}, nil
 }
 

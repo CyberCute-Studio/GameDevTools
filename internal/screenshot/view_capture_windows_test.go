@@ -11,6 +11,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 )
 
@@ -140,22 +141,144 @@ func TestNativeViewDisplayPickerReservesLayoutHeight(t *testing.T) {
 	}
 }
 
-func TestNativeViewStartCaptureRectangleModesPending(t *testing.T) {
+// fakeOverlayNative records the controller's calls to the session surface
+// so view tests can run rectangle sessions without real overlay windows.
+type fakeOverlayNative struct {
+	closed int
+	ready  []bool
+}
+
+func (f *fakeOverlayNative) Close()                       { f.closed++ }
+func (f *fakeOverlayNative) SetSelectionReady(ready bool) { f.ready = append(f.ready, ready) }
+
+// fakeOverlaySession reroutes the view's session controller to fakes and
+// returns the hide/restore/create call log, the native surface Begin
+// creates, and the injectable creation error.
+func fakeOverlaySession(view *NativeView) (*[]string, *fakeOverlayNative, *error) {
+	log := &[]string{}
+	native := &fakeOverlayNative{}
+	createErr := new(error)
+	view.sessions.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1080}, nil
+	}
+	view.sessions.Hide = func(...uintptr) (func(), error) {
+		*log = append(*log, "hide")
+		return func() { *log = append(*log, "restore") }, nil
+	}
+	view.sessions.Create = func(overlay.CreateRequest) (overlay.NativeSession, error) {
+		*log = append(*log, "create")
+		if *createErr != nil {
+			return nil, *createErr
+		}
+		return native, nil
+	}
+	return log, native, createErr
+}
+
+func TestNativeViewRectangleModesStartOverlaySession(t *testing.T) {
 	parent := newViewTestParent(t)
 	folder := testFolder(t)
 	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
 	preset.RegisterValidators(store)
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, folder, parent)
+	log, _, _ := fakeOverlaySession(view)
 
 	view.NativeAction()
-	if got := view.status.Text(); !strings.HasPrefix(got, "Information:") || !strings.Contains(got, "Full Display capture is available") {
-		t.Fatalf("status for Free Rectangle start = %q", got)
+	if !view.sessions.Active() {
+		t.Fatal("Free Rectangle start did not open the selection overlay")
 	}
+	if len(*log) != 2 || (*log)[0] != "hide" || (*log)[1] != "create" {
+		t.Fatalf("session call order = %v, want [hide create] (SCR-050)", *log)
+	}
+
+	// A second Start Capture while the session is on screen is rejected
+	// without touching the hidden window or the overlay (SCR-053).
+	view.NativeAction()
+	if got := view.status.Text(); !strings.HasPrefix(got, "Warning:") || !strings.Contains(got, "already on screen") {
+		t.Fatalf("status for concurrent session = %q", got)
+	}
+	if len(*log) != 2 {
+		t.Fatalf("concurrent start changed state: %v", *log)
+	}
+
+	// Cancelling closes the overlay, restores the main window, and reports
+	// that nothing was captured (SCR-051).
+	view.sessions.Cancel()
+	if view.sessions.Active() {
+		t.Fatal("session stayed active after Cancel")
+	}
+	if len(*log) != 3 || (*log)[2] != "restore" {
+		t.Fatalf("session call order after Cancel = %v", *log)
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Information:") || !strings.Contains(got, "Nothing was captured") {
+		t.Fatalf("status after cancel = %q", got)
+	}
+
+	// Preset Rectangle starts a fresh session after the first was cancelled.
 	view.NativeCommand(optionsCommandBase+modePresetCommand, 0)
 	view.NativeAction()
-	if got := view.status.Text(); !strings.HasPrefix(got, "Information:") || !strings.Contains(got, "Full Display capture is available") {
-		t.Fatalf("status for Preset Rectangle start = %q", got)
+	if !view.sessions.Active() {
+		t.Fatal("Preset Rectangle start did not reopen the selection overlay")
+	}
+	view.NativeDestroy()
+	if view.sessions.Active() || len(*log) != 6 {
+		t.Fatalf("NativeDestroy left the session behind: active=%v log=%v (SCR-056)", view.sessions.Active(), *log)
+	}
+}
+
+func TestNativeViewOverlayFailureRestoresMainWindow(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	log, _, createErr := fakeOverlaySession(view)
+	*createErr = errors.New("window class unavailable")
+
+	view.NativeAction()
+	if view.sessions.Active() {
+		t.Fatal("session stayed active after the overlay failed to appear")
+	}
+	if len(*log) != 3 || (*log)[2] != "restore" {
+		t.Fatalf("session call order after failed start = %v, want restore (SCR-052)", *log)
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") || !strings.Contains(got, "window class unavailable") {
+		t.Fatalf("status after failed overlay start = %q", got)
+	}
+
+	// The failure must not wedge the module: a later start retries cleanly.
+	*createErr = nil
+	view.NativeAction()
+	if !view.sessions.Active() {
+		t.Fatal("session did not start after the overlay failure was fixed")
+	}
+	view.sessions.Shutdown()
+}
+
+func TestNativeViewShutdownCancelsOverlaySession(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	log, native, _ := fakeOverlaySession(view)
+
+	view.NativeAction()
+	if !view.sessions.Active() {
+		t.Fatal("session did not start")
+	}
+	view.NativeShutdown()
+	if view.sessions.Active() {
+		t.Fatal("session stayed active through shutdown (SCR-056)")
+	}
+	if native.closed != 1 {
+		t.Fatalf("native Close calls = %d, want 1", native.closed)
+	}
+	if len(*log) != 3 || (*log)[2] != "restore" {
+		t.Fatalf("session call order after shutdown = %v, want restore", *log)
 	}
 }
 

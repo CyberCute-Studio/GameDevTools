@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -34,10 +36,11 @@ const (
 )
 
 type NativeView struct {
-	options *OptionsManager
-	presets *preset.NativeManager
-	parent  windows.Handle
-	browse  func(windows.Handle, string) (string, bool, error)
+	options  *OptionsManager
+	presets  *preset.NativeManager
+	parent   windows.Handle
+	browse   func(windows.Handle, string) (string, bool, error)
+	sessions *overlay.Controller
 
 	displays    *display.Monitor
 	capture     CaptureFunc
@@ -49,6 +52,7 @@ type NativeView struct {
 	inProgress  bool
 	savedPath   string
 	shown       bool
+	font        windows.Handle
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -68,7 +72,7 @@ type NativeView struct {
 	openFolder   *ui.Button
 }
 
-func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc) *NativeView {
+func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc, sessions *overlay.Controller) *NativeView {
 	return &NativeView{
 		options:  options,
 		presets:  preset.NewNativeManager(manager),
@@ -76,6 +80,7 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		displays: displays,
 		capture:  capture,
 		reveal:   ui.RevealInFolder,
+		sessions: sessions,
 	}
 }
 
@@ -154,6 +159,7 @@ func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
+	n.font = font
 	n.modeLabel.SetFont(font)
 	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton, n.openFolder} {
 		button.SetFont(font)
@@ -327,17 +333,21 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 }
 
 func (n *NativeView) NativeDestroy() {
+	if n.sessions != nil {
+		n.sessions.Shutdown()
+	}
 	n.status.Destroy()
 	n.presets.NativeDestroy()
 }
 
 // NativeAction runs the shell's primary Start Capture action for the
-// currently selected capture mode (SCR-001). Rectangle modes are delivered
-// by later items; Full Display capture runs here.
+// currently selected capture mode (SCR-001). Full Display capture runs here;
+// the rectangle modes open the selection overlay session (SCR-050), whose
+// drawing and capture tools arrive with later items.
 func (n *NativeView) NativeAction() {
 	options := n.options.Options()
 	if options.Mode != ModeFullDisplay {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureRectanglePending}, 0)
+		n.beginOverlay()
 		return
 	}
 	if n.inProgress {
@@ -397,8 +407,46 @@ func (n *NativeView) NativeAction() {
 // its outputs. The shell calls it only after the message loop has ended and
 // the window is destroyed, so the worker never waits on the GUI thread here;
 // its final dispatcher post fails harmlessly against the destroyed window.
+// NativeDestroy has already shut down any overlay session; Shutdown here is
+// the idempotent backstop.
 func (n *NativeView) NativeShutdown() {
 	n.pending.Wait()
+	if n.sessions != nil {
+		n.sessions.Shutdown()
+	}
+}
+
+// beginOverlay starts the rectangle selection session: the controller hides
+// the main window before the overlay appears (SCR-050) and restores it on
+// cancel, failure, and exit. A cancelled session only reports that nothing
+// was captured (SCR-051).
+func (n *NativeView) beginOverlay() {
+	if n.sessions == nil {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New("the overlay service is unavailable"))}, 0)
+		return
+	}
+	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), overlay.Events{
+		OnCancel: func() {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
+		},
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, overlay.ErrSessionActive):
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureSessionActive}, 0)
+	default:
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, err)}, 0)
+	}
+}
+
+// NativeFilterMessage lets the shell's message loop pre-handle queued
+// messages for the overlay session's windows: Escape cancels the session,
+// and toolbar messages receive dialog navigation.
+func (n *NativeView) NativeFilterMessage(message unsafe.Pointer) bool {
+	if n.sessions == nil {
+		return false
+	}
+	return n.sessions.FilterMessage(message)
 }
 
 // finishCapture presents one capture's outcome on the GUI thread. Clipboard

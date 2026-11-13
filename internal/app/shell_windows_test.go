@@ -221,6 +221,39 @@ func (n *recordingNativeView) NativeCommand(id int32, notification uint16) bool 
 }
 func (*recordingNativeView) NativeDestroy() {}
 
+// filterRecordingView records NativeFilterMessage calls so the shell's
+// pre-dispatch hook can be observed.
+type filterRecordingView struct {
+	recordingNativeView
+	messages int
+	handled  bool
+}
+
+func (n *filterRecordingView) NativeFilterMessage(message unsafe.Pointer) bool {
+	n.messages++
+	return n.handled
+}
+
+func TestFilterModuleMessageDelegatesToNativeViews(t *testing.T) {
+	native := &filterRecordingView{}
+	shell := newCommandTestShell(t, native)
+
+	var message msg
+	if shell.filterModuleMessage(&message) {
+		t.Fatal("filter claimed a message the view declined")
+	}
+	if native.messages != 1 {
+		t.Fatalf("NativeFilterMessage calls = %d, want 1", native.messages)
+	}
+	native.handled = true
+	if !shell.filterModuleMessage(&message) {
+		t.Fatal("filter dropped a message the view handled")
+	}
+	if native.messages != 2 {
+		t.Fatalf("NativeFilterMessage calls = %d, want 2", native.messages)
+	}
+}
+
 // shutdownRecordingView records a NativeShutdown call and blocks until the
 // test releases it, so waitForBackgroundWork can be observed waiting.
 type shutdownRecordingView struct {

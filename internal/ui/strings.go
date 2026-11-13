@@ -7,7 +7,7 @@ const (
 
 	ScreenshotNavigation    = "Screenshot"
 	ScreenshotTitle         = "Screenshot"
-	ScreenshotDescription   = "Choose the capture mode, manage exact-dimension presets, and configure the save format, JPEG quality, and output folder. Full Display capture runs from Start Capture; rectangle capture modes arrive with later Screenshot items."
+	ScreenshotDescription   = "Choose the capture mode, manage exact-dimension presets, and configure the save format, JPEG quality, and output folder. Full Display capture runs from Start Capture; the rectangle modes open the selection overlay, whose drawing and capture tools arrive with later Screenshot items."
 	StartCaptureAction      = "Start Capture"
 	CaptureAction           = "Capture"
 	CancelAction            = "Cancel"
@@ -102,11 +102,17 @@ const (
 	OpenFolderAction       = "Open Folder"
 	OpenFolderFailed       = "The folder of the saved screenshot could not be opened: %v"
 
-	CaptureRectanglePending = "Free Rectangle and Preset Rectangle capture arrive with later Screenshot items. Full Display capture is available."
-	CaptureInProgress       = "A capture is already in progress. Wait for it to finish."
-	CaptureFailed           = "The display could not be captured: %v"
-	CaptureSucceeded        = "Display captured. Saved to %s and copied to the clipboard."
-	CaptureSaveFailed       = "Display captured and copied to the clipboard, but saving failed: %v"
-	CaptureClipboardFailed  = "Display captured and saved to %s, but copying to the clipboard failed: %v"
-	CaptureOutputsFailed    = "Display captured, but saving failed (%v) and copying to the clipboard failed (%v)."
+	CaptureInProgress      = "A capture is already in progress. Wait for it to finish."
+	CaptureFailed          = "The display could not be captured: %v"
+	CaptureSucceeded       = "Display captured. Saved to %s and copied to the clipboard."
+	CaptureSaveFailed      = "Display captured and copied to the clipboard, but saving failed: %v"
+	CaptureClipboardFailed = "Display captured and saved to %s, but copying to the clipboard failed: %v"
+	CaptureOutputsFailed   = "Display captured, but saving failed (%v) and copying to the clipboard failed (%v)."
+
+	OverlayWindowTitle    = "GameDevTools rectangle selection overlay"
+	OverlayToolbarTitle   = "GameDevTools rectangle selection toolbar"
+	OverlayInstructions   = "Drag to draw a selection arrives with the next Screenshot item. Press Escape or Cancel to exit."
+	CaptureOverlayFailed  = "The selection overlay could not be shown: %v"
+	CaptureSessionActive  = "A rectangle selection is already on screen. Finish or cancel it before starting another."
+	CaptureSelectionEnded = "Rectangle selection cancelled. Nothing was captured."
 )

@@ -15,6 +15,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -79,7 +80,7 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 	capture := func(CaptureRequest) CaptureResult {
 		return CaptureResult{}
 	}
-	view := NewNativeView(manager, options, display.NewMonitor(), capture)
+	view := NewNativeView(manager, options, display.NewMonitor(), capture, overlay.NewController(display.NewMonitor()))
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatal(err)
 	}
