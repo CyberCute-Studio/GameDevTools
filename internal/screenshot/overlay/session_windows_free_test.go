@@ -377,6 +377,85 @@ func TestOverlayEscapeCancelsWithoutOutput(t *testing.T) {
 	}
 }
 
+// TestOverlayDimensionCommitDroppedMidDrag pins the drag guard on
+// commitDimensions: a dimension field keeps keyboard focus across an overlay
+// click (the overlay never activates), so Enter can arrive while a handle
+// drag is in progress. Committing then would fight the live drag and jump
+// the toolbar mid-drag; the commit must be dropped.
+func TestOverlayDimensionCommitDroppedMidDrag(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+
+	procSetFocus.Call(uintptr(native.widthEdit.Handle()))
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.widthEdit.Handle()) {
+		t.Skip("the test thread could not take keyboard focus")
+	}
+	t.Cleanup(func() { procSetFocus.Call(0) })
+
+	// Start a south-east handle drag; the focused field tracks the live
+	// width as the drag proceeds.
+	sendMouse(native.overlay, wmLButtonDown, 300, 240)
+	sendMouse(native.overlay, wmMouseMove, 350, 240)
+	if got := native.widthEdit.Text(); got != "251" {
+		t.Fatalf("width field mid-drag = %q, want the live 251", got)
+	}
+	native.widthEdit.SetText("500")
+	enter := windowMessage{HWND: native.widthEdit.Handle(), Message: wmKeyDown, WParam: vkReturn}
+	if !controller.FilterMessage(unsafe.Pointer(&enter)) {
+		t.Fatal("filter did not swallow Enter in the dimension field")
+	}
+	if got := native.selection.Width(); got != 251 {
+		t.Fatalf("selection width after mid-drag Enter = %d, want the drag's 251, not a committed 500", got)
+	}
+	sendMouse(native.overlay, wmLButtonUp, 350, 240)
+}
+
+// TestOverlayClearingSelectionMovesFocusOffCapture mirrors the dimension
+// field focus handling for the Capture button: a plain click on the dimmed
+// surface clears the selection and disables Capture, and the overlay never
+// takes activation, so the button can hold focus at that moment. Focus must
+// move to the toolbar first so Escape keeps cancelling the session.
+func TestOverlayClearingSelectionMovesFocusOffCapture(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+	if !captureEnabled(native) {
+		t.Fatal("Capture stayed disabled with a selection on screen")
+	}
+
+	procSetFocus.Call(uintptr(native.captureButton))
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.captureButton) {
+		t.Skip("the test thread could not take keyboard focus")
+	}
+	t.Cleanup(func() { procSetFocus.Call(0) })
+
+	// A plain click on the dimmed area clears the selection and so disables
+	// the focused Capture button.
+	sendMouse(native.overlay, wmLButtonDown, 600, 450)
+	sendMouse(native.overlay, wmLButtonUp, 600, 450)
+	if captureEnabled(native) {
+		t.Fatal("Capture stayed enabled after the selection was cleared")
+	}
+	if focus, _, _ := procGetFocus.Call(); focus == uintptr(native.captureButton) {
+		t.Fatal("focus stayed on the disabled Capture button")
+	}
+}
+
 func TestPresetRectangleSessionDoesNotDrawYet(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(42, 0, ModePresetRectangle, Events{}); err != nil {

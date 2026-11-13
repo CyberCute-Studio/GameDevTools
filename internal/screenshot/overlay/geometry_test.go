@@ -1,6 +1,7 @@
 package overlay
 
 import (
+	"math"
 	"testing"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
@@ -183,6 +184,15 @@ func TestSizedSelectionAppliesTypedDimensions(t *testing.T) {
 	}
 	if _, ok := sizedSelection(selection, 1<<32+100, 720, desktop); ok {
 		t.Fatal("sizedSelection accepted a width that wraps int32 to a fitting value")
+	}
+	// ParseDimension accepts values up to int64's maximum; adding one to the
+	// selection's origin overflows even int64 and wraps into a bogus
+	// rectangle, so the fit check must run before any addition.
+	if _, ok := sizedSelection(selection, math.MaxInt64, 720, desktop); ok {
+		t.Fatal("sizedSelection accepted a width that overflows int64 addition")
+	}
+	if _, ok := sizedSelection(selection, 720, math.MaxInt64-50, desktop); ok {
+		t.Fatal("sizedSelection accepted a height that overflows int64 addition")
 	}
 }
 

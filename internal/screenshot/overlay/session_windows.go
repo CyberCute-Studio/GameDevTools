@@ -414,8 +414,10 @@ func createNative(request CreateRequest) (NativeSession, error) {
 		return nil, err
 	}
 	procShowWindow.Call(uintptr(session.toolbar), swShow)
-	// Best effort: if another window owns the foreground the toolbar stays
-	// usable by mouse, and the shell's message filter still routes Escape.
+	// Best effort: if another window owns the foreground the toolbar does not
+	// take keyboard focus (keystrokes then belong to that other application's
+	// thread, not to the shell's message filter), but it stays usable by
+	// mouse, and clicking it once foregrounds it and restores Escape.
 	procSetForegroundWindow.Call(uintptr(session.toolbar))
 	return session, nil
 }
@@ -592,6 +594,15 @@ func (s *windowsSession) Close() {
 func (s *windowsSession) SetSelectionReady(ready bool) {
 	if s.captureButton == 0 {
 		return
+	}
+	if !ready && s.toolbar != 0 {
+		// The overlay never takes activation, so the Capture button can
+		// still hold keyboard focus when a fresh draw disables it; move
+		// focus to the toolbar first, the same way clearing the selection
+		// moves focus off the dimension fields, so Escape keeps cancelling.
+		if focus, _, _ := procGetFocus.Call(); focus == uintptr(s.captureButton) {
+			procSetFocus.Call(uintptr(s.toolbar))
+		}
 	}
 	enabled := uintptr(0)
 	if ready {
@@ -913,9 +924,12 @@ func (s *windowsSession) syncDimensions() {
 // commitDimensions applies the toolbar's typed width and height to the
 // selection (SCR-013). Invalid or non-fitting values are rejected with a
 // validation message and the fields revert to the actual dimensions, so a
-// mistyped value can never resize the capture silently.
+// mistyped value can never resize the capture silently. While the pointer
+// is mid-drag the fields track the live drag, so a commit (Enter can arrive
+// from a field that kept focus across the overlay click) would only fight
+// the drag and jump the toolbar; it is dropped.
 func (s *windowsSession) commitDimensions() {
-	if s.selection.Empty() {
+	if s.selection.Empty() || s.drag.op != dragNone {
 		return
 	}
 	width, err := ui.ParseDimension("Width", s.widthEdit.Text())

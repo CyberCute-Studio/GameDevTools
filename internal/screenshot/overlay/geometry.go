@@ -142,23 +142,25 @@ func resizeSelection(selection display.Rect, z zone, p display.Point, desktop di
 // sizedSelection applies typed width and height values to the selection,
 // anchored at its top-left corner (SCR-013). The rectangle must keep at
 // least one pixel and fit inside the desktop without moving; the caller
-// reports a violation and keeps the current selection. The arithmetic runs
-// in 64 bits: ParseDimension accepts values beyond int32, and converting
-// one of those directly would wrap into a bogus rectangle that fits.
+// reports a violation and keeps the current selection. The fit check runs
+// in 64 bits by subtraction: ParseDimension accepts values up to int64's
+// maximum, and even int64 addition of such a value to the selection's
+// origin can overflow and wrap into a bogus rectangle that fits.
 func sizedSelection(selection display.Rect, width, height int, desktop display.Rect) (display.Rect, bool) {
 	if width < 1 || height < 1 {
 		return display.Rect{}, false
 	}
-	right := int64(selection.Left) + int64(width)
-	bottom := int64(selection.Top) + int64(height)
-	if right > int64(desktop.Right) || bottom > int64(desktop.Bottom) {
+	if int64(width) > int64(desktop.Right)-int64(selection.Left) ||
+		int64(height) > int64(desktop.Bottom)-int64(selection.Top) {
 		return display.Rect{}, false
 	}
+	// The fit check bounds width and height by the distance to the desktop's
+	// edges, so these sums stay well inside int64 and int32.
 	return display.Rect{
 		Left:   selection.Left,
 		Top:    selection.Top,
-		Right:  int32(right),
-		Bottom: int32(bottom),
+		Right:  int32(int64(selection.Left) + int64(width)),
+		Bottom: int32(int64(selection.Top) + int64(height)),
 	}, true
 }
 
