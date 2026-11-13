@@ -16,22 +16,22 @@ func TestDrawRectNormalizesDragCorners(t *testing.T) {
 		want    display.Rect
 	}{
 		{
-			name:    "drag down and right",
+			name:    "drag down and right includes the release pixel",
 			anchor:  display.Point{X: 10, Y: 20},
 			current: display.Point{X: 810, Y: 620},
-			want:    display.Rect{Left: 10, Top: 20, Right: 810, Bottom: 620},
+			want:    display.Rect{Left: 10, Top: 20, Right: 811, Bottom: 621},
 		},
 		{
-			name:    "drag up and left",
+			name:    "drag up and left includes the release pixel",
 			anchor:  display.Point{X: 810, Y: 620},
 			current: display.Point{X: 10, Y: 20},
-			want:    display.Rect{Left: 10, Top: 20, Right: 810, Bottom: 620},
+			want:    display.Rect{Left: 10, Top: 20, Right: 811, Bottom: 621},
 		},
 		{
 			name:    "horizontal stroke grows to one pixel tall",
 			anchor:  display.Point{X: 100, Y: 100},
 			current: display.Point{X: 400, Y: 100},
-			want:    display.Rect{Left: 100, Top: 100, Right: 400, Bottom: 101},
+			want:    display.Rect{Left: 100, Top: 100, Right: 401, Bottom: 101},
 		},
 		{
 			name:    "stationary press grows to one by one",
@@ -43,13 +43,19 @@ func TestDrawRectNormalizesDragCorners(t *testing.T) {
 			name:    "drag past the desktop edge is clamped",
 			anchor:  display.Point{X: 0, Y: 0},
 			current: display.Point{X: 99999, Y: -99999},
-			want:    display.Rect{Left: 0, Top: -100, Right: 1919, Bottom: 0},
+			want:    display.Rect{Left: 0, Top: -100, Right: 1920, Bottom: 1},
 		},
 		{
 			name:    "one-pixel drag in the far corner still fits",
 			anchor:  display.Point{X: 1919, Y: 1079},
 			current: display.Point{X: 1919, Y: 1079},
 			want:    display.Rect{Left: 1919, Top: 1079, Right: 1920, Bottom: 1080},
+		},
+		{
+			name:    "corner-to-corner drag covers the whole desktop",
+			anchor:  display.Point{X: -1920, Y: -100},
+			current: display.Point{X: 1919, Y: 1079},
+			want:    desktop,
 		},
 	}
 	for _, test := range tests {

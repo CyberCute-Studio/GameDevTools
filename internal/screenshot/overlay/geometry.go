@@ -31,23 +31,18 @@ func clampPoint(p display.Point, desktop display.Rect) display.Point {
 
 // drawRect normalizes the two drag corners into a rectangle of at least
 // 1 × 1 physical pixel (SCR-010). Both corners are clamped into the desktop
-// first, so the result can never reach outside it.
+// first, so the result can never reach outside it, and the rectangle
+// includes the pixels under both corners — matching the resize handles, so a
+// corner-to-corner drag can still select the desktop's last row and column.
 func drawRect(anchor, current display.Point, desktop display.Rect) display.Rect {
 	anchor = clampPoint(anchor, desktop)
 	current = clampPoint(current, desktop)
-	r := display.Rect{
+	return display.Rect{
 		Left:   min(anchor.X, current.X),
 		Top:    min(anchor.Y, current.Y),
-		Right:  max(anchor.X, current.X),
-		Bottom: max(anchor.Y, current.Y),
+		Right:  max(anchor.X, current.X) + 1,
+		Bottom: max(anchor.Y, current.Y) + 1,
 	}
-	if r.Right == r.Left {
-		r.Right = r.Left + 1
-	}
-	if r.Bottom == r.Top {
-		r.Bottom = r.Top + 1
-	}
-	return r
 }
 
 // hitZone classifies a pointer position against the selection's resize

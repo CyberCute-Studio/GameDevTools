@@ -68,16 +68,17 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	sendMouse(native.overlay, wmLButtonDown, 60, 40)
 	sendMouse(native.overlay, wmMouseMove, 460, 340)
 	// Live physical-pixel dimensions track the drag in the toolbar fields
-	// (SCR-011) and Capture becomes available (SCR-024).
-	if got := native.widthEdit.Text(); got != "400" {
-		t.Fatalf("width field mid-drag = %q, want 400", got)
+	// (SCR-011) and Capture becomes available (SCR-024). The rectangle
+	// includes the pixels under both drag corners.
+	if got := native.widthEdit.Text(); got != "401" {
+		t.Fatalf("width field mid-drag = %q, want 401", got)
 	}
-	if got := native.heightEdit.Text(); got != "300" {
-		t.Fatalf("height field mid-drag = %q, want 300", got)
+	if got := native.heightEdit.Text(); got != "301" {
+		t.Fatalf("height field mid-drag = %q, want 301", got)
 	}
 	sendMouse(native.overlay, wmLButtonUp, 460, 340)
 
-	want := clientRect(native, 60, 40, 460, 340)
+	want := clientRect(native, 60, 40, 461, 341)
 	if native.selection != want {
 		t.Fatalf("selection = %v, want %v (SCR-010)", native.selection, want)
 	}
@@ -110,7 +111,7 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 
 	// The toolbar moved near the selection without covering it (SCR-025).
 	toolbar := windowRect(t, native.toolbar)
-	selectionBottom := 340 + native.bounds.Top
+	selectionBottom := 341 + native.bounds.Top
 	if toolbar.Top != selectionBottom+native.margin {
 		t.Fatalf("toolbar top = %d, want %d just below the selection", toolbar.Top, selectionBottom+native.margin)
 	}
@@ -183,7 +184,7 @@ func TestOverlayMoveAndResizeAdjustSelection(t *testing.T) {
 	sendMouse(native.overlay, wmLButtonDown, 100, 100)
 	sendMouse(native.overlay, wmMouseMove, 300, 240)
 	sendMouse(native.overlay, wmLButtonUp, 300, 240)
-	drawn := clientRect(native, 100, 100, 300, 240)
+	drawn := clientRect(native, 100, 100, 301, 241)
 	if native.selection != drawn {
 		t.Fatalf("selection = %v, want %v", native.selection, drawn)
 	}
@@ -193,7 +194,7 @@ func TestOverlayMoveAndResizeAdjustSelection(t *testing.T) {
 	sendMouse(native.overlay, wmLButtonDown, 200, 170)
 	sendMouse(native.overlay, wmMouseMove, 240, 210)
 	sendMouse(native.overlay, wmLButtonUp, 240, 210)
-	moved := clientRect(native, 140, 140, 340, 280)
+	moved := clientRect(native, 140, 140, 341, 281)
 	if native.selection != moved {
 		t.Fatalf("moved selection = %v, want %v", native.selection, moved)
 	}
@@ -297,8 +298,8 @@ func TestOverlayDimensionEditingRejectsInvalidValues(t *testing.T) {
 	if got := native.message.Text(); !strings.Contains(got, "Validation error") {
 		t.Fatalf("validation message = %q", got)
 	}
-	if got := native.widthEdit.Text(); got != "200" {
-		t.Fatalf("width field after rejection = %q, want the actual 200", got)
+	if got := native.widthEdit.Text(); got != "201" {
+		t.Fatalf("width field after rejection = %q, want the actual 201", got)
 	}
 
 	// Dimensions that would reach past the desktop edge are rejected too,
