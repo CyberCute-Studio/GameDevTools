@@ -285,8 +285,8 @@ type windowsSession struct {
 
 	// Overlay rendering surface: a top-down 32-bit BGRA DIB covering the
 	// whole virtual desktop, composited per-pixel through
-	// UpdateLayeredWindowIndirect so the selection interior stays fully
-	// transparent while the rest of the desktop stays dimmed.
+	// UpdateLayeredWindowIndirect so the selection interior stays visually
+	// clear while the rest of the desktop stays dimmed.
 	memDC       uintptr
 	dib         uintptr
 	oldBitmap   uintptr
@@ -757,9 +757,16 @@ func inflateRect(r display.Rect, pad int32) display.Rect {
 	return display.Rect{Left: r.Left - pad, Top: r.Top - pad, Right: r.Right + pad, Bottom: r.Bottom + pad}
 }
 
-// dimPixel is the premultiplied black tint at overlayTintAlpha; zero is a
-// fully transparent pixel.
+// dimPixel is the premultiplied black tint at overlayTintAlpha.
 const dimPixel = uint32(overlayTintAlpha) << 24
+
+// selectionPixel paints the selection interior: visually clear, but not
+// alpha zero. A layered window's hit testing follows the alpha channel, so
+// alpha-zero pixels pass mouse messages through to the windows beneath —
+// clicks inside the selection would reach other applications mid-session
+// and the interior move-drag would never start (SCR-012, SCR-052). Alpha 1
+// is imperceptible but hit-tests as solid.
+const selectionPixel = 1
 
 // renderAll paints the initial fully dimmed frame and composites it.
 func (s *windowsSession) renderAll() error {
@@ -769,10 +776,11 @@ func (s *windowsSession) renderAll() error {
 
 // renderSelection repaints the band where the selection visuals changed:
 // the union of the old and new visual bounds is re-dimmed, the new
-// selection interior is cleared to transparent, and its border and handles
-// are drawn on top. The border ring sits outside the selection rectangle,
-// so even an incompletely flushed frame could never put selection visuals
-// inside the captured pixels (SCR-068).
+// selection interior is cleared to the visually transparent
+// selectionPixel, and its border and handles are drawn on top. The border
+// ring sits outside the selection rectangle, so even an incompletely
+// flushed frame could never put selection visuals inside the captured
+// pixels (SCR-068).
 func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 	dirty := rectUnion(oldVisual, s.visualBounds())
 	if dirty.Empty() {
@@ -782,7 +790,7 @@ func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 	s.fillLocal(local, dimPixel)
 	if !s.selection.Empty() {
 		sel := s.toLocal(s.selection)
-		s.fillLocal(sel, 0)
+		s.fillLocal(sel, selectionPixel)
 		s.fillRing(inflateRect(sel, s.border), sel, s.borderPx)
 		s.fillRing(inflateRect(sel, s.border), inflateRect(sel, s.border-1), 0xff000000)
 		s.fillRing(inflateRect(sel, 1), sel, 0xff000000)
@@ -883,12 +891,14 @@ func (s *windowsSession) placeToolbar() {
 }
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's
-// fields (SCR-011), unless the user is typing in the field.
+// fields (SCR-011). Both fields are updated even while one holds keyboard
+// focus: selection changes only ever come from pointer drags, which cannot
+// coincide with typing, and leaving a stale value in the focused field
+// would let a later focus-loss commit silently apply it over a resize.
 func (s *windowsSession) syncDimensions() {
 	if s.widthEdit == nil || s.heightEdit == nil {
 		return
 	}
-	focus, _, _ := procGetFocus.Call()
 	width, height := "", ""
 	if !s.selection.Empty() {
 		width = fmt.Sprintf("%d", s.selection.Width())
@@ -896,12 +906,8 @@ func (s *windowsSession) syncDimensions() {
 	}
 	s.syncing = true
 	defer func() { s.syncing = false }()
-	if focus != uintptr(s.widthEdit.Handle()) {
-		s.widthEdit.SetText(width)
-	}
-	if focus != uintptr(s.heightEdit.Handle()) {
-		s.heightEdit.SetText(height)
-	}
+	s.widthEdit.SetText(width)
+	s.heightEdit.SetText(height)
 }
 
 // commitDimensions applies the toolbar's typed width and height to the
@@ -915,36 +921,24 @@ func (s *windowsSession) commitDimensions() {
 	width, err := ui.ParseDimension("Width", s.widthEdit.Text())
 	if err != nil {
 		s.message.SetText(ui.FormatError(ui.ErrorValidation, err))
-		s.syncDimensionsForce()
+		s.syncDimensions()
 		return
 	}
 	height, err := ui.ParseDimension("Height", s.heightEdit.Text())
 	if err != nil {
 		s.message.SetText(ui.FormatError(ui.ErrorValidation, err))
-		s.syncDimensionsForce()
+		s.syncDimensions()
 		return
 	}
 	resized, ok := sizedSelection(s.selection, width, height, s.bounds)
 	if !ok {
 		s.message.SetText(ui.SelectionFitInvalid)
-		s.syncDimensionsForce()
+		s.syncDimensions()
 		return
 	}
 	s.message.SetText(ui.OverlayInstructions)
 	s.setSelection(resized)
 	s.placeToolbar()
-}
-
-// syncDimensionsForce reverts the dimension fields to the actual selection
-// after a rejected edit, even in the field that has focus.
-func (s *windowsSession) syncDimensionsForce() {
-	if s.selection.Empty() {
-		return
-	}
-	s.syncing = true
-	defer func() { s.syncing = false }()
-	s.widthEdit.SetText(fmt.Sprintf("%d", s.selection.Width()))
-	s.heightEdit.SetText(fmt.Sprintf("%d", s.selection.Height()))
 }
 
 // pointerFromClient decodes the signed 16-bit client coordinates packed

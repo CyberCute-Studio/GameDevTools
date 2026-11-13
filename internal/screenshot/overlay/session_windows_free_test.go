@@ -92,12 +92,14 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	if got := windowRect(t, native.overlay); got != native.bounds {
 		t.Fatalf("overlay window rect after selection frames = %v, want the desktop %v", got, native.bounds)
 	}
-	// The selection interior is transparent, the desktop around it stays
-	// dimmed, and the frame around it is opaque.
+	// The selection interior is visually clear but painted at alpha 1 so it
+	// still hit-tests as solid: alpha-zero pixels of a layered window pass
+	// mouse messages through to the windows beneath (SCR-012, SCR-052). The
+	// desktop around the selection stays dimmed and the frame is opaque.
 	pixels := native.pixelSlice()
 	at := func(x, y int32) uint32 { return pixels[int(y)*int(native.pixelWidth)+int(x)] }
-	if got := at(200, 150); got != 0 {
-		t.Fatalf("interior pixel = %#08x, want transparent", got)
+	if got := at(200, 150); got != selectionPixel {
+		t.Fatalf("interior pixel = %#08x, want %#08x (visually clear but input-capturing)", got, selectionPixel)
 	}
 	if got := at(5, 5); got != dimPixel {
 		t.Fatalf("dimmed pixel = %#08x, want %#08x", got, dimPixel)
@@ -207,6 +209,38 @@ func TestOverlayMoveAndResizeAdjustSelection(t *testing.T) {
 	}
 	if got := native.widthEdit.Text(); got != "231" {
 		t.Fatalf("width field after resize = %q, want 231", got)
+	}
+}
+
+// TestOverlayFocusedFieldTracksHandleResize pins SCR-011 against a stale
+// focused field: keyboard focus stays in a dimension field when the pointer
+// drags a handle (the overlay never activates), and the live dimensions
+// must still reach that field, or a later focus-loss commit would silently
+// apply the stale value over the resize.
+func TestOverlayFocusedFieldTracksHandleResize(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+
+	procSetFocus.Call(uintptr(native.widthEdit.Handle()))
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.widthEdit.Handle()) {
+		t.Skip("the test thread could not take keyboard focus")
+	}
+	t.Cleanup(func() { procSetFocus.Call(0) })
+
+	// Resize by the south-east handle while the width field holds focus.
+	sendMouse(native.overlay, wmLButtonDown, 300, 240)
+	sendMouse(native.overlay, wmMouseMove, 400, 240)
+	sendMouse(native.overlay, wmLButtonUp, 400, 240)
+	if got := native.widthEdit.Text(); got != "301" {
+		t.Fatalf("focused width field after handle resize = %q, want the live 301 (SCR-011)", got)
 	}
 }
 
