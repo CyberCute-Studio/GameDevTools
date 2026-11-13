@@ -28,9 +28,11 @@ const (
 	toolbarWidthCommand   = 3
 	toolbarHeightCommand  = 4
 
-	// Logical toolbar measurements, scaled by the cursor display's DPI.
+	// Logical toolbar measurements, scaled by the cursor display's DPI. The
+	// height leaves the message label two lines: static text word-wraps, so
+	// a one-line label would clip the instructions and validation messages.
 	toolbarLogicalWidth  = 512
-	toolbarLogicalHeight = 76
+	toolbarLogicalHeight = 96
 	toolbarLogicalMargin = 16
 	toolbarLogicalInset  = 12
 
@@ -542,8 +544,8 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	s.heightEdit = heightEdit
 
 	inset := scale(toolbarLogicalInset)
-	message.Move(inset, scale(6), width-2*inset, scale(20))
-	rowY := scale(34)
+	message.Move(inset, scale(6), width-2*inset, scale(46))
+	rowY := scale(58)
 	labelWidth, editWidth := scale(48), scale(64)
 	widthLabel.Move(inset, rowY+scale(3), labelWidth, scale(20))
 	widthEdit.Move(inset+labelWidth, rowY, editWidth, scale(24))
