@@ -86,7 +86,6 @@ var (
 	registerClassesOnce sync.Once
 	registerClassesErr  error
 
-	overlayStates = map[windows.Handle]*windowsSession{}
 	toolbarStates = map[windows.Handle]*windowsSession{}
 )
 
@@ -211,7 +210,6 @@ func createNative(request CreateRequest) (NativeSession, error) {
 		return nil, callError("CreateWindowExW(overlay)", err)
 	}
 	session.overlay = windows.Handle(overlay)
-	overlayStates[session.overlay] = session
 	if r, _, err := procSetLayeredWindowAttributes.Call(overlay, 0, overlayTintAlpha, lwaAlpha); r == 0 {
 		session.Close()
 		return nil, callError("SetLayeredWindowAttributes", err)
@@ -341,9 +339,9 @@ func (s *windowsSession) isToolbarMessage(hwnd uintptr) bool {
 
 // FilterMessage pre-handles the GUI thread's queued messages while a session
 // is active. Escape cancels from any session window, and toolbar messages go
-// through IsDialogMessage so Tab, arrow keys, Enter, and mnemonics work
-// between the Capture and Cancel buttons even though the toolbar is a popup
-// rather than a dialog. Messages for other windows pass through untouched.
+// through IsDialogMessage so Tab, arrow keys, and Enter work between the
+// Capture and Cancel buttons even though the toolbar is a popup rather than
+// a dialog. Messages for other windows pass through untouched.
 func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 	msg := (*windowMessage)(message)
 	c.mu.Lock()
@@ -372,10 +370,6 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 	// Escape never reaches this procedure: the overlay cannot take focus
 	// (WS_EX_NOACTIVATE), and the shell's message filter consumes Escape for
 	// every session window before dispatch.
-	if message == wmDestroy {
-		delete(overlayStates, hwnd)
-		return 0
-	}
 	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
 	return r
 }
