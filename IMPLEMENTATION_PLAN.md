@@ -125,11 +125,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** AC-S08 and AC-S09 failure cases are required in this PR, not deferred. The `internal/screenshot/output` service delivers one capture to the clipboard (original pixels, before JPEG encoding) and to a collision-free timestamped PNG/JPEG file written through a temporary file, reporting both outcomes independently. Capture execution and the completion notification are wired in SCR-05.
 
 12. **SCR-05 — Complete Full Display capture end to end**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-04
+    - **Status:** In Progress | **PR:** [#12](https://github.com/CyberCute-Studio/GameDevTools/pull/12) | **Depends on:** SCR-04
     - **Requirements:** SCR-001, SCR-040, SCR-041, SCR-042, SCR-043, SCR-044, SCR-060, SCR-069.
     - **Deliver:** Display picker with cursor-display default, main-window hiding, automatic capture, clipboard/save execution, and non-blocking result notification with Open Folder action.
     - **Verify:** Capture primary and secondary displays at native resolution and orientation. Confirm the main window and cursor are absent, output format settings apply, and focus is not unexpectedly stolen afterward.
-    - **Notes:** Global invocation is added in SCR-09; this PR completes main-window invocation.
+    - **Notes:** Global invocation is added in SCR-09; this PR completes main-window invocation. The shell's primary action button is wired to modules that implement it; the new `internal/screenshot/execute` pipeline hides the main window, captures the selected display off the GUI thread, restores it on every path without stealing focus, and delivers through `internal/screenshot/output`; shutdown waits for in-flight captures. Rectangle modes report that they arrive with later items. Multi-display and mixed-DPI hardware verification remains covered by the FND-01 blocker; picker selection, cursor default, notification outcomes, and shutdown behavior are unit-tested.
 
 13. **SCR-06 — Build the rectangle overlay session foundation**
     - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-03, SCR-05, FND-05
