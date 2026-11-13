@@ -53,10 +53,16 @@ func drawRect(anchor, current display.Point, desktop display.Rect) display.Rect 
 // hitZone classifies a pointer position against the selection's resize
 // handles and interior. Handles are grab×grab squares centered on the
 // corners and edge midpoints and win over the interior, so even a 1 × 1
-// selection stays adjustable.
+// selection stays adjustable. For selections smaller than the full grab
+// reach the grab shrinks instead: three overlapping handle squares per edge
+// would otherwise cover the whole rectangle and leave no interior to drag,
+// making such a selection impossible to move (SCR-012).
 func hitZone(selection display.Rect, p display.Point, grab int32) zone {
 	if selection.Empty() {
 		return zoneOutside
+	}
+	if smaller := min(selection.Width(), selection.Height()); 2*grab >= smaller {
+		grab = max(smaller/4, 1)
 	}
 	half := grab / 2
 	centerX := (selection.Left + selection.Right) / 2
@@ -136,21 +142,24 @@ func resizeSelection(selection display.Rect, z zone, p display.Point, desktop di
 // sizedSelection applies typed width and height values to the selection,
 // anchored at its top-left corner (SCR-013). The rectangle must keep at
 // least one pixel and fit inside the desktop without moving; the caller
-// reports a violation and keeps the current selection.
+// reports a violation and keeps the current selection. The arithmetic runs
+// in 64 bits: ParseDimension accepts values beyond int32, and converting
+// one of those directly would wrap into a bogus rectangle that fits.
 func sizedSelection(selection display.Rect, width, height int, desktop display.Rect) (display.Rect, bool) {
 	if width < 1 || height < 1 {
 		return display.Rect{}, false
 	}
-	r := display.Rect{
-		Left:   selection.Left,
-		Top:    selection.Top,
-		Right:  selection.Left + int32(width),
-		Bottom: selection.Top + int32(height),
-	}
-	if r.Right > desktop.Right || r.Bottom > desktop.Bottom {
+	right := int64(selection.Left) + int64(width)
+	bottom := int64(selection.Top) + int64(height)
+	if right > int64(desktop.Right) || bottom > int64(desktop.Bottom) {
 		return display.Rect{}, false
 	}
-	return r, true
+	return display.Rect{
+		Left:   selection.Left,
+		Top:    selection.Top,
+		Right:  int32(right),
+		Bottom: int32(bottom),
+	}, true
 }
 
 // toolbarPlacement picks the toolbar's position. Without a selection the

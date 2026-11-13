@@ -93,7 +93,9 @@ type CreateRequest struct {
 // resolves the desktop bounds and toolbar anchor; DesktopBounds, Hide, and
 // Create default to the production native services and are replaceable in
 // tests. Hide hides the main window and returns the function that restores
-// it; the controller calls that restore exactly once per session.
+// it; every session path runs that restore exactly once — Cancel and
+// Shutdown run it directly, Complete hands it to the OnCapture handler so
+// the window stays hidden until the capture has read the pixels (SCR-044).
 type Controller struct {
 	Monitor       *display.Monitor
 	DesktopBounds func() (display.Rect, error)

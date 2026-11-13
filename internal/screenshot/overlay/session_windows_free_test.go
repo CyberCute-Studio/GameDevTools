@@ -36,6 +36,12 @@ func captureEnabled(native *windowsSession) bool {
 	return r != 0
 }
 
+func editsEnabled(native *windowsSession) bool {
+	width, _, _ := procIsWindowEnabled.Call(uintptr(native.widthEdit.Handle()))
+	height, _, _ := procIsWindowEnabled.Call(uintptr(native.heightEdit.Handle()))
+	return width != 0 && height != 0
+}
+
 func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	controller, log := newNativeSessionController(t)
 	var captured display.Rect
@@ -56,6 +62,9 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	native := nativeOf(t, controller)
 	t.Cleanup(controller.Shutdown)
 
+	if editsEnabled(native) {
+		t.Fatal("dimension fields were editable without a selection")
+	}
 	sendMouse(native.overlay, wmLButtonDown, 60, 40)
 	sendMouse(native.overlay, wmMouseMove, 460, 340)
 	// Live physical-pixel dimensions track the drag in the toolbar fields
@@ -74,6 +83,14 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	}
 	if !captureEnabled(native) {
 		t.Fatal("Capture stayed disabled with a selection on screen")
+	}
+	if !editsEnabled(native) {
+		t.Fatal("dimension fields stayed disabled with a selection on screen (SCR-013)")
+	}
+	// The dirty-band compositing must not resize the overlay: it still
+	// covers the whole virtual desktop after several selection frames.
+	if got := windowRect(t, native.overlay); got != native.bounds {
+		t.Fatalf("overlay window rect after selection frames = %v, want the desktop %v", got, native.bounds)
 	}
 	// The selection interior is transparent, the desktop around it stays
 	// dimmed, and the frame around it is opaque.
@@ -137,6 +154,19 @@ func TestOverlayClickWithoutDragLeavesNoSelection(t *testing.T) {
 	sendMouse(native.overlay, wmLButtonUp, 500, 400)
 	if !native.selection.Empty() {
 		t.Fatalf("stationary move created a selection: %v", native.selection)
+	}
+
+	// Clearing an existing selection disables the dimension fields again.
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+	if !editsEnabled(native) {
+		t.Fatal("dimension fields stayed disabled with a selection on screen")
+	}
+	sendMouse(native.overlay, wmLButtonDown, 500, 400)
+	sendMouse(native.overlay, wmLButtonUp, 500, 400)
+	if editsEnabled(native) {
+		t.Fatal("dimension fields stayed editable after the selection was cleared")
 	}
 }
 
@@ -247,6 +277,17 @@ func TestOverlayDimensionEditingRejectsInvalidValues(t *testing.T) {
 	if got := native.message.Text(); !strings.Contains(got, "do not fit") {
 		t.Fatalf("fit message = %q", got)
 	}
+
+	// A value beyond int32 must be rejected too, not wrapped into a
+	// fitting or empty rectangle (SCR-013).
+	native.widthEdit.SetText("4294967396")
+	procSendMessageW.Call(uintptr(native.toolbar), wmCommand, uintptr(enKillFocus<<16|toolbarWidthCommand), 0)
+	if native.selection != before {
+		t.Fatalf("wrapping width changed the selection to %v", native.selection)
+	}
+	if got := native.message.Text(); !strings.Contains(got, "do not fit") {
+		t.Fatalf("fit message for wrapping width = %q", got)
+	}
 }
 
 func TestOverlayEnterCommitsDimensionField(t *testing.T) {
@@ -321,5 +362,8 @@ func TestPresetRectangleSessionDoesNotDrawYet(t *testing.T) {
 	}
 	if captureEnabled(native) {
 		t.Fatal("Capture became enabled in a preset session")
+	}
+	if editsEnabled(native) {
+		t.Fatal("dimension fields became editable in a preset session")
 	}
 }

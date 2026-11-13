@@ -89,6 +89,16 @@ func TestHitZoneClassifiesHandlesInteriorAndOutside(t *testing.T) {
 	if got := hitZone(tiny, display.Point{X: 40, Y: 40}, grab); got == zoneOutside || got == zoneInterior {
 		t.Fatalf("hitZone on a 1 × 1 selection = %d, want a handle so it stays adjustable", got)
 	}
+	// A selection smaller than the full grab reach keeps an interior strip
+	// to drag: the handle squares shrink instead of covering it whole
+	// (SCR-012).
+	small := display.Rect{Left: 100, Top: 100, Right: 112, Bottom: 112}
+	if got := hitZone(small, display.Point{X: 103, Y: 103}, grab); got != zoneInterior {
+		t.Fatalf("hitZone inside a small selection = %d, want the movable interior", got)
+	}
+	if got := hitZone(small, display.Point{X: 100, Y: 100}, grab); got != zoneNW {
+		t.Fatalf("hitZone on a small selection's corner = %d, want the north-west handle", got)
+	}
 	if got := hitZone(display.Rect{}, display.Point{X: 40, Y: 40}, grab); got != zoneOutside {
 		t.Fatalf("hitZone without a selection = %d, want outside", got)
 	}
@@ -164,6 +174,15 @@ func TestSizedSelectionAppliesTypedDimensions(t *testing.T) {
 	}
 	if _, ok := sizedSelection(selection, 200, 2000, desktop); ok {
 		t.Fatal("sizedSelection accepted a height that reaches past the desktop edge")
+	}
+	// ParseDimension accepts values beyond int32; a direct int32 conversion
+	// would wrap 2^32 to zero and 2^32+100 to a fitting 100, so those must
+	// be rejected before the conversion.
+	if _, ok := sizedSelection(selection, 1<<32, 720, desktop); ok {
+		t.Fatal("sizedSelection accepted a width that wraps int32 to zero")
+	}
+	if _, ok := sizedSelection(selection, 1<<32+100, 720, desktop); ok {
+		t.Fatal("sizedSelection accepted a width that wraps int32 to a fitting value")
 	}
 }
 

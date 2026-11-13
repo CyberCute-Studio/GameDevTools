@@ -100,33 +100,34 @@ var (
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
 
-	procRegisterClassExW    = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW     = user32.NewProc("CreateWindowExW")
-	procDestroyWindow       = user32.NewProc("DestroyWindow")
-	procDefWindowProcW      = user32.NewProc("DefWindowProcW")
-	procShowWindow          = user32.NewProc("ShowWindow")
-	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procUpdateLayeredWindow = user32.NewProc("UpdateLayeredWindow")
-	procSetWindowPos        = user32.NewProc("SetWindowPos")
-	procEnableWindow        = user32.NewProc("EnableWindow")
-	procIsChild             = user32.NewProc("IsChild")
-	procIsDialogMessageW    = user32.NewProc("IsDialogMessageW")
-	procLoadCursorW         = user32.NewProc("LoadCursorW")
-	procSetCursor           = user32.NewProc("SetCursor")
-	procSetCapture          = user32.NewProc("SetCapture")
-	procReleaseCapture      = user32.NewProc("ReleaseCapture")
-	procGetFocus            = user32.NewProc("GetFocus")
-	procGetCursorPos        = user32.NewProc("GetCursorPos")
-	procGetSysColor         = user32.NewProc("GetSysColor")
-	procGetSysColorBrush    = user32.NewProc("GetSysColorBrush")
-	procGetModuleHandleW    = kernel32.NewProc("GetModuleHandleW")
-	procCreateCompatibleDC  = gdi32.NewProc("CreateCompatibleDC")
-	procCreateDIBSection    = gdi32.NewProc("CreateDIBSection")
-	procSelectObject        = gdi32.NewProc("SelectObject")
-	procDeleteObject        = gdi32.NewProc("DeleteObject")
-	procDeleteDC            = gdi32.NewProc("DeleteDC")
-	procSetBkMode           = gdi32.NewProc("SetBkMode")
-	procSetTextColor        = gdi32.NewProc("SetTextColor")
+	procRegisterClassExW            = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW             = user32.NewProc("CreateWindowExW")
+	procDestroyWindow               = user32.NewProc("DestroyWindow")
+	procDefWindowProcW              = user32.NewProc("DefWindowProcW")
+	procShowWindow                  = user32.NewProc("ShowWindow")
+	procSetForegroundWindow         = user32.NewProc("SetForegroundWindow")
+	procUpdateLayeredWindowIndirect = user32.NewProc("UpdateLayeredWindowIndirect")
+	procSetWindowPos                = user32.NewProc("SetWindowPos")
+	procEnableWindow                = user32.NewProc("EnableWindow")
+	procIsChild                     = user32.NewProc("IsChild")
+	procIsDialogMessageW            = user32.NewProc("IsDialogMessageW")
+	procLoadCursorW                 = user32.NewProc("LoadCursorW")
+	procSetCursor                   = user32.NewProc("SetCursor")
+	procSetCapture                  = user32.NewProc("SetCapture")
+	procReleaseCapture              = user32.NewProc("ReleaseCapture")
+	procSetFocus                    = user32.NewProc("SetFocus")
+	procGetFocus                    = user32.NewProc("GetFocus")
+	procGetCursorPos                = user32.NewProc("GetCursorPos")
+	procGetSysColor                 = user32.NewProc("GetSysColor")
+	procGetSysColorBrush            = user32.NewProc("GetSysColorBrush")
+	procGetModuleHandleW            = kernel32.NewProc("GetModuleHandleW")
+	procCreateCompatibleDC          = gdi32.NewProc("CreateCompatibleDC")
+	procCreateDIBSection            = gdi32.NewProc("CreateDIBSection")
+	procSelectObject                = gdi32.NewProc("SelectObject")
+	procDeleteObject                = gdi32.NewProc("DeleteObject")
+	procDeleteDC                    = gdi32.NewProc("DeleteDC")
+	procSetBkMode                   = gdi32.NewProc("SetBkMode")
+	procSetTextColor                = gdi32.NewProc("SetTextColor")
 
 	registerClassesOnce sync.Once
 	registerClassesErr  error
@@ -164,6 +165,28 @@ type point struct {
 type sizeStruct struct {
 	Width  int32
 	Height int32
+}
+
+type rectStruct struct {
+	Left   int32
+	Top    int32
+	Right  int32
+	Bottom int32
+}
+
+// updateLayeredWindowInfo mirrors the Win32 UPDATELAYEREDWINDOWINFO
+// structure UpdateLayeredWindowIndirect takes by pointer.
+type updateLayeredWindowInfo struct {
+	CbSize   uint32
+	HdcDst   uintptr
+	PptDst   unsafe.Pointer
+	PSize    unsafe.Pointer
+	HdcSrc   uintptr
+	PptSrc   unsafe.Pointer
+	CrKey    uint32
+	PBlend   unsafe.Pointer
+	DwFlags  uint32
+	PrcDirty unsafe.Pointer
 }
 
 // blendFunction mirrors the Win32 BLENDFUNCTION structure.
@@ -262,8 +285,8 @@ type windowsSession struct {
 
 	// Overlay rendering surface: a top-down 32-bit BGRA DIB covering the
 	// whole virtual desktop, composited per-pixel through
-	// UpdateLayeredWindow so the selection interior stays fully transparent
-	// while the rest of the desktop stays dimmed.
+	// UpdateLayeredWindowIndirect so the selection interior stays fully
+	// transparent while the rest of the desktop stays dimmed.
 	memDC       uintptr
 	dib         uintptr
 	oldBitmap   uintptr
@@ -398,9 +421,8 @@ func createNative(request CreateRequest) (NativeSession, error) {
 }
 
 // createSurface allocates the overlay's desktop-sized backing bitmap. The
-// whole desktop is dimmed once here; later selection updates repaint only
-// the affected band but still composite the full bitmap, which
-// UpdateLayeredWindow requires.
+// whole desktop is dimmed once here; later selection updates repaint and
+// composite only the affected band.
 func (s *windowsSession) createSurface() error {
 	width, height := s.bounds.Width(), s.bounds.Height()
 	memory, _, err := procCreateCompatibleDC.Call(0)
@@ -645,6 +667,23 @@ func (s *windowsSession) setSelection(selection display.Rect) {
 		// interaction stays usable, so the error is not fatal.
 		_ = err
 	}
+	// Typed dimensions (SCR-013) are only meaningful with a selection on
+	// screen; the fields stay disabled until one exists so they cannot be
+	// focused or committed into an empty selection. The overlay never takes
+	// activation, so clearing the selection can disable the field that still
+	// holds keyboard focus; move focus to the toolbar first so Escape keeps
+	// cancelling the session.
+	if s.widthEdit != nil && s.heightEdit != nil {
+		enabled := !selection.Empty()
+		if !enabled {
+			focus, _, _ := procGetFocus.Call()
+			if s.isDimensionEdit(focus) {
+				procSetFocus.Call(uintptr(s.toolbar))
+			}
+		}
+		s.widthEdit.Enable(enabled)
+		s.heightEdit.Enable(enabled)
+	}
 	s.syncDimensions()
 	if s.onSelection != nil {
 		s.onSelection(selection)
@@ -725,7 +764,7 @@ const dimPixel = uint32(overlayTintAlpha) << 24
 // renderAll paints the initial fully dimmed frame and composites it.
 func (s *windowsSession) renderAll() error {
 	s.fillLocal(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}, dimPixel)
-	return s.present()
+	return s.present(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight})
 }
 
 // renderSelection repaints the band where the selection visuals changed:
@@ -751,7 +790,7 @@ func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 			s.drawHandles(sel)
 		}
 	}
-	return s.present()
+	return s.present(local)
 }
 
 // drawHandles paints the eight resize handles as white squares with a dark
@@ -771,23 +810,43 @@ func (s *windowsSession) drawHandles(sel display.Rect) {
 	}
 }
 
-// present composites the backing bitmap onto the overlay window.
-// UpdateLayeredWindow always uploads the full bitmap; the repaints are
-// limited to the dirty band, and the upload is a straight memory copy into
-// the window's redirection surface.
-func (s *windowsSession) present() error {
+// present composites the backing bitmap onto the overlay window. Only the
+// dirty band, in overlay client coordinates, is uploaded:
+// UpdateLayeredWindow always resizes the window to the source size, so
+// compositing goes through UpdateLayeredWindowIndirect, whose dirty
+// rectangle uploads just the repainted band while the window keeps covering
+// the whole virtual desktop. During a drag this runs per mouse move, and a
+// full-desktop upload every move is a noticeable cost on multi-monitor
+// desktops.
+func (s *windowsSession) present(dirty display.Rect) error {
+	dirty = display.Rect{
+		Left:   max(dirty.Left, 0),
+		Top:    max(dirty.Top, 0),
+		Right:  min(dirty.Right, s.pixelWidth),
+		Bottom: min(dirty.Bottom, s.pixelHeight),
+	}
+	if dirty.Empty() {
+		return nil
+	}
 	position := point{X: s.bounds.Left, Y: s.bounds.Top}
 	size := sizeStruct{Width: s.pixelWidth, Height: s.pixelHeight}
 	source := point{}
 	blend := blendFunction{SourceConstantAlpha: 255, AlphaFormat: acSrcAlpha}
-	r, _, err := procUpdateLayeredWindow.Call(
-		uintptr(s.overlay), 0,
-		uintptr(unsafe.Pointer(&position)), uintptr(unsafe.Pointer(&size)),
-		s.memDC, uintptr(unsafe.Pointer(&source)),
-		0, uintptr(unsafe.Pointer(&blend)), ulwAlpha,
-	)
+	band := rectStruct{Left: dirty.Left, Top: dirty.Top, Right: dirty.Right, Bottom: dirty.Bottom}
+	info := updateLayeredWindowInfo{
+		HdcDst:   0,
+		PptDst:   unsafe.Pointer(&position),
+		PSize:    unsafe.Pointer(&size),
+		HdcSrc:   s.memDC,
+		PptSrc:   unsafe.Pointer(&source),
+		PBlend:   unsafe.Pointer(&blend),
+		DwFlags:  ulwAlpha,
+		PrcDirty: unsafe.Pointer(&band),
+	}
+	info.CbSize = uint32(unsafe.Sizeof(info))
+	r, _, err := procUpdateLayeredWindowIndirect.Call(uintptr(s.overlay), uintptr(unsafe.Pointer(&info)))
 	if r == 0 {
-		return callError("UpdateLayeredWindow", err)
+		return callError("UpdateLayeredWindowIndirect", err)
 	}
 	return nil
 }
@@ -812,6 +871,11 @@ func rectUnion(a, b display.Rect) display.Rect {
 // finishes, not on every mouse move, so the toolbar does not jump around
 // under the pointer mid-drag.
 func (s *windowsSession) placeToolbar() {
+	if s.toolbar == 0 {
+		// WM_CAPTURECHANGED can arrive while Close is destroying the
+		// session, after the toolbar is already gone.
+		return
+	}
 	x, y := toolbarPlacement(s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
 	procSetWindowPos.Call(uintptr(s.toolbar), 0,
 		uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,

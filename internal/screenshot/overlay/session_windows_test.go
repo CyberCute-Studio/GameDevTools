@@ -26,7 +26,6 @@ var (
 	procGetWindowRect   = user32.NewProc("GetWindowRect")
 	procIsWindow        = user32.NewProc("IsWindow")
 	procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
-	procSetFocus        = user32.NewProc("SetFocus")
 	procGetDlgItem      = user32.NewProc("GetDlgItem")
 	procSendMessageW    = user32.NewProc("SendMessageW")
 )
