@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -26,6 +29,8 @@ const (
 	qualityCommand
 	folderCommand
 	browseCommand
+	displayCommand
+	openFolderCommand
 )
 
 type NativeView struct {
@@ -34,10 +39,23 @@ type NativeView struct {
 	parent  windows.Handle
 	browse  func(windows.Handle, string) (string, bool, error)
 
+	displays    *display.Monitor
+	capture     CaptureFunc
+	dispatcher  core.Dispatcher
+	reveal      func(string) error
+	pending     sync.WaitGroup
+	displayList []display.Display
+	displayErr  error
+	inProgress  bool
+	savedPath   string
+	shown       bool
+
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
 	modePreset   *ui.Button
 	modeFull     *ui.Button
+	displayLabel *ui.Label
+	displayCombo *ui.ComboBox
 	formatLabel  *ui.Label
 	format       *ui.ComboBox
 	quality      *ui.TextInput
@@ -47,13 +65,17 @@ type NativeView struct {
 	patternLabel *ui.Label
 	pattern      *ui.Label
 	status       *ui.StatusArea
+	openFolder   *ui.Button
 }
 
-func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
+func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc) *NativeView {
 	return &NativeView{
-		options: options,
-		presets: preset.NewNativeManager(manager),
-		browse:  ui.BrowseForFolder,
+		options:  options,
+		presets:  preset.NewNativeManager(manager),
+		browse:   ui.BrowseForFolder,
+		displays: displays,
+		capture:  capture,
+		reveal:   ui.RevealInFolder,
 	}
 }
 
@@ -71,6 +93,12 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 		return err
 	}
 	if n.modeFull, err = ui.NewButton(parent, ui.CaptureModeFullDisplay, ui.ButtonOptions{ID: base + modeFullCommand, Radio: true}); err != nil {
+		return err
+	}
+	if n.displayLabel, err = ui.NewMnemonicLabel(parent, ui.DisplayLabel); err != nil {
+		return err
+	}
+	if n.displayCombo, err = ui.NewComboBox(parent, base+displayCommand); err != nil {
 		return err
 	}
 	if n.formatLabel, err = ui.NewMnemonicLabel(parent, ui.OutputFormatLabel); err != nil {
@@ -102,18 +130,36 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.status, err = ui.NewStatusArea(parent); err != nil {
 		return err
 	}
+	if n.openFolder, err = ui.NewButton(parent, ui.OpenFolderAction, ui.ButtonOptions{ID: base + openFolderCommand, Group: true, Disabled: true}); err != nil {
+		return err
+	}
 	if err := n.presets.NativeCreate(parent); err != nil {
 		return err
 	}
+	if n.displays != nil {
+		n.displays.Subscribe(n.refreshDisplays)
+	}
+	// refresh clears the status area, so it runs before refreshDisplays:
+	// a display-enumeration failure at startup must stay visible.
 	n.refresh()
+	n.refreshDisplays()
 	return nil
+}
+
+// NativeDispatcher receives the shell's GUI-thread dispatcher. Capture
+// completions are posted through it so result presentation always runs on
+// the GUI thread.
+func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
+	n.dispatcher = dispatcher
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
 	n.modeLabel.SetFont(font)
-	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton} {
+	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton, n.openFolder} {
 		button.SetFont(font)
 	}
+	n.displayLabel.SetFont(font)
+	n.displayCombo.SetFont(font)
 	n.formatLabel.SetFont(font)
 	n.format.SetFont(font)
 	n.quality.SetFont(font)
@@ -126,10 +172,12 @@ func (n *NativeView) NativeFont(font windows.Handle) {
 }
 
 func (n *NativeView) NativeShow(visible bool) {
+	n.shown = visible
 	n.modeLabel.Show(visible)
-	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton} {
+	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton, n.openFolder} {
 		button.Show(visible)
 	}
+	n.showDisplayPicker(visible && n.options.Options().Mode == ModeFullDisplay)
 	n.formatLabel.Show(visible)
 	n.format.Show(visible)
 	n.quality.Show(visible)
@@ -139,6 +187,11 @@ func (n *NativeView) NativeShow(visible bool) {
 	n.pattern.Show(visible)
 	n.status.Label.Show(visible)
 	n.presets.NativeShow(visible)
+}
+
+func (n *NativeView) showDisplayPicker(visible bool) {
+	n.displayLabel.Show(visible)
+	n.displayCombo.Show(visible)
 }
 
 func (n *NativeView) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
@@ -163,6 +216,11 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 		y = radioY + scale(26)
 	}
 	y += scale(12)
+	if n.options.Options().Mode == ModeFullDisplay {
+		n.displayLabel.Move(x, y, width, scale(20))
+		n.displayCombo.Move(x, y+scale(24), width, scale(200))
+		y += scale(66)
+	}
 	n.formatLabel.Move(x, y, width, scale(20))
 	n.format.Move(x, y+scale(24), width, scale(200))
 	y += scale(66)
@@ -177,7 +235,9 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 	n.patternLabel.Move(x, y, width, scale(20))
 	n.pattern.Move(x, y+scale(24), width, scale(20))
 	y += scale(24) + scale(20) + scale(12)
-	n.status.Move(x, y, width, statusHeight)
+	folderWidth := scale(120)
+	n.status.Move(x, y, max(int32(1), width-folderWidth-gap), statusHeight)
+	n.openFolder.Move(x+width-folderWidth, y+(statusHeight-scale(28))/2, folderWidth, scale(28))
 	y += statusHeight + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 }
@@ -190,11 +250,14 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 		radioRows = 3
 	}
 	height := scale(24) + radioRows*scale(26) + scale(12)
+	if n.options.Options().Mode == ModeFullDisplay {
+		height += scale(66)
+	}
 	height += scale(66)
 	height += metrics.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
-	statusHeight := max(scale(48), measure(n.status.Text(), width))
+	statusHeight := max(scale(48), measure(n.status.Text(), width-scale(120)-scale(8)))
 	return height + statusHeight + scale(16), metrics, statusHeight
 }
 
@@ -246,6 +309,17 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 			n.folder.SetText(n.options.Options().OutputFolder)
 		}
 		n.presentResult(err, fmt.Sprintf(ui.OutputFolderSaved, folder))
+	case displayCommand:
+		// The selection lives in the control and is read at capture time;
+		// nothing commits on selection change.
+		return true
+	case openFolderCommand:
+		if notification != 0 || n.savedPath == "" {
+			return true
+		}
+		if err := n.reveal(n.savedPath); err != nil {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
+		}
 	default:
 		return n.presets.NativeCommand(id, notification)
 	}
@@ -257,13 +331,200 @@ func (n *NativeView) NativeDestroy() {
 	n.presets.NativeDestroy()
 }
 
+// NativeAction runs the shell's primary Start Capture action for the
+// currently selected capture mode (SCR-001). Rectangle modes are delivered
+// by later items; Full Display capture runs here.
+func (n *NativeView) NativeAction() {
+	options := n.options.Options()
+	if options.Mode != ModeFullDisplay {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureRectanglePending}, 0)
+		return
+	}
+	if n.inProgress {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureInProgress}, 0)
+		return
+	}
+	// The quality field otherwise commits only when it loses focus, and
+	// keyboard activation of Start Capture never moves focus; the capture
+	// must not run with stale or invalid quality text.
+	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
+	if err != nil {
+		n.quality.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		return
+	}
+	// The commit bypasses commitQuality's success notice: the capture
+	// result replaces it moments later, so the notice would only flash.
+	// Failures still surface, and a non-persistence failure aborts the
+	// capture because the new value never reached the options.
+	if quality != options.JPEGQuality {
+		if err := n.options.SetJPEGQuality(quality); err != nil {
+			n.presentResult(err, "")
+			if !errors.Is(err, ErrPersistence) {
+				return
+			}
+		}
+	}
+	options = n.options.Options()
+	if err := options.Validate(); err != nil {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		return
+	}
+	// A stale enumeration failure must not wedge capture: retry it here,
+	// the same way selectMode retries on mode selection, so a recovered
+	// display service works without the user toggling the capture mode.
+	n.refreshDisplays()
+	if n.displayErr != nil {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}, 0)
+		return
+	}
+	deviceName := n.selectedDeviceName()
+	if deviceName == "" {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.DisplayRequired}, 0)
+		return
+	}
+	n.inProgress = true
+	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options}
+	n.pending.Add(1)
+	go func() {
+		defer n.pending.Done()
+		result := n.capture(request)
+		n.post(func() { n.finishCapture(result) })
+	}()
+}
+
+// NativeShutdown blocks until an in-flight capture has finished delivering
+// its outputs. The shell calls it only after the message loop has ended and
+// the window is destroyed, so the worker never waits on the GUI thread here;
+// its final dispatcher post fails harmlessly against the destroyed window.
+func (n *NativeView) NativeShutdown() {
+	n.pending.Wait()
+}
+
+// finishCapture presents one capture's outcome on the GUI thread. Clipboard
+// and save outcomes are reported independently (SCR-060), and a saved file
+// enables the Open Folder action (SCR-069).
+func (n *NativeView) finishCapture(result CaptureResult) {
+	n.inProgress = false
+	n.savedPath = result.Path
+	n.openFolder.Enable(result.Path != "")
+	switch {
+	case result.Err != nil:
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureFailed, result.Err)}, 0)
+	case result.Clipboard == nil && result.Save == nil:
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.CaptureSucceeded, result.Path)}, 0)
+	case result.Save != nil && result.Clipboard == nil:
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.CaptureSaveFailed, result.Save)}, 0)
+	case result.Clipboard != nil && result.Save == nil:
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.CaptureClipboardFailed, result.Path, result.Clipboard)}, 0)
+	default:
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOutputsFailed, result.Save, result.Clipboard)}, 0)
+	}
+}
+
+func (n *NativeView) post(task func()) {
+	if n.dispatcher == nil {
+		task()
+		return
+	}
+	// A failed post means the shell window is gone; the capture pipeline has
+	// already restored the window state, so the result is dropped quietly.
+	_ = n.dispatcher.Post(task)
+}
+
 func (n *NativeView) selectMode(notification uint16, mode CaptureMode) {
 	if notification != 0 || n.options.Options().Mode == mode {
 		return
 	}
 	err := n.options.SetMode(mode)
 	n.refreshMode()
+	if mode == ModeFullDisplay {
+		n.refreshDisplays()
+		if err == nil && n.displayErr != nil {
+			// refreshDisplays already reported that the picker could not be
+			// populated; a mode-selection success notice must not replace
+			// that failure.
+			return
+		}
+	}
 	n.presentResult(err, fmt.Sprintf(ui.CaptureModeSelected, captureModeLabel(mode)))
+}
+
+// refreshDisplays repopulates the display picker from the current topology
+// (SCR-041, SCR-043). A previous selection is kept while its display stays
+// connected; otherwise the cursor display becomes the default. It runs on
+// the GUI thread, including from the display-change subscription.
+func (n *NativeView) refreshDisplays() {
+	if n.displayCombo == nil {
+		return
+	}
+	previous := n.selectedDeviceName()
+	if n.displays == nil {
+		n.displayErr = errors.New("the display service is unavailable")
+		n.displayList = nil
+		n.displayCombo.Reset()
+		return
+	}
+	displays, err := n.displays.Displays()
+	if err != nil {
+		n.displayErr = err
+		n.displayList = nil
+		n.displayCombo.Reset()
+		// The picker is hidden outside Full Display mode, so a failure
+		// notice only makes sense there; NativeAction and selectMode
+		// surface displayErr when the mode is selected.
+		if n.options.Options().Mode == ModeFullDisplay {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
+		}
+		return
+	}
+	n.displayErr = nil
+	n.displayList = displays
+	n.displayCombo.Reset()
+	for _, item := range displays {
+		n.displayCombo.Add(displayListItem(item))
+	}
+	selected := -1
+	for i, item := range displays {
+		if item.DeviceName == previous {
+			selected = i
+			break
+		}
+	}
+	if selected < 0 {
+		if cursor, err := n.displays.CursorDisplay(); err == nil {
+			for i, item := range displays {
+				if item.DeviceName == cursor.DeviceName {
+					selected = i
+					break
+				}
+			}
+		}
+	}
+	if selected < 0 && len(displays) > 0 {
+		selected = 0
+	}
+	n.displayCombo.Select(selected)
+}
+
+func (n *NativeView) selectedDeviceName() string {
+	index := n.displayCombo.Selected()
+	if index < 0 || index >= len(n.displayList) {
+		return ""
+	}
+	return n.displayList[index].DeviceName
+}
+
+func displayListItem(item display.Display) string {
+	name := item.Name
+	if name == "" {
+		name = item.DeviceName
+	}
+	format := ui.DisplayListItem
+	if item.Primary {
+		format = ui.DisplayListItemPrimary
+	}
+	return fmt.Sprintf(format, item.Number, name, item.Bounds.Width(), item.Bounds.Height(), item.ScalePercent())
 }
 
 func (n *NativeView) commitQuality() {
@@ -303,6 +564,7 @@ func (n *NativeView) refreshMode() {
 	n.modeFree.SetChecked(options.Mode == ModeFreeRectangle)
 	n.modePreset.SetChecked(options.Mode == ModePresetRectangle)
 	n.modeFull.SetChecked(options.Mode == ModeFullDisplay)
+	n.showDisplayPicker(n.shown && options.Mode == ModeFullDisplay)
 }
 
 func (n *NativeView) refreshFormat() {

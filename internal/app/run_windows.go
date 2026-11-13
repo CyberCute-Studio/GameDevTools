@@ -12,6 +12,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/execute"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -64,7 +65,9 @@ func runNative() error {
 	if len(loaded.Warnings) > 0 && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}
-	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value)
+	monitor := display.NewMonitor()
+	executor := execute.NewService(monitor)
+	screenshotModule, err := screenshot.New(screenshotRepository, optionsManager, &value, monitor, executor.FullDisplay)
 	if err != nil {
 		return err
 	}
@@ -81,5 +84,5 @@ func runNative() error {
 	if err := navigator.Select(shell.ModuleID(loaded.Settings.Shell.SelectedModule)); err != nil {
 		return err
 	}
-	return runShell(navigator, store, &value, logger, display.NewMonitor(), strings.Join(loaded.Warnings, "\n"))
+	return runShell(navigator, store, &value, logger, monitor, strings.Join(loaded.Warnings, "\n"))
 }

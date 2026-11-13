@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -75,7 +76,10 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := NewNativeView(manager, options)
+	capture := func(CaptureRequest) CaptureResult {
+		return CaptureResult{}
+	}
+	view := NewNativeView(manager, options, display.NewMonitor(), capture)
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatal(err)
 	}

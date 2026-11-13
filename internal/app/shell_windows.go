@@ -18,6 +18,9 @@ import (
 const (
 	shellClassName = "GameDevToolsMainWindow"
 	navCommandBase = 100
+	// actionCommand identifies the primary action button; it stays clear of
+	// the navigation commands and module command bases.
+	actionCommand = 99
 )
 
 type nativeShell struct {
@@ -56,6 +59,25 @@ type nativeView interface {
 
 type nativeViewProvider interface {
 	NativeView() any
+}
+
+// nativeActionHandler is implemented by module views that run the shell's
+// primary action button, such as the Screenshot module's Start Capture.
+type nativeActionHandler interface {
+	NativeAction()
+}
+
+// nativeDispatcherAware is implemented by module views that post background
+// results back to the GUI thread through the shell dispatcher.
+type nativeDispatcherAware interface {
+	NativeDispatcher(core.Dispatcher)
+}
+
+// nativeShutdown is implemented by module views with background work, such
+// as an in-flight capture, that must finish delivering before the process
+// exits.
+type nativeShutdown interface {
+	NativeShutdown()
 }
 
 type shellLayout struct {
@@ -149,6 +171,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 			return callError("GetMessageW", err)
 		}
 		if r == 0 {
+			shell.waitForBackgroundWork()
 			return nil
 		}
 		if handled, _, _ := procIsDialogMessageW.Call(hwnd, uintptr(unsafe.Pointer(&message))); handled != 0 {
@@ -212,7 +235,7 @@ func (s *nativeShell) createControls() error {
 		return err
 	}
 	s.description = description.Handle()
-	action, err := ui.NewButton(s.hwnd, "", ui.ButtonOptions{Primary: true, Group: true, Disabled: true})
+	action, err := ui.NewButton(s.hwnd, "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true})
 	if err != nil {
 		return err
 	}
@@ -232,6 +255,9 @@ func (s *nativeShell) createControls() error {
 		}
 		if err := native.NativeCreate(s.hwnd); err != nil {
 			return err
+		}
+		if aware, ok := native.(nativeDispatcherAware); ok {
+			aware.NativeDispatcher(s.dispatcher)
 		}
 		native.NativeShow(false)
 		s.nativeViews[module.ID()] = native
@@ -283,6 +309,13 @@ func (s *nativeShell) updateView() {
 		showAction = swShow
 	}
 	procShowWindow.Call(uintptr(s.action), uintptr(showAction))
+	enabled := uintptr(0)
+	if native, exists := s.nativeViews[current.ID()]; exists && view.PrimaryAction() != "" {
+		if _, actionable := native.(nativeActionHandler); actionable {
+			enabled = 1
+		}
+	}
+	procEnableWindow.Call(uintptr(s.action), enabled)
 	for id, button := range s.navButtons {
 		checked := uintptr(0)
 		if id == current.ID() {
@@ -468,6 +501,19 @@ func (s *nativeShell) layout() {
 	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
 }
 
+// waitForBackgroundWork lets in-flight module work, such as a capture still
+// delivering its outputs, finish before the process exits. It runs only
+// after the message loop ended and the window was destroyed, so workers
+// never block on the GUI thread here and their completion posts fail
+// harmlessly against the destroyed window.
+func (s *nativeShell) waitForBackgroundWork() {
+	for _, native := range s.nativeViews {
+		if shutdown, ok := native.(nativeShutdown); ok {
+			shutdown.NativeShutdown()
+		}
+	}
+}
+
 func (s *nativeShell) setScrollPosition(position int32) {
 	info := scrollInfo{
 		CbSize: uint32(unsafe.Sizeof(scrollInfo{})),
@@ -615,6 +661,15 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			shell.ensureControlVisible(windows.Handle(lParam))
 			return 0
 		}
+		if shell != nil && notification == 0 && lowWord(wParam) == actionCommand {
+			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists {
+				if handler, actionable := native.(nativeActionHandler); actionable {
+					handler.NativeAction()
+					shell.layout()
+					return 0
+				}
+			}
+		}
 		if shell != nil && highWord(wParam) == 0 {
 			if id, exists := shell.navIDs[lowWord(wParam)]; exists {
 				if shell.navigator.Select(id) == nil {
@@ -658,6 +713,9 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDisplayChange:
 		if shell != nil && shell.displays != nil {
 			shell.displays.HandleDisplayChange()
+			// Subscriber callbacks can change the status area's text;
+			// remeasure so a fresh notice is not clipped.
+			shell.layout()
 			return 0
 		}
 	case wmDPIChanged:
@@ -690,6 +748,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmAppDispatch:
 		if shell != nil {
 			shell.dispatcher.Drain()
+			shell.layout()
 			return 0
 		}
 	case wmClose:
