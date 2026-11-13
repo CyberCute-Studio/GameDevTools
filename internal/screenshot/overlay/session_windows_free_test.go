@@ -456,6 +456,45 @@ func TestOverlayClearingSelectionMovesFocusOffCapture(t *testing.T) {
 	}
 }
 
+// TestOverlayDrawCompletionPaintsHandles pins SCR-012's visible resize
+// affordance: the handles are skipped while the draw is in progress, so the
+// button release must repaint them — otherwise the resting selection shows
+// no handles until the next interaction starts. Losing the pointer capture
+// mid-draw without a button release must finish the draw the same way.
+func TestOverlayDrawCompletionPaintsHandles(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	at := func(x, y int32) uint32 {
+		return native.pixelSlice()[int(y)*int(native.pixelWidth)+int(x)]
+	}
+
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	if got := at(100, 100); got != selectionPixel {
+		t.Fatalf("corner pixel mid-draw = %#08x, want the bare interior while the handles are skipped", got)
+	}
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+	if got := at(100, 100); got != 0xffffffff {
+		t.Fatalf("corner pixel after the draw = %#08x, want the painted handle (SCR-012)", got)
+	}
+
+	// The same repaint must happen when the capture is lost mid-draw
+	// without a button release.
+	sendMouse(native.overlay, wmLButtonDown, 500, 400)
+	sendMouse(native.overlay, wmMouseMove, 700, 540)
+	procSendMessageW.Call(uintptr(native.overlay), wmCaptureChanged, 0, 0)
+	if native.drag.op != dragNone {
+		t.Fatal("lost capture left the drag running")
+	}
+	if got := at(500, 400); got != 0xffffffff {
+		t.Fatalf("corner pixel after lost capture = %#08x, want the painted handle", got)
+	}
+}
+
 func TestPresetRectangleSessionDoesNotDrawYet(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(42, 0, ModePresetRectangle, Events{}); err != nil {

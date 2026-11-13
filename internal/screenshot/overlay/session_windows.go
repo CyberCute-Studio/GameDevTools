@@ -967,7 +967,9 @@ func (s *windowsSession) pointerFromClient(lParam uintptr) display.Point {
 
 // endDrag finishes the pointer interaction. A press that never moved clears
 // the previous selection instead of leaving a 1 × 1 rectangle behind from
-// an accidental click.
+// an accidental click. A finished draw repaints its band once more: the
+// resize handles are skipped while drawing, so without the repaint the
+// resting selection would show no resize affordance at all (SCR-012).
 func (s *windowsSession) endDrag() {
 	if s.drag.op == dragNone {
 		return
@@ -975,9 +977,26 @@ func (s *windowsSession) endDrag() {
 	if s.drag.op == dragDraw && !s.drag.moved {
 		s.setSelection(display.Rect{})
 	}
+	drawing := s.drag.op == dragDraw
 	s.drag = dragState{}
+	if drawing {
+		s.revealHandles()
+	}
 	procReleaseCapture.Call()
 	s.placeToolbar()
+}
+
+// revealHandles repaints the selection band so the resize handles the draw
+// skipped appear once the draw ends. A compositing failure keeps the
+// handle-less frame; the handles still respond to the pointer, so the error
+// is not fatal.
+func (s *windowsSession) revealHandles() {
+	if s.selection.Empty() {
+		return
+	}
+	if err := s.renderSelection(s.visualBounds()); err != nil {
+		_ = err
+	}
 }
 
 func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
@@ -994,7 +1013,14 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 			session.endDrag()
 			return 0
 		case wmCaptureChanged:
+			// Capture can be lost mid-draw without a button release (another
+			// window claiming the capture, or Close tearing down the
+			// session); finish the draw the same way a release would.
+			drawing := session.drag.op == dragDraw && session.drag.moved
 			session.drag = dragState{}
+			if drawing {
+				session.revealHandles()
+			}
 			session.placeToolbar()
 			return 0
 		case wmSetCursor:
