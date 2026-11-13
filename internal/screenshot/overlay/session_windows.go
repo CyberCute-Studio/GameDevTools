@@ -33,6 +33,7 @@ const (
 	toolbarLogicalInset  = 12
 
 	wmDestroy        = 0x0002
+	wmClose          = 0x0010
 	wmNCHitTest      = 0x0084
 	wmKeyDown        = 0x0100
 	wmCommand        = 0x0111
@@ -90,11 +91,12 @@ var (
 )
 
 // windowMessage mirrors the Win32 MSG layout the shell's message loop holds,
-// so FilterMessage can inspect and forward the queued message in place.
+// so FilterMessage can inspect and forward the queued message in place. It
+// must stay field-for-field identical to the shell's msg type: the shell
+// passes its own messages through unsafe.Pointer.
 type windowMessage struct {
 	HWND     windows.Handle
 	Message  uint32
-	_        uint32
 	WParam   uintptr
 	LParam   uintptr
 	Time     uint32
@@ -367,14 +369,10 @@ func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 }
 
 func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
-	session := overlayStates[hwnd]
-	switch message {
-	case wmKeyDown:
-		if session != nil && wParam == vkEscape && session.onCancel != nil {
-			session.onCancel()
-			return 0
-		}
-	case wmDestroy:
+	// Escape never reaches this procedure: the overlay cannot take focus
+	// (WS_EX_NOACTIVATE), and the shell's message filter consumes Escape for
+	// every session window before dispatch.
+	if message == wmDestroy {
 		delete(overlayStates, hwnd)
 		return 0
 	}
@@ -400,11 +398,16 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 				return 0
 			}
 		}
-	case wmKeyDown:
-		if session != nil && wParam == vkEscape && session.onCancel != nil {
+	case wmClose:
+		// Alt+F4 targets the foreground window, which is the toolbar while a
+		// session is active. DefWindowProc would destroy the toolbar alone,
+		// leaving the input-capturing overlay up with no keyboard way back
+		// (focus leaves the application with the toolbar), so closing the
+		// toolbar cancels the whole session instead (SCR-052).
+		if session != nil && session.onCancel != nil {
 			session.onCancel()
-			return 0
 		}
+		return 0
 	case wmNCHitTest:
 		// The toolbar background drags the toolbar; child controls still
 		// receive their own hit tests.

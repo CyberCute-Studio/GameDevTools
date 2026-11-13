@@ -126,8 +126,11 @@ func TestNativeSessionCoversVirtualDesktop(t *testing.T) {
 		t.Fatal("Capture is enabled before a selection exists")
 	}
 
+	// Close zeroes the session's handles, so snapshot them before tearing
+	// down; checking the zeroed fields would assert nothing.
+	overlayHwnd, toolbarHwnd := native.overlay, native.toolbar
 	controller.Cancel()
-	if isWindow(native.overlay) || isWindow(native.toolbar) {
+	if isWindow(overlayHwnd) || isWindow(toolbarHwnd) {
 		t.Fatal("Cancel left session windows behind")
 	}
 }
@@ -147,14 +150,17 @@ func TestFilterMessageEscapeCancelsSession(t *testing.T) {
 		t.Fatal("unrelated message ended the session")
 	}
 
-	escape := windowMessage{HWND: native.overlay, Message: wmKeyDown, WParam: vkEscape}
+	// Close zeroes the session's handles, so snapshot them before Escape
+	// tears the session down; checking the zeroed fields would assert nothing.
+	overlayHwnd, toolbarHwnd := native.overlay, native.toolbar
+	escape := windowMessage{HWND: overlayHwnd, Message: wmKeyDown, WParam: vkEscape}
 	if !controller.FilterMessage(unsafe.Pointer(&escape)) {
 		t.Fatal("filter did not handle Escape on the overlay")
 	}
 	if controller.Active() {
 		t.Fatal("session is still active after Escape")
 	}
-	if isWindow(native.overlay) || isWindow(native.toolbar) {
+	if isWindow(overlayHwnd) || isWindow(toolbarHwnd) {
 		t.Fatal("Escape left session windows behind")
 	}
 	if got := *log; len(got) != 2 || got[0] != "hide" || got[1] != "restore" {
@@ -178,6 +184,30 @@ func TestToolbarCancelCommandCancelsSession(t *testing.T) {
 	}
 	if cancelled != 1 {
 		t.Fatalf("OnCancel fired %d times, want 1", cancelled)
+	}
+}
+
+func TestToolbarCloseCancelsSession(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	cancelled := 0
+	if err := controller.Begin(42, 0, Events{OnCancel: func() { cancelled++ }}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	// Alt+F4 delivers WM_CLOSE to the foreground window — the toolbar during
+	// a session. Letting DefWindowProc destroy the toolbar alone would leave
+	// the input-capturing overlay up with no keyboard recovery (SCR-052).
+	// Close zeroes the session's handles, so snapshot them first.
+	overlayHwnd, toolbarHwnd := native.overlay, native.toolbar
+	procSendMessageW.Call(uintptr(toolbarHwnd), wmClose, 0, 0)
+	if controller.Active() {
+		t.Fatal("session is still active after the toolbar received WM_CLOSE")
+	}
+	if cancelled != 1 {
+		t.Fatalf("OnCancel fired %d times, want 1", cancelled)
+	}
+	if isWindow(overlayHwnd) || isWindow(toolbarHwnd) {
+		t.Fatal("WM_CLOSE left session windows behind")
 	}
 }
 
