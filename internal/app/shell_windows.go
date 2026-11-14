@@ -81,6 +81,14 @@ type nativeMessageFilter interface {
 	NativeFilterMessage(message unsafe.Pointer) bool
 }
 
+// nativeHotkeyHandler is implemented by module views that own a global
+// hotkey registered on the shell window — the Screenshot global capture
+// shortcut. WM_HOTKEY carries the registration identifier in wParam; the
+// handler reports whether it consumed the hotkey.
+type nativeHotkeyHandler interface {
+	NativeHotkey(id int32) bool
+}
+
 // nativeShutdown is implemented by module views with background work, such
 // as an in-flight capture, that must finish delivering before the process
 // exits.
@@ -683,6 +691,13 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		notification := highWord(wParam)
 		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus) && lParam != nil {
 			shell.ensureControlVisible(windows.Handle(lParam))
+			// Set-focus notifications also reach the owning module view: the
+			// Screenshot shortcut field suspends its global hotkey while it is
+			// being edited, which only works if this branch does not swallow
+			// the notification.
+			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists && native.NativeCommand(int32(lowWord(wParam)), notification) {
+				shell.layout()
+			}
 			return 0
 		}
 		if shell != nil && notification == 0 && lowWord(wParam) == actionCommand {
@@ -714,6 +729,20 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmVScroll:
 		if shell != nil {
 			shell.scroll(lowWord(wParam))
+			return 0
+		}
+	case wmHotkey:
+		// A module's global hotkey fires here regardless of which
+		// application holds the foreground — including while the shell
+		// window is hidden behind a capture session, because the message
+		// loop keeps running. The owning view consumes its identifier.
+		if shell != nil {
+			for _, native := range shell.nativeViews {
+				if handler, ok := native.(nativeHotkeyHandler); ok && handler.NativeHotkey(int32(wParam)) {
+					shell.layout()
+					return 0
+				}
+			}
 			return 0
 		}
 	case wmMouseWheel:

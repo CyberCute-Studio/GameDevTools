@@ -145,6 +145,7 @@ func TestNativeViewDisplayPickerReservesLayoutHeight(t *testing.T) {
 // so view tests can run rectangle sessions without real overlay windows.
 type fakeOverlayNative struct {
 	closed      int
+	attention   int
 	ready       []bool
 	onSelection func(display.Rect)
 	onCapture   func()
@@ -152,6 +153,7 @@ type fakeOverlayNative struct {
 
 func (f *fakeOverlayNative) Close()                       { f.closed++ }
 func (f *fakeOverlayNative) SetSelectionReady(ready bool) { f.ready = append(f.ready, ready) }
+func (f *fakeOverlayNative) Attention()                   { f.attention++ }
 
 // fakeOverlaySession reroutes the view's session controller to fakes and
 // returns the hide/restore/create call log, the native surface Begin

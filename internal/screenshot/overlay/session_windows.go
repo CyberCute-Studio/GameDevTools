@@ -737,6 +737,21 @@ func (s *windowsSession) SetSelectionReady(ready bool) {
 	procEnableWindow.Call(uintptr(s.captureButton), enabled)
 }
 
+// Attention draws the user back to the active session when the global
+// capture shortcut fires while a selection is already on screen (SCR-005):
+// the toolbar retakes the foreground so Escape, the commands, and the
+// dimension fields are where the user looks. Pressing a registered hotkey
+// grants the process foreground rights, so the request is honored while
+// the user invokes the shortcut from another application; if another
+// window still keeps the foreground, the topmost toolbar stays visible
+// above it and one click brings focus back.
+func (s *windowsSession) Attention() {
+	if s.toolbar == 0 {
+		return
+	}
+	procSetForegroundWindow.Call(uintptr(s.toolbar))
+}
+
 // owns reports whether hwnd is one of the session's windows or a toolbar
 // control.
 func (s *windowsSession) owns(hwnd uintptr) bool {

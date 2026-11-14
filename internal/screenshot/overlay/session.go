@@ -154,6 +154,29 @@ func (c *Controller) Active() bool {
 	return c.session != nil
 }
 
+// attentionSession is implemented by native sessions that can draw the
+// user's attention back to their on-screen selection surfaces.
+type attentionSession interface {
+	Attention()
+}
+
+// Attention brings the active session back to the user's attention without
+// starting a new one: the global capture shortcut invokes it while a
+// selection is on screen so the existing session is found rather than
+// stacked under a second overlay (SCR-005). Sessions whose native surface
+// has no attention affordance are left alone.
+func (c *Controller) Attention() {
+	c.mu.Lock()
+	s := c.session
+	c.mu.Unlock()
+	if s == nil {
+		return
+	}
+	if native, ok := s.native.(attentionSession); ok {
+		native.Attention()
+	}
+}
+
 // Begin hides the main window and shows the selection surface and toolbar
 // (SCR-050). Only one session may be active (SCR-053). Preset Rectangle
 // sessions take the frame's exact physical-pixel dimensions in size (X is

@@ -63,7 +63,11 @@ func TestOptionsStoreRoundTripAndPresetCoexistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	options := CaptureOptions{Mode: ModeFullDisplay, Format: FormatJPEG, JPEGQuality: 55, OutputFolder: folder}
+	customShortcut, err := ParseShortcut("Ctrl+Shift+F5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := CaptureOptions{Mode: ModeFullDisplay, Format: FormatJPEG, JPEGQuality: 55, OutputFolder: folder, Shortcut: customShortcut}
 	if err := optionsStore.Save(&value, options); err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +138,9 @@ func TestOptionsStoreRejectsMalformedSections(t *testing.T) {
 		{name: "relative folder", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":"Screenshots"}}`, wantErr: "absolute"},
 		{name: "missing folder", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90}}`, wantErr: "required"},
 		{name: "surrogate escape in folder", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":"C:\\Screenshots\ud800"}}`, wantErr: "not valid text"},
+		{name: "unparseable shortcut", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"shortcut":"banana"}}`, wantErr: "Ctrl+Alt+S"},
+		{name: "empty shortcut", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"shortcut":""}}`, wantErr: "Ctrl+Alt+S"},
+		{name: "shortcut without modifier", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"shortcut":"S"}}`, wantErr: "Ctrl+Alt+S"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -151,7 +158,7 @@ func TestOptionsStoreValidSection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	section := json.RawMessage(`{"capture":{"version":1,"mode":"preset-rectangle","format":"jpeg","jpegQuality":40,"outputFolder":` + string(quoted) + `}}`)
+	section := json.RawMessage(`{"capture":{"version":1,"mode":"preset-rectangle","format":"jpeg","jpegQuality":40,"outputFolder":` + string(quoted) + `,"shortcut":"Ctrl+Shift+F5"}}`)
 	stored, exists, err := decodeOptions(section)
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +168,35 @@ func TestOptionsStoreValidSection(t *testing.T) {
 	}
 	if stored.Mode != ModePresetRectangle || stored.Format != FormatJPEG || stored.JPEGQuality != 40 || stored.OutputFolder != folder {
 		t.Fatalf("stored options = %+v", stored)
+	}
+	wantShortcut, err := ParseShortcut("Ctrl+Shift+F5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.shortcut != wantShortcut {
+		t.Fatalf("stored shortcut = %+v, want %+v", stored.shortcut, wantShortcut)
+	}
+}
+
+// TestOptionsStoreSectionWithoutShortcutUsesDefault loads a capture section
+// written before the shortcut setting existed: the omitted field decodes to
+// the Ctrl+Alt+S default rather than failing validation (SCR-003).
+func TestOptionsStoreSectionWithoutShortcutUsesDefault(t *testing.T) {
+	folder := testFolder(t)
+	quoted, err := json.Marshal(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := json.RawMessage(`{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `}}`)
+	stored, exists, err := decodeOptions(section)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("stored capture options were not detected")
+	}
+	if stored.shortcut != DefaultShortcut() {
+		t.Fatalf("shortcut without stored value = %+v, want default", stored.shortcut)
 	}
 }
 

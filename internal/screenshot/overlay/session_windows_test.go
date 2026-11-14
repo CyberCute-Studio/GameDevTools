@@ -264,3 +264,21 @@ func TestFilterMessageTabNavigatesToolbar(t *testing.T) {
 	}
 	controller.Cancel()
 }
+
+// TestNativeSessionAttentionForegroundsToolbar exercises the real SCR-005
+// surface: the controller forwards Attention to the live windows session,
+// which foregrounds the toolbar without disturbing it.
+func TestNativeSessionAttentionForegroundsToolbar(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(0, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	controller.Attention()
+	native := nativeOf(t, controller)
+	if r, _, err := procIsWindow.Call(uintptr(native.toolbar)); r == 0 {
+		t.Fatalf("toolbar was disturbed by Attention: %v", err)
+	}
+	controller.Cancel()
+	// Attention without a session is a no-op and must not panic.
+	controller.Attention()
+}

@@ -47,6 +47,7 @@ type CaptureOptions struct {
 	Format       ImageFormat
 	JPEGQuality  int
 	OutputFolder string
+	Shortcut     Shortcut
 }
 
 func DefaultOptions(outputFolder string) CaptureOptions {
@@ -55,6 +56,7 @@ func DefaultOptions(outputFolder string) CaptureOptions {
 		Format:       FormatPNG,
 		JPEGQuality:  DefaultJPEGQuality,
 		OutputFolder: outputFolder,
+		Shortcut:     DefaultShortcut(),
 	}
 }
 
@@ -71,6 +73,9 @@ func (o CaptureOptions) Validate() error {
 	}
 	if o.JPEGQuality < MinJPEGQuality || o.JPEGQuality > MaxJPEGQuality {
 		return errors.New(ui.JPEGQualityRange)
+	}
+	if !o.Shortcut.Valid() {
+		return errors.New(ui.ShortcutInvalid)
 	}
 	return validateOutputFolder(o.OutputFolder)
 }
@@ -168,6 +173,16 @@ func (m *OptionsManager) SetJPEGQuality(quality int) error {
 func (m *OptionsManager) SetOutputFolder(folder string) error {
 	updated := m.options
 	updated.OutputFolder = folder
+	if err := updated.Validate(); err != nil {
+		return err
+	}
+	m.options = updated
+	return m.save()
+}
+
+func (m *OptionsManager) SetShortcut(shortcut Shortcut) error {
+	updated := m.options
+	updated.Shortcut = shortcut
 	if err := updated.Validate(); err != nil {
 		return err
 	}

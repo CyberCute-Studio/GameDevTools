@@ -40,6 +40,7 @@ func optionsFor(folder string, format screenshot.ImageFormat) screenshot.Capture
 		Format:       format,
 		JPEGQuality:  screenshot.DefaultJPEGQuality,
 		OutputFolder: folder,
+		Shortcut:     screenshot.DefaultShortcut(),
 	}
 }
 

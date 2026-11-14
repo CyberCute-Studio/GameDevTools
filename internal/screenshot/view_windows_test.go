@@ -84,12 +84,42 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 		return CaptureResult{}
 	}
 	view := NewNativeView(manager, options, display.NewMonitor(), capture, captureRectangle, overlay.NewController(display.NewMonitor()))
+	// View tests never touch the real global hotkey: RegisterHotKey
+	// combinations are machine-global, so a test view would fail or succeed
+	// depending on whatever the test machine happens to own. Registration
+	// itself is covered by the Hotkey tests with unique combinations.
+	view.hotkeyFactory = func(uintptr, int32) hotkeyRegistrar {
+		return &fakeHotkeyRegistrar{}
+	}
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(view.NativeDestroy)
 	return view
 }
+
+// fakeHotkeyRegistrar records the view's hotkey calls without touching the
+// machine-global RegisterHotKey state. applyFunc can fail specific
+// combinations, such as a simulated conflict with another application.
+type fakeHotkeyRegistrar struct {
+	applied   []Shortcut
+	suspended int
+	released  int
+	applyFunc func(Shortcut) error
+}
+
+func (f *fakeHotkeyRegistrar) Apply(shortcut Shortcut) error {
+	if f.applyFunc != nil {
+		if err := f.applyFunc(shortcut); err != nil {
+			return err
+		}
+	}
+	f.applied = append(f.applied, shortcut)
+	return nil
+}
+
+func (f *fakeHotkeyRegistrar) Suspend() { f.suspended++ }
+func (f *fakeHotkeyRegistrar) Release() { f.released++ }
 
 func TestNativeViewDefaultsAndModeSelection(t *testing.T) {
 	parent := newViewTestParent(t)

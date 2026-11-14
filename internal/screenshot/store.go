@@ -24,6 +24,12 @@ type storedOptions struct {
 	Format       ImageFormat `json:"format"`
 	JPEGQuality  int         `json:"jpegQuality"`
 	OutputFolder string      `json:"outputFolder"`
+	Shortcut     string      `json:"shortcut"`
+	// shortcut holds the parsed Shortcut text; it is filled by decodeOptions
+	// and never serialized. Sections written before the field existed omit
+	// the text and decode to the default shortcut; a present value must
+	// parse, even an empty one.
+	shortcut Shortcut
 }
 
 type OptionsStore struct {
@@ -56,6 +62,7 @@ func (s *OptionsStore) Load(value settings.Settings) (CaptureOptions, error) {
 	options.Format = stored.Format
 	options.JPEGQuality = stored.JPEGQuality
 	options.OutputFolder = stored.OutputFolder
+	options.Shortcut = stored.shortcut
 	return options, options.Validate()
 }
 
@@ -94,7 +101,8 @@ func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
 	if !exists {
 		return storedOptions{}, false, nil
 	}
-	if _, err := decodeObjectFields("stored capture options", data); err != nil {
+	objectFields, err := decodeObjectFields("stored capture options", data)
+	if err != nil {
 		return storedOptions{}, false, err
 	}
 	var stored storedOptions
@@ -109,11 +117,20 @@ func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
 	if stored.Version != OptionsVersion {
 		return storedOptions{}, false, fmt.Errorf("unsupported capture options version %d", stored.Version)
 	}
+	stored.shortcut = DefaultShortcut()
+	if _, present := objectFields["shortcut"]; present {
+		shortcut, err := ParseShortcut(stored.Shortcut)
+		if err != nil {
+			return storedOptions{}, false, fmt.Errorf("validate stored capture options: %w", err)
+		}
+		stored.shortcut = shortcut
+	}
 	options := CaptureOptions{
 		Mode:         stored.Mode,
 		Format:       stored.Format,
 		JPEGQuality:  stored.JPEGQuality,
 		OutputFolder: stored.OutputFolder,
+		Shortcut:     stored.shortcut,
 	}
 	if err := options.Validate(); err != nil {
 		return storedOptions{}, false, fmt.Errorf("validate stored capture options: %w", err)
@@ -132,6 +149,7 @@ func encodeOptions(section json.RawMessage, options CaptureOptions) (json.RawMes
 		Format:       options.Format,
 		JPEGQuality:  options.JPEGQuality,
 		OutputFolder: options.OutputFolder,
+		Shortcut:     options.Shortcut.String(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode stored capture options: %w", err)

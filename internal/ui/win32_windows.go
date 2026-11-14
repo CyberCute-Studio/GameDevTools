@@ -23,6 +23,7 @@ const (
 	esReadOnly          = 0x00000800
 	enChange            = 0x0300
 	enKillFocus         = 0x0200
+	enSetFocus          = 0x0100
 	bmSetCheck          = 0x00f1
 	cbsDropDownList     = 0x0003
 	cbsNoIntegralHeight = 0x0400
@@ -45,6 +46,17 @@ const (
 // field loses keyboard focus, exported so feature modules can commit a field
 // value at the same moment the shared input clears its validation text.
 const NotificationEditKillFocus = enKillFocus
+
+// NotificationEditSetFocus is the edit-control notification sent when the
+// field gains keyboard focus, exported so feature modules can suspend side
+// effects of the field's committed value — such as its global hotkey — while
+// the user edits a replacement.
+const NotificationEditSetFocus = enSetFocus
+
+// NotificationEditChange is the edit-control notification sent when the
+// field's text changes, exported so feature modules can clear stale
+// validation text while the user types.
+const NotificationEditChange = enChange
 
 var (
 	user32 = windows.NewLazySystemDLL("user32.dll")
