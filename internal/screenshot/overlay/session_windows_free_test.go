@@ -342,6 +342,51 @@ func TestOverlayClickOnHandleLeavesSelectionUnchanged(t *testing.T) {
 	}
 }
 
+// TestOverlayClickOnInteriorLeavesSelectionUnchanged pins the same
+// never-moved-press guard on interior (move) drags: a plain click inside the
+// selection must not shift the capture region by the release jitter, and a
+// stationary spurious move during the press must not shift it either. A press
+// whose pointer motion was coalesced away entirely still moves the selection
+// to the release position, exactly like a move drag with delivered moves.
+func TestOverlayClickOnInteriorLeavesSelectionUnchanged(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+	drawn := native.selection
+
+	// Press and release inside the selection without moving: the click must
+	// not move the selection.
+	sendMouse(native.overlay, wmLButtonDown, 200, 170)
+	sendMouse(native.overlay, wmLButtonUp, 200, 170)
+	if native.selection != drawn {
+		t.Fatalf("plain interior click moved the selection to %v, want unchanged %v", native.selection, drawn)
+	}
+
+	// A stationary mouse move during the press must not move it either.
+	sendMouse(native.overlay, wmLButtonDown, 200, 170)
+	sendMouse(native.overlay, wmMouseMove, 200, 170)
+	sendMouse(native.overlay, wmLButtonUp, 200, 170)
+	if native.selection != drawn {
+		t.Fatalf("stationary move on the interior moved the selection to %v, want unchanged %v", native.selection, drawn)
+	}
+
+	// A press whose pointer motion was coalesced away entirely still moves
+	// the selection by the press-to-release delta.
+	sendMouse(native.overlay, wmLButtonDown, 200, 170)
+	sendMouse(native.overlay, wmLButtonUp, 240, 210)
+	want := clientRect(native, 140, 140, 341, 281)
+	if native.selection != want {
+		t.Fatalf("coalesced-move drag = %v, want %v moved by the release delta", native.selection, want)
+	}
+}
+
 func TestOverlayDimensionEditingAppliesExactSize(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	var captured display.Rect
