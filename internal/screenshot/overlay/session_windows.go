@@ -88,9 +88,6 @@ const (
 
 	dibRGBColors = 0
 
-	flashwAll       = 0x00000003
-	flashwTimerNoFG = 0x0000000c
-
 	colorWindow     = 5
 	colorWindowText = 8
 	colorHighlight  = 13
@@ -116,7 +113,6 @@ var (
 	procDefWindowProcW              = user32.NewProc("DefWindowProcW")
 	procShowWindow                  = user32.NewProc("ShowWindow")
 	procSetForegroundWindow         = user32.NewProc("SetForegroundWindow")
-	procFlashWindowEx               = user32.NewProc("FlashWindowEx")
 	procUpdateLayeredWindowIndirect = user32.NewProc("UpdateLayeredWindowIndirect")
 	procSetWindowPos                = user32.NewProc("SetWindowPos")
 	procEnableWindow                = user32.NewProc("EnableWindow")
@@ -199,16 +195,6 @@ type updateLayeredWindowInfo struct {
 	PBlend   unsafe.Pointer
 	DwFlags  uint32
 	PrcDirty unsafe.Pointer
-}
-
-// flashWindowInfo mirrors the Win32 FLASHWINFO structure FlashWindowEx takes
-// by pointer.
-type flashWindowInfo struct {
-	CbSize    uint32
-	Hwnd      windows.Handle
-	DwFlags   uint32
-	UCount    uint32
-	DwTimeout uint32
 }
 
 // blendFunction mirrors the Win32 BLENDFUNCTION structure.
@@ -753,21 +739,16 @@ func (s *windowsSession) SetSelectionReady(ready bool) {
 
 // Attention draws the user back to the active session when the global
 // capture shortcut fires while a selection is already on screen (SCR-005):
-// the toolbar flashes and retakes the foreground so Escape, the commands,
-// and the dimension fields are where the user looks. Another application
-// may keep the foreground despite the request; the flash still marks the
-// session's window.
+// the toolbar retakes the foreground so Escape, the commands, and the
+// dimension fields are where the user looks. Pressing a registered hotkey
+// grants the process foreground rights, so the request is honored while
+// the user invokes the shortcut from another application; if another
+// window still keeps the foreground, the topmost toolbar stays visible
+// above it and one click brings focus back.
 func (s *windowsSession) Attention() {
 	if s.toolbar == 0 {
 		return
 	}
-	info := flashWindowInfo{
-		Hwnd:    s.toolbar,
-		DwFlags: flashwAll | flashwTimerNoFG,
-		UCount:  3,
-	}
-	info.CbSize = uint32(unsafe.Sizeof(info))
-	procFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
 	procSetForegroundWindow.Call(uintptr(s.toolbar))
 }
 

@@ -27,7 +27,8 @@ type storedOptions struct {
 	Shortcut     string      `json:"shortcut"`
 	// shortcut holds the parsed Shortcut text; it is filled by decodeOptions
 	// and never serialized. Sections written before the field existed omit
-	// the text and decode to the default shortcut.
+	// the text and decode to the default shortcut; a present value must
+	// parse, even an empty one.
 	shortcut Shortcut
 }
 
@@ -100,7 +101,8 @@ func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
 	if !exists {
 		return storedOptions{}, false, nil
 	}
-	if _, err := decodeObjectFields("stored capture options", data); err != nil {
+	objectFields, err := decodeObjectFields("stored capture options", data)
+	if err != nil {
 		return storedOptions{}, false, err
 	}
 	var stored storedOptions
@@ -116,7 +118,7 @@ func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
 		return storedOptions{}, false, fmt.Errorf("unsupported capture options version %d", stored.Version)
 	}
 	stored.shortcut = DefaultShortcut()
-	if stored.Shortcut != "" {
+	if _, present := objectFields["shortcut"]; present {
 		shortcut, err := ParseShortcut(stored.Shortcut)
 		if err != nil {
 			return storedOptions{}, false, fmt.Errorf("validate stored capture options: %w", err)

@@ -139,6 +139,7 @@ func TestOptionsStoreRejectsMalformedSections(t *testing.T) {
 		{name: "missing folder", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90}}`, wantErr: "required"},
 		{name: "surrogate escape in folder", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":"C:\\Screenshots\ud800"}}`, wantErr: "not valid text"},
 		{name: "unparseable shortcut", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"shortcut":"banana"}}`, wantErr: "Ctrl+Alt+S"},
+		{name: "empty shortcut", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"shortcut":""}}`, wantErr: "Ctrl+Alt+S"},
 		{name: "shortcut without modifier", section: `{"capture":{"version":1,"mode":"free-rectangle","format":"png","jpegQuality":90,"outputFolder":` + string(quoted) + `,"shortcut":"S"}}`, wantErr: "Ctrl+Alt+S"},
 	}
 	for _, test := range tests {

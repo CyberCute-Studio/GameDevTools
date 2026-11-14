@@ -265,10 +265,10 @@ func TestFilterMessageTabNavigatesToolbar(t *testing.T) {
 	controller.Cancel()
 }
 
-// TestNativeSessionAttentionFlashesToolbar exercises the real SCR-005
+// TestNativeSessionAttentionForegroundsToolbar exercises the real SCR-005
 // surface: the controller forwards Attention to the live windows session,
-// which flashes and foregrounds the toolbar without disturbing it.
-func TestNativeSessionAttentionFlashesToolbar(t *testing.T) {
+// which foregrounds the toolbar without disturbing it.
+func TestNativeSessionAttentionForegroundsToolbar(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(0, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
