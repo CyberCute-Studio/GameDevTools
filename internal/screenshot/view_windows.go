@@ -419,8 +419,11 @@ func (n *NativeView) NativeShutdown() {
 }
 
 // beginOverlay starts the rectangle selection session: the controller hides
-// the main window before the overlay appears (SCR-050) and restores it on
-// cancel, failure, and exit. A cancelled session only reports that nothing
+// the main window before the session surface appears (SCR-050) and restores
+// it on cancel, failure, and exit. Preset Rectangle mode sizes the session's
+// frame from the selected preset's exact dimensions (SCR-020); a preset that
+// cannot fit the virtual desktop is rejected with a validation notice before
+// anything hides (SCR-031). A cancelled session only reports that nothing
 // was captured (SCR-051); a completed one hands the selected rectangle and
 // the main-window restore to startRectangleCapture.
 func (n *NativeView) beginOverlay() {
@@ -429,10 +432,17 @@ func (n *NativeView) beginOverlay() {
 		return
 	}
 	mode := overlay.ModeFreeRectangle
+	size := display.Point{}
 	if n.options.Options().Mode == ModePresetRectangle {
 		mode = overlay.ModePresetRectangle
+		selected, exists := n.presets.SelectedPreset()
+		if !exists {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, errors.New(ui.PresetSelectionRequired))}, 0)
+			return
+		}
+		size = display.Point{X: int32(selected.Width), Y: int32(selected.Height)}
 	}
-	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), mode, overlay.Events{
+	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), mode, size, overlay.Events{
 		OnCapture: n.startRectangleCapture,
 		OnCancel: func() {
 			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
@@ -440,6 +450,8 @@ func (n *NativeView) beginOverlay() {
 	})
 	switch {
 	case err == nil:
+	case errors.Is(err, overlay.ErrPresetTooLarge):
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 	case errors.Is(err, overlay.ErrSessionActive):
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureSessionActive}, 0)
 	default:

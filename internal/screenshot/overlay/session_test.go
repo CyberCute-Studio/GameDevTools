@@ -29,6 +29,7 @@ type sessionFixture struct {
 	log       []string
 	native    *fakeNative
 	mode      Mode
+	size      display.Point
 	hideErr   error
 	createErr error
 }
@@ -54,6 +55,7 @@ func newFixtureController() (*Controller, *sessionFixture) {
 			return nil, fixture.createErr
 		}
 		fixture.mode = request.Mode
+		fixture.size = request.Size
 		fixture.native = &fakeNative{
 			onSelection: request.OnSelection,
 			onCapture:   request.OnCapture,
@@ -64,9 +66,42 @@ func newFixtureController() (*Controller, *sessionFixture) {
 	return controller, fixture
 }
 
+func TestBeginPresetValidatesFrameSize(t *testing.T) {
+	controller, fixture := newFixtureController()
+	// An empty size cannot frame anything (SCR-020).
+	if err := controller.Begin(42, 0, ModePresetRectangle, display.Point{}, Events{}); err == nil {
+		t.Fatal("Begin succeeded with an empty preset size")
+	}
+	if err := controller.Begin(42, 0, ModePresetRectangle, display.Point{X: 320, Y: 0}, Events{}); err == nil {
+		t.Fatal("Begin succeeded with a zero-height preset size")
+	}
+	// A frame larger than the whole virtual desktop is rejected before the
+	// main window hides or any session window appears (SCR-031).
+	err := controller.Begin(42, 0, ModePresetRectangle, display.Point{X: testDesktop.Width() + 1, Y: 240}, Events{})
+	if !errors.Is(err, ErrPresetTooLarge) {
+		t.Fatalf("oversized width error = %v, want ErrPresetTooLarge (SCR-031)", err)
+	}
+	err = controller.Begin(42, 0, ModePresetRectangle, display.Point{X: 320, Y: testDesktop.Height() + 1}, Events{})
+	if !errors.Is(err, ErrPresetTooLarge) {
+		t.Fatalf("oversized height error = %v, want ErrPresetTooLarge (SCR-031)", err)
+	}
+	if len(fixture.log) != 0 {
+		t.Fatalf("rejected Begin changed state: %v, want no hide or create", fixture.log)
+	}
+	// A frame larger than one display is allowed while it fits the virtual
+	// desktop (SCR-031); the test desktop spans two 1920-wide displays.
+	if err := controller.Begin(42, 0, ModePresetRectangle, display.Point{X: 2560, Y: 1000}, Events{}); err != nil {
+		t.Fatalf("Begin with a desktop-fitting frame larger than one display: %v", err)
+	}
+	if got := fixture.size; got != (display.Point{X: 2560, Y: 1000}) {
+		t.Fatalf("CreateRequest.Size = %v, want the preset dimensions", got)
+	}
+	controller.Cancel()
+}
+
 func TestBeginHidesMainWindowBeforeCreatingOverlay(t *testing.T) {
 	controller, fixture := newFixtureController()
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(fixture.log, []string{"hide", "create"}) {
@@ -79,10 +114,10 @@ func TestBeginHidesMainWindowBeforeCreatingOverlay(t *testing.T) {
 
 func TestBeginRejectsConcurrentSession(t *testing.T) {
 	controller, fixture := newFixtureController()
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
-	err := controller.Begin(42, 0, ModeFreeRectangle, Events{})
+	err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{})
 	if !errors.Is(err, ErrSessionActive) {
 		t.Fatalf("second Begin error = %v, want ErrSessionActive (SCR-053)", err)
 	}
@@ -98,7 +133,7 @@ func TestBeginRejectsConcurrentSession(t *testing.T) {
 func TestBeginFailureRestoresMainWindow(t *testing.T) {
 	controller, fixture := newFixtureController()
 	fixture.createErr = errors.New("window class unavailable")
-	err := controller.Begin(42, 0, ModeFreeRectangle, Events{})
+	err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{})
 	if err == nil || !errors.Is(err, fixture.createErr) {
 		t.Fatalf("Begin error = %v, want wrapped %v", err, fixture.createErr)
 	}
@@ -115,7 +150,7 @@ func TestBeginFailureRestoresMainWindow(t *testing.T) {
 func TestBeginHideFailureSkipsOverlay(t *testing.T) {
 	controller, fixture := newFixtureController()
 	fixture.hideErr = errors.New("compositor unavailable")
-	err := controller.Begin(42, 0, ModeFreeRectangle, Events{})
+	err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{})
 	if err == nil || !errors.Is(err, fixture.hideErr) {
 		t.Fatalf("Begin error = %v, want wrapped %v", err, fixture.hideErr)
 	}
@@ -129,14 +164,14 @@ func TestBeginHideFailureSkipsOverlay(t *testing.T) {
 
 func TestBeginWithoutDisplayServiceFails(t *testing.T) {
 	controller := &Controller{}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err == nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err == nil {
 		t.Fatal("Begin succeeded without a display service")
 	}
 	controller, fixture := newFixtureController()
 	controller.DesktopBounds = func() (display.Rect, error) {
 		return display.Rect{}, errors.New("enumeration failed")
 	}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err == nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err == nil {
 		t.Fatal("Begin succeeded when the desktop bounds were unavailable")
 	}
 	if len(fixture.log) != 0 {
@@ -145,7 +180,7 @@ func TestBeginWithoutDisplayServiceFails(t *testing.T) {
 	controller.DesktopBounds = func() (display.Rect, error) {
 		return display.Rect{}, nil
 	}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err == nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err == nil {
 		t.Fatal("Begin succeeded with an empty virtual desktop")
 	}
 }
@@ -153,7 +188,7 @@ func TestBeginWithoutDisplayServiceFails(t *testing.T) {
 func TestCancelClosesOverlayBeforeRestoring(t *testing.T) {
 	controller, fixture := newFixtureController()
 	events := []string{}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCancel: func() { events = append(events, "cancel") }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{OnCancel: func() { events = append(events, "cancel") }}); err != nil {
 		t.Fatal(err)
 	}
 	controller.Cancel()
@@ -195,7 +230,7 @@ func TestCompleteDeliversSelection(t *testing.T) {
 		}
 		restore()
 	}}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); err != nil {
 		t.Fatal(err)
 	}
 	region := display.Rect{Left: 10, Top: 20, Right: 810, Bottom: 620}
@@ -228,7 +263,7 @@ func TestCompleteDeliversSelection(t *testing.T) {
 func TestCompleteTransfersRestoreToHandler(t *testing.T) {
 	controller, fixture := newFixtureController()
 	keptRestore := func() {}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
 		OnCapture: func(_ display.Rect, restore func()) { keptRestore = restore },
 	}); err != nil {
 		t.Fatal(err)
@@ -246,7 +281,7 @@ func TestCompleteTransfersRestoreToHandler(t *testing.T) {
 
 func TestCompleteWithoutHandlerRestoresWindow(t *testing.T) {
 	controller, fixture := newFixtureController()
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	controller.SetSelection(display.Rect{Left: 1, Top: 1, Right: 5, Bottom: 5})
@@ -262,7 +297,7 @@ func TestCompleteWithoutHandlerRestoresWindow(t *testing.T) {
 func TestCompleteWithEmptySelectionKeepsSession(t *testing.T) {
 	controller, fixture := newFixtureController()
 	captures := 0
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCapture: func(display.Rect, func()) { captures++ }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{OnCapture: func(display.Rect, func()) { captures++ }}); err != nil {
 		t.Fatal(err)
 	}
 	fixture.native.onCapture()
@@ -294,7 +329,7 @@ func TestShutdownRemovesSessionSilently(t *testing.T) {
 		OnCancel:  func() { cancelled++ },
 		OnCapture: func(display.Rect, func()) { captured++ },
 	}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); err != nil {
 		t.Fatal(err)
 	}
 	controller.Shutdown()

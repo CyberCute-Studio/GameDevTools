@@ -200,9 +200,11 @@ func TestNativeViewPresetRectangleOpensPresetSession(t *testing.T) {
 	log, _, _ := fakeOverlaySession(view)
 
 	var requested overlay.Mode
+	var size display.Point
 	view.sessions.Create = func(request overlay.CreateRequest) (overlay.NativeSession, error) {
 		*log = append(*log, "create")
 		requested = request.Mode
+		size = request.Size
 		return &fakeOverlayNative{}, nil
 	}
 
@@ -214,5 +216,103 @@ func TestNativeViewPresetRectangleOpensPresetSession(t *testing.T) {
 	if requested != overlay.ModePresetRectangle {
 		t.Fatalf("session mode = %v, want the preset mode", requested)
 	}
+	// The frame takes the selected preset's exact dimensions (SCR-020); a
+	// fresh library selects the built-in HD preset.
+	selected, exists := view.presets.SelectedPreset()
+	if !exists {
+		t.Fatal("no selected preset")
+	}
+	if size != (display.Point{X: int32(selected.Width), Y: int32(selected.Height)}) {
+		t.Fatalf("session size = %v, want the selected preset's %d × %d", size, selected.Width, selected.Height)
+	}
 	view.sessions.Shutdown()
+}
+
+// TestNativeViewPresetRectangleTooLargeBlocked covers SCR-031's validation
+// case: a preset larger than the entire virtual desktop blocks the capture
+// with a clear message before the main window hides or any session opens.
+func TestNativeViewPresetRectangleTooLargeBlocked(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	log, _, _ := fakeOverlaySession(view)
+	// A 640 × 480 virtual desktop cannot fit the default 1280 × 720 preset.
+	view.sessions.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{Right: 640, Bottom: 480}, nil
+	}
+
+	captureCalled := false
+	view.captureRectangle = func(display.Rect, func(), CaptureOptions) CaptureResult {
+		captureCalled = true
+		return CaptureResult{}
+	}
+
+	view.NativeCommand(optionsCommandBase+modePresetCommand, 0)
+	view.NativeAction()
+	if view.sessions.Active() {
+		t.Fatal("an oversized preset opened a selection session")
+	}
+	if captureCalled {
+		t.Fatal("an oversized preset reached the capture pipeline")
+	}
+	if len(*log) != 0 {
+		t.Fatalf("blocked start changed state: %v, want no hide or create", *log)
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error: Validation error:") || !strings.Contains(got, "larger than the entire virtual desktop") {
+		t.Fatalf("status for an oversized preset = %q", got)
+	}
+}
+
+// TestNativeViewPresetAdHocEditKeepsSavedPreset pins SCR-029: dimensions
+// edited inside the session update only the captured rectangle; the saved
+// preset keeps its original dimensions.
+func TestNativeViewPresetAdHocEditKeepsSavedPreset(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	_, native, _ := fakeOverlaySession(view)
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	captureStarted := make(chan display.Rect, 1)
+	view.captureRectangle = func(region display.Rect, restore func(), options CaptureOptions) CaptureResult {
+		captureStarted <- region
+		restore()
+		return CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}
+	}
+
+	view.NativeCommand(optionsCommandBase+modePresetCommand, 0)
+	view.NativeAction()
+	before, exists := view.presets.SelectedPreset()
+	if !exists {
+		t.Fatal("no selected preset")
+	}
+	// The session reports an ad hoc edited rectangle and captures it.
+	edited := display.Rect{Left: 100, Top: 80, Right: 100 + 640, Bottom: 80 + 480}
+	native.onSelection(edited)
+	native.onCapture()
+
+	var captured display.Rect
+	select {
+	case captured = <-captureStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("preset capture did not start")
+	}
+	dispatcher.runNext(t)
+	if captured != edited {
+		t.Fatalf("captured region = %v, want the ad hoc edited %v", captured, edited)
+	}
+	after, exists := view.presets.SelectedPreset()
+	if !exists {
+		t.Fatal("no selected preset after the capture")
+	}
+	if after != before {
+		t.Fatalf("saved preset changed to %+v by an ad hoc edit, want %+v (SCR-029)", after, before)
+	}
 }

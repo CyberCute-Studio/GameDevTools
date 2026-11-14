@@ -31,7 +31,7 @@ const (
 	// Logical toolbar measurements, scaled by the cursor display's DPI. The
 	// height leaves the message label two lines: static text word-wraps, so
 	// a one-line label would clip the instructions and validation messages.
-	toolbarLogicalWidth  = 512
+	toolbarLogicalWidth  = 592
 	toolbarLogicalHeight = 96
 	toolbarLogicalMargin = 16
 	toolbarLogicalInset  = 12
@@ -61,6 +61,11 @@ const (
 
 	vkEscape = 0x1b
 	vkReturn = 0x0d
+	vkShift  = 0x10
+	vkLeft   = 0x25
+	vkUp     = 0x26
+	vkRight  = 0x27
+	vkDown   = 0x28
 
 	htClient  = 1
 	htCaption = 2
@@ -119,6 +124,7 @@ var (
 	procReleaseCapture              = user32.NewProc("ReleaseCapture")
 	procSetFocus                    = user32.NewProc("SetFocus")
 	procGetFocus                    = user32.NewProc("GetFocus")
+	procGetKeyState                 = user32.NewProc("GetKeyState")
 	procGetCursorPos                = user32.NewProc("GetCursorPos")
 	procGetSysColor                 = user32.NewProc("GetSysColor")
 	procGetSysColorBrush            = user32.NewProc("GetSysColorBrush")
@@ -258,9 +264,10 @@ type dragState struct {
 	moved    bool
 }
 
-// windowsSession owns the two topmost windows of one active session — the
-// dimmed virtual-desktop overlay and the floating toolbar — the overlay's
-// backing bitmap, and the live selection state.
+// windowsSession owns the topmost windows of one active session — the Free
+// Rectangle dimmed virtual-desktop overlay or the Preset Rectangle exact-size
+// frame, plus the floating toolbar — the overlay's backing bitmap, and the
+// live selection state.
 type windowsSession struct {
 	mode          Mode
 	bounds        display.Rect
@@ -269,6 +276,7 @@ type windowsSession struct {
 	message       *ui.Label
 	widthEdit     *ui.Control
 	heightEdit    *ui.Control
+	position      *ui.Label
 	captureButton windows.Handle
 
 	onSelection func(display.Rect)
@@ -282,15 +290,24 @@ type windowsSession struct {
 	// user typing again.
 	syncing bool
 
+	// frameOrigin is the preset frame window's top-left corner in
+	// virtual-desktop coordinates: the selection inflated outward by the
+	// border ring. Free Rectangle sessions leave it zero; their bitmap
+	// coordinates follow bounds instead.
+	frameOrigin display.Point
+
 	// Toolbar placement inputs captured at creation.
 	anchor      display.Rect
+	dpi         uint32
 	toolbarSize sizeStruct
 	margin      int32
 
-	// Overlay rendering surface: a top-down 32-bit BGRA DIB covering the
-	// whole virtual desktop, composited per-pixel through
-	// UpdateLayeredWindowIndirect so the selection interior stays visually
-	// clear while the rest of the desktop stays dimmed.
+	// Rendering surface: a top-down 32-bit BGRA DIB composited per-pixel
+	// through UpdateLayeredWindowIndirect. It covers the whole virtual
+	// desktop in Free Rectangle sessions, where the selection interior
+	// stays visually clear while the rest of the desktop stays dimmed, and
+	// exactly the frame window in Preset Rectangle sessions, where the
+	// alpha-zero interior lets clicks through to the windows beneath.
 	memDC       uintptr
 	dib         uintptr
 	oldBitmap   uintptr
@@ -374,11 +391,14 @@ func registerOverlayClasses() error {
 	return registerClassesErr
 }
 
-// createNative shows the session's windows: a per-pixel-alpha overlay
-// covering the whole virtual desktop and a floating toolbar anchored to the
-// cursor display. The overlay never activates, so it cannot rise above the
-// toolbar or steal keyboard focus; the toolbar takes the foreground so
-// Escape, Tab, and Enter work while the main window is hidden.
+// createNative shows the session's windows. Free Rectangle sessions get a
+// per-pixel-alpha overlay covering the whole virtual desktop; Preset
+// Rectangle sessions get an exact-size frame floating above the desktop.
+// Neither window activates: the toolbar takes the foreground so Escape, Tab,
+// and Enter work while the main window is hidden. Preset sessions report
+// their initial frame as the live selection before returning, so the
+// controller's Capture command is armed with the exact preset dimensions
+// (SCR-020).
 func createNative(request CreateRequest) (NativeSession, error) {
 	if err := registerOverlayClasses(); err != nil {
 		return nil, err
@@ -390,21 +410,28 @@ func createNative(request CreateRequest) (NativeSession, error) {
 		onCapture:   request.OnCapture,
 		onCancel:    request.OnCancel,
 	}
-	overlay, _, err := procCreateWindowExW.Call(
-		wsExLayered|wsExTopmost|wsExToolWindow|wsExNoActivate,
-		uintptr(unsafe.Pointer(utf16(overlayClassName))),
-		uintptr(unsafe.Pointer(utf16(ui.OverlayWindowTitle))),
-		wsPopup,
-		uintptr(uint32(request.Bounds.Left)), uintptr(uint32(request.Bounds.Top)),
-		uintptr(uint32(request.Bounds.Width())), uintptr(uint32(request.Bounds.Height())),
-		0, 0, 0, 0,
-	)
-	if overlay == 0 {
-		return nil, callError("CreateWindowExW(overlay)", err)
+	dpi := uint32(display.ReferenceDPI)
+	anchor := request.Bounds
+	if item, err := request.Monitor.CursorDisplay(); err == nil {
+		dpi = item.DPIX
+		anchor = item.WorkArea
 	}
-	session.overlay = windows.Handle(overlay)
+	session.configure(dpi, anchor)
+	if session.mode == ModePresetRectangle {
+		session.selection = presetPlacement(anchor, request.Bounds, request.Size.X, request.Size.Y)
+		if err := session.createWindow(ui.PresetFrameWindowTitle); err != nil {
+			return nil, err
+		}
+		session.frameOrigin = display.Point{X: session.selection.Left - session.border, Y: session.selection.Top - session.border}
+	} else if err := session.createWindow(ui.OverlayWindowTitle); err != nil {
+		return nil, err
+	}
 	overlayStates[session.overlay] = session
-	if err := session.createSurface(); err != nil {
+	width, height := request.Bounds.Width(), request.Bounds.Height()
+	if session.mode == ModePresetRectangle {
+		width, height = session.selection.Width()+2*session.border, session.selection.Height()+2*session.border
+	}
+	if err := session.createSurface(width, height); err != nil {
 		session.Close()
 		return nil, err
 	}
@@ -412,7 +439,7 @@ func createNative(request CreateRequest) (NativeSession, error) {
 		session.Close()
 		return nil, err
 	}
-	procShowWindow.Call(overlay, swShowNoActivate)
+	procShowWindow.Call(uintptr(session.overlay), swShowNoActivate)
 	if err := session.renderAll(); err != nil {
 		session.Close()
 		return nil, err
@@ -423,19 +450,108 @@ func createNative(request CreateRequest) (NativeSession, error) {
 	// thread, not to the shell's message filter), but it stays usable by
 	// mouse, and clicking it once foregrounds it and restores Escape.
 	procSetForegroundWindow.Call(uintptr(session.toolbar))
+	if session.mode == ModePresetRectangle && session.onSelection != nil {
+		session.onSelection(session.selection)
+	}
 	return session, nil
 }
 
-// createSurface allocates the overlay's desktop-sized backing bitmap. The
-// whole desktop is dimmed once here; later selection updates repaint and
-// composite only the affected band.
-func (s *windowsSession) createSurface() error {
-	width, height := s.bounds.Width(), s.bounds.Height()
+// configure fixes the session's DPI-scaled measurements and toolbar anchor
+// before any window is created: the preset frame's border ring decides the
+// frame window's size.
+func (s *windowsSession) configure(dpi uint32, anchor display.Rect) {
+	scale := func(value int32) int32 {
+		return display.LogicalToPhysical(value, dpi)
+	}
+	s.anchor = anchor
+	s.dpi = dpi
+	s.toolbarSize = sizeStruct{Width: scale(toolbarLogicalWidth), Height: scale(toolbarLogicalHeight)}
+	s.margin = scale(toolbarLogicalMargin)
+	s.border = scale(borderLogicalThickness)
+	s.handleSize = scale(handleLogicalSize)
+	s.grab = s.handleSize + scale(handleLogicalGrabExtra)
+	s.borderPx = highlightPixel()
+}
+
+// createWindow creates the session's input surface: the desktop-sized Free
+// Rectangle tint overlay, or the Preset Rectangle frame sized to the
+// selection plus its border ring. The window never activates, so it cannot
+// rise above the toolbar or steal keyboard focus.
+func (s *windowsSession) createWindow(title string) error {
+	window := display.Rect{Left: s.bounds.Left, Top: s.bounds.Top, Right: s.bounds.Right, Bottom: s.bounds.Bottom}
+	if s.mode == ModePresetRectangle {
+		window = inflateRect(s.selection, s.border)
+	}
+	overlay, _, err := procCreateWindowExW.Call(
+		wsExLayered|wsExTopmost|wsExToolWindow|wsExNoActivate,
+		uintptr(unsafe.Pointer(utf16(overlayClassName))),
+		uintptr(unsafe.Pointer(utf16(title))),
+		wsPopup,
+		uintptr(uint32(window.Left)), uintptr(uint32(window.Top)),
+		uintptr(uint32(window.Width())), uintptr(uint32(window.Height())),
+		0, 0, 0, 0,
+	)
+	if overlay == 0 {
+		return callError("CreateWindowExW(overlay)", err)
+	}
+	s.overlay = windows.Handle(overlay)
+	return nil
+}
+
+// createSurface allocates the session's backing bitmap: the whole desktop
+// for the Free Rectangle tint, dimmed once here and later repainted in the
+// selection's band, or the Preset Rectangle frame window.
+func (s *windowsSession) createSurface(width, height int32) error {
 	memory, _, err := procCreateCompatibleDC.Call(0)
 	if memory == 0 {
 		return callError("CreateCompatibleDC", err)
 	}
 	s.memDC = memory
+	bitmap, pixels, err := createDIB(memory, width, height)
+	if err != nil {
+		return err
+	}
+	previous, _, selErr := procSelectObject.Call(memory, bitmap)
+	if previous == 0 {
+		procDeleteObject.Call(bitmap)
+		return callError("SelectObject", selErr)
+	}
+	s.oldBitmap = previous
+	s.dib = bitmap
+	s.pixels = pixels
+	s.pixelWidth = width
+	s.pixelHeight = height
+	if s.mode == ModeFreeRectangle {
+		s.fillLocal(display.Rect{Right: width, Bottom: height}, dimPixel)
+	}
+	return nil
+}
+
+// resizeSurface swaps the backing bitmap for a new size, keeping the old one
+// when allocation fails so the session still renders. The preset frame needs
+// it when typed dimensions change the selection's size.
+func (s *windowsSession) resizeSurface(width, height int32) error {
+	bitmap, pixels, err := createDIB(s.memDC, width, height)
+	if err != nil {
+		return err
+	}
+	previous, _, selErr := procSelectObject.Call(s.memDC, bitmap)
+	if previous == 0 {
+		procDeleteObject.Call(bitmap)
+		return callError("SelectObject", selErr)
+	}
+	// previous is the session's current DIB; the stock bitmap it replaced at
+	// creation stays in oldBitmap for Close.
+	procDeleteObject.Call(previous)
+	s.dib = bitmap
+	s.pixels = pixels
+	s.pixelWidth = width
+	s.pixelHeight = height
+	return nil
+}
+
+// createDIB allocates one top-down 32-bit BGRA DIB section.
+func createDIB(memory uintptr, width, height int32) (uintptr, unsafe.Pointer, error) {
 	info := bitmapInfo{Header: bitmapInfoHeader{
 		Size:      uint32(unsafe.Sizeof(bitmapInfoHeader{})),
 		Width:     width,
@@ -450,39 +566,17 @@ func (s *windowsSession) createSurface() error {
 		uintptr(unsafe.Pointer(&pixels)), 0, 0,
 	)
 	if bitmap == 0 || pixels == nil {
-		return callError("CreateDIBSection", err)
+		return 0, nil, callError("CreateDIBSection", err)
 	}
-	s.dib = bitmap
-	s.pixels = pixels
-	s.pixelWidth = width
-	s.pixelHeight = height
-	previous, _, err := procSelectObject.Call(memory, bitmap)
-	if previous == 0 {
-		return callError("SelectObject", err)
-	}
-	s.oldBitmap = previous
-	return nil
+	return bitmap, pixels, nil
 }
 
 func (s *windowsSession) createToolbar(request CreateRequest) error {
-	dpi := uint32(display.ReferenceDPI)
-	anchor := request.Bounds
-	if item, err := request.Monitor.CursorDisplay(); err == nil {
-		dpi = item.DPIX
-		anchor = item.WorkArea
-	}
 	scale := func(value int32) int32 {
-		return display.LogicalToPhysical(value, dpi)
+		return display.LogicalToPhysical(value, s.dpi)
 	}
-	width, height := scale(toolbarLogicalWidth), scale(toolbarLogicalHeight)
-	s.anchor = anchor
-	s.toolbarSize = sizeStruct{Width: width, Height: height}
-	s.margin = scale(toolbarLogicalMargin)
-	s.border = scale(borderLogicalThickness)
-	s.handleSize = scale(handleLogicalSize)
-	s.grab = s.handleSize + scale(handleLogicalGrabExtra)
-	s.borderPx = highlightPixel()
-	x, y := toolbarPlacement(request.Bounds, anchor, display.Rect{}, width, height, s.margin)
+	width, height := s.toolbarSize.Width, s.toolbarSize.Height
+	x, y := toolbarPlacement(request.Bounds, s.anchor, s.selection, width, height, s.margin)
 	toolbar, _, err := procCreateWindowExW.Call(
 		wsExTopmost|wsExToolWindow,
 		uintptr(unsafe.Pointer(utf16(toolbarClassName))),
@@ -497,11 +591,7 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	s.toolbar = windows.Handle(toolbar)
 	toolbarStates[s.toolbar] = s
 
-	instructions := ui.OverlayInstructions
-	if request.Mode != ModeFreeRectangle {
-		instructions = ui.OverlayPresetPending
-	}
-	message, err := ui.NewLabel(s.toolbar, instructions)
+	message, err := ui.NewLabel(s.toolbar, s.instructions())
 	if err != nil {
 		return err
 	}
@@ -522,6 +612,13 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	if err != nil {
 		return err
 	}
+	if s.mode == ModePresetRectangle {
+		position, err := ui.NewLabel(s.toolbar, "")
+		if err != nil {
+			return err
+		}
+		s.position = position
+	}
 	captureButton, err := ui.NewButton(s.toolbar, ui.CaptureAction, ui.ButtonOptions{ID: toolbarCaptureCommand, Primary: true, Disabled: true})
 	if err != nil {
 		return err
@@ -532,7 +629,11 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	}
 	font := windows.Handle(request.Font)
 	if font != 0 {
-		for _, control := range []*ui.Label{message, widthLabel, heightLabel} {
+		labels := []*ui.Label{message, widthLabel, heightLabel}
+		if s.position != nil {
+			labels = append(labels, s.position)
+		}
+		for _, control := range labels {
 			control.SetFont(font)
 		}
 		widthEdit.SetFont(font)
@@ -540,8 +641,12 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 		captureButton.SetFont(font)
 		cancelButton.SetFont(font)
 	}
-	widthEdit.Enable(false)
-	heightEdit.Enable(false)
+	// The dimension fields are only meaningful with a selection on screen;
+	// Free Rectangle sessions start without one, Preset Rectangle sessions
+	// with the exact preset frame.
+	enabled := !s.selection.Empty()
+	widthEdit.Enable(enabled)
+	heightEdit.Enable(enabled)
 	s.widthEdit = widthEdit
 	s.heightEdit = heightEdit
 
@@ -556,9 +661,26 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	heightEdit.Move(heightX+labelWidth, rowY, editWidth, scale(24))
 	buttonWidth, buttonHeight := scale(88), scale(28)
 	cancelButton.Move(width-inset-buttonWidth, rowY-scale(2), buttonWidth, buttonHeight)
-	captureButton.Move(width-inset-2*buttonWidth-scale(8), rowY-scale(2), buttonWidth, buttonHeight)
+	captureX := width - inset - 2*buttonWidth - scale(8)
+	captureButton.Move(captureX, rowY-scale(2), buttonWidth, buttonHeight)
+	if s.position != nil {
+		// The X/Y readout (SCR-028) takes the space between the dimension
+		// fields and the Capture button.
+		positionX := heightX + labelWidth + editWidth + scale(8)
+		s.position.Move(positionX, rowY+scale(3), captureX-positionX-scale(8), scale(20))
+	}
 	s.captureButton = captureButton.Handle()
+	s.syncDimensions()
+	s.syncPosition()
 	return nil
+}
+
+// instructions returns the toolbar's guidance text for the session mode.
+func (s *windowsSession) instructions() string {
+	if s.mode == ModePresetRectangle {
+		return ui.OverlayPresetInstructions
+	}
+	return ui.OverlayInstructions
 }
 
 // highlightPixel returns the system highlight color as an opaque
@@ -637,10 +759,14 @@ func (s *windowsSession) isDimensionEdit(hwnd uintptr) bool {
 // FilterMessage pre-handles the GUI thread's queued messages while a session
 // is active. Escape cancels from any session window, Enter inside a
 // dimension field commits the typed value instead of triggering the default
-// Capture button, and toolbar messages go through IsDialogMessage so Tab,
-// arrow keys, and Enter work between the toolbar controls even though the
-// toolbar is a popup rather than a dialog. Messages for other windows pass
-// through untouched.
+// Capture button, arrow keys nudge a preset frame by one physical pixel (ten
+// with Shift, SCR-027) — except inside the dimension fields, where they keep
+// moving the text caret — and toolbar messages go through IsDialogMessage so
+// Tab and Enter work between the toolbar controls even though the toolbar is
+// a popup rather than a dialog (in Free Rectangle sessions arrow keys take
+// their dialog-navigation role there too, while Preset Rectangle sessions
+// consume them as nudges first). Messages for other windows pass through
+// untouched.
 func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 	msg := (*windowMessage)(message)
 	c.mu.Lock()
@@ -662,6 +788,23 @@ func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 		native.commitDimensions()
 		return true
 	}
+	if native.mode == ModePresetRectangle && msg.Message == wmKeyDown && native.owns(hwnd) && !native.isDimensionEdit(hwnd) {
+		dx, dy := int32(0), int32(0)
+		switch msg.WParam {
+		case vkLeft:
+			dx = -1
+		case vkRight:
+			dx = 1
+		case vkUp:
+			dy = -1
+		case vkDown:
+			dy = 1
+		}
+		if dx != 0 || dy != 0 {
+			native.nudge(dx, dy, nudgeStep())
+			return true
+		}
+	}
 	if native.isToolbarMessage(hwnd) {
 		handled, _, _ := procIsDialogMessageW.Call(uintptr(native.toolbar), uintptr(message))
 		return handled != 0
@@ -669,12 +812,15 @@ func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 	return false
 }
 
-// setSelection records a new live selection, repaints the affected band of
-// the overlay, keeps the toolbar's dimension fields in sync, and reports
-// the change to the controller. The toolbar is not repositioned here — that
-// happens when a drag or edit finishes, so it does not jump around
-// mid-drag.
+// setSelection records a new live selection, updates the session surface,
+// keeps the toolbar's dimension fields in sync, and reports the change to
+// the controller. The toolbar is not repositioned here — that happens when a
+// drag or edit finishes, so it does not jump around mid-drag.
 func (s *windowsSession) setSelection(selection display.Rect) {
+	if s.mode == ModePresetRectangle {
+		s.setPresetSelection(selection)
+		return
+	}
 	oldVisual := s.visualBounds()
 	s.selection = selection
 	if err := s.renderSelection(oldVisual); err != nil {
@@ -705,6 +851,47 @@ func (s *windowsSession) setSelection(selection display.Rect) {
 	}
 }
 
+// setPresetSelection moves or resizes the preset frame to the new selection
+// (SCR-020, SCR-029). A pure move slides the window with its rendered border
+// ring untouched; a size change swaps the backing bitmap and repaints, and
+// UpdateLayeredWindowIndirect resizes the window to match. The border ring
+// always sits outside the selection, so even an incompletely flushed frame
+// could never put frame visuals inside the captured pixels (SCR-068).
+func (s *windowsSession) setPresetSelection(selection display.Rect) {
+	resized := selection.Width() != s.selection.Width() || selection.Height() != s.selection.Height()
+	if resized {
+		if err := s.resizeSurface(selection.Width()+2*s.border, selection.Height()+2*s.border); err != nil {
+			// The backing bitmap could not be swapped for the new size, so
+			// the frame keeps the previous rectangle: painting the new ring
+			// into the old bitmap would clip it, and the frame would no
+			// longer outline the rectangle Capture reads. The dimension
+			// fields revert to the actual frame, exactly like a rejected
+			// edit.
+			s.message.SetText(fmt.Sprintf(ui.SelectionResizeFailed, err))
+			s.syncDimensions()
+			return
+		}
+	}
+	s.selection = selection
+	s.frameOrigin = display.Point{X: selection.Left - s.border, Y: selection.Top - s.border}
+	if resized {
+		if err := s.renderFrame(); err != nil {
+			// A compositing failure leaves the previous frame visible; the
+			// interaction stays usable, so the error is not fatal.
+			_ = err
+		}
+	} else {
+		procSetWindowPos.Call(uintptr(s.overlay), 0,
+			uintptr(uint32(s.frameOrigin.X)), uintptr(uint32(s.frameOrigin.Y)), 0, 0,
+			swpNoSize|swpNoZOrder|swpNoActivate)
+	}
+	s.syncDimensions()
+	s.syncPosition()
+	if s.onSelection != nil {
+		s.onSelection(selection)
+	}
+}
+
 // visualBounds returns the virtual-desktop rectangle the selection's
 // painted visuals cover: the selection plus its border and the half of each
 // handle that extends outside.
@@ -721,14 +908,25 @@ func (s *windowsSession) visualBounds() display.Rect {
 	}
 }
 
-// toLocal converts virtual-desktop coordinates into overlay client
+// clientOrigin returns the virtual-desktop point the session window's client
+// coordinates start at: the desktop's top-left corner for the Free Rectangle
+// tint, the frame window's top-left corner for the Preset Rectangle frame.
+func (s *windowsSession) clientOrigin() display.Point {
+	if s.mode == ModePresetRectangle {
+		return s.frameOrigin
+	}
+	return display.Point{X: s.bounds.Left, Y: s.bounds.Top}
+}
+
+// toLocal converts virtual-desktop coordinates into session window client
 // coordinates, which are also the backing bitmap's pixel coordinates.
 func (s *windowsSession) toLocal(r display.Rect) display.Rect {
+	origin := s.clientOrigin()
 	return display.Rect{
-		Left:   r.Left - s.bounds.Left,
-		Top:    r.Top - s.bounds.Top,
-		Right:  r.Right - s.bounds.Left,
-		Bottom: r.Bottom - s.bounds.Top,
+		Left:   r.Left - origin.X,
+		Top:    r.Top - origin.Y,
+		Right:  r.Right - origin.X,
+		Bottom: r.Bottom - origin.Y,
 	}
 }
 
@@ -783,9 +981,30 @@ const dimPixel = uint32(overlayTintAlpha) << 24
 // is imperceptible but hit-tests as solid.
 const selectionPixel = 1
 
-// renderAll paints the initial fully dimmed frame and composites it.
+// renderAll composites the session's initial frame: the fully dimmed
+// desktop for Free Rectangle (painted when the surface was created), or the
+// preset frame's border ring.
 func (s *windowsSession) renderAll() error {
-	s.fillLocal(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}, dimPixel)
+	if s.mode == ModePresetRectangle {
+		return s.renderFrame()
+	}
+	return s.present(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight})
+}
+
+// renderFrame paints the preset frame: the border ring opaque and draggable,
+// the selection interior alpha zero. A layered window's hit testing follows
+// the alpha channel, so the interior passes mouse input through to the
+// windows beneath — the underlying application receives clicks inside the
+// frame while the frame keeps its position and dimensions (SCR-022, AC-S03)
+// — and the transparent interior never obscures the content being framed.
+// The ring sits outside the selection rectangle, so it cannot reach the
+// captured pixels (SCR-068).
+func (s *windowsSession) renderFrame() error {
+	s.fillLocal(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}, 0)
+	sel := s.toLocal(s.selection)
+	s.fillRing(inflateRect(sel, s.border), sel, s.borderPx)
+	s.fillRing(inflateRect(sel, s.border), inflateRect(sel, s.border-1), 0xff000000)
+	s.fillRing(inflateRect(sel, 1), sel, 0xff000000)
 	return s.present(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight})
 }
 
@@ -851,7 +1070,8 @@ func (s *windowsSession) present(dirty display.Rect) error {
 	if dirty.Empty() {
 		return nil
 	}
-	position := point{X: s.bounds.Left, Y: s.bounds.Top}
+	origin := s.clientOrigin()
+	position := point{X: origin.X, Y: origin.Y}
 	size := sizeStruct{Width: s.pixelWidth, Height: s.pixelHeight}
 	source := point{}
 	blend := blendFunction{SourceConstantAlpha: 255, AlphaFormat: acSrcAlpha}
@@ -907,9 +1127,9 @@ func (s *windowsSession) placeToolbar() {
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's
 // fields (SCR-011). Both fields are updated even while one holds keyboard
-// focus: selection changes only ever come from pointer drags, which cannot
-// coincide with typing, and leaving a stale value in the focused field
-// would let a later focus-loss commit silently apply it over a resize.
+// focus: selection changes come from pointer drags and, in preset sessions,
+// keyboard nudges, and leaving a stale value in the focused field would let
+// a later focus-loss commit silently apply it over the newer rectangle.
 func (s *windowsSession) syncDimensions() {
 	if s.widthEdit == nil || s.heightEdit == nil {
 		return
@@ -926,12 +1146,13 @@ func (s *windowsSession) syncDimensions() {
 }
 
 // commitDimensions applies the toolbar's typed width and height to the
-// selection (SCR-013). Invalid or non-fitting values are rejected with a
-// validation message and the fields revert to the actual dimensions, so a
-// mistyped value can never resize the capture silently. While the pointer
-// is mid-drag the fields track the live drag, so a commit (Enter can arrive
-// from a field that kept focus across the overlay click) would only fight
-// the drag and jump the toolbar; it is dropped.
+// selection (SCR-013, SCR-029). Invalid or non-fitting values are rejected
+// with a validation message and the fields revert to the actual dimensions,
+// so a mistyped value can never resize the capture silently. The edit is ad
+// hoc: it updates the active rectangle only and never touches the saved
+// preset. While the pointer is mid-drag the fields track the live drag, so a
+// commit (Enter can arrive from a field that kept focus across an overlay
+// click) would only fight the drag and jump the toolbar; it is dropped.
 func (s *windowsSession) commitDimensions() {
 	if s.selection.Empty() || s.drag.op != dragNone {
 		return
@@ -954,18 +1175,50 @@ func (s *windowsSession) commitDimensions() {
 		s.syncDimensions()
 		return
 	}
-	s.message.SetText(ui.OverlayInstructions)
+	s.message.SetText(s.instructions())
 	s.setSelection(resized)
 	s.placeToolbar()
+}
+
+// syncPosition mirrors the live selection's virtual-desktop origin into the
+// toolbar's X/Y readout (SCR-028). Negative coordinates on displays left of
+// or above the primary display are shown as-is.
+func (s *windowsSession) syncPosition() {
+	if s.position == nil || s.selection.Empty() {
+		return
+	}
+	s.position.SetText(fmt.Sprintf(ui.SelectionPositionFormat, s.selection.Left, s.selection.Top))
+}
+
+// nudge moves the preset frame by whole physical pixels in one direction,
+// clamped inside the virtual desktop (SCR-027). Nudges are complete moves,
+// so the toolbar follows immediately.
+func (s *windowsSession) nudge(dx, dy, step int32) {
+	if s.selection.Empty() || s.drag.op != dragNone {
+		return
+	}
+	s.setSelection(moveSelection(s.selection, dx*step, dy*step, s.bounds))
+	s.placeToolbar()
+}
+
+// nudgeStep reads the Shift key state for the queued keyboard message: with
+// Shift down the nudge covers ten physical pixels instead of one (SCR-027).
+func nudgeStep() int32 {
+	state, _, _ := procGetKeyState.Call(vkShift)
+	if state&0x8000 != 0 {
+		return 10
+	}
+	return 1
 }
 
 // pointerFromClient decodes the signed 16-bit client coordinates packed
 // into a mouse message's lParam and converts them to virtual-desktop
 // coordinates.
 func (s *windowsSession) pointerFromClient(lParam uintptr) display.Point {
+	origin := s.clientOrigin()
 	return display.Point{
-		X: int32(int16(lParam&0xffff)) + s.bounds.Left,
-		Y: int32(int16(lParam>>16)) + s.bounds.Top,
+		X: int32(int16(lParam&0xffff)) + origin.X,
+		Y: int32(int16(lParam>>16)) + origin.Y,
 	}
 }
 
@@ -1066,16 +1319,19 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 	return r
 }
 
-// onButtonDown starts the pointer interaction the click position selects
-// (SCR-010, SCR-012): a handle drag resizes, an interior drag moves the
-// selection, and a press on the dimmed area starts a new selection. Preset
-// Rectangle sessions do not draw yet; their exact frame arrives with the
-// Preset Rectangle item.
+// onButtonDown starts the pointer interaction the click position selects.
+// Free Rectangle: a handle drag resizes, an interior drag moves the
+// selection, and a press on the dimmed area starts a new selection
+// (SCR-010, SCR-012). Preset Rectangle: the interior is alpha zero and its
+// clicks pass to the windows beneath (SCR-022), so a press can only land on
+// the border ring and always starts a move drag (SCR-023).
 func (s *windowsSession) onButtonDown(lParam unsafe.Pointer) {
-	if s.mode != ModeFreeRectangle {
+	p := s.pointerFromClient(uintptr(lParam))
+	if s.mode == ModePresetRectangle {
+		s.drag = dragState{op: dragMove, origin: s.selection, originPt: p}
+		procSetCapture.Call(uintptr(s.overlay))
 		return
 	}
-	p := s.pointerFromClient(uintptr(lParam))
 	z := hitZone(s.selection, p, s.grab)
 	switch {
 	case z != zoneOutside && z != zoneInterior:
@@ -1122,6 +1378,11 @@ func (s *windowsSession) onMouseMove(lParam unsafe.Pointer) {
 // zoneCursor picks the mouse cursor for the current interaction state and
 // pointer position.
 func (s *windowsSession) zoneCursor() uintptr {
+	if s.mode == ModePresetRectangle {
+		// The only input the preset frame receives is the border ring's
+		// move drag; the size-all cursor advertises it (SCR-023).
+		return cursorSizeAll
+	}
 	z := zoneOutside
 	if s.drag.op == dragResize {
 		z = s.drag.zone
@@ -1177,8 +1438,8 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 				// Typing again after a rejected edit clears the validation
 				// message back to the instructions; programmatic field
 				// updates are not typing.
-				if !session.syncing && session.mode == ModeFreeRectangle {
-					session.message.SetText(ui.OverlayInstructions)
+				if !session.syncing {
+					session.message.SetText(session.instructions())
 				}
 				return 0
 			}

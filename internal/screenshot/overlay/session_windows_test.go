@@ -87,7 +87,7 @@ func isWindow(hwnd windows.Handle) bool {
 
 func TestNativeSessionCoversVirtualDesktop(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -137,7 +137,7 @@ func TestNativeSessionCoversVirtualDesktop(t *testing.T) {
 
 func TestFilterMessageEscapeCancelsSession(t *testing.T) {
 	controller, log := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -174,7 +174,7 @@ func TestFilterMessageEscapeCancelsSession(t *testing.T) {
 func TestToolbarCancelCommandCancelsSession(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	cancelled := 0
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCancel: func() { cancelled++ }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{OnCancel: func() { cancelled++ }}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -190,7 +190,7 @@ func TestToolbarCancelCommandCancelsSession(t *testing.T) {
 func TestToolbarCloseCancelsSession(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	cancelled := 0
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCancel: func() { cancelled++ }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{OnCancel: func() { cancelled++ }}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -214,7 +214,7 @@ func TestToolbarCloseCancelsSession(t *testing.T) {
 func TestToolbarCaptureCommandDeliversSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	var captured display.Rect
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{OnCapture: func(region display.Rect, restore func()) { captured = region; restore() }}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{OnCapture: func(region display.Rect, restore func()) { captured = region; restore() }}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -234,7 +234,7 @@ func TestToolbarCaptureCommandDeliversSelection(t *testing.T) {
 
 func TestFilterMessageTabNavigatesToolbar(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)

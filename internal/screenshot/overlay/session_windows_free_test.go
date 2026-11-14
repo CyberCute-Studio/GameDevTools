@@ -10,7 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
-	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 // sendMouse delivers a mouse message to the overlay at client coordinates,
@@ -56,7 +55,7 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 		restore()
 		restored = true
 	}}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -136,7 +135,7 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 
 func TestOverlayClickWithoutDragLeavesNoSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -175,7 +174,7 @@ func TestOverlayClickWithoutDragLeavesNoSelection(t *testing.T) {
 
 func TestOverlayMoveAndResizeAdjustSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -220,7 +219,7 @@ func TestOverlayMoveAndResizeAdjustSelection(t *testing.T) {
 // apply the stale value over the resize.
 func TestOverlayFocusedFieldTracksHandleResize(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -253,7 +252,7 @@ func TestOverlayFocusedFieldTracksHandleResize(t *testing.T) {
 // selection.
 func TestOverlayDragEndsAtTheReleasePosition(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -303,7 +302,7 @@ func TestOverlayDragEndsAtTheReleasePosition(t *testing.T) {
 // plain click — the same jitter class the draw guard rejects.
 func TestOverlayClickOnHandleLeavesSelectionUnchanged(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -350,7 +349,7 @@ func TestOverlayClickOnHandleLeavesSelectionUnchanged(t *testing.T) {
 // to the release position, exactly like a move drag with delivered moves.
 func TestOverlayClickOnInteriorLeavesSelectionUnchanged(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -394,7 +393,7 @@ func TestOverlayDimensionEditingAppliesExactSize(t *testing.T) {
 		captured = region
 		restore()
 	}}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -421,7 +420,7 @@ func TestOverlayDimensionEditingAppliesExactSize(t *testing.T) {
 
 func TestOverlayDimensionEditingRejectsInvalidValues(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -469,7 +468,7 @@ func TestOverlayDimensionEditingRejectsInvalidValues(t *testing.T) {
 
 func TestOverlayEnterCommitsDimensionField(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -497,7 +496,7 @@ func TestOverlayEscapeCancelsWithoutOutput(t *testing.T) {
 		OnCapture: func(display.Rect, func()) { captured++ },
 		OnCancel:  func() { cancelled++ },
 	}
-	if err := controller.Begin(42, 0, ModeFreeRectangle, events); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -527,7 +526,7 @@ func TestOverlayEscapeCancelsWithoutOutput(t *testing.T) {
 // the toolbar mid-drag; the commit must be dropped.
 func TestOverlayDimensionCommitDroppedMidDrag(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -568,7 +567,7 @@ func TestOverlayDimensionCommitDroppedMidDrag(t *testing.T) {
 // move to the toolbar first so Escape keeps cancelling the session.
 func TestOverlayClearingSelectionMovesFocusOffCapture(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -606,7 +605,7 @@ func TestOverlayClearingSelectionMovesFocusOffCapture(t *testing.T) {
 // mid-draw without a button release must finish the draw the same way.
 func TestOverlayDrawCompletionPaintsHandles(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
@@ -635,30 +634,5 @@ func TestOverlayDrawCompletionPaintsHandles(t *testing.T) {
 	}
 	if got := at(500, 400); got != 0xffffffff {
 		t.Fatalf("corner pixel after lost capture = %#08x, want the painted handle", got)
-	}
-}
-
-func TestPresetRectangleSessionDoesNotDrawYet(t *testing.T) {
-	controller, _ := newNativeSessionController(t)
-	if err := controller.Begin(42, 0, ModePresetRectangle, Events{}); err != nil {
-		t.Fatal(err)
-	}
-	native := nativeOf(t, controller)
-	t.Cleanup(controller.Shutdown)
-
-	if got := native.message.Text(); got != ui.OverlayPresetPending {
-		t.Fatalf("preset instructions = %q", got)
-	}
-	sendMouse(native.overlay, wmLButtonDown, 100, 100)
-	sendMouse(native.overlay, wmMouseMove, 300, 240)
-	sendMouse(native.overlay, wmLButtonUp, 300, 240)
-	if !native.selection.Empty() {
-		t.Fatalf("preset session drew a selection: %v", native.selection)
-	}
-	if captureEnabled(native) {
-		t.Fatal("Capture became enabled in a preset session")
-	}
-	if editsEnabled(native) {
-		t.Fatal("dimension fields became editable in a preset session")
 	}
 }

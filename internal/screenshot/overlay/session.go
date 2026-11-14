@@ -1,17 +1,20 @@
 // Package overlay runs rectangle capture selection sessions: it hides the
-// application window, covers the virtual desktop with a visibly dimmed
-// input-capturing surface plus a floating toolbar, and ends the session by
-// capturing the selected rectangle or by cancelling. Free Rectangle sessions
-// draw the selection by dragging, adjust it with move and resize handles or
-// typed dimensions, and deliver it to the capture pipeline; the exact preset
-// frame is implemented by the Preset Rectangle item.
+// application window, presents the mode's selection surface plus a floating
+// toolbar, and ends the session by capturing the selected rectangle or by
+// cancelling. Free Rectangle sessions cover the virtual desktop with a
+// dimmed input-capturing overlay on which the user draws, moves, and resizes
+// the selection or types exact dimensions. Preset Rectangle sessions instead
+// float an exact-size topmost frame whose border moves the selection while
+// its click-through interior leaves the applications beneath interactive,
+// with arrow-key nudges and typed dimensions for exact adjustment.
 //
 // All Controller methods run on the GUI thread. The session windows are
 // unowned topmost popups, so they outlive the main window unless the
 // controller removes them; Cancel, Complete, and Shutdown guarantee that
-// removal (SCR-052, SCR-056). The overlay always carries a visible tint
-// while it intercepts input, so a session can never wedge the desktop
-// behind an invisible surface (SCR-052).
+// removal (SCR-052, SCR-056). Every input-capturing surface is visible while
+// it intercepts input — the Free Rectangle tint, the Preset Rectangle frame
+// ring — so a session can never wedge the desktop behind an invisible
+// surface (SCR-052).
 package overlay
 
 import (
@@ -21,16 +24,23 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 // ErrSessionActive rejects starting a second rectangle selection while one
 // is already on screen (SCR-053).
 var ErrSessionActive = errors.New("a rectangle selection session is already active")
 
+// ErrPresetTooLarge rejects a Preset Rectangle session whose frame cannot
+// fit inside the virtual desktop (SCR-031). A frame larger than one
+// individual display is still allowed while it fits the virtual desktop.
+var ErrPresetTooLarge = errors.New("the preset rectangle does not fit the virtual desktop")
+
 // Mode selects the session behavior: Free Rectangle draws and adjusts a
 // selection by mouse and typed dimensions (SCR-010 through SCR-013); Preset
-// Rectangle's exact-size frame arrives with its own item and the session
-// only offers Cancel until then.
+// Rectangle floats an exact-size frame that moves by its border, arrow-key
+// nudges, and typed dimensions without exposing resize handles (SCR-020
+// through SCR-030).
 type Mode int
 
 const (
@@ -70,18 +80,25 @@ type NativeSession interface {
 
 // CreateRequest carries everything the platform surface needs to appear.
 type CreateRequest struct {
-	// Mode selects free drawing or the later preset frame behavior.
+	// Mode selects free drawing or the preset frame behavior.
 	Mode Mode
 	// Monitor resolves the cursor display for toolbar placement and DPI.
 	Monitor *display.Monitor
-	// Bounds is the virtual-desktop rectangle the tint overlay covers.
+	// Bounds is the virtual-desktop rectangle the session works in. Free
+	// Rectangle sessions cover it with the tint overlay; Preset Rectangle
+	// sessions keep the frame inside it.
 	Bounds display.Rect
+	// Size is the Preset Rectangle frame's exact physical-pixel width (X)
+	// and height (Y); it is zero in Free Rectangle sessions.
+	Size display.Point
 	// Font is the shell's body font handle for toolbar controls, or zero
 	// to keep the system default.
 	Font uintptr
 	// OnSelection reports the live selection rectangle while the user
 	// draws, moves, resizes, or types dimensions; an empty rectangle means
-	// there is no selection and Capture stays disabled.
+	// there is no selection and Capture stays disabled. Preset Rectangle
+	// sessions report their initial frame through it at creation and never
+	// report an empty rectangle.
 	OnSelection func(display.Rect)
 	// OnCapture and OnCancel route the toolbar commands into the
 	// controller.
@@ -137,12 +154,16 @@ func (c *Controller) Active() bool {
 	return c.session != nil
 }
 
-// Begin hides the main window and shows the selection overlay and toolbar
-// (SCR-050). Only one session may be active (SCR-053). If the overlay
-// cannot be created, the main window is restored before the error returns,
-// so a failed start never leaves the app hidden or an input-capturing
-// surface behind (SCR-052).
-func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, events Events) error {
+// Begin hides the main window and shows the selection surface and toolbar
+// (SCR-050). Only one session may be active (SCR-053). Preset Rectangle
+// sessions take the frame's exact physical-pixel dimensions in size (X is
+// the width, Y the height); a frame that cannot fit inside the virtual
+// desktop is rejected with ErrPresetTooLarge before any window changes
+// (SCR-031), as is an empty size. Free Rectangle sessions ignore size. If
+// the overlay cannot be created, the main window is restored before the
+// error returns, so a failed start never leaves the app hidden or an
+// input-capturing surface behind (SCR-052).
+func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, size display.Point, events Events) error {
 	if c.Monitor == nil || c.DesktopBounds == nil {
 		return errors.New("the display service is unavailable")
 	}
@@ -159,18 +180,40 @@ func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, events Event
 	if bounds.Empty() {
 		return errors.New("the virtual desktop has no area to select from")
 	}
+	if mode == ModePresetRectangle {
+		width, height := size.X, size.Y
+		if width < 1 || height < 1 {
+			return errors.New("the preset rectangle needs a width and height of at least one pixel")
+		}
+		if width > bounds.Width() || height > bounds.Height() {
+			return fmt.Errorf("%w: "+ui.PresetRectangleTooLarge, ErrPresetTooLarge, width, height, bounds.Width(), bounds.Height())
+		}
+	}
 	restore, err := c.Hide(window)
 	if err != nil {
 		return fmt.Errorf("hide the main window: %w", err)
 	}
+	// The native session can report an initial selection while it is being
+	// created — Preset Rectangle's exact frame exists from the start
+	// (SCR-020) — but the controller's session only exists once Create
+	// returns. Buffer that report and drive it once the session is
+	// installed, or Capture would stay disarmed and deliver an empty
+	// rectangle.
+	var reported display.Rect
+	selectionReported := false
 	native, err := c.Create(CreateRequest{
-		Mode:        mode,
-		Monitor:     c.Monitor,
-		Bounds:      bounds,
-		Font:        font,
-		OnSelection: c.SetSelection,
-		OnCapture:   c.completeFromToolbar,
-		OnCancel:    c.Cancel,
+		Mode:    mode,
+		Monitor: c.Monitor,
+		Bounds:  bounds,
+		Size:    size,
+		Font:    font,
+		OnSelection: func(region display.Rect) {
+			reported = region
+			selectionReported = true
+			c.SetSelection(region)
+		},
+		OnCapture: c.completeFromToolbar,
+		OnCancel:  c.Cancel,
 	})
 	if err != nil {
 		restore()
@@ -187,6 +230,9 @@ func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, events Event
 	}
 	c.session = &session{native: native, restore: restore, events: events}
 	c.mu.Unlock()
+	if selectionReported {
+		c.SetSelection(reported)
+	}
 	return nil
 }
 
