@@ -1127,9 +1127,9 @@ func (s *windowsSession) placeToolbar() {
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's
 // fields (SCR-011). Both fields are updated even while one holds keyboard
-// focus: selection changes only ever come from pointer drags, which cannot
-// coincide with typing, and leaving a stale value in the focused field
-// would let a later focus-loss commit silently apply it over a resize.
+// focus: selection changes come from pointer drags and, in preset sessions,
+// keyboard nudges, and leaving a stale value in the focused field would let
+// a later focus-loss commit silently apply it over the newer rectangle.
 func (s *windowsSession) syncDimensions() {
 	if s.widthEdit == nil || s.heightEdit == nil {
 		return
