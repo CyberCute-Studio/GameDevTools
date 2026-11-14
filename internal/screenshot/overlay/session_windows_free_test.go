@@ -295,6 +295,53 @@ func TestOverlayDragEndsAtTheReleasePosition(t *testing.T) {
 	}
 }
 
+// TestOverlayClickOnHandleLeavesSelectionUnchanged pins the never-moved-press
+// guard on handle and interior drags: a press on a resize handle released
+// without any pointer motion must leave the selection as it was. The press
+// point sits inside the handle's grab square, off the selection's edge, so
+// applying it as the drag end would silently resize the capture region on a
+// plain click — the same jitter class the draw guard rejects.
+func TestOverlayClickOnHandleLeavesSelectionUnchanged(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 300, 240)
+	drawn := native.selection
+
+	// Press and release inside the south-east handle's grab square without
+	// moving: the click must not resize the selection to the press point.
+	x := drawn.Right - native.bounds.Left - native.grab/2 + 2
+	y := drawn.Bottom - native.bounds.Top - native.grab/2 + 2
+	sendMouse(native.overlay, wmLButtonDown, x, y)
+	sendMouse(native.overlay, wmLButtonUp, x, y)
+	if native.selection != drawn {
+		t.Fatalf("plain click on a handle resized the selection to %v, want unchanged %v", native.selection, drawn)
+	}
+
+	// A stationary mouse move during the press must not resize either.
+	sendMouse(native.overlay, wmLButtonDown, x, y)
+	sendMouse(native.overlay, wmMouseMove, x, y)
+	sendMouse(native.overlay, wmLButtonUp, x, y)
+	if native.selection != drawn {
+		t.Fatalf("stationary move on a handle resized the selection to %v, want unchanged %v", native.selection, drawn)
+	}
+
+	// A press whose pointer motion was coalesced away entirely still ends at
+	// the release position, exactly like a drag with delivered moves.
+	sendMouse(native.overlay, wmLButtonDown, x, y)
+	sendMouse(native.overlay, wmLButtonUp, x+30, y+20)
+	want := clientRect(native, 100, 100, x+31, y+21)
+	if native.selection != want {
+		t.Fatalf("coalesced-move resize = %v, want %v ending at the release position", native.selection, want)
+	}
+}
+
 func TestOverlayDimensionEditingAppliesExactSize(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	var captured display.Rect

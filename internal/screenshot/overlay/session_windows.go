@@ -245,8 +245,10 @@ const (
 )
 
 // dragState tracks one pointer interaction: its operation, the resize zone
-// for handle drags, the anchor pointer position for draw and move drags,
-// and the selection rectangle as it was when the drag started.
+// for handle drags, the anchor pointer position for draw drags, the press
+// position for move and resize drags, and the selection rectangle as it was
+// when the drag started. moved records whether the pointer left the press
+// position at least once, so a press that never moved is still a click.
 type dragState struct {
 	op       dragOp
 	zone     zone
@@ -971,10 +973,15 @@ func (s *windowsSession) pointerFromClient(lParam uintptr) display.Point {
 // button-up message carries: the final WM_MOUSEMOVE ahead of a release can
 // be coalesced away, so the selection must catch up to where the button was
 // actually released rather than stop at the last delivered move. A press
-// that never moved clears the previous selection instead of leaving a 1 × 1
-// rectangle behind from an accidental click; its release position is not
-// applied either, so pointer jitter during a plain click cannot create a
-// tiny selection. A finished draw repaints its band once more: the resize
+// that never moved is a click, not a drag: a draw click clears the previous
+// selection instead of leaving a tiny rectangle behind from pointer jitter,
+// and a handle or interior click released at the press position leaves the
+// selection alone — the handle press point sits inside the grab square, off
+// the selection's edge, so applying it as the drag end would silently
+// resize the capture region on a plain click. A handle or interior press
+// released away from the press position still ends at the release position
+// even when every move was coalesced away, so a fast flick lands where the
+// button came up. A finished draw repaints its band once more: the resize
 // handles are skipped while drawing, so without the repaint the resting
 // selection would show no resize affordance at all (SCR-012).
 func (s *windowsSession) endDrag(lParam unsafe.Pointer) {
@@ -982,6 +989,7 @@ func (s *windowsSession) endDrag(lParam unsafe.Pointer) {
 		return
 	}
 	p := s.pointerFromClient(uintptr(lParam))
+	releaseMoved := s.drag.moved || p != s.drag.originPt
 	switch s.drag.op {
 	case dragDraw:
 		if s.drag.moved {
@@ -990,9 +998,13 @@ func (s *windowsSession) endDrag(lParam unsafe.Pointer) {
 			s.setSelection(display.Rect{})
 		}
 	case dragMove:
-		s.setSelection(moveSelection(s.drag.origin, p.X-s.drag.originPt.X, p.Y-s.drag.originPt.Y, s.bounds))
+		if releaseMoved {
+			s.setSelection(moveSelection(s.drag.origin, p.X-s.drag.originPt.X, p.Y-s.drag.originPt.Y, s.bounds))
+		}
 	case dragResize:
-		s.setSelection(resizeSelection(s.drag.origin, s.drag.zone, p, s.bounds))
+		if releaseMoved {
+			s.setSelection(resizeSelection(s.drag.origin, s.drag.zone, p, s.bounds))
+		}
 	}
 	drawing := s.drag.op == dragDraw
 	s.drag = dragState{}
@@ -1067,7 +1079,7 @@ func (s *windowsSession) onButtonDown(lParam unsafe.Pointer) {
 	z := hitZone(s.selection, p, s.grab)
 	switch {
 	case z != zoneOutside && z != zoneInterior:
-		s.drag = dragState{op: dragResize, zone: z, origin: s.selection}
+		s.drag = dragState{op: dragResize, zone: z, origin: s.selection, originPt: p}
 	case z == zoneInterior:
 		s.drag = dragState{op: dragMove, origin: s.selection, originPt: p}
 	default:
@@ -1091,10 +1103,19 @@ func (s *windowsSession) onMouseMove(lParam unsafe.Pointer) {
 		}
 		s.drag.moved = true
 		s.setSelection(drawRect(s.drag.anchor, p, s.bounds))
-	case dragMove:
-		s.setSelection(moveSelection(s.drag.origin, p.X-s.drag.originPt.X, p.Y-s.drag.originPt.Y, s.bounds))
-	case dragResize:
-		s.setSelection(resizeSelection(s.drag.origin, s.drag.zone, p, s.bounds))
+	case dragMove, dragResize:
+		if !s.drag.moved && p == s.drag.originPt {
+			// A stationary move on a handle or the interior must not snap
+			// the selection to the press point either: the press point sits
+			// inside the handle's grab square, off the selection's edge.
+			return
+		}
+		s.drag.moved = true
+		if s.drag.op == dragMove {
+			s.setSelection(moveSelection(s.drag.origin, p.X-s.drag.originPt.X, p.Y-s.drag.originPt.Y, s.bounds))
+		} else {
+			s.setSelection(resizeSelection(s.drag.origin, s.drag.zone, p, s.bounds))
+		}
 	}
 }
 
