@@ -173,14 +173,17 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	// refresh clears the status area, so it runs before refreshDisplays:
 	// a display-enumeration failure at startup must stay visible.
 	n.refresh()
-	n.refreshDisplays()
-	// Register the global capture shortcut last so a registration conflict
-	// (SCR-003, AC-S11) is reported beside the field and in the status area
-	// without hiding a display-enumeration failure.
+	// Register the global capture shortcut between the two refreshes. The
+	// status area holds a single notice, so a startup registration conflict
+	// (SCR-003, AC-S11) is reported beside the field and takes the status
+	// area, which a later display-enumeration failure then claims for
+	// itself — the conflict stays visible beside the field either way,
+	// while the display failure has no other home.
 	n.hotkeys = n.hotkeyFactory(uintptr(parent), globalShortcutHotkeyID)
 	if err := n.hotkeys.Apply(n.options.Options().Shortcut); err != nil {
 		n.presentShortcutFailure(err)
 	}
+	n.refreshDisplays()
 	return nil
 }
 
