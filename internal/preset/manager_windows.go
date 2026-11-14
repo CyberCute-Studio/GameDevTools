@@ -50,6 +50,13 @@ func NewNativeManager(manager *Manager) *NativeManager {
 	return &NativeManager{manager: manager, confirm: ui.Confirm}
 }
 
+// SelectedPreset returns the preset the library has selected; the Screenshot
+// module sizes its Preset Rectangle capture frame from its exact dimensions
+// (SCR-020).
+func (n *NativeManager) SelectedPreset() (Preset, bool) {
+	return n.manager.library.Get(n.manager.library.SelectedID())
+}
+
 func (n *NativeManager) NativeCreate(parent windows.Handle) error {
 	n.parent = parent
 	base := int32(200)

@@ -289,3 +289,46 @@ func TestToolbarPlacementFollowsTheSelection(t *testing.T) {
 		})
 	}
 }
+
+func TestPresetPlacementCentersAndClamps(t *testing.T) {
+	desktop := display.Rect{Left: -1920, Top: 0, Right: 1920, Bottom: 1080}
+	tests := []struct {
+		name          string
+		anchor        display.Rect
+		width, height int32
+		want          display.Rect
+	}{
+		{
+			name:   "centers on the cursor display work area",
+			anchor: display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1040},
+			width:  1280, height: 720,
+			want: display.Rect{Left: 320, Top: 160, Right: 1600, Bottom: 880},
+		},
+		{
+			name:   "centers on a negative-coordinate display",
+			anchor: display.Rect{Left: -1920, Top: 0, Right: 0, Bottom: 1080},
+			width:  1280, height: 720,
+			want: display.Rect{Left: -1600, Top: 180, Right: -320, Bottom: 900},
+		},
+		{
+			name:   "clamps into the desktop when the anchor hangs over its edge",
+			anchor: display.Rect{Left: -1920, Top: -600, Right: 0, Bottom: 480},
+			width:  1280, height: 720,
+			want: display.Rect{Left: -1600, Top: 0, Right: -320, Bottom: 720},
+		},
+		{
+			name:   "keeps exact dimensions when clamped (SCR-020)",
+			anchor: display.Rect{Left: 1700, Top: 0, Right: 1920, Bottom: 1080},
+			width:  1280, height: 720,
+			want: display.Rect{Left: 640, Top: 180, Right: 1920, Bottom: 900},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := presetPlacement(test.anchor, desktop, test.width, test.height)
+			if got != test.want {
+				t.Fatalf("presetPlacement = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

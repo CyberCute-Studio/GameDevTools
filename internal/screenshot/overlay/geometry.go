@@ -159,6 +159,18 @@ func sizedSelection(selection display.Rect, width, height int, desktop display.R
 	}, true
 }
 
+// presetPlacement positions the Preset Rectangle frame's initial selection:
+// centered on the cursor display's work area, then clamped so the whole
+// rectangle stays inside the virtual desktop (SCR-026). The dimensions never
+// change (SCR-020); the caller guarantees they fit the desktop.
+func presetPlacement(anchor, desktop display.Rect, width, height int32) display.Rect {
+	left := anchor.Left + (anchor.Width()-width)/2
+	top := anchor.Top + (anchor.Height()-height)/2
+	left = min(max(left, desktop.Left), desktop.Right-width)
+	top = min(max(top, desktop.Top), desktop.Bottom-height)
+	return display.Rect{Left: left, Top: top, Right: left + width, Bottom: top + height}
+}
+
 // toolbarPlacement picks the toolbar's position. Without a selection the
 // toolbar is centered at the top of the anchor work area. With a selection
 // it sits centered below the selection, or above it when there is no room
