@@ -14,6 +14,7 @@ import (
 
 const (
 	vkTab             = 0x09
+	wmGetFont         = 0x0031
 	gwlExStyle        = ^uintptr(19) // -20 as a uintptr
 	wsExLayeredBit    = 0x00080000
 	wsExTopmostBit    = 0x00000008
@@ -28,6 +29,7 @@ var (
 	procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
 	procGetDlgItem      = user32.NewProc("GetDlgItem")
 	procSendMessageW    = user32.NewProc("SendMessageW")
+	procGetStockObject  = gdi32.NewProc("GetStockObject")
 )
 
 type win32Rect struct {

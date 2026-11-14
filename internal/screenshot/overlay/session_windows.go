@@ -630,20 +630,6 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	if err != nil {
 		return err
 	}
-	font := windows.Handle(request.Font)
-	if font != 0 {
-		labels := []*ui.Label{message, widthLabel, heightLabel}
-		if s.position != nil {
-			labels = append(labels, s.position)
-		}
-		for _, control := range labels {
-			control.SetFont(font)
-		}
-		widthEdit.SetFont(font)
-		heightEdit.SetFont(font)
-		captureButton.SetFont(font)
-		cancelButton.SetFont(font)
-	}
 	// The dimension fields are only meaningful with a selection on screen;
 	// Free Rectangle sessions start without one, Preset Rectangle sessions
 	// with the exact preset frame.
@@ -658,11 +644,36 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	s.capture = captureButton
 	s.cancel = cancelButton
 
+	if request.Font != 0 {
+		s.SetFont(request.Font)
+	}
 	s.layoutToolbarControls()
 	s.captureButton = captureButton.Handle()
 	s.syncDimensions()
 	s.syncPosition()
 	return nil
+}
+
+// SetFont applies the shell's body font to every toolbar control. It runs at
+// creation and again when the shell recreates its fonts for a DPI change:
+// the old handle is destroyed in that recreation, so a control left holding
+// it would paint with a fallback font at the wrong size.
+func (s *windowsSession) SetFont(font uintptr) {
+	if s.toolbar == 0 {
+		return
+	}
+	handle := windows.Handle(font)
+	labels := []*ui.Label{s.message, s.widthLabel, s.heightLabel}
+	if s.position != nil {
+		labels = append(labels, s.position)
+	}
+	for _, control := range labels {
+		control.SetFont(handle)
+	}
+	s.widthEdit.SetFont(handle)
+	s.heightEdit.SetFont(handle)
+	s.capture.SetFont(handle)
+	s.cancel.SetFont(handle)
 }
 
 // layoutToolbarControls positions the toolbar's controls for the session's
@@ -830,14 +841,12 @@ func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 				return false
 			}
 		}
-		s.fillLocal(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}, dimPixel)
-		if err := s.renderSelection(display.Rect{}); err != nil {
-			return false
-		}
-		// renderSelection only uploads the selection's band; the full upload
-		// covers the re-dimmed desktop and repositions the window to the new
-		// desktop origin.
-		if err := s.present(display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}); err != nil {
+		// The whole desktop is repainted — re-dimmed with the revalidated
+		// selection drawn into it — and uploaded in one pass that also
+		// repositions the window to the new desktop origin.
+		full := display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}
+		s.paintSelection(full)
+		if err := s.present(full); err != nil {
 			return false
 		}
 	}
@@ -1140,6 +1149,16 @@ func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 		return nil
 	}
 	local := s.toLocal(dirty)
+	s.paintSelection(local)
+	return s.present(local)
+}
+
+// paintSelection paints one band of the backing bitmap, in client
+// coordinates: the band is re-dimmed and the selection's interior, border,
+// and handles are drawn into it. The band must cover the selection's visual
+// bounds; it may be larger, as when the whole desktop is repainted after a
+// display change.
+func (s *windowsSession) paintSelection(local display.Rect) {
 	s.fillLocal(local, dimPixel)
 	if !s.selection.Empty() {
 		sel := s.toLocal(s.selection)
@@ -1151,7 +1170,6 @@ func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 			s.drawHandles(sel)
 		}
 	}
-	return s.present(local)
 }
 
 // drawHandles paints the eight resize handles as white squares with a dark

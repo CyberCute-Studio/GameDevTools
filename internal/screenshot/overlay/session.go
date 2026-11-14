@@ -10,9 +10,10 @@
 //
 // All Controller methods run on the GUI thread. The session windows are
 // unowned topmost popups, so they outlive the main window unless the
-// controller removes them; Cancel, Complete, and Shutdown guarantee that
-// removal (SCR-052, SCR-056). Every input-capturing surface is visible while
-// it intercepts input — the Free Rectangle tint, the Preset Rectangle frame
+// controller removes them; Cancel, Complete, Shutdown, and a display change
+// the session cannot survive all guarantee that removal (SCR-052, SCR-054,
+// SCR-056). Every input-capturing surface is visible while it intercepts
+// input — the Free Rectangle tint, the Preset Rectangle frame
 // ring — so a session can never wedge the desktop behind an invisible
 // surface (SCR-052).
 package overlay
@@ -188,6 +189,29 @@ func (c *Controller) Attention() {
 	}
 	if native, ok := s.native.(attentionSession); ok {
 		native.Attention()
+	}
+}
+
+// fontSession is implemented by native sessions whose toolbar controls hold
+// a font the shell can replace.
+type fontSession interface {
+	SetFont(font uintptr)
+}
+
+// SetFont hands the shell's current body font to the active session's
+// toolbar. The shell recreates its fonts when its DPI changes and destroys
+// the old handles, so a session created with the previous font must receive
+// the new one or its controls keep painting through a destroyed handle.
+// Without an active session there is nothing to update.
+func (c *Controller) SetFont(font uintptr) {
+	c.mu.Lock()
+	s := c.session
+	c.mu.Unlock()
+	if s == nil {
+		return
+	}
+	if native, ok := s.native.(fontSession); ok {
+		native.SetFont(font)
 	}
 }
 

@@ -212,6 +212,12 @@ func (n *NativeView) NativeFont(font windows.Handle) {
 	n.pattern.SetFont(font)
 	n.status.SetFont(font)
 	n.presets.NativeFont(font)
+	// The shell destroys the previous font while recreating this one, so an
+	// active overlay session's toolbar must receive the new handle too, or
+	// its controls keep painting through the destroyed one (SCR-054).
+	if n.sessions != nil {
+		n.sessions.SetFont(uintptr(font))
+	}
 }
 
 func (n *NativeView) NativeShow(visible bool) {

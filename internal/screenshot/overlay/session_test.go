@@ -14,6 +14,7 @@ var testDesktop = display.Rect{Left: -1920, Top: 0, Right: 1920, Bottom: 1080}
 type fakeNative struct {
 	closed      int
 	ready       []bool
+	fonts       []uintptr
 	onSelection func(display.Rect)
 	onCapture   func()
 	onCancel    func()
@@ -24,6 +25,7 @@ type fakeNative struct {
 
 func (f *fakeNative) Close()                       { f.closed++ }
 func (f *fakeNative) SetSelectionReady(ready bool) { f.ready = append(f.ready, ready) }
+func (f *fakeNative) SetFont(font uintptr)         { f.fonts = append(f.fonts, font) }
 
 func (f *fakeNative) DisplayChanged(bounds display.Rect) bool {
 	if f.displayChanged == nil {
@@ -625,4 +627,32 @@ func TestDisplayChangeWithoutSessionIsNoop(t *testing.T) {
 	if len(fixture.log) != 0 {
 		t.Fatalf("display change without a session changed state: %v", fixture.log)
 	}
+}
+
+// TestSetFontForwardsToNativeSession pins the DPI-change font handoff: the
+// shell destroys its previous font while recreating it, so the active
+// session's toolbar must receive the new handle. Without a session, or with
+// a surface that has no toolbar font, nothing happens.
+func TestSetFontForwardsToNativeSession(t *testing.T) {
+	controller, fixture := newFixtureController()
+	controller.SetFont(11)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+
+	controller.SetFont(42)
+
+	if !reflect.DeepEqual(fixture.native.fonts, []uintptr{42}) {
+		t.Fatalf("SetFont calls = %v, want [42] for the active session only", fixture.native.fonts)
+	}
+
+	plain := &plainNative{}
+	controller.Create = func(CreateRequest) (NativeSession, error) { return plain, nil }
+	controller.Cancel()
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	// A surface without font support is left alone.
+	controller.SetFont(43)
+	controller.Cancel()
 }

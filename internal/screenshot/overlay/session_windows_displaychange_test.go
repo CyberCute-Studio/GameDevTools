@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
 
@@ -250,6 +252,41 @@ func TestDisplayChangeResolvesScalingOnUnchangedTopology(t *testing.T) {
 	wantSize := display.LogicalToPhysical(toolbarLogicalWidth, cursor.DPIX)
 	if native.toolbarSize.Width != wantSize {
 		t.Fatalf("toolbar width after the display change = %d, want %d at %d DPI", native.toolbarSize.Width, wantSize, cursor.DPIX)
+	}
+	controller.Cancel()
+}
+
+// TestSetFontUpdatesToolbarControls pins the DPI-change font handoff end to
+// end: the shell destroys the session toolbar's font while recreating its
+// own, so the recreated handle must reach every toolbar control — a control
+// left holding the destroyed handle would paint with a fallback font at the
+// wrong size (SCR-054).
+func TestSetFontUpdatesToolbarControls(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModePresetRectangle, display.Point{X: 320, Y: 240}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+
+	// A stock font is a guaranteed-valid HFONT: the edit controls validate
+	// the handle they are handed and keep no record of an invalid one.
+	font, _, _ := procGetStockObject.Call(17) // DEFAULT_GUI_FONT
+	controller.SetFont(font)
+
+	controls := map[string]windows.Handle{
+		"message":      native.message.Handle(),
+		"width label":  native.widthLabel.Handle(),
+		"height label": native.heightLabel.Handle(),
+		"width edit":   native.widthEdit.Handle(),
+		"height edit":  native.heightEdit.Handle(),
+		"position":     native.position.Handle(),
+		"capture":      native.capture.Handle(),
+		"cancel":       native.cancel.Handle(),
+	}
+	for name, hwnd := range controls {
+		if got, _, _ := procSendMessageW.Call(uintptr(hwnd), wmGetFont, 0, 0); got != font {
+			t.Errorf("%s font = %d, want %d", name, got, font)
+		}
 	}
 	controller.Cancel()
 }
