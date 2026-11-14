@@ -245,6 +245,56 @@ func TestOverlayFocusedFieldTracksHandleResize(t *testing.T) {
 	}
 }
 
+// TestOverlayDragEndsAtTheReleasePosition pins the drag completion against
+// mouse-move coalescing: the final WM_MOUSEMOVE ahead of a release can be
+// dropped, so the button-up message's own coordinates must finish the drag.
+// A press that never moved is still a click and clears the selection — its
+// release position is not applied, so pointer jitter cannot create a tiny
+// selection.
+func TestOverlayDragEndsAtTheReleasePosition(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	// The draw's release corner wins over the last delivered move.
+	sendMouse(native.overlay, wmLButtonDown, 100, 100)
+	sendMouse(native.overlay, wmMouseMove, 300, 240)
+	sendMouse(native.overlay, wmLButtonUp, 310, 245)
+	if want := clientRect(native, 100, 100, 311, 246); native.selection != want {
+		t.Fatalf("drawn selection = %v, want %v ending at the release position", native.selection, want)
+	}
+
+	// A move drag ends where the button was released, not where the last
+	// move was delivered.
+	sendMouse(native.overlay, wmLButtonDown, 150, 150)
+	sendMouse(native.overlay, wmMouseMove, 160, 160)
+	sendMouse(native.overlay, wmLButtonUp, 190, 200)
+	if want := clientRect(native, 140, 150, 351, 296); native.selection != want {
+		t.Fatalf("moved selection = %v, want %v ending at the release position", native.selection, want)
+	}
+
+	// A handle resize ends at the release position too.
+	sel := native.selection
+	sendMouse(native.overlay, wmLButtonDown, sel.Right-1-native.bounds.Left, sel.Bottom-1-native.bounds.Top)
+	sendMouse(native.overlay, wmMouseMove, 400, 340)
+	sendMouse(native.overlay, wmLButtonUp, 420, 360)
+	if want := clientRect(native, 140, 150, 421, 361); native.selection != want {
+		t.Fatalf("resized selection = %v, want %v ending at the release position", native.selection, want)
+	}
+
+	// A press that never moved clears the selection even when the release
+	// lands a pixel or two away from the press: plain-click jitter must not
+	// create a tiny selection.
+	sendMouse(native.overlay, wmLButtonDown, 500, 400)
+	sendMouse(native.overlay, wmLButtonUp, 502, 401)
+	if !native.selection.Empty() {
+		t.Fatalf("click jitter created a selection: %v", native.selection)
+	}
+}
+
 func TestOverlayDimensionEditingAppliesExactSize(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	var captured display.Rect

@@ -967,17 +967,32 @@ func (s *windowsSession) pointerFromClient(lParam uintptr) display.Point {
 	}
 }
 
-// endDrag finishes the pointer interaction. A press that never moved clears
-// the previous selection instead of leaving a 1 × 1 rectangle behind from
-// an accidental click. A finished draw repaints its band once more: the
-// resize handles are skipped while drawing, so without the repaint the
-// resting selection would show no resize affordance at all (SCR-012).
-func (s *windowsSession) endDrag() {
+// endDrag finishes the pointer interaction at the release position the
+// button-up message carries: the final WM_MOUSEMOVE ahead of a release can
+// be coalesced away, so the selection must catch up to where the button was
+// actually released rather than stop at the last delivered move. A press
+// that never moved clears the previous selection instead of leaving a 1 × 1
+// rectangle behind from an accidental click; its release position is not
+// applied either, so pointer jitter during a plain click cannot create a
+// tiny selection. A finished draw repaints its band once more: the resize
+// handles are skipped while drawing, so without the repaint the resting
+// selection would show no resize affordance at all (SCR-012).
+func (s *windowsSession) endDrag(lParam unsafe.Pointer) {
 	if s.drag.op == dragNone {
 		return
 	}
-	if s.drag.op == dragDraw && !s.drag.moved {
-		s.setSelection(display.Rect{})
+	p := s.pointerFromClient(uintptr(lParam))
+	switch s.drag.op {
+	case dragDraw:
+		if s.drag.moved {
+			s.setSelection(drawRect(s.drag.anchor, p, s.bounds))
+		} else {
+			s.setSelection(display.Rect{})
+		}
+	case dragMove:
+		s.setSelection(moveSelection(s.drag.origin, p.X-s.drag.originPt.X, p.Y-s.drag.originPt.Y, s.bounds))
+	case dragResize:
+		s.setSelection(resizeSelection(s.drag.origin, s.drag.zone, p, s.bounds))
 	}
 	drawing := s.drag.op == dragDraw
 	s.drag = dragState{}
@@ -1012,7 +1027,7 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 			session.onMouseMove(lParam)
 			return 0
 		case wmLButtonUp:
-			session.endDrag()
+			session.endDrag(lParam)
 			return 0
 		case wmCaptureChanged:
 			// Capture can be lost mid-draw without a button release (another
