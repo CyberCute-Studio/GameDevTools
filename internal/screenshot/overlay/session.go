@@ -209,9 +209,15 @@ type displayChangeSession interface {
 // still fits the new virtual desktop; otherwise it ends with an explanation
 // instead of leaving a stale overlay up (AC-S12). A topology that cannot be
 // enumerated at all is treated the same way, because the session can no
-// longer prove its surface matches the desktop (SCR-052). Sessions without
-// display-change support are ended rather than left covering a desktop they
-// no longer match.
+// longer prove its surface matches the desktop (SCR-052). Sessions with
+// display-change support receive every readable notification, even one whose
+// physical topology is unchanged: a scaling or work-area change keeps the
+// virtual-desktop rectangle identical while still invalidating the session's
+// DPI-derived measurements, and only the native session can tell that from a
+// truly empty notification. Sessions without display-change support are
+// ended when the topology moved — left up, they would cover a desktop they
+// no longer match — and left alone when it did not, because their surface
+// still matches it.
 func (c *Controller) DisplayChange() {
 	c.mu.Lock()
 	s := c.session
@@ -224,11 +230,14 @@ func (c *Controller) DisplayChange() {
 		c.endDisplayChangeSession(s, ui.CaptureSessionDisplayGone)
 		return
 	}
-	if bounds == s.bounds {
+	native, ok := s.native.(displayChangeSession)
+	if !ok {
+		if bounds != s.bounds {
+			c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
+		}
 		return
 	}
-	native, ok := s.native.(displayChangeSession)
-	if !ok || !native.DisplayChanged(bounds) {
+	if !native.DisplayChanged(bounds) {
 		c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
 		return
 	}

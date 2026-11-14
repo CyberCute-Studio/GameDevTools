@@ -20,11 +20,11 @@ func TestCaptureFailureMessage(t *testing.T) {
 	}
 
 	// A disconnected display or a mid-capture layout change asks for a
-	// fresh display selection rather than reporting a generic failure
-	// (UX-010).
+	// fresh look at the connected displays rather than reporting a generic
+	// failure (UX-010).
 	displayErr := &capture.Error{Kind: capture.KindDisplay, Op: "find display", Err: errors.New(`display \\.\DISPLAY2 is no longer connected`)}
 	got := captureFailureMessage(fallback, displayErr)
-	if !strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the display selection") {
+	if !strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the connected displays") {
 		t.Fatalf("display-kind message = %q", got)
 	}
 
@@ -46,7 +46,7 @@ func TestCaptureFailureMessage(t *testing.T) {
 
 	// A wrapped typed error is still recognized.
 	wrapped := fmt.Errorf("capture display: %w", displayErr)
-	if got := captureFailureMessage(fallback, wrapped); !strings.Contains(got, "Check the display selection") {
+	if got := captureFailureMessage(fallback, wrapped); !strings.Contains(got, "Check the connected displays") {
 		t.Fatalf("wrapped display-kind message = %q", got)
 	}
 }

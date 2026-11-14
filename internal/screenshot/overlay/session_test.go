@@ -426,8 +426,9 @@ func TestAttentionForwardsToNativeSession(t *testing.T) {
 // TestDisplayChangeKeepsFittingSession covers the SCR-054 happy path: the
 // topology changed but the session's surface revalidated itself, so the
 // session survives with its selection re-reported and the controller's
-// bounds updated. An unchanged topology does not disturb the session at
-// all.
+// bounds updated. A notification whose physical topology is unchanged is
+// still forwarded to the native surface, which re-resolves scaling and
+// work-area measurements the controller cannot see.
 func TestDisplayChangeKeepsFittingSession(t *testing.T) {
 	controller, fixture := newFixtureController()
 	lost := 0
@@ -438,10 +439,26 @@ func TestDisplayChangeKeepsFittingSession(t *testing.T) {
 	}
 	controller.SetSelection(display.Rect{Left: 10, Top: 10, Right: 810, Bottom: 610})
 
-	// An unchanged desktop leaves the native surface alone.
+	// An unchanged desktop still reaches the native surface; the surface
+	// answers without re-reporting the selection, and the session is
+	// untouched.
+	forwarded := 0
+	fixture.native.displayChanged = func(bounds display.Rect) bool {
+		forwarded++
+		if bounds != testDesktop {
+			t.Errorf("DisplayChanged bounds = %v, want the unchanged %v", bounds, testDesktop)
+		}
+		return true
+	}
 	controller.DisplayChange()
-	if fixture.native.displayChanged != nil {
-		t.Fatal("test setup: unexpected DisplayChanged stub")
+	if forwarded != 1 {
+		t.Fatalf("DisplayChanged calls for an unchanged topology = %d, want 1", forwarded)
+	}
+	if len(fixture.native.ready) != 1 {
+		t.Fatalf("SetSelectionReady calls after an unchanged topology = %v, want no re-report", fixture.native.ready)
+	}
+	if len(fixture.log) != 2 {
+		t.Fatalf("an unchanged topology touched the main window: %v", fixture.log)
 	}
 
 	shrunken := display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1080}
@@ -542,8 +559,10 @@ func TestDisplayChangeEndsSessionWhenTopologyUnreadable(t *testing.T) {
 }
 
 // TestDisplayChangeEndsUnsupportedSession pins the fallback for a native
-// surface without display-change support: leaving it up would mean an
-// overlay sized for a desktop that no longer exists.
+// surface without display-change support: leaving it up after the topology
+// moved would mean an overlay sized for a desktop that no longer exists. An
+// unchanged topology leaves it alone, because its surface still matches the
+// desktop.
 func TestDisplayChangeEndsUnsupportedSession(t *testing.T) {
 	controller, fixture := newFixtureController()
 	plain := &plainNative{}
@@ -557,6 +576,12 @@ func TestDisplayChangeEndsUnsupportedSession(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	controller.DisplayChange()
+	if !controller.Active() || plain.closed != 0 || lost != 0 {
+		t.Fatalf("an unchanged topology disturbed an unsupported session: active=%v closed=%d lost=%d", controller.Active(), plain.closed, lost)
+	}
+
 	controller.DesktopBounds = func() (display.Rect, error) {
 		return display.Rect{Right: 640, Bottom: 480}, nil
 	}

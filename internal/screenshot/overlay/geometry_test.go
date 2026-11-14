@@ -359,4 +359,29 @@ func TestRevalidatedSelection(t *testing.T) {
 	if _, ok := revalidatedSelection(oversized, desktop); ok {
 		t.Fatal("a selection larger than the desktop was kept")
 	}
+	// A selection exactly equal to the desktop is kept unchanged.
+	if got, ok := revalidatedSelection(desktop, desktop); !ok || got != desktop {
+		t.Fatalf("desktop-sized selection = (%v, %v), want (%v, true)", got, ok, desktop)
+	}
+
+	// A negative-coordinate desktop: a selection reaching past its left edge
+	// moves back inside without changing dimensions.
+	negative := display.Rect{Left: -1920, Top: -120, Right: 0, Bottom: 960}
+	reaching := display.Rect{Left: -2000, Top: -200, Right: -1360, Bottom: 280}
+	wantNegative := display.Rect{Left: -1920, Top: -120, Right: -1280, Bottom: 360}
+	if got, ok := revalidatedSelection(reaching, negative); !ok || got != wantNegative {
+		t.Fatalf("negative-desktop selection = (%v, %v), want (%v, true)", got, ok, wantNegative)
+	}
+
+	// A 1 × 1 desktop keeps a 1 × 1 selection and rejects anything larger.
+	tiny := display.Rect{Left: -1, Top: -1, Right: 0, Bottom: 0}
+	pixel := display.Rect{Left: 5, Top: 5, Right: 6, Bottom: 6}
+	wantPixel := display.Rect{Left: -1, Top: -1, Right: 0, Bottom: 0}
+	if got, ok := revalidatedSelection(pixel, tiny); !ok || got != wantPixel {
+		t.Fatalf("1 × 1 selection on a 1 × 1 desktop = (%v, %v), want (%v, true)", got, ok, wantPixel)
+	}
+	tooBig := display.Rect{Left: -1, Top: -1, Right: 1, Bottom: 0}
+	if _, ok := revalidatedSelection(tooBig, tiny); ok {
+		t.Fatal("a 2 × 1 selection was kept on a 1 × 1 desktop")
+	}
 }

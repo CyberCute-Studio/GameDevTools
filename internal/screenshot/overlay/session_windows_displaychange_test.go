@@ -172,3 +172,84 @@ func TestDisplayChangeDestroysSessionWindows(t *testing.T) {
 		t.Fatalf("session-loss reason = %q, want a display-layout explanation", reason)
 	}
 }
+
+// TestDisplayChangeLeavesUnchangedTopologyUntouched pins the no-op answer:
+// a notification whose physical topology, cursor-display scaling, and anchor
+// work area all match the session's measurements must not re-render or
+// re-report anything (SCR-054).
+func TestDisplayChangeLeavesUnchangedTopologyUntouched(t *testing.T) {
+	controller, log := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	selection := display.Rect{
+		Left:   native.bounds.Left + 100,
+		Top:    native.bounds.Top + 100,
+		Right:  native.bounds.Left + 740,
+		Bottom: native.bounds.Top + 580,
+	}
+	native.setSelection(selection)
+	overlayBefore := windowRect(t, native.overlay)
+	toolbarBefore := windowRect(t, native.toolbar)
+
+	controller.DisplayChange()
+
+	if !controller.Active() {
+		t.Fatal("an unchanged topology ended the session")
+	}
+	if native.selection != selection {
+		t.Fatalf("selection after an unchanged topology = %v, want %v", native.selection, selection)
+	}
+	if got := windowRect(t, native.overlay); got != overlayBefore {
+		t.Fatalf("overlay rect after an unchanged topology = %v, want %v", got, overlayBefore)
+	}
+	if got := windowRect(t, native.toolbar); got != toolbarBefore {
+		t.Fatalf("toolbar rect after an unchanged topology = %v, want %v", got, toolbarBefore)
+	}
+	if got := native.pixelSlice()[5*int(native.pixelWidth)+5]; got != dimPixel {
+		t.Fatalf("overlay pixel after an unchanged topology = %#08x, want the dimmed tint %#08x", got, dimPixel)
+	}
+	if len(*log) != 1 {
+		t.Fatalf("an unchanged topology touched the main window: %v", *log)
+	}
+}
+
+// TestDisplayChangeResolvesScalingOnUnchangedTopology covers the SCR-054
+// scaling path: a DPI or work-area change keeps the physical virtual-desktop
+// rectangle identical, so the controller cannot see it — the notification
+// still reaches the session, which re-resolves its DPI-derived measurements
+// instead of carrying stale ones.
+func TestDisplayChangeResolvesScalingOnUnchangedTopology(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	// Simulate measurements left over from a previous scaling level: the
+	// session's own record no longer matches the cursor display, exactly as
+	// a mid-session scaling change leaves it.
+	native.dpi = 1
+	native.anchor = display.Rect{}
+
+	controller.DisplayChange()
+
+	if !controller.Active() {
+		t.Fatal("a scaling-only change ended the session")
+	}
+	cursor, err := display.NewMonitor().CursorDisplay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if native.dpi != cursor.DPIX {
+		t.Fatalf("session DPI after the display change = %d, want the cursor display's %d", native.dpi, cursor.DPIX)
+	}
+	if native.anchor != cursor.WorkArea {
+		t.Fatalf("toolbar anchor after the display change = %v, want the cursor display work area %v", native.anchor, cursor.WorkArea)
+	}
+	wantSize := display.LogicalToPhysical(toolbarLogicalWidth, cursor.DPIX)
+	if native.toolbarSize.Width != wantSize {
+		t.Fatalf("toolbar width after the display change = %d, want %d at %d DPI", native.toolbarSize.Width, wantSize, cursor.DPIX)
+	}
+	controller.Cancel()
+}

@@ -667,7 +667,7 @@ func TestNativeViewCaptureFailureCategorizesTypedErrors(t *testing.T) {
 		Kind: capture.KindDisplay, Op: "find display", Err: errors.New(`display \.\DISPLAY2 is no longer connected`),
 	}}, displayCaptureMessages)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") ||
-		!strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the display selection") {
+		!strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the connected displays") {
 		t.Fatalf("status for a disconnected display = %q", got)
 	}
 

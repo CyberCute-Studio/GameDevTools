@@ -781,7 +781,10 @@ func (s *windowsSession) Attention() {
 // (AC-S12); false is also returned when the new surfaces cannot be
 // allocated, because a session that cannot repaint itself to match the
 // desktop must not stay up intercepting input (SCR-052). The revalidated
-// selection is reported through OnSelection, like every selection change.
+// selection is reported through OnSelection, like every selection change. A
+// notification whose physical topology, cursor-display scaling, and anchor
+// work area all match the session's current measurements changes nothing the
+// surfaces show, so it is answered without re-rendering.
 func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 	selection, ok := revalidatedSelection(s.selection, bounds)
 	if !ok {
@@ -797,6 +800,9 @@ func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 			dpi = item.DPIX
 			anchor = item.WorkArea
 		}
+	}
+	if bounds == s.bounds && dpi == s.dpi && anchor == s.anchor {
+		return true
 	}
 	// Pointer coordinates from a drag in progress belong to the old desktop;
 	// end the interaction rather than apply them to the new layout.

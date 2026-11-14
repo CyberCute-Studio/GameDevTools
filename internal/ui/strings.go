@@ -110,7 +110,7 @@ const (
 
 	CaptureInProgress      = "A capture is already in progress. Wait for it to finish."
 	CaptureFailed          = "The display could not be captured: %v"
-	CaptureDisplayChanged  = "The display layout changed or the selected display disconnected before the capture could finish: %v. Check the display selection and try again."
+	CaptureDisplayChanged  = "The display layout changed or a display disconnected before the capture could finish: %v. Check the connected displays and try again."
 	CaptureGraphicsFailed  = "The graphics system could not read the screen: %v. If a full-screen exclusive application or game is running, switch it to windowed mode and try again."
 	CaptureSucceeded       = "Display captured. Saved to %s and copied to the clipboard."
 	CaptureSaveFailed      = "Display captured and copied to the clipboard, but saving failed: %v"
@@ -131,7 +131,7 @@ const (
 	CaptureOverlayFailed      = "The selection overlay could not be shown: %v"
 	CaptureSessionActive      = "A rectangle selection is already on screen. Finish or cancel it before starting another."
 	CaptureSelectionEnded     = "Rectangle selection cancelled. Nothing was captured."
-	CaptureSessionDisplayLost = "The display layout changed and the selection no longer fits the connected displays. Nothing was captured; start the capture again."
+	CaptureSessionDisplayLost = "The display layout changed and the selection could not be kept in the new layout. Nothing was captured; start the capture again."
 	CaptureSessionDisplayGone = "The display layout could not be read after a display change. Nothing was captured; start the capture again."
 
 	SelectionCaptureFailed          = "The selection could not be captured: %v"

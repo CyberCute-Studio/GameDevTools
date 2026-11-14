@@ -160,7 +160,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** Include AC-S11 and the shortcut portion of AC-A05. The Screenshot view registers the persisted shortcut on the shell window, which routes `WM_HOTKEY` to the module; the shortcut starts the selected mode like Start Capture, or flashes the active session's toolbar instead of stacking a second overlay. Registration conflicts keep the previous combination working while the user picks a replacement, and the registration releases on exit. A per-session named mutex gives one instance per user session; a second launch activates the existing window and exits. Live cross-application invocation, second-instance activation, and mixed-DPI behavior are tested at the registration/routing/windowing level; hardware validation remains gated by the FND-01 blocker.
 
 17. **SCR-10 — Harden display changes, capture errors, and overlay recovery**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-09
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** SCR-09
     - **Requirements:** SCR-052, SCR-054, SCR-056, SCR-060, SCR-069, NFR-022, UX-010.
     - **Deliver:** Display-disconnect/reconnect handling, selection revalidation, protected/exclusive-content error presentation, graphics/capture failure recovery, independent output-result notifications, and shutdown cleanup for every capture state.
     - **Verify:** Disconnect the active display, change DPI/layout during selection, simulate capture/clipboard/save failures, and exit from each state. Confirm actionable errors and no invisible overlays, lost input, or false success.
