@@ -119,6 +119,7 @@ const (
 	SelectionHeightLabel      = "&H (px)"
 	SelectionPositionFormat   = "X: %d, Y: %d"
 	SelectionFitInvalid       = "The typed dimensions do not fit at the selection's position. Move the selection or enter smaller dimensions."
+	SelectionResizeFailed     = "The frame could not be resized: %v. The previous dimensions were kept."
 	PresetRectangleTooLarge   = "the preset rectangle (%d × %d physical pixels) is larger than the entire virtual desktop (%d × %d). Choose or create a smaller preset"
 	CaptureOverlayFailed      = "The selection overlay could not be shown: %v"
 	CaptureSessionActive      = "A rectangle selection is already on screen. Finish or cancel it before starting another."

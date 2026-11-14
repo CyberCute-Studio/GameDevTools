@@ -762,9 +762,11 @@ func (s *windowsSession) isDimensionEdit(hwnd uintptr) bool {
 // Capture button, arrow keys nudge a preset frame by one physical pixel (ten
 // with Shift, SCR-027) — except inside the dimension fields, where they keep
 // moving the text caret — and toolbar messages go through IsDialogMessage so
-// Tab, arrow keys, and Enter work between the toolbar controls even though
-// the toolbar is a popup rather than a dialog. Messages for other windows
-// pass through untouched.
+// Tab and Enter work between the toolbar controls even though the toolbar is
+// a popup rather than a dialog (in Free Rectangle sessions arrow keys take
+// their dialog-navigation role there too, while Preset Rectangle sessions
+// consume them as nudges first). Messages for other windows pass through
+// untouched.
 func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 	msg := (*windowMessage)(message)
 	c.mu.Lock()
@@ -857,16 +859,25 @@ func (s *windowsSession) setSelection(selection display.Rect) {
 // could never put frame visuals inside the captured pixels (SCR-068).
 func (s *windowsSession) setPresetSelection(selection display.Rect) {
 	resized := selection.Width() != s.selection.Width() || selection.Height() != s.selection.Height()
+	if resized {
+		if err := s.resizeSurface(selection.Width()+2*s.border, selection.Height()+2*s.border); err != nil {
+			// The backing bitmap could not be swapped for the new size, so
+			// the frame keeps the previous rectangle: painting the new ring
+			// into the old bitmap would clip it, and the frame would no
+			// longer outline the rectangle Capture reads. The dimension
+			// fields revert to the actual frame, exactly like a rejected
+			// edit.
+			s.message.SetText(fmt.Sprintf(ui.SelectionResizeFailed, err))
+			s.syncDimensions()
+			return
+		}
+	}
 	s.selection = selection
 	s.frameOrigin = display.Point{X: selection.Left - s.border, Y: selection.Top - s.border}
 	if resized {
-		if err := s.resizeSurface(selection.Width()+2*s.border, selection.Height()+2*s.border); err != nil {
-			// The old bitmap no longer matches the selection; the frame is
-			// still composited from it below, so a failure only leaves the
-			// previous ring visible and the interaction stays usable.
-			_ = err
-		}
 		if err := s.renderFrame(); err != nil {
+			// A compositing failure leaves the previous frame visible; the
+			// interaction stays usable, so the error is not fatal.
 			_ = err
 		}
 	} else {
