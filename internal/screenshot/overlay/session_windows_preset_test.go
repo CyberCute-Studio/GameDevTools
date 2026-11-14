@@ -304,22 +304,29 @@ func TestPresetFrameCaptureDeliversExactRect(t *testing.T) {
 		restore()
 		restored = true
 	}}
-	if err := controller.Begin(42, 0, ModePresetRectangle, display.Point{X: 1280, Y: 720}, events); err != nil {
+	// AC-S01 geometry asks for a 1280 × 720 preset; CI desktops can be
+	// smaller, so the frame shrinks to fit rather than testing nothing.
+	desktop, err := display.NewMonitor().VirtualDesktopBounds()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := display.Point{X: min(1280, desktop.Width()), Y: min(720, desktop.Height())}
+	if err := controller.Begin(42, 0, ModePresetRectangle, size, events); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
 	t.Cleanup(controller.Shutdown)
 
-	// AC-S01 geometry: Capture delivers exactly the preset rectangle, and
-	// the session windows are destroyed before the pixels are read so no
-	// frame or toolbar visual can reach the output (SCR-068).
+	// Capture delivers exactly the preset rectangle, and the session windows
+	// are destroyed before the pixels are read so no frame or toolbar visual
+	// can reach the output (SCR-068).
 	selection := native.selection
 	procSendMessageW.Call(uintptr(native.toolbar), wmCommand, toolbarCaptureCommand, 0)
 	if captured != selection {
 		t.Fatalf("captured region = %v, want the exact preset frame %v", captured, selection)
 	}
-	if captured.Width() != 1280 || captured.Height() != 720 {
-		t.Fatalf("captured dimensions = %d × %d, want 1280 × 720", captured.Width(), captured.Height())
+	if captured.Width() != size.X || captured.Height() != size.Y {
+		t.Fatalf("captured dimensions = %d × %d, want the preset %d × %d", captured.Width(), captured.Height(), size.X, size.Y)
 	}
 	if !restored {
 		t.Fatal("main window was not restored")
