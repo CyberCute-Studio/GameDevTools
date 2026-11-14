@@ -221,6 +221,46 @@ func (n *recordingNativeView) NativeCommand(id int32, notification uint16) bool 
 }
 func (*recordingNativeView) NativeDestroy() {}
 
+// hotkeyRecordingView records NativeHotkey calls so the shell's WM_HOTKEY
+// routing can be observed.
+type hotkeyRecordingView struct {
+	recordingNativeView
+	hotkeyID int32
+	calls    int
+	handled  bool
+}
+
+func (n *hotkeyRecordingView) NativeHotkey(id int32) bool {
+	n.calls++
+	n.hotkeyID = id
+	return n.handled
+}
+
+// TestShellWindowProcRoutesHotkeys covers the shell half of SCR-002: a
+// WM_HOTKEY reaching the shell window is offered to the module views with
+// its registration identifier, and a consumed hotkey triggers a relayout.
+func TestShellWindowProcRoutesHotkeys(t *testing.T) {
+	native := &hotkeyRecordingView{handled: true}
+	shell := newCommandTestShell(t, native)
+	shellWindowProc(shell.hwnd, wmHotkey, 1, nil)
+	if native.calls != 1 || native.hotkeyID != 1 {
+		t.Fatalf("routed hotkey = (%d calls, id %d), want (1, 1)", native.calls, native.hotkeyID)
+	}
+	if native.layouts == 0 {
+		t.Fatal("consumed hotkey did not trigger a layout")
+	}
+
+	native.handled = false
+	layouts := native.layouts
+	shellWindowProc(shell.hwnd, wmHotkey, 7, nil)
+	if native.calls != 2 || native.hotkeyID != 7 {
+		t.Fatalf("unconsumed hotkey = (%d calls, id %d), want (2, 7)", native.calls, native.hotkeyID)
+	}
+	if native.layouts != layouts {
+		t.Fatal("unconsumed hotkey triggered a layout")
+	}
+}
+
 // filterRecordingView records NativeFilterMessage calls so the shell's
 // pre-dispatch hook can be observed.
 type filterRecordingView struct {

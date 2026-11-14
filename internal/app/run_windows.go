@@ -25,6 +25,17 @@ func runNative() error {
 	if err := enablePerMonitorDPI(); err != nil {
 		return err
 	}
+	// One instance per user session (APP-005): a second launch activates
+	// the running instance's window and exits, so global shortcuts and
+	// settings never conflict across instances.
+	releaseInstance, activated, err := enforceSingleInstance()
+	if err != nil {
+		return err
+	}
+	if activated {
+		return nil
+	}
+	defer releaseInstance()
 
 	paths, pathErr := settings.LocalPaths()
 	store := settings.NewStore(paths)

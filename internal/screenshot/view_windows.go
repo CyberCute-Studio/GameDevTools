@@ -29,11 +29,25 @@ const (
 	modeFullCommand
 	formatCommand
 	qualityCommand
+	shortcutCommand
 	folderCommand
 	browseCommand
 	displayCommand
 	openFolderCommand
 )
+
+// globalShortcutHotkeyID is the RegisterHotKey identifier the shell window
+// uses for the global capture shortcut; WM_HOTKEY carries it in wParam.
+const globalShortcutHotkeyID = 1
+
+// hotkeyRegistrar registers, suspends, and releases one global hotkey
+// combination. The production implementation is Hotkey; tests substitute a
+// fake.
+type hotkeyRegistrar interface {
+	Apply(Shortcut) error
+	Suspend()
+	Release()
+}
 
 type NativeView struct {
 	options  *OptionsManager
@@ -47,6 +61,8 @@ type NativeView struct {
 	captureRectangle RectangleCaptureFunc
 	dispatcher       core.Dispatcher
 	reveal           func(string) error
+	hotkeyFactory    func(uintptr, int32) hotkeyRegistrar
+	hotkeys          hotkeyRegistrar
 	pending          sync.WaitGroup
 	displayList      []display.Display
 	displayErr       error
@@ -64,6 +80,7 @@ type NativeView struct {
 	formatLabel  *ui.Label
 	format       *ui.ComboBox
 	quality      *ui.TextInput
+	shortcut     *ui.TextInput
 	folderLabel  *ui.Label
 	folder       *ui.ReadOnlyText
 	browseButton *ui.Button
@@ -82,7 +99,10 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		capture:          capture,
 		captureRectangle: captureRectangle,
 		reveal:           ui.RevealInFolder,
-		sessions:         sessions,
+		hotkeyFactory: func(window uintptr, id int32) hotkeyRegistrar {
+			return newHotkey(window, id)
+		},
+		sessions: sessions,
 	}
 }
 
@@ -119,6 +139,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.quality, err = ui.NewTextInput(parent, ui.JPEGQualityLabel, base+qualityCommand); err != nil {
 		return err
 	}
+	if n.shortcut, err = ui.NewTextInput(parent, ui.GlobalShortcutLabel, base+shortcutCommand); err != nil {
+		return err
+	}
+	n.shortcut.Edit.SetText(n.options.Options().Shortcut.String())
 	if n.folderLabel, err = ui.NewMnemonicLabel(parent, ui.OutputFolderLabel); err != nil {
 		return err
 	}
@@ -150,6 +174,13 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	// a display-enumeration failure at startup must stay visible.
 	n.refresh()
 	n.refreshDisplays()
+	// Register the global capture shortcut last so a registration conflict
+	// (SCR-003, AC-S11) is reported beside the field and in the status area
+	// without hiding a display-enumeration failure.
+	n.hotkeys = n.hotkeyFactory(uintptr(parent), globalShortcutHotkeyID)
+	if err := n.hotkeys.Apply(n.options.Options().Shortcut); err != nil {
+		n.presentShortcutFailure(err)
+	}
 	return nil
 }
 
@@ -171,6 +202,7 @@ func (n *NativeView) NativeFont(font windows.Handle) {
 	n.formatLabel.SetFont(font)
 	n.format.SetFont(font)
 	n.quality.SetFont(font)
+	n.shortcut.SetFont(font)
 	n.folderLabel.SetFont(font)
 	n.folder.SetFont(font)
 	n.patternLabel.SetFont(font)
@@ -189,6 +221,7 @@ func (n *NativeView) NativeShow(visible bool) {
 	n.formatLabel.Show(visible)
 	n.format.Show(visible)
 	n.quality.Show(visible)
+	n.shortcut.Show(visible)
 	n.folderLabel.Show(visible)
 	n.folder.Show(visible)
 	n.patternLabel.Show(visible)
@@ -203,12 +236,12 @@ func (n *NativeView) showDisplayPicker(visible bool) {
 }
 
 func (n *NativeView) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
-	own, _, _ := n.optionsSectionHeight(width, scale, measure)
+	own, _, _, _ := n.optionsSectionHeight(width, scale, measure)
 	return own + n.presets.NativeHeight(width, scale, measure)
 }
 
 func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) {
-	_, metrics, statusHeight := n.optionsSectionHeight(width, scale, measure)
+	_, qualityMetrics, shortcutMetrics, statusHeight := n.optionsSectionHeight(width, scale, measure)
 	n.modeLabel.Move(x, y, width, scale(20))
 	radioY := y + scale(24)
 	if stackedOptionsLayout(width, scale) {
@@ -232,8 +265,10 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 	n.formatLabel.Move(x, y, width, scale(20))
 	n.format.Move(x, y+scale(24), width, scale(200))
 	y += scale(66)
-	n.quality.Move(x, y, width, metrics)
-	y += metrics.Height() + scale(12)
+	n.quality.Move(x, y, width, qualityMetrics)
+	y += qualityMetrics.Height() + scale(12)
+	n.shortcut.Move(x, y, width, shortcutMetrics)
+	y += shortcutMetrics.Height() + scale(12)
 	n.folderLabel.Move(x, y, width, scale(20))
 	browseWidth := scale(120)
 	gap := scale(8)
@@ -250,9 +285,13 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 	n.presets.NativeLayout(x, y, width, scale, measure)
 }
 
-func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) (int32, ui.DimensionMetrics, int32) {
-	metrics := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
-	metrics.ErrorHeight = max(metrics.ErrorHeight, measure(n.quality.Error.Text(), width))
+func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) (int32, ui.DimensionMetrics, ui.DimensionMetrics, int32) {
+	// Each text input reserves its own error height, so a wrapped message
+	// under one field does not inflate the row of the other.
+	quality := ui.DimensionMetrics{LabelHeight: scale(20), EditHeight: scale(28), ErrorHeight: scale(40), Gap: scale(4)}
+	quality.ErrorHeight = max(quality.ErrorHeight, measure(n.quality.Error.Text(), width))
+	shortcut := quality
+	shortcut.ErrorHeight = max(scale(40), measure(n.shortcut.Error.Text(), width))
 	radioRows := int32(1)
 	if stackedOptionsLayout(width, scale) {
 		radioRows = 3
@@ -262,11 +301,12 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 		height += scale(66)
 	}
 	height += scale(66)
-	height += metrics.Height() + scale(12)
+	height += quality.Height() + scale(12)
+	height += shortcut.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
 	statusHeight := max(scale(48), measure(n.status.Text(), width-scale(120)-scale(8)))
-	return height + statusHeight + scale(16), metrics, statusHeight
+	return height + statusHeight + scale(16), quality, shortcut, statusHeight
 }
 
 func stackedOptionsLayout(width int32, scale func(int32) int32) bool {
@@ -274,6 +314,21 @@ func stackedOptionsLayout(width int32, scale func(int32) int32) bool {
 }
 
 func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
+	if id == optionsCommandBase+shortcutCommand {
+		switch notification {
+		case ui.NotificationEditSetFocus:
+			// While the user edits the combination, pressing the active
+			// shortcut must not start a capture out from under the edit.
+			if n.hotkeys != nil {
+				n.hotkeys.Suspend()
+			}
+		case ui.NotificationEditKillFocus:
+			n.commitShortcut()
+		case ui.NotificationEditChange:
+			n.shortcut.Error.SetText("")
+		}
+		return true
+	}
 	if n.quality.HandleCommand(id, notification) {
 		if notification == ui.NotificationEditKillFocus {
 			n.commitQuality()
@@ -335,6 +390,9 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 }
 
 func (n *NativeView) NativeDestroy() {
+	if n.hotkeys != nil {
+		n.hotkeys.Release()
+	}
 	if n.sessions != nil {
 		n.sessions.Shutdown()
 	}
@@ -403,6 +461,23 @@ func (n *NativeView) NativeAction() {
 		result := n.capture(request)
 		n.post(func() { n.finishCapture(result, displayCaptureMessages) })
 	}()
+}
+
+// NativeHotkey runs the global capture shortcut for the currently selected
+// capture mode (SCR-002), exactly like the Start Capture button (SCR-001).
+// While a rectangle selection session is on screen, the shortcut brings
+// attention to that session instead of stacking a second overlay (SCR-005).
+// The shell routes WM_HOTKEY here; unknown identifiers are not consumed.
+func (n *NativeView) NativeHotkey(id int32) bool {
+	if id != globalShortcutHotkeyID || n.hotkeys == nil {
+		return false
+	}
+	if n.sessions != nil && n.sessions.Active() {
+		n.sessions.Attention()
+		return true
+	}
+	n.NativeAction()
+	return true
 }
 
 // NativeShutdown blocks until an in-flight capture has finished delivering
@@ -643,6 +718,64 @@ func displayListItem(item display.Display) string {
 		format = ui.DisplayListItemPrimary
 	}
 	return fmt.Sprintf(format, item.Number, name, item.Bounds.Width(), item.Bounds.Height(), item.ScalePercent())
+}
+
+// commitShortcut applies the shortcut field's text when the field loses
+// focus. Invalid text is rejected with field-level validation and the
+// previously registered combination is restored; a combination another
+// application owns is reported as a registration conflict while the old
+// shortcut keeps working, so the user can choose a replacement (SCR-003,
+// SCR-004, AC-S11).
+func (n *NativeView) commitShortcut() {
+	if n.hotkeys == nil {
+		return
+	}
+	current := n.options.Options().Shortcut
+	shortcut, err := ParseShortcut(n.shortcut.Edit.Text())
+	if err != nil {
+		n.shortcut.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
+		n.restoreHotkey(current)
+		return
+	}
+	if shortcut == current {
+		n.shortcut.Error.SetText("")
+		n.shortcut.Edit.SetText(shortcut.String())
+		n.restoreHotkey(current)
+		return
+	}
+	if err := n.hotkeys.Apply(shortcut); err != nil {
+		// A failed registration leaves the old combination untouched, but
+		// the field edit suspended it; bring it back so the working shortcut
+		// keeps working while the user picks another (AC-S11).
+		n.restoreHotkey(current)
+		n.presentShortcutFailure(err)
+		return
+	}
+	n.shortcut.Error.SetText("")
+	n.shortcut.Edit.SetText(shortcut.String())
+	err = n.options.SetShortcut(shortcut)
+	n.presentResult(err, fmt.Sprintf(ui.ShortcutSaved, shortcut))
+}
+
+// restoreHotkey re-registers the persisted combination after the shortcut
+// field's focus suspension or a rejected edit. A failure here means the
+// combination itself became unavailable — another application claimed it in
+// the meantime — so it is reported like any registration failure.
+func (n *NativeView) restoreHotkey(shortcut Shortcut) {
+	if n.hotkeys == nil {
+		return
+	}
+	if err := n.hotkeys.Apply(shortcut); err != nil {
+		n.presentShortcutFailure(err)
+	}
+}
+
+// presentShortcutFailure reports a registration problem beside the shortcut
+// field and in the status area, categorized as a shortcut-registration
+// failure (UX-010).
+func (n *NativeView) presentShortcutFailure(err error) {
+	n.shortcut.Error.SetText(ui.FormatError(ui.ErrorShortcutRegistration, err))
+	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorShortcutRegistration, err)}, 0)
 }
 
 func (n *NativeView) commitQuality() {

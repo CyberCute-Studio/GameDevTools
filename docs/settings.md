@@ -34,7 +34,8 @@ Settings are UTF-8 JSON. Unknown fields, unsupported versions, invalid module id
         "mode": "preset-rectangle",
         "format": "png",
         "jpegQuality": 90,
-        "outputFolder": "C:\\Users\\Example\\Pictures\\GameDevTools\\Screenshots"
+        "outputFolder": "C:\\Users\\Example\\Pictures\\GameDevTools\\Screenshots",
+        "shortcut": "Ctrl+Alt+S"
       },
       "presets": {
         "version": 1,
@@ -95,8 +96,9 @@ The Screenshot module stores capture configuration under its own `capture` objec
 - `capture.format` is `png` or `jpeg`. The default is `png`.
 - `capture.jpegQuality` is a whole number from 1 through 100. The default is `90`. It is stored even while PNG is selected so the last quality is retained when switching formats.
 - `capture.outputFolder` is an absolute local folder path. The default is the user's Pictures folder under `GameDevTools/Screenshots`, resolved through the Windows known-folder API. The folder is created when a capture is saved, not when it is configured.
+- `capture.shortcut` is the global capture-invocation shortcut in its canonical `Modifier+Key` form, for example `Ctrl+Alt+S`. At least one of Ctrl, Alt, Shift, or Win is required, plus one letter (A–Z), digit (0–9), or function key (F1–F24). The default is `Ctrl+Alt+S`. Sections written before this field existed omit it and load with the default.
 
-Unsupported versions, unknown fields, duplicate fields, invalid enumerations, out-of-range quality values, and missing, relative, or invalid-text folders are rejected. The whole settings file then follows the standard backup-and-recovery flow, so malformed capture options cannot silently discard presets or window state.
+Unsupported versions, unknown fields, duplicate fields, invalid enumerations, out-of-range quality values, unparseable or modifier-less shortcuts, and missing, relative, or invalid-text folders are rejected. The whole settings file then follows the standard backup-and-recovery flow, so malformed capture options cannot silently discard presets or window state.
 
 The filename pattern is fixed at `Screenshot_yyyyMMdd_HHmmssfff` with a `.png` or `.jpg` extension following the selected format; the Screenshot view displays the pattern but does not edit it.
 

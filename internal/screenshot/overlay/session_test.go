@@ -350,3 +350,55 @@ func TestShutdownRemovesSessionSilently(t *testing.T) {
 		t.Fatal("second Shutdown closed the windows again")
 	}
 }
+
+// attentiveNative is a native session with an attention affordance, used to
+// verify the controller forwards Attention to sessions that implement it.
+type attentiveNative struct {
+	fakeNative
+	attention int
+}
+
+func (a *attentiveNative) Attention() { a.attention++ }
+
+// TestAttentionForwardsToNativeSession covers SCR-005's plumbing: the global
+// capture shortcut asks the controller to draw attention to the active
+// session. Sessions with an attention affordance receive exactly one call;
+// sessions without one are left alone, and calling without a session is a
+// no-op.
+func TestAttentionForwardsToNativeSession(t *testing.T) {
+	controller, fixture := newFixtureController()
+	attentive := &attentiveNative{}
+	controller.Create = func(request CreateRequest) (NativeSession, error) {
+		fixture.log = append(fixture.log, "create")
+		attentive.onSelection = request.OnSelection
+		attentive.onCapture = request.OnCapture
+		attentive.onCancel = request.OnCancel
+		return attentive, nil
+	}
+
+	controller.Attention()
+	if attentive.attention != 0 {
+		t.Fatal("Attention reached a session before one existed")
+	}
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	controller.Attention()
+	if attentive.attention != 1 {
+		t.Fatalf("Attention calls = %d, want 1", attentive.attention)
+	}
+	controller.Cancel()
+	controller.Attention()
+	if attentive.attention != 1 {
+		t.Fatal("Attention reached the session after it ended")
+	}
+
+	// A session whose native surface has no attention affordance is simply
+	// left alone.
+	plain, _ := newFixtureController()
+	if err := plain.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	plain.Attention()
+	plain.Cancel()
+}

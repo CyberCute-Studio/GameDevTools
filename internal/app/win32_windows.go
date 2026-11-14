@@ -14,6 +14,7 @@ const (
 	wmSize           = 0x0005
 	wmClose          = 0x0010
 	wmCommand        = 0x0111
+	wmHotkey         = 0x0312
 	wmVScroll        = 0x0115
 	wmCtlColorStatic = 0x0138
 	wmSetFont        = 0x0030
@@ -52,6 +53,7 @@ const (
 	swHide          = 0
 	swShowMaximized = 3
 	swShow          = 5
+	swRestore       = 9
 
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
@@ -115,6 +117,11 @@ var (
 	procReleaseDC                     = user32.NewProc("ReleaseDC")
 	procDrawTextW                     = user32.NewProc("DrawTextW")
 	procGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
+	procCreateMutexW                  = kernel32.NewProc("CreateMutexW")
+	procCloseHandle                   = kernel32.NewProc("CloseHandle")
+	procFindWindowW                   = user32.NewProc("FindWindowW")
+	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
+	procIsIconic                      = user32.NewProc("IsIconic")
 	procCreateFontIndirectW           = gdi32.NewProc("CreateFontIndirectW")
 	procSelectObject                  = gdi32.NewProc("SelectObject")
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")

@@ -30,6 +30,9 @@ func TestDefaultOptions(t *testing.T) {
 	if options.OutputFolder != folder {
 		t.Fatalf("default output folder = %q, want %q", options.OutputFolder, folder)
 	}
+	if options.Shortcut != DefaultShortcut() {
+		t.Fatalf("default shortcut = %q, want %q", options.Shortcut, DefaultShortcut())
+	}
 	if err := options.Validate(); err != nil {
 		t.Fatalf("default options are invalid: %v", err)
 	}
@@ -55,6 +58,7 @@ func TestCaptureOptionsValidateBoundaries(t *testing.T) {
 		{name: "quality above range", mutate: func(o *CaptureOptions) { o.JPEGQuality = 101 }, wantErr: "between 1 and 100"},
 		{name: "negative quality", mutate: func(o *CaptureOptions) { o.JPEGQuality = -5 }, wantErr: "between 1 and 100"},
 		{name: "empty folder", mutate: func(o *CaptureOptions) { o.OutputFolder = "" }, wantErr: "required"},
+		{name: "unset shortcut", mutate: func(o *CaptureOptions) { o.Shortcut = Shortcut{} }, wantErr: "Ctrl+Alt+S"},
 		{name: "relative folder", mutate: func(o *CaptureOptions) { o.OutputFolder = filepath.Join("Screenshots", "out") }, wantErr: "absolute"},
 		{name: "folder with null character", mutate: func(o *CaptureOptions) { o.OutputFolder = folder + "\x00" }, wantErr: "not valid text"},
 		{name: "folder with replacement character", mutate: func(o *CaptureOptions) { o.OutputFolder = folder + "�" }, wantErr: "not valid text"},
@@ -145,8 +149,15 @@ func TestOptionsManagerUpdatesAndPersistenceFailure(t *testing.T) {
 	if err := manager.SetOutputFolder(folder); err != nil {
 		t.Fatal(err)
 	}
+	shortcut, err := ParseShortcut("Ctrl+Shift+F5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetShortcut(shortcut); err != nil {
+		t.Fatal(err)
+	}
 	options := manager.Options()
-	if options.Mode != ModePresetRectangle || options.Format != FormatJPEG || options.JPEGQuality != 70 || options.OutputFolder != folder {
+	if options.Mode != ModePresetRectangle || options.Format != FormatJPEG || options.JPEGQuality != 70 || options.OutputFolder != folder || options.Shortcut != shortcut {
 		t.Fatalf("updated options = %+v", options)
 	}
 
@@ -158,6 +169,9 @@ func TestOptionsManagerUpdatesAndPersistenceFailure(t *testing.T) {
 	}
 	if err := manager.SetOutputFolder("relative\\Screenshots"); err == nil {
 		t.Fatal("SetOutputFolder accepted a relative path")
+	}
+	if err := manager.SetShortcut(Shortcut{}); err == nil {
+		t.Fatal("SetShortcut accepted an empty shortcut")
 	}
 	if manager.Options() != options {
 		t.Fatalf("rejected updates changed options to %+v", manager.Options())
