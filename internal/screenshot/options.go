@@ -74,7 +74,7 @@ func (o CaptureOptions) Validate() error {
 	if o.JPEGQuality < MinJPEGQuality || o.JPEGQuality > MaxJPEGQuality {
 		return errors.New(ui.JPEGQualityRange)
 	}
-	if o.Shortcut.Key == 0 {
+	if !o.Shortcut.Valid() {
 		return errors.New(ui.ShortcutInvalid)
 	}
 	return validateOutputFolder(o.OutputFolder)

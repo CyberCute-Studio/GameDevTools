@@ -33,6 +33,12 @@ func DefaultShortcut() Shortcut {
 	return Shortcut{Ctrl: true, Alt: true, Key: 'S', Name: "S"}
 }
 
+// Valid reports whether the shortcut can be registered: a key plus at least
+// one modifier, matching what ParseShortcut accepts and what is stored.
+func (s Shortcut) Valid() bool {
+	return s.Key != 0 && (s.Ctrl || s.Alt || s.Shift || s.Win)
+}
+
 // String formats the shortcut in its canonical modifier order, for example
 // "Ctrl+Alt+S" or "Ctrl+Shift+F5".
 func (s Shortcut) String() string {
@@ -102,7 +108,7 @@ func ParseShortcut(input string) (Shortcut, error) {
 			keySeen = true
 		}
 	}
-	if !keySeen || shortcut.Key == 0 || (!shortcut.Ctrl && !shortcut.Alt && !shortcut.Shift && !shortcut.Win) {
+	if !keySeen || !shortcut.Valid() {
 		return Shortcut{}, errors.New(ui.ShortcutInvalid)
 	}
 	return shortcut, nil

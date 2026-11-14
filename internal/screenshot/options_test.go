@@ -59,6 +59,7 @@ func TestCaptureOptionsValidateBoundaries(t *testing.T) {
 		{name: "negative quality", mutate: func(o *CaptureOptions) { o.JPEGQuality = -5 }, wantErr: "between 1 and 100"},
 		{name: "empty folder", mutate: func(o *CaptureOptions) { o.OutputFolder = "" }, wantErr: "required"},
 		{name: "unset shortcut", mutate: func(o *CaptureOptions) { o.Shortcut = Shortcut{} }, wantErr: "Ctrl+Alt+S"},
+		{name: "modifier-less shortcut", mutate: func(o *CaptureOptions) { o.Shortcut = Shortcut{Key: 'S', Name: "S"} }, wantErr: "Ctrl+Alt+S"},
 		{name: "relative folder", mutate: func(o *CaptureOptions) { o.OutputFolder = filepath.Join("Screenshots", "out") }, wantErr: "absolute"},
 		{name: "folder with null character", mutate: func(o *CaptureOptions) { o.OutputFolder = folder + "\x00" }, wantErr: "not valid text"},
 		{name: "folder with replacement character", mutate: func(o *CaptureOptions) { o.OutputFolder = folder + "�" }, wantErr: "not valid text"},
@@ -172,6 +173,9 @@ func TestOptionsManagerUpdatesAndPersistenceFailure(t *testing.T) {
 	}
 	if err := manager.SetShortcut(Shortcut{}); err == nil {
 		t.Fatal("SetShortcut accepted an empty shortcut")
+	}
+	if err := manager.SetShortcut(Shortcut{Key: 'S', Name: "S"}); err == nil {
+		t.Fatal("SetShortcut accepted a modifier-less shortcut")
 	}
 	if manager.Options() != options {
 		t.Fatalf("rejected updates changed options to %+v", manager.Options())

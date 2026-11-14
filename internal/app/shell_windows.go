@@ -691,6 +691,13 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		notification := highWord(wParam)
 		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus) && lParam != nil {
 			shell.ensureControlVisible(windows.Handle(lParam))
+			// Set-focus notifications also reach the owning module view: the
+			// Screenshot shortcut field suspends its global hotkey while it is
+			// being edited, which only works if this branch does not swallow
+			// the notification.
+			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists && native.NativeCommand(int32(lowWord(wParam)), notification) {
+				shell.layout()
+			}
 			return 0
 		}
 		if shell != nil && notification == 0 && lowWord(wParam) == actionCommand {

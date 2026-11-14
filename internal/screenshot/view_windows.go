@@ -734,21 +734,30 @@ func (n *NativeView) commitShortcut() {
 	shortcut, err := ParseShortcut(n.shortcut.Edit.Text())
 	if err != nil {
 		n.shortcut.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
-		n.restoreHotkey(current)
+		if restoreErr := n.restoreHotkey(current); restoreErr != nil {
+			n.presentShortcutFailure(restoreErr)
+		}
 		return
 	}
 	if shortcut == current {
 		n.shortcut.Error.SetText("")
 		n.shortcut.Edit.SetText(shortcut.String())
-		n.restoreHotkey(current)
+		if restoreErr := n.restoreHotkey(current); restoreErr != nil {
+			n.presentShortcutFailure(restoreErr)
+		}
 		return
 	}
 	if err := n.hotkeys.Apply(shortcut); err != nil {
 		// A failed registration leaves the old combination untouched, but
 		// the field edit suspended it; bring it back so the working shortcut
-		// keeps working while the user picks another (AC-S11).
-		n.restoreHotkey(current)
-		n.presentShortcutFailure(err)
+		// keeps working while the user picks another (AC-S11). If the old
+		// combination cannot be brought back either, that loss is the more
+		// important message.
+		if restoreErr := n.restoreHotkey(current); restoreErr != nil {
+			n.presentShortcutFailure(restoreErr)
+		} else {
+			n.presentShortcutFailure(err)
+		}
 		return
 	}
 	n.shortcut.Error.SetText("")
@@ -760,14 +769,12 @@ func (n *NativeView) commitShortcut() {
 // restoreHotkey re-registers the persisted combination after the shortcut
 // field's focus suspension or a rejected edit. A failure here means the
 // combination itself became unavailable — another application claimed it in
-// the meantime — so it is reported like any registration failure.
-func (n *NativeView) restoreHotkey(shortcut Shortcut) {
+// the meantime — so the caller reports it like any registration failure.
+func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 	if n.hotkeys == nil {
-		return
+		return nil
 	}
-	if err := n.hotkeys.Apply(shortcut); err != nil {
-		n.presentShortcutFailure(err)
-	}
+	return n.hotkeys.Apply(shortcut)
 }
 
 // presentShortcutFailure reports a registration problem beside the shortcut

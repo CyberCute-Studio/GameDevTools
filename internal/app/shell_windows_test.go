@@ -261,6 +261,27 @@ func TestShellWindowProcRoutesHotkeys(t *testing.T) {
 	}
 }
 
+// TestShellWindowProcForwardsEditSetFocusToView pins the regression where
+// the shell's scroll-into-view branch swallowed EN_SETFOCUS before the
+// module view saw it: the Screenshot shortcut field suspends its global
+// hotkey on that notification, so swallowing it kept the hotkey live while
+// the user edited the combination.
+func TestShellWindowProcForwardsEditSetFocusToView(t *testing.T) {
+	native := &recordingNativeView{}
+	shell := newCommandTestShell(t, native)
+	edit, err := ui.NewTextInput(shell.hwnd, "Shortcut", 401)
+	if err != nil {
+		t.Fatal(err)
+	}
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(401)|uintptr(enSetFocus)<<16, uintptr(edit.Edit.Handle()))
+	if native.commandID != 401 || native.notification != enSetFocus {
+		t.Fatalf("routed set-focus = (%d, %d), want (401, %d)", native.commandID, native.notification, enSetFocus)
+	}
+	if native.layouts == 0 {
+		t.Fatal("consumed set-focus notification did not trigger a layout")
+	}
+}
+
 // filterRecordingView records NativeFilterMessage calls so the shell's
 // pre-dispatch hook can be observed.
 type filterRecordingView struct {

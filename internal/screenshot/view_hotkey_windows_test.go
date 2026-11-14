@@ -245,6 +245,25 @@ func TestNativeViewShortcutFieldSuspendsHotkeyWhileEditing(t *testing.T) {
 	}
 }
 
+// TestNativeViewShortcutCommitReportsRestoreFailure covers the path where
+// the previous combination was claimed by another application in the
+// meantime: the user must hear that the working shortcut was lost, not only
+// that the new one failed to register.
+func TestNativeViewShortcutCommitReportsRestoreFailure(t *testing.T) {
+	view := newConflictedHotkeyView(t)
+
+	view.shortcut.Edit.SetText("Ctrl+Shift+F9")
+	view.NativeCommand(optionsCommandBase+shortcutCommand, ui.NotificationEditKillFocus)
+
+	if got := view.shortcut.Error.Text(); !strings.Contains(got, "Shortcut registration error:") ||
+		!strings.Contains(got, "Ctrl+Alt+S") {
+		t.Fatalf("field error when the working shortcut is lost = %q, want it to name Ctrl+Alt+S", got)
+	}
+	if got := view.options.Options().Shortcut; got != DefaultShortcut() {
+		t.Fatalf("failed commit changed the stored shortcut to %+v", got)
+	}
+}
+
 // TestNativeViewDestroyReleasesHotkey is SCR-006 and the shortcut half of
 // AC-A05: exiting releases the global shortcut so no registration outlives
 // the application.

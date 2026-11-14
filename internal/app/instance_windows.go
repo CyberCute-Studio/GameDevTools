@@ -3,6 +3,7 @@
 package app
 
 import (
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -23,7 +24,10 @@ func enforceSingleInstance() (release func(), activated bool, err error) {
 		return nil, false, err
 	}
 	if already {
-		activateExistingInstance(shellClassName)
+		// The duplicate handle is not needed to activate the other
+		// instance, and this process exits right after.
+		procCloseHandle.Call(handle)
+		activateExistingInstance(shellClassName, 2*time.Second)
 		return nil, true, nil
 	}
 	return func() { procCloseHandle.Call(handle) }, false, nil
@@ -45,12 +49,19 @@ func acquireInstance(name string) (handle uintptr, already bool, err error) {
 
 // activateExistingInstance brings the running instance's window back to the
 // user (APP-005): a minimized window is restored first, then the window is
-// moved to the foreground. It reports whether the window was found. While
-// the existing instance is capturing, its main window is intentionally
-// hidden; activating a hidden window changes nothing on screen, and the
-// running capture is left undisturbed.
-func activateExistingInstance(className string) bool {
-	hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16(className))), 0)
+// moved to the foreground. It reports whether the window was found. The
+// running instance takes the instance mutex before its window exists, so a
+// second launch that lands in that startup gap retries for up to wait
+// instead of exiting without showing anything. While the existing instance
+// is capturing, its main window is intentionally hidden; activating a hidden
+// window changes nothing on screen, and the running capture is left
+// undisturbed.
+func activateExistingInstance(className string, wait time.Duration) bool {
+	hwnd := findInstanceWindow(className)
+	for deadline := time.Now().Add(wait); hwnd == 0 && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		hwnd = findInstanceWindow(className)
+	}
 	if hwnd == 0 {
 		return false
 	}
@@ -59,4 +70,11 @@ func activateExistingInstance(className string) bool {
 	}
 	procSetForegroundWindow.Call(hwnd)
 	return true
+}
+
+// findInstanceWindow resolves the running instance's top-level window by its
+// class name, or zero while that window does not exist yet.
+func findInstanceWindow(className string) uintptr {
+	hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16(className))), 0)
+	return hwnd
 }
