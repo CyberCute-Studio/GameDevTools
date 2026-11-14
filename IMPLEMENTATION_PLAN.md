@@ -139,7 +139,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** The `internal/screenshot/overlay` controller hides the main window, dims the virtual desktop with a translucent topmost overlay, and anchors a topmost toolbar (disabled Capture, Cancel) to the cursor display; the shell forwards session messages through a module filter for Escape and toolbar keyboard navigation. Cancelling, overlay-creation failure, and application exit all destroy the session windows and restore the main window. Selection drawing, exact-frame behavior, and capture execution are implemented in subsequent items.
 
 14. **SCR-07 — Complete Free Rectangle capture end to end**
-    - **Status:** In Progress | **PR:** TBD | **Depends on:** SCR-06, SCR-04
+    - **Status:** In Progress | **PR:** [#14](https://github.com/CyberCute-Studio/GameDevTools/pull/14) | **Depends on:** SCR-06, SCR-04
     - **Requirements:** SCR-010, SCR-011, SCR-012, SCR-013, SCR-014, SCR-024, SCR-025, SCR-051, SCR-068.
     - **Deliver:** Drag-to-draw selection, live physical-pixel dimensions, move/resize handles, numeric dimension editing, edge-aware toolbar placement, capture/cancel actions, and output integration.
     - **Verify:** Test 1 × 1 selection, large and cross-monitor selections, moving/resizing, numeric edits, cancellation, and exact output content/dimensions without overlay artifacts.
