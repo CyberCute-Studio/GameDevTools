@@ -141,6 +141,17 @@ func convertDIB(pixels unsafe.Pointer, width, height int) *image.RGBA {
 	return result
 }
 
+// FlushCompositor waits for the desktop compositor to apply queued window
+// changes, so a capture that runs right after app-owned surfaces were hidden
+// or destroyed cannot still contain them (SCR-044, SCR-068).
+func FlushCompositor() error {
+	if hr, _, _ := procDwmFlush.Call(); int32(hr) < 0 {
+		return kindError(KindNative, "DwmFlush",
+			fmt.Errorf("returned HRESULT %#x", uint32(hr)))
+	}
+	return nil
+}
+
 // Hide hides the given app-owned windows and waits for the desktop
 // compositor to settle, so a following capture cannot contain them
 // (SCR-044). It returns the Exclusion that restores the windows; callers
@@ -164,10 +175,9 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 			wasMinimized: minimized != 0,
 		})
 	}
-	if hr, _, _ := procDwmFlush.Call(); int32(hr) < 0 {
+	if err := FlushCompositor(); err != nil {
 		exclusion.Restore()
-		return nil, kindError(KindNative, "DwmFlush",
-			fmt.Errorf("returned HRESULT %#x", uint32(hr)))
+		return nil, err
 	}
 	return exclusion, nil
 }

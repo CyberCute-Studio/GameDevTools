@@ -42,17 +42,18 @@ type NativeView struct {
 	browse   func(windows.Handle, string) (string, bool, error)
 	sessions *overlay.Controller
 
-	displays    *display.Monitor
-	capture     CaptureFunc
-	dispatcher  core.Dispatcher
-	reveal      func(string) error
-	pending     sync.WaitGroup
-	displayList []display.Display
-	displayErr  error
-	inProgress  bool
-	savedPath   string
-	shown       bool
-	font        windows.Handle
+	displays         *display.Monitor
+	capture          CaptureFunc
+	captureRectangle RectangleCaptureFunc
+	dispatcher       core.Dispatcher
+	reveal           func(string) error
+	pending          sync.WaitGroup
+	displayList      []display.Display
+	displayErr       error
+	inProgress       bool
+	savedPath        string
+	shown            bool
+	font             windows.Handle
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -72,15 +73,16 @@ type NativeView struct {
 	openFolder   *ui.Button
 }
 
-func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc, sessions *overlay.Controller) *NativeView {
+func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc, captureRectangle RectangleCaptureFunc, sessions *overlay.Controller) *NativeView {
 	return &NativeView{
-		options:  options,
-		presets:  preset.NewNativeManager(manager),
-		browse:   ui.BrowseForFolder,
-		displays: displays,
-		capture:  capture,
-		reveal:   ui.RevealInFolder,
-		sessions: sessions,
+		options:          options,
+		presets:          preset.NewNativeManager(manager),
+		browse:           ui.BrowseForFolder,
+		displays:         displays,
+		capture:          capture,
+		captureRectangle: captureRectangle,
+		reveal:           ui.RevealInFolder,
+		sessions:         sessions,
 	}
 }
 
@@ -343,13 +345,8 @@ func (n *NativeView) NativeDestroy() {
 // NativeAction runs the shell's primary Start Capture action for the
 // currently selected capture mode (SCR-001). Full Display capture runs here;
 // the rectangle modes open the selection overlay session (SCR-050), whose
-// drawing and capture tools arrive with later items.
+// Capture command captures the drawn rectangle end to end.
 func (n *NativeView) NativeAction() {
-	options := n.options.Options()
-	if options.Mode != ModeFullDisplay {
-		n.beginOverlay()
-		return
-	}
 	if n.inProgress {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureInProgress}, 0)
 		return
@@ -363,6 +360,7 @@ func (n *NativeView) NativeAction() {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 		return
 	}
+	options := n.options.Options()
 	// The commit bypasses commitQuality's success notice: the capture
 	// result replaces it moments later, so the notice would only flash.
 	// Failures still surface, and a non-persistence failure aborts the
@@ -378,6 +376,10 @@ func (n *NativeView) NativeAction() {
 	options = n.options.Options()
 	if err := options.Validate(); err != nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		return
+	}
+	if options.Mode != ModeFullDisplay {
+		n.beginOverlay()
 		return
 	}
 	// A stale enumeration failure must not wedge capture: retry it here,
@@ -399,7 +401,7 @@ func (n *NativeView) NativeAction() {
 	go func() {
 		defer n.pending.Done()
 		result := n.capture(request)
-		n.post(func() { n.finishCapture(result) })
+		n.post(func() { n.finishCapture(result, displayCaptureMessages) })
 	}()
 }
 
@@ -419,13 +421,19 @@ func (n *NativeView) NativeShutdown() {
 // beginOverlay starts the rectangle selection session: the controller hides
 // the main window before the overlay appears (SCR-050) and restores it on
 // cancel, failure, and exit. A cancelled session only reports that nothing
-// was captured (SCR-051).
+// was captured (SCR-051); a completed one hands the selected rectangle and
+// the main-window restore to startRectangleCapture.
 func (n *NativeView) beginOverlay() {
 	if n.sessions == nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New("the overlay service is unavailable"))}, 0)
 		return
 	}
-	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), overlay.Events{
+	mode := overlay.ModeFreeRectangle
+	if n.options.Options().Mode == ModePresetRectangle {
+		mode = overlay.ModePresetRectangle
+	}
+	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), mode, overlay.Events{
+		OnCapture: n.startRectangleCapture,
 		OnCancel: func() {
 			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
 		},
@@ -439,6 +447,28 @@ func (n *NativeView) beginOverlay() {
 	}
 }
 
+// startRectangleCapture runs on the GUI thread when the overlay session's
+// Capture command completes: the session windows are already destroyed and
+// the main window is still hidden. The worker reads the selection's pixels
+// off the GUI thread (TECH-005), restores the main window through the
+// session's restore function as soon as the capture ends, and delivers the
+// captured image to the clipboard and the output folder (SCR-014).
+func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) {
+	if n.captureRectangle == nil {
+		restore()
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New("the capture service is unavailable"))}, 0)
+		return
+	}
+	options := n.options.Options()
+	n.inProgress = true
+	n.pending.Add(1)
+	go func() {
+		defer n.pending.Done()
+		result := n.captureRectangle(region, restore, options)
+		n.post(func() { n.finishCapture(result, selectionCaptureMessages) })
+	}()
+}
+
 // NativeFilterMessage lets the shell's message loop pre-handle queued
 // messages for the overlay session's windows: Escape cancels the session,
 // and toolbar messages receive dialog navigation.
@@ -449,24 +479,52 @@ func (n *NativeView) NativeFilterMessage(message unsafe.Pointer) bool {
 	return n.sessions.FilterMessage(message)
 }
 
+// captureMessages carries the user-facing result wording of one capture
+// flavor, so finishCapture presents rectangle and full display outcomes
+// through the same independent-outcome matrix.
+type captureMessages struct {
+	failed          string
+	succeeded       string
+	saveFailed      string
+	clipboardFailed string
+	outputsFailed   string
+}
+
+var (
+	displayCaptureMessages = captureMessages{
+		failed:          ui.CaptureFailed,
+		succeeded:       ui.CaptureSucceeded,
+		saveFailed:      ui.CaptureSaveFailed,
+		clipboardFailed: ui.CaptureClipboardFailed,
+		outputsFailed:   ui.CaptureOutputsFailed,
+	}
+	selectionCaptureMessages = captureMessages{
+		failed:          ui.SelectionCaptureFailed,
+		succeeded:       ui.SelectionCaptureSucceeded,
+		saveFailed:      ui.SelectionCaptureSaveFailed,
+		clipboardFailed: ui.SelectionCaptureClipboardFailed,
+		outputsFailed:   ui.SelectionCaptureOutputsFailed,
+	}
+)
+
 // finishCapture presents one capture's outcome on the GUI thread. Clipboard
 // and save outcomes are reported independently (SCR-060), and a saved file
 // enables the Open Folder action (SCR-069).
-func (n *NativeView) finishCapture(result CaptureResult) {
+func (n *NativeView) finishCapture(result CaptureResult, messages captureMessages) {
 	n.inProgress = false
 	n.savedPath = result.Path
 	n.openFolder.Enable(result.Path != "")
 	switch {
 	case result.Err != nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureFailed, result.Err)}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(messages.failed, result.Err)}, 0)
 	case result.Clipboard == nil && result.Save == nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.CaptureSucceeded, result.Path)}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(messages.succeeded, result.Path)}, 0)
 	case result.Save != nil && result.Clipboard == nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.CaptureSaveFailed, result.Save)}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(messages.saveFailed, result.Save)}, 0)
 	case result.Clipboard != nil && result.Save == nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.CaptureClipboardFailed, result.Path, result.Clipboard)}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(messages.clipboardFailed, result.Path, result.Clipboard)}, 0)
 	default:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOutputsFailed, result.Save, result.Clipboard)}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(messages.outputsFailed, result.Save, result.Clipboard)}, 0)
 	}
 }
 

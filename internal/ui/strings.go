@@ -7,7 +7,7 @@ const (
 
 	ScreenshotNavigation    = "Screenshot"
 	ScreenshotTitle         = "Screenshot"
-	ScreenshotDescription   = "Choose the capture mode, manage exact-dimension presets, and configure the save format, JPEG quality, and output folder. Full Display capture runs from Start Capture; the rectangle modes open the selection overlay, whose drawing and capture tools arrive with later Screenshot items."
+	ScreenshotDescription   = "Choose the capture mode, manage exact-dimension presets, and configure the save format, JPEG quality, and output folder. Full Display capture runs from Start Capture; Free Rectangle opens the selection overlay to draw, adjust, and capture a region, and Preset Rectangle's exact frame arrives with a later Screenshot item."
 	StartCaptureAction      = "Start Capture"
 	CaptureAction           = "Capture"
 	CancelAction            = "Cancel"
@@ -111,8 +111,18 @@ const (
 
 	OverlayWindowTitle    = "GameDevTools rectangle selection overlay"
 	OverlayToolbarTitle   = "GameDevTools rectangle selection toolbar"
-	OverlayInstructions   = "Drag to draw a selection arrives with the next Screenshot item. Press Escape or Cancel to exit."
+	OverlayInstructions   = "Drag to draw the capture rectangle. Drag inside the selection to move it, drag a handle to resize it, or type exact dimensions. Escape cancels."
+	OverlayPresetPending  = "Preset Rectangle framing arrives with the next Screenshot item. Press Escape or Cancel to exit."
+	SelectionWidthLabel   = "&W (px)"
+	SelectionHeightLabel  = "&H (px)"
+	SelectionFitInvalid   = "The typed dimensions do not fit at the selection's position. Move the selection or enter smaller dimensions."
 	CaptureOverlayFailed  = "The selection overlay could not be shown: %v"
 	CaptureSessionActive  = "A rectangle selection is already on screen. Finish or cancel it before starting another."
 	CaptureSelectionEnded = "Rectangle selection cancelled. Nothing was captured."
+
+	SelectionCaptureFailed          = "The selection could not be captured: %v"
+	SelectionCaptureSucceeded       = "Selection captured. Saved to %s and copied to the clipboard."
+	SelectionCaptureSaveFailed      = "Selection captured and copied to the clipboard, but saving failed: %v"
+	SelectionCaptureClipboardFailed = "Selection captured and saved to %s, but copying to the clipboard failed: %v"
+	SelectionCaptureOutputsFailed   = "Selection captured, but saving failed (%v) and copying to the clipboard failed (%v)."
 )

@@ -8,6 +8,6 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 )
 
-func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc, sessions *overlay.Controller) any {
+func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc, captureRectangle RectangleCaptureFunc, sessions *overlay.Controller) any {
 	return nil
 }

@@ -19,13 +19,13 @@ type View struct {
 	native  any
 }
 
-func New(repository *preset.Repository, options *OptionsManager, value *settings.Settings, displays *display.Monitor, capture CaptureFunc, sessions *overlay.Controller) (*Module, error) {
+func New(repository *preset.Repository, options *OptionsManager, value *settings.Settings, displays *display.Monitor, capture CaptureFunc, captureRectangle RectangleCaptureFunc, sessions *overlay.Controller) (*Module, error) {
 	manager, err := preset.NewManager(repository, value)
 	if err != nil {
 		return nil, err
 	}
 	view := &View{manager: manager, options: options}
-	view.native = NewNativeView(manager, options, displays, capture, sessions)
+	view.native = NewNativeView(manager, options, displays, capture, captureRectangle, sessions)
 	return &Module{view: view}, nil
 }
 

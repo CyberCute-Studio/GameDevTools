@@ -26,3 +26,10 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 
 // Restore is a no-op off Windows, where Hide never succeeds.
 func (e *Exclusion) Restore() {}
+
+// FlushCompositor is unavailable off Windows; the production application
+// only runs on Windows.
+func FlushCompositor() error {
+	return kindError(KindNative, "flush compositor",
+		errors.New("screen capture is available on Windows only"))
+}

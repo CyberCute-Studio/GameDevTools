@@ -298,6 +298,17 @@ func (d *DimensionInput) HandleCommand(id int32, notification uint16) bool {
 	return true
 }
 
+// NewEdit creates a bare single-line edit control for compact surfaces such
+// as the selection toolbar, where TextInput's stacked label and error labels
+// do not fit; validation presentation stays with the caller.
+func NewEdit(parent windows.Handle, id int32) (*Control, error) {
+	hwnd, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll, wsExClientEdge, id)
+	if err != nil {
+		return nil, err
+	}
+	return &Control{hwnd: hwnd}, nil
+}
+
 // ReadOnlyText displays a value such as a chosen path. It is keyboard
 // focusable and horizontally scrollable so long values stay readable, but it
 // cannot be edited.

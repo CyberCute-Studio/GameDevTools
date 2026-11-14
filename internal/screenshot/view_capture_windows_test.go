@@ -144,8 +144,10 @@ func TestNativeViewDisplayPickerReservesLayoutHeight(t *testing.T) {
 // fakeOverlayNative records the controller's calls to the session surface
 // so view tests can run rectangle sessions without real overlay windows.
 type fakeOverlayNative struct {
-	closed int
-	ready  []bool
+	closed      int
+	ready       []bool
+	onSelection func(display.Rect)
+	onCapture   func()
 }
 
 func (f *fakeOverlayNative) Close()                       { f.closed++ }
@@ -165,11 +167,13 @@ func fakeOverlaySession(view *NativeView) (*[]string, *fakeOverlayNative, *error
 		*log = append(*log, "hide")
 		return func() { *log = append(*log, "restore") }, nil
 	}
-	view.sessions.Create = func(overlay.CreateRequest) (overlay.NativeSession, error) {
+	view.sessions.Create = func(request overlay.CreateRequest) (overlay.NativeSession, error) {
 		*log = append(*log, "create")
 		if *createErr != nil {
 			return nil, *createErr
 		}
+		native.onSelection = request.OnSelection
+		native.onCapture = request.OnCapture
 		return native, nil
 	}
 	return log, native, createErr
@@ -367,7 +371,7 @@ func TestNativeViewCaptureFailurePresentations(t *testing.T) {
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, folder, parent)
 
-	view.finishCapture(CaptureResult{Err: errors.New("display disconnected")})
+	view.finishCapture(CaptureResult{Err: errors.New("display disconnected")}, displayCaptureMessages)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") || !strings.Contains(got, "display disconnected") {
 		t.Fatalf("status for failed capture = %q", got)
 	}
@@ -375,13 +379,13 @@ func TestNativeViewCaptureFailurePresentations(t *testing.T) {
 		t.Fatal("Open Folder enabled after a failed capture without a saved file")
 	}
 
-	view.finishCapture(CaptureResult{Save: errors.New("disk full")})
+	view.finishCapture(CaptureResult{Save: errors.New("disk full")}, displayCaptureMessages)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Warning:") ||
 		!strings.Contains(got, "copied to the clipboard") || !strings.Contains(got, "disk full") {
 		t.Fatalf("status for failed save = %q", got)
 	}
 
-	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`, Clipboard: errors.New("clipboard busy")})
+	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`, Clipboard: errors.New("clipboard busy")}, displayCaptureMessages)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Warning:") ||
 		!strings.Contains(got, `C:\Screenshots\Screenshot_1.png`) || !strings.Contains(got, "clipboard busy") {
 		t.Fatalf("status for failed clipboard copy = %q", got)
@@ -390,7 +394,7 @@ func TestNativeViewCaptureFailurePresentations(t *testing.T) {
 		t.Fatal("Open Folder disabled although the file was saved")
 	}
 
-	view.finishCapture(CaptureResult{Save: errors.New("disk full"), Clipboard: errors.New("clipboard busy")})
+	view.finishCapture(CaptureResult{Save: errors.New("disk full"), Clipboard: errors.New("clipboard busy")}, displayCaptureMessages)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") ||
 		!strings.Contains(got, "disk full") || !strings.Contains(got, "clipboard busy") {
 		t.Fatalf("status for both outputs failing = %q", got)
@@ -418,7 +422,7 @@ func TestNativeViewOpenFolderRevealsSavedFile(t *testing.T) {
 		t.Fatal("Open Folder acted before any capture was saved")
 	}
 
-	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`})
+	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}, displayCaptureMessages)
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
 	if revealed != `C:\Screenshots\Screenshot_1.png` {
 		t.Fatalf("revealed path = %q", revealed)

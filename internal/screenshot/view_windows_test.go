@@ -80,7 +80,10 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 	capture := func(CaptureRequest) CaptureResult {
 		return CaptureResult{}
 	}
-	view := NewNativeView(manager, options, display.NewMonitor(), capture, overlay.NewController(display.NewMonitor()))
+	captureRectangle := func(display.Rect, func(), CaptureOptions) CaptureResult {
+		return CaptureResult{}
+	}
+	view := NewNativeView(manager, options, display.NewMonitor(), capture, captureRectangle, overlay.NewController(display.NewMonitor()))
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatal(err)
 	}
