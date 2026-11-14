@@ -502,8 +502,9 @@ func (n *NativeView) NativeShutdown() {
 // frame from the selected preset's exact dimensions (SCR-020); a preset that
 // cannot fit the virtual desktop is rejected with a validation notice before
 // anything hides (SCR-031). A cancelled session only reports that nothing
-// was captured (SCR-051); a completed one hands the selected rectangle and
-// the main-window restore to startRectangleCapture.
+// was captured (SCR-051); a session a display change invalidates ends with
+// the reason as a warning (SCR-054); a completed one hands the selected
+// rectangle and the main-window restore to startRectangleCapture.
 func (n *NativeView) beginOverlay() {
 	if n.sessions == nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New("the overlay service is unavailable"))}, 0)
@@ -524,6 +525,9 @@ func (n *NativeView) beginOverlay() {
 		OnCapture: n.startRectangleCapture,
 		OnCancel: func() {
 			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
+		},
+		OnSessionLost: func(reason string) {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: reason}, 0)
 		},
 	})
 	switch {
@@ -606,7 +610,7 @@ func (n *NativeView) finishCapture(result CaptureResult, messages captureMessage
 	n.openFolder.Enable(result.Path != "")
 	switch {
 	case result.Err != nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(messages.failed, result.Err)}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: captureFailureMessage(messages.failed, result.Err)}, 0)
 	case result.Clipboard == nil && result.Save == nil:
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(messages.succeeded, result.Path)}, 0)
 	case result.Save != nil && result.Clipboard == nil:

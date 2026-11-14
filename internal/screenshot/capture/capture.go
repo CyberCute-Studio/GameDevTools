@@ -18,13 +18,13 @@
 //
 // Failures are reported as *Error values with a Kind, so callers can
 // distinguish invalid geometry from a disconnected display and from native
-// graphics failures. A failed capture never returns a blank image as
-// success. One class of content cannot be reported this way: windows the
-// compositor excludes from capture, such as DRM-protected video or
-// surfaces marked with WDA_EXCLUDEFROMCAPTURE, composite as black while
-// BitBlt still succeeds, and the GDI path cannot distinguish that from a
-// genuinely black screen. ADR-0001 records this limitation; presenting it
-// to the user is SCR-10 scope.
+// graphics failures and present the matching recovery path (UX-010). A
+// failed capture never returns a blank image as success. One class of
+// content cannot be reported this way: windows the compositor excludes from
+// capture, such as DRM-protected video or surfaces marked with
+// WDA_EXCLUDEFROMCAPTURE, composite as black while BitBlt still succeeds,
+// and the GDI path cannot distinguish that from a genuinely black screen.
+// ADR-0001 records this limitation.
 package capture
 
 import (

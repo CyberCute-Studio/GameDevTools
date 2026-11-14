@@ -11,6 +11,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 )
@@ -648,4 +649,40 @@ func TestNativeViewShutdownWaitsForInflightCapture(t *testing.T) {
 		t.Fatal("NativeShutdown did not return after the capture finished")
 	}
 	dispatcher.runNext(t)
+}
+
+// TestNativeViewCaptureFailureCategorizesTypedErrors pins UX-010 for
+// capture failures: a disconnected display, a native graphics failure, and
+// invalid capture geometry are presented as distinct, actionable messages
+// rather than one generic failure (PRD 9.8).
+func TestNativeViewCaptureFailureCategorizesTypedErrors(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+
+	view.finishCapture(CaptureResult{Err: &capture.Error{
+		Kind: capture.KindDisplay, Op: "find display", Err: errors.New(`display \.\DISPLAY2 is no longer connected`),
+	}}, displayCaptureMessages)
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") ||
+		!strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the display selection") {
+		t.Fatalf("status for a disconnected display = %q", got)
+	}
+
+	view.finishCapture(CaptureResult{Err: &capture.Error{
+		Kind: capture.KindNative, Op: "BitBlt", Err: errors.New("access denied"),
+	}}, selectionCaptureMessages)
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") ||
+		!strings.Contains(got, "access denied") || !strings.Contains(got, "windowed mode") {
+		t.Fatalf("status for a native graphics failure = %q", got)
+	}
+
+	view.finishCapture(CaptureResult{Err: &capture.Error{
+		Kind: capture.KindValidation, Op: "validate region", Err: errors.New("capture rectangle is empty or inverted"),
+	}}, displayCaptureMessages)
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error: Validation error:") {
+		t.Fatalf("status for invalid capture geometry = %q", got)
+	}
 }

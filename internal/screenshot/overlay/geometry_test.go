@@ -332,3 +332,31 @@ func TestPresetPlacementCentersAndClamps(t *testing.T) {
 		})
 	}
 }
+
+func TestRevalidatedSelection(t *testing.T) {
+	desktop := display.Rect{Left: 0, Top: 0, Right: 1280, Bottom: 720}
+
+	// Nothing drawn yet is always kept, so the user can draw on the new
+	// desktop right away.
+	if got, ok := revalidatedSelection(display.Rect{}, desktop); !ok || !got.Empty() {
+		t.Fatalf("empty selection = (%v, %v), want an empty kept selection", got, ok)
+	}
+	// A selection that still fits keeps its exact dimensions and
+	// coordinates (SCR-054).
+	fitting := display.Rect{Left: 100, Top: 50, Right: 740, Bottom: 530}
+	if got, ok := revalidatedSelection(fitting, desktop); !ok || got != fitting {
+		t.Fatalf("fitting selection = (%v, %v), want (%v, true)", got, ok, fitting)
+	}
+	// A selection reaching outside the new desktop moves back inside
+	// without changing its dimensions.
+	outside := display.Rect{Left: 900, Top: 600, Right: 1540, Bottom: 1080}
+	want := display.Rect{Left: 640, Top: 240, Right: 1280, Bottom: 720}
+	if got, ok := revalidatedSelection(outside, desktop); !ok || got != want {
+		t.Fatalf("out-of-desktop selection = (%v, %v), want (%v, true)", got, ok, want)
+	}
+	// A selection larger than the new desktop cannot be kept (AC-S12).
+	oversized := display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1080}
+	if _, ok := revalidatedSelection(oversized, desktop); ok {
+		t.Fatal("a selection larger than the desktop was kept")
+	}
+}
