@@ -367,13 +367,6 @@ func (n *NativeView) commitBackground() {
 
 func (n *NativeView) refresh() {
 	options := n.options.Options()
-	formatIndex := 0
-	for index, candidate := range formatOrder {
-		if candidate == options.Format {
-			formatIndex = index
-		}
-	}
-	n.format.Select(formatIndex)
 	n.refreshFormat()
 	n.quality.Edit.SetText(strconv.Itoa(options.JPEGQuality))
 	n.quality.Error.SetText("")
@@ -386,8 +379,19 @@ func (n *NativeView) refresh() {
 }
 
 func (n *NativeView) refreshFormat() {
-	n.quality.Enable(n.options.Options().Format != FormatPNG)
-	n.background.Enable(n.options.Options().Format != FormatPNG)
+	options := n.options.Options()
+	formatIndex := 0
+	for index, candidate := range formatOrder {
+		if candidate == options.Format {
+			formatIndex = index
+		}
+	}
+	// The combo re-selects the stored format so a rejected change — the save
+	// validation still fails while no output folder is set — cannot leave the
+	// control showing a format that was never applied.
+	n.format.Select(formatIndex)
+	n.quality.Enable(options.Format != FormatPNG)
+	n.background.Enable(options.Format != FormatPNG)
 }
 
 func (n *NativeView) refreshCollision() {

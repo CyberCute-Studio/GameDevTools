@@ -244,6 +244,32 @@ func TestNativeViewFormatQualityAndBackground(t *testing.T) {
 	}
 }
 
+func TestNativeViewRejectedFormatReselectsStoredFormat(t *testing.T) {
+	parent := newViewTestParent(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	// Without a default folder every setter fails output-folder validation, so
+	// the format change is rejected and the combo must fall back to the stored
+	// format instead of showing a selection that was never applied.
+	view, _ := newNativeViewForTest(t, store, &value, "", parent)
+
+	view.format.Select(2)
+	view.NativeCommand(optionsCommandBase+formatCommand, 1)
+	if view.options.Options().Format != FormatKeepSource {
+		t.Fatalf("format after rejected selection = %q, want %q", view.options.Options().Format, FormatKeepSource)
+	}
+	if got := view.format.Selected(); got != 0 {
+		t.Fatalf("combo after rejected selection = %d, want the stored format at index 0", got)
+	}
+	if enabled, _, _ := procIsWindowEnabled.Call(uintptr(view.quality.Edit.Handle())); enabled == 0 {
+		t.Fatal("JPEG quality enablement no longer matches the stored Keep Source Format")
+	}
+	if got := view.status.Text(); !strings.Contains(got, "output folder is required") {
+		t.Fatalf("status after rejected selection = %q", got)
+	}
+}
+
 func TestNativeViewModeDescriptionFollowsPresetSelection(t *testing.T) {
 	parent := newViewTestParent(t)
 	folder := testFolder(t)
