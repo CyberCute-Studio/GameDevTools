@@ -413,6 +413,9 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		}
 		n.inventory.Clear()
 		n.refreshSources()
+		// Clearing disables the Clear button itself, so keyboard focus moves
+		// to the list instead of being stranded on a disabled control.
+		n.list.Focus()
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared}, 0)
 		return true
 	case sourceListCommand:

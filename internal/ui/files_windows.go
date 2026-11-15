@@ -13,6 +13,7 @@ import (
 
 const (
 	ofnHideReadOnly      = 0x00000004
+	ofnNoChangeDir       = 0x00000008
 	ofnAllowMultiSelect  = 0x00000200
 	ofnPathMustExist     = 0x00000800
 	ofnFileMustExist     = 0x00001000
@@ -74,7 +75,9 @@ func PickImageFiles(parent windows.Handle, title string) ([]string, bool, error)
 		lpstrFile:   &buffer[0],
 		nMaxFile:    uint32(len(buffer)),
 		lpstrTitle:  utf16(title),
-		flags:       ofnExplorer | ofnAllowMultiSelect | ofnFileMustExist | ofnPathMustExist | ofnHideReadOnly | ofnDontAddToRecent,
+		// OFN_NOCHANGEDIR keeps the dialog from silently moving the process
+		// working directory to the browsed folder.
+		flags: ofnExplorer | ofnAllowMultiSelect | ofnFileMustExist | ofnPathMustExist | ofnHideReadOnly | ofnNoChangeDir | ofnDontAddToRecent,
 	}
 	result, _, _ := procGetOpenFileNameW.Call(uintptr(unsafe.Pointer(&dialog)))
 	if result == 0 {

@@ -150,9 +150,16 @@ func TestNativeViewRemoveSelectedAndClearSources(t *testing.T) {
 		t.Fatalf("status after removal = %q", got)
 	}
 
+	// Clearing disables the Clear button itself, so focus must move off it
+	// rather than being stranded on a disabled control.
+	view.clearButton.Focus()
 	view.NativeCommand(sourcesCommandBase+clearListCommand, 0)
 	if view.list.Count() != 0 {
 		t.Fatalf("rows after clear = %d", view.list.Count())
+	}
+	getFocus := windows.NewLazySystemDLL("user32.dll").NewProc("GetFocus")
+	if focus, _, _ := getFocus.Call(); windows.Handle(focus) != view.list.Handle() {
+		t.Fatalf("focus after clear = %#x, want the source list %#x", focus, view.list.Handle())
 	}
 	if got := view.path.Text(); got != "" {
 		t.Fatalf("path display after clear = %q", got)
