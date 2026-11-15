@@ -181,11 +181,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Deliver safe, responsive bulk PNG/JPEG resizing with module-specific presets, deterministic fitting behavior, collision handling, and per-file outcomes.
 
 19. **RSZ-01 — Add Image Resizer presets and job configuration UI**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** FND-07, FND-04
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-07, FND-04
     - **Requirements:** PRESET-001, PRESET-007, RSZ-016, RSZ-020, RSZ-021, RSZ-022, RSZ-023, RSZ-025, RSZ-028, RSZ-029.
     - **Deliver:** Resizer view, dimension presets with Stretch/Fit/Crop to Fill, plain-language mode descriptions, output folder/format/name behavior, collision policy selection, JPEG quality, transparency background color, and persistence of job settings.
     - **Verify:** Test all preset modes, built-in Fit defaults, setting validation/persistence, independent preset namespace, and clear mode explanations before a job can start.
-    - **Notes:** This PR configures jobs but does not execute resizing.
+    - **Notes:** This PR configures jobs but does not execute resizing; Start Resize stays disabled until the batch items land. Job settings persist in a versioned `resize` object inside the Image Resizer module section, validated independently from and preserved alongside the module's `presets` data. The view restates the selected preset's fitting mode in plain language — including the Stretch distortion warning — refreshed after every preset operation, and restates the selected collision policy's consequence, including that Overwrite replaces existing outputs only after job-time confirmation and never touches source files. JPEG quality and the transparency background stay enabled for Keep Source Format because JPEG sources still encode as JPEG.
 
 20. **RSZ-02 — Implement bulk input selection and inventory**
     - **Status:** Pending | **PR:** TBD | **Depends on:** RSZ-01, FND-05

@@ -51,6 +51,14 @@ Settings are UTF-8 JSON. Unknown fields, unsupported versions, invalid module id
       }
     },
     "image-resizer": {
+      "resize": {
+        "version": 1,
+        "format": "keep-source",
+        "collision": "rename",
+        "jpegQuality": 90,
+        "background": "#FFFFFF",
+        "outputFolder": "C:\\Users\\Example\\Pictures\\GameDevTools\\Resized"
+      },
       "presets": {
         "version": 1,
         "custom": [
@@ -101,6 +109,19 @@ The Screenshot module stores capture configuration under its own `capture` objec
 Unsupported versions, unknown fields, duplicate fields, invalid enumerations, out-of-range quality values, unparseable or modifier-less shortcuts, and missing, relative, or invalid-text folders are rejected. The whole settings file then follows the standard backup-and-recovery flow, so malformed capture options cannot silently discard presets or window state.
 
 The filename pattern is fixed at `Screenshot_yyyyMMdd_HHmmssfff` with a `.png` or `.jpg` extension following the selected format; the Screenshot view displays the pattern but does not edit it.
+
+## Image Resizer resize options
+
+The Image Resizer module stores job configuration under its own `resize` object, beside and independent of `presets`. Saving either one preserves the other, and each section owner registers its own validator for the shared module section.
+
+- `resize.version` is the nested format version, currently `1`.
+- `resize.format` is `keep-source`, `png`, or `jpeg`. The default is `keep-source`, which encodes each output in its source file's format.
+- `resize.collision` is `rename`, `skip`, or `overwrite`. The default is `rename`. The policy applies to destination files when a job runs; it never changes how source files are treated.
+- `resize.jpegQuality` is a whole number from 1 through 100. The default is `90`. It applies whenever JPEG output is produced, including Keep Source Format jobs with JPEG sources, and is stored even while PNG is selected so the last quality is retained when switching formats.
+- `resize.background` is the JPEG transparency flattening color in canonical `#RRGGBB` form. The default is `#FFFFFF`. Transparent pixels are flattened against it whenever an image with alpha is encoded as JPEG; PNG output preserves alpha instead.
+- `resize.outputFolder` is an absolute local folder path. The default is the user's Pictures folder under `GameDevTools/Resized`, resolved through the Windows known-folder API. The folder is created when a job writes to it, not when it is configured.
+
+Unsupported versions, unknown fields, duplicate fields, invalid enumerations, out-of-range quality values, malformed background colors, and missing, relative, or invalid-text folders are rejected. The whole settings file then follows the standard backup-and-recovery flow, so malformed resize options cannot silently discard presets or window state.
 
 ## Recovery and writes
 
