@@ -40,12 +40,18 @@ func TestDisplayChangeResizesFreeOverlayToNewDesktop(t *testing.T) {
 	native := nativeOf(t, controller)
 	shrunken := desktopHalf(t)
 	// A selection reaching into the disconnected half must move back inside
-	// the remaining desktop with its exact dimensions kept.
+	// the remaining desktop with its exact dimensions kept. The dimensions
+	// scale with the test desktop so the selection always fits the shrunken
+	// half, whatever resolution the machine runs.
+	width, height := shrunken.Width()/2, shrunken.Height()/2
+	if width < 8 || height < 8 {
+		t.Skipf("test desktop too small: %v", shrunken)
+	}
 	selection := display.Rect{
-		Left:   shrunken.Right - 100,
-		Top:    shrunken.Top + 40,
-		Right:  shrunken.Right + 540,
-		Bottom: shrunken.Top + 520,
+		Left:   shrunken.Right - width/2,
+		Top:    shrunken.Top + 10,
+		Right:  shrunken.Right + width/2,
+		Bottom: shrunken.Top + 10 + height,
 	}
 	native.setSelection(selection)
 	controller.DesktopBounds = func() (display.Rect, error) { return shrunken, nil }
