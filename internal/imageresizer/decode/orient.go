@@ -84,35 +84,50 @@ func (o Orientation) target(x, y, width, height int) (int, int) {
 }
 
 // steps returns where the stored pixel (0, 0) of a width × height image
-// lands in an upright RGBA buffer with the given stride, and how far the
-// destination moves for each stored column (across) and each stored row
-// (down). Every orientation's target is linear in x and y, so these three
-// offsets place every pixel.
-func (o Orientation) steps(width, height, stride int) (start, across, down int) {
+// lands in an upright buffer with the given stride and pixel size in bytes,
+// and how far the destination moves for each stored column (across) and
+// each stored row (down). Every orientation's target is linear in x and y,
+// so these three offsets place every pixel.
+func (o Orientation) steps(width, height, stride, pixelSize int) (start, across, down int) {
 	offset := func(x, y int) int {
 		tx, ty := o.target(x, y, width, height)
-		return ty*stride + 4*tx
+		return ty*stride + pixelSize*tx
 	}
 	start = offset(0, 0)
 	return start, offset(1, 0) - start, offset(0, 1) - start
 }
 
 // orient returns src made upright. A source that needs no reorientation is
-// returned unchanged; every other orientation produces a new *image.RGBA in
-// one pass — opaque, since only JPEG sources are reoriented — so a
-// reoriented source needs one extra 4-byte-per-pixel buffer rather than an
-// intermediate conversion as well. Each stored row is converted once into a
-// small row buffer and then written out with the orientation's fixed
-// destination steps, so the per-pixel work is a 4-byte copy.
+// returned unchanged; every other orientation produces a new image in one
+// pass, so a reoriented source needs one extra buffer rather than an
+// intermediate conversion as well. A grayscale source stays an *image.Gray
+// of one byte per pixel; any other becomes an *image.RGBA — opaque, since
+// only JPEG sources are reoriented. Each stored row is converted once into a
+// small row buffer, or read in place when grayscale, and then written out
+// with the orientation's fixed destination steps, so the per-pixel work is a
+// copy of the pixel's bytes.
 func orient(src image.Image, o Orientation) image.Image {
 	if !o.Reorients() {
 		return src
 	}
 	bounds := src.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
-	uprightWidth, uprightHeight := o.upright(width, height)
-	dst := image.NewRGBA(image.Rect(0, 0, uprightWidth, uprightHeight))
-	start, across, down := o.steps(width, height, dst.Stride)
+	upright := image.Rectangle{Max: image.Pt(o.upright(width, height))}
+	if gray, ok := src.(*image.Gray); ok {
+		dst := image.NewGray(upright)
+		start, across, down := o.steps(width, height, dst.Stride, 1)
+		for y := 0; y < height; y++ {
+			row := gray.Pix[gray.PixOffset(bounds.Min.X, bounds.Min.Y+y):][:width]
+			offset := start + y*down
+			for _, value := range row {
+				dst.Pix[offset] = value
+				offset += across
+			}
+		}
+		return dst
+	}
+	dst := image.NewRGBA(upright)
+	start, across, down := o.steps(width, height, dst.Stride, 4)
 	row := make([]uint8, 4*width)
 	for y := 0; y < height; y++ {
 		readRow(src, bounds.Min.X, bounds.Min.Y+y, row)
@@ -127,10 +142,11 @@ func orient(src image.Image, o Orientation) image.Image {
 }
 
 // readRow converts the row of src at y, starting at column minX, into
-// premultiplied 8-bit RGBA, filling row. The JPEG decoder produces YCbCr,
-// Gray, CMYK, or RGBA images, each of which is read directly rather than
-// through the per-pixel interface allocation of image.Image.At; any other
-// type falls back to the generic color conversion.
+// premultiplied 8-bit RGBA, filling row. Besides the Gray images orient
+// copies directly, the JPEG decoder produces YCbCr, CMYK, or RGBA images,
+// each of which is read directly rather than through the per-pixel interface
+// allocation of image.Image.At; any other type falls back to the generic
+// color conversion.
 func readRow(src image.Image, minX, y int, row []uint8) {
 	width := len(row) / 4
 	switch typed := src.(type) {
@@ -141,12 +157,6 @@ func readRow(src image.Image, minX, y int, row []uint8) {
 			r, g, b := color.YCbCrToRGB(typed.Y[yi], typed.Cb[ci], typed.Cr[ci])
 			pixel := row[4*index : 4*index+4 : 4*index+4]
 			pixel[0], pixel[1], pixel[2], pixel[3] = r, g, b, 0xff
-		}
-	case *image.Gray:
-		values := typed.Pix[typed.PixOffset(minX, y):]
-		for index, value := range values[:width] {
-			pixel := row[4*index : 4*index+4 : 4*index+4]
-			pixel[0], pixel[1], pixel[2], pixel[3] = value, value, value, 0xff
 		}
 	case *image.CMYK:
 		values := typed.Pix[typed.PixOffset(minX, y):]

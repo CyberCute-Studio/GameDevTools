@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func writeSource(t *testing.T, directory, name string) string {
@@ -311,6 +312,7 @@ func TestFailureStatusIdentifiesEachKind(t *testing.T) {
 		detail string
 	}{
 		{"read", &decode.Error{Kind: decode.KindRead, Err: os.ErrPermission}, StatusInaccessible, "permission denied"},
+		{"changed", &decode.Error{Kind: decode.KindRead, Format: decode.FormatPNG, Err: decode.ErrChanged}, StatusInaccessible, ui.SourceChangedDetail},
 		{"unrecognized", &decode.Error{Kind: decode.KindUnsupported, Err: decode.ErrUnrecognized}, StatusUnsupported, "not PNG or JPEG image data"},
 		{"feature", &decode.Error{Kind: decode.KindUnsupported, Format: decode.FormatJPEG, Err: errors.New("unsupported JPEG feature: precision")}, StatusUnsupported, "This JPEG file uses a feature the image decoder does not support (unsupported JPEG feature: precision)"},
 		{"corrupt", &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}, StatusCorrupt, "The PNG data is damaged or incomplete and cannot be decoded (invalid checksum)"},

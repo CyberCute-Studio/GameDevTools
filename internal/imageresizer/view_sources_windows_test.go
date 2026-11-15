@@ -403,7 +403,8 @@ func TestNativeViewRemovingCheckingItemsAbandonsTheirChecks(t *testing.T) {
 	if rows := listContents(view.list); len(rows) != 1 || rows[0] != "two.png — 4 × 3 px — Ready" {
 		t.Fatalf("rows after removal = %v", rows)
 	}
-	if got := view.status.Text(); got != "Success: Added 2 image(s). Checked 1 image(s): 1 ready." {
+	// The summary restates only what is still listed.
+	if got := view.status.Text(); got != "Success: Added 1 image(s). Checked 1 image(s): 1 ready." {
 		t.Fatalf("status after checking = %q", got)
 	}
 
@@ -575,7 +576,7 @@ func TestNativeViewRemovingTheLastCheckSummarizes(t *testing.T) {
 	view.NativeCommand(sourcesCommandBase+sourceListCommand, ui.NotificationListSelChange)
 	view.NativeCommand(sourcesCommandBase+removeSelectedCommand, 0)
 	gate.waitFor(t, gate.canceled)
-	if got := view.status.Text(); got != "Warning: Added 3 image(s). Checked 2 image(s): 1 ready. 1 cannot be resized — select an item to see why. Removed 1 image(s)." {
+	if got := view.status.Text(); got != "Warning: Added 2 image(s). Checked 2 image(s): 1 ready. 1 cannot be resized — select an item to see why. Removed 1 image(s)." {
 		t.Fatalf("status after removing the last check = %q", got)
 	}
 
@@ -591,34 +592,50 @@ func TestNativeViewRemovingTheLastCheckSummarizes(t *testing.T) {
 	}
 }
 
-// TestNativeViewCheckSummaryCountsListedItems pins that items removed after
-// their check resolved drop out of the summary, so it never points at
-// failures that are no longer listed.
+// TestNativeViewCheckSummaryCountsListedItems pins that items removed while
+// checks are pending drop out of the summary — out of the restated add
+// results and out of the check outcomes alike — so it never counts images,
+// or points at failures, that are no longer listed.
 func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
 	directory := sourceDir(t, view)
+	listed := writeViewSource(t, directory, "listed.png")
+	view.NativeDropFiles([]string{listed})
+	gate.waitFor(t, gate.started)
+	gate.release <- struct{}{}
+	settle(t, view, dispatcher)
+
 	view.NativeDropFiles([]string{
 		writeViewSource(t, directory, "one.png"),
 		writeViewSource(t, directory, "damaged.png"),
 		writeViewSource(t, directory, "three.png"),
+		writeViewSource(t, directory, "notes.txt"),
+		listed,
 	})
+	if got := view.status.Text(); got != "Warning: Added 3 image(s). 1 already in the list. 1 listed with an unsupported format. Checking image content…" {
+		t.Fatalf("add notice = %q", got)
+	}
 	for range 2 {
 		gate.waitFor(t, gate.started)
 		gate.release <- struct{}{}
 		dispatcher.runNext(t)
 	}
-	if got := view.list.ItemText(1); got != "damaged.png — Damaged or incomplete" {
+	if got := view.list.ItemText(2); got != "damaged.png — Damaged or incomplete" {
 		t.Fatalf("damaged row = %q", got)
 	}
-	view.list.SetSelected(1, true)
+	// Remove the damaged image and the unsupported file, and an item listed
+	// before this add, which the summary never counted.
+	for _, index := range []int{0, 2, 4} {
+		view.list.SetSelected(index, true)
+	}
 	view.NativeCommand(sourcesCommandBase+sourceListCommand, ui.NotificationListSelChange)
 	view.NativeCommand(sourcesCommandBase+removeSelectedCommand, 0)
 
 	gate.waitFor(t, gate.started)
 	gate.release <- struct{}{}
 	settle(t, view, dispatcher)
-	if got := view.status.Text(); got != "Success: Added 3 image(s). Checked 2 image(s): 2 ready." {
+	if got := view.status.Text(); got != "Success: Added 2 image(s). 1 already in the list. Checked 2 image(s): 2 ready." {
 		t.Fatalf("status after checking = %q", got)
 	}
 }

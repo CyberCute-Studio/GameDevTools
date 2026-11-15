@@ -328,8 +328,9 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 		// per pixel for a progressive 4:2:0 frame's planes and coefficients.
 		{"progressive.jpg", jpegWithDimensions(t, readFixture(t, "progressive.jpeg"), 16384, 16384), FormatJPEG, 16384, 16384},
 		{"oriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 65000, 30000), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 30000, 65000},
-		// The 256 MiB gray plane fits, but not with the upright copy.
-		{"reoriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 16384, 16384), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 16384, 16384},
+		// The 384 MiB of 4:2:0 planes fit, but not with the 1 GiB upright
+		// RGBA copy.
+		{"reoriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewRGBA(image.Rect(0, 0, 16, 16))), 16384, 16384), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 16384, 16384},
 		// The decoder skips an unknown chunk before IHDR, and so does the
 		// scan.
 		{"late-header.png", lateHeaderPNG(20000, 20000), FormatPNG, 20000, 20000},
@@ -429,14 +430,18 @@ func TestCancellation(t *testing.T) {
 }
 
 // scriptedFile serves content like an open file and lets a test act at an
-// exact pass of a decode. Each pass — the signature sniff, the header scan,
-// the header parse, and the decode — starts with a seek, so seeks counts the
-// passes begun after the first.
+// exact pass of a decode. The signature sniff and the header scan share the
+// first pass; the header parse, the conversion walk when it runs, and the
+// decode each start with a seek, so seeks counts the passes begun after the
+// first.
 type scriptedFile struct {
 	*bytes.Reader
 	seeks int
-	// failPass makes the first read after that many seeks fail, once.
+	// failing makes the first read in pass failPass that starts at or past
+	// offset failFrom fail, once.
+	failing  bool
 	failPass int
+	failFrom int64
 	failed   bool
 	// afterRead runs after every successful read.
 	afterRead func(seeks int)
@@ -450,7 +455,7 @@ func (f *scriptedFile) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (f *scriptedFile) Read(buffer []byte) (int, error) {
-	if f.failPass > 0 && f.seeks == f.failPass && !f.failed {
+	if f.failing && !f.failed && f.seeks == f.failPass && f.Size()-int64(f.Len()) >= f.failFrom {
 		f.failed = true
 		return 0, errScriptedRead
 	}
@@ -462,20 +467,83 @@ func (f *scriptedFile) Read(buffer []byte) (int, error) {
 }
 
 // TestReadFailureDuringTheScanIsReported pins that a transient read failure
-// while the header is scanned fails the source as unreadable. Otherwise the
-// scan would see no orientation, the later passes would read fine, and the
-// source would be listed as Ready with its stored rather than upright
-// dimensions (RSZ-018).
+// while the header is scanned fails the source as unreadable. Otherwise a
+// JPEG scan would see no orientation, the later passes would read fine, and
+// the source would be listed as Ready with its stored rather than upright
+// dimensions (RSZ-018); and a PNG scan cut short assumes a transparency
+// chunk, so this gray source, which fits the limit at one byte per pixel,
+// would be listed as too large. Each header runs past the first segment, so
+// the failing read comes after the signature was sniffed.
 func TestReadFailureDuringTheScanIsReported(t *testing.T) {
-	content := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 40, 30))), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
-	info, _, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(content)}}, false)
+	comment := jpegSegment(0xfe, make([]byte, 40000))
+	oriented := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 40, 30))), comment, comment, exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
+	gray := bytes.Join([][]byte{pngHeader(20000, 20000, 8, 0), pngChunk("tEXt", make([]byte, 2*readBufferSize)), pngChunk("IDAT", nil)}, nil)
+
+	info, _, err := decodeSource(newSourceReader(context.Background(), &scriptedFile{Reader: bytes.NewReader(oriented)}), false)
 	if err != nil || info.Width != 30 || info.Height != 40 {
 		t.Fatalf("intact read = %+v, %v; want 30 × 40", info, err)
 	}
-	_, _, _, err = decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(content), failPass: 1}}, false)
-	requireKind(t, err, KindRead, FormatJPEG)
-	if !errors.Is(err, errScriptedRead) {
-		t.Fatalf("error = %v, want the read failure", err)
+	// Without image data the gray source is damaged, not too large.
+	_, _, err = decodeSource(newSourceReader(context.Background(), &scriptedFile{Reader: bytes.NewReader(gray)}), false)
+	requireKind(t, err, KindCorrupt, FormatPNG)
+
+	for format, content := range map[Format][]byte{FormatJPEG: oriented, FormatPNG: gray} {
+		file := &scriptedFile{Reader: bytes.NewReader(content), failing: true, failFrom: readBufferSize}
+		_, _, err := decodeSource(newSourceReader(context.Background(), file), false)
+		requireKind(t, err, KindRead, format)
+		if !errors.Is(err, errScriptedRead) {
+			t.Fatalf("%v: error = %v, want the read failure", format, err)
+		}
+	}
+}
+
+// changingFile serves one content until it has been rewound rewrittenAt
+// times and another from then on, like a file saved again between two
+// passes of its decode.
+type changingFile struct {
+	*bytes.Reader
+	rewritten   []byte
+	rewrittenAt int
+	seeks       int
+}
+
+func (f *changingFile) Seek(offset int64, whence int) (int64, error) {
+	f.seeks++
+	if f.seeks == f.rewrittenAt {
+		f.Reader = bytes.NewReader(f.rewritten)
+	}
+	return f.Reader.Seek(offset, whence)
+}
+
+// TestRewrittenFileIsNotDecoded pins that each pass of a decode reads the
+// bytes the earlier passes checked: a file rewritten with a larger picture
+// after its header was scanned, or after it was parsed and the memory limit
+// checked, fails as changed instead of being decoded from a header the limit
+// never saw.
+func TestRewrittenFileIsNotDecoded(t *testing.T) {
+	cases := []struct {
+		name               string
+		format             Format
+		original, replaced []byte
+	}{
+		{"png", FormatPNG, encodePNG(t, image.NewRGBA(image.Rect(0, 0, 8, 8))), encodePNG(t, image.NewRGBA(image.Rect(0, 0, 16, 16)))},
+		{"jpeg", FormatJPEG, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), encodeJPEG(t, image.NewGray(image.Rect(0, 0, 16, 16)))},
+	}
+	for _, tc := range cases {
+		info, pixels, err := decodeSource(newSourceReader(context.Background(), &changingFile{Reader: bytes.NewReader(tc.original)}), true)
+		if err != nil || info.Width != 8 || pixels.Bounds().Dx() != 8 {
+			t.Fatalf("%s: unchanged file = %+v, %v", tc.name, info, err)
+		}
+		// The header parse is the first pass after a seek, the decode the
+		// second.
+		for _, pass := range []int{1, 2} {
+			file := &changingFile{Reader: bytes.NewReader(tc.original), rewritten: tc.replaced, rewrittenAt: pass}
+			_, _, err := decodeSource(newSourceReader(context.Background(), file), true)
+			requireKind(t, err, KindRead, tc.format)
+			if !errors.Is(err, ErrChanged) {
+				t.Fatalf("%s rewritten before pass %d: error = %v, want ErrChanged", tc.name, pass, err)
+			}
+		}
 	}
 }
 
@@ -488,11 +556,11 @@ func TestCancellationAfterTheLastRead(t *testing.T) {
 	defer cancel()
 	file := &scriptedFile{Reader: bytes.NewReader(content), afterRead: func(seeks int) {
 		// The decode pass reads the whole small file at once.
-		if seeks == 3 {
+		if seeks == 2 {
 			cancel()
 		}
 	}}
-	info, pixels, _, err := decodeSource(&sourceReader{ctx: ctx, file: file}, true)
+	info, pixels, err := decodeSource(newSourceReader(ctx, file), true)
 	requireKind(t, err, KindCanceled, FormatJPEG)
 	if pixels != nil || info != (Info{}) {
 		t.Fatalf("cancelled decode returned %+v with pixels %v", info, pixels != nil)
@@ -500,9 +568,10 @@ func TestCancellationAfterTheLastRead(t *testing.T) {
 }
 
 // TestInspectReleasesLargeDecodes pins NFR-014 across back-to-back checks:
-// after decoding a large source Inspect returns its discarded pixel memory
-// at once, while small or rejected sources skip the forced collection, and
-// the upright copy Inspect never makes does not count.
+// after a decode that allocated a large amount Inspect returns the discarded
+// memory at once, while small sources, sources rejected from their header,
+// and sources that fail before the decoder allocates their pixels skip the
+// forced collection.
 func TestInspectReleasesLargeDecodes(t *testing.T) {
 	releases := 0
 	previous := releaseMemory
@@ -515,18 +584,22 @@ func TestInspectReleasesLargeDecodes(t *testing.T) {
 	if _, err := Inspect(context.Background(), writeFile(t, "huge.png", pngHeader(100000, 100000, 8, 6))); err == nil {
 		t.Fatal("Inspect accepted an oversized source")
 	}
-	// A rotated 4096 × 4096 gray JPEG decodes into a 16 MiB plane; only
-	// Decode adds the 64 MiB upright copy that would pass the threshold.
+	// The header declares just over 64 MiB of gray pixels, but the empty
+	// image data fails before the decoder allocates them.
+	_, err := Inspect(context.Background(), writeFile(t, "empty.png", append(pngHeader(8192, 8200, 8, 0), pngChunk("IDAT", nil)...)))
+	requireKind(t, err, KindCorrupt, FormatPNG)
+	// A rotated 4096 × 4096 gray JPEG decodes into a 16 MiB plane, and
+	// Inspect never makes its upright copy.
 	rotated := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 4096, 4096))), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
 	if _, err := Inspect(context.Background(), writeFile(t, "rotated.jpg", rotated)); err != nil {
 		t.Fatal(err)
 	}
 	if releases != 0 {
-		t.Fatalf("%d releases for small, rejected, and rotated sources, want 0", releases)
+		t.Fatalf("%d releases for small, rejected, failed, and rotated sources, want 0", releases)
 	}
 	// A two-color palette encodes at one bit per pixel and decodes at one
-	// byte per pixel, so the file stays small while its decoding allowance
-	// passes the threshold.
+	// byte per pixel, so the file stays small while its decoded pixels pass
+	// the threshold.
 	large := image.NewPaletted(image.Rect(0, 0, 8192, 8200), color.Palette{color.Black, color.White})
 	if _, err := Inspect(context.Background(), writeFile(t, "large.png", encodePNG(t, large))); err != nil {
 		t.Fatal(err)

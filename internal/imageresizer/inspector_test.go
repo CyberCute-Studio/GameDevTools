@@ -141,11 +141,9 @@ func TestInspectorDropAbandonsQueuedAndInFlightChecks(t *testing.T) {
 
 // TestInspectorDropFreesTheQueueFromAStuckCheck pins that removing a source
 // whose read is blocked in the operating system — which never observes the
-// cancellation — lets the remaining checks go on, while at most one such
-// worker is set aside at a time, so no more than two sources are ever
-// decoded at once (NFR-014). A second stuck source removed meanwhile is set
-// aside as soon as the first one's worker exits, rather than holding the
-// queue until its own read returns.
+// cancellation — lets the remaining checks go on at once (RSZ-004), however
+// many removed sources are still blocked, and that a stuck check is never
+// delivered once its read returns.
 func TestInspectorDropFreesTheQueueFromAStuckCheck(t *testing.T) {
 	results := newCollector()
 	started := make(chan string, 16)
@@ -170,15 +168,6 @@ func TestInspectorDropFreesTheQueueFromAStuckCheck(t *testing.T) {
 			t.Fatalf("%q did not start", want)
 		}
 	}
-	noneStarts := func(reason string) {
-		t.Helper()
-		select {
-		case path := <-started:
-			t.Fatalf("%q started while %s", path, reason)
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-
 	inspector.Enqueue([]Inspection{{ID: 1, Path: "stuck one"}, {ID: 2, Path: "quick"}, {ID: 3, Path: "stuck two"}, {ID: 4, Path: "last"}})
 	waitStarted("stuck one")
 	inspector.Drop([]uint64{1})
@@ -186,19 +175,20 @@ func TestInspectorDropFreesTheQueueFromAStuckCheck(t *testing.T) {
 	if got := results.wait(t, 1); got[0].ID != 2 {
 		t.Fatalf("first delivered result = %+v, want item 2", got[0])
 	}
+	// A second stuck source removed while the first is still blocked frees
+	// the queue just the same.
 	waitStarted("stuck two")
 	inspector.Drop([]uint64{3})
-	noneStarts("the first stuck check is still set aside")
-	close(unstick["stuck one"])
 	waitStarted("last")
 	got := results.wait(t, 2)
 	if got[1].ID != 4 {
 		t.Fatalf("second delivered result = %+v, want item 4", got[1])
 	}
-	// Work queued later is not held up by the check still stuck either.
+	// Work queued later is not held up by the checks still stuck either.
 	inspector.Enqueue([]Inspection{{ID: 5, Path: "later"}})
 	waitStarted("later")
 	results.wait(t, 3)
+	close(unstick["stuck one"])
 	close(unstick["stuck two"])
 	inspector.Close()
 	inspector.Wait()

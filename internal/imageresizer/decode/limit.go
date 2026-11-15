@@ -161,16 +161,20 @@ func jpegDecodeBytes(config image.Config, frame jpegFrame) uint64 {
 
 // rgbaBytes is the size of a 4-byte-per-pixel image of the configured
 // dimensions: a JPEG frame's RGB or CMYK conversion, or the upright copy of a
-// reoriented source.
+// reoriented color source.
 func rgbaBytes(config image.Config) uint64 {
 	return 4 * uint64(config.Width) * uint64(config.Height)
 }
 
 // uprightCopyBytes is the image Decode copies a reoriented source into while
-// the decoded one is still alive.
+// the decoded one is still alive: one byte per pixel for a grayscale source,
+// which stays grayscale, and 4 for any other.
 func uprightCopyBytes(config image.Config, orientation Orientation) uint64 {
 	if !orientation.Reorients() {
 		return 0
+	}
+	if config.ColorModel == color.GrayModel {
+		return uint64(config.Width) * uint64(config.Height)
 	}
 	return rgbaBytes(config)
 }

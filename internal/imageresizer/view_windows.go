@@ -97,16 +97,31 @@ type NativeView struct {
 }
 
 // checkTally accumulates, since the list last had nothing left to check,
-// the add results whose checks are pending and the outcome of each resolved
-// content check. The finishing summary restates the add results, because
-// small files resolve so quickly that the add notice itself is replaced at
-// once.
+// what the adds contributed and the outcome of each resolved content check.
+// The finishing summary restates the add results, because small files
+// resolve so quickly that the add notice itself is replaced at once.
+// Removing an item forgets it, so the summary counts only items still in
+// the list.
 type checkTally struct {
-	added AddSummary
+	// duplicates counts the paths the adds skipped as already listed.
+	duplicates int
+	// added maps each item the adds listed to its status when it was added:
+	// Checking for a file queued for its content check, or Unsupported or
+	// Inaccessible for one rejected up front.
+	added map[uint64]SourceStatus
 	// resolved maps each resolved item's ID to whether it became Ready.
-	// Removing an item forgets its outcome, so the summary counts only
-	// items still in the list.
 	resolved map[uint64]bool
+}
+
+// add records one add's results: its duplicates and the items it listed.
+func (c *checkTally) add(summary AddSummary, listed []SourceItem) {
+	c.duplicates += summary.Duplicates
+	if c.added == nil {
+		c.added = make(map[uint64]SourceStatus, len(listed))
+	}
+	for _, item := range listed {
+		c.added[item.ID] = item.Status
+	}
 }
 
 func (c *checkTally) record(id uint64, ready bool) {
@@ -118,8 +133,25 @@ func (c *checkTally) record(id uint64, ready bool) {
 
 func (c *checkTally) forget(ids []uint64) {
 	for _, id := range ids {
+		delete(c.added, id)
 		delete(c.resolved, id)
 	}
+}
+
+// addSummary restates the adds' results for the items still listed.
+func (c checkTally) addSummary() AddSummary {
+	summary := AddSummary{Duplicates: c.duplicates}
+	for _, status := range c.added {
+		switch status {
+		case StatusUnsupported:
+			summary.Unsupported++
+		case StatusInaccessible:
+			summary.Inaccessible++
+		default:
+			summary.Added++
+		}
+	}
+	return summary
 }
 
 // outcomes counts the resolved checks by outcome.
@@ -665,11 +697,17 @@ func (n *NativeView) NativeDropFiles(paths []string) {
 }
 
 func (n *NativeView) addSources(paths []string) {
+	first := n.inventory.Len()
 	summary := n.inventory.Add(paths)
 	n.refreshSources()
 	n.inspector.Enqueue(summary.Inspect)
 	if n.inventory.Checking() > 0 {
-		n.checked.added.merge(summary)
+		// Add only appends, so the items it listed follow the earlier ones.
+		listed := make([]SourceItem, 0, n.inventory.Len()-first)
+		for index := first; index < n.inventory.Len(); index++ {
+			listed = append(listed, n.inventory.Item(index))
+		}
+		n.checked.add(summary, listed)
 	}
 	n.list.Focus()
 	n.showSourceNotice(summarizeAdd(summary))
@@ -759,10 +797,10 @@ func (n *NativeView) finishChecks() (ui.Notice, bool) {
 
 // summarizeChecks builds the notice shown when the last pending content
 // check resolves: the add results since the list was last fully checked,
-// then how many of the images still listed are ready and how many cannot be
-// resized.
+// counting only the images still listed, then how many of those are ready
+// and how many cannot be resized.
 func summarizeChecks(tally checkTally) ui.Notice {
-	message, warn := describeAdd(tally.added)
+	message, warn := describeAdd(tally.addSummary())
 	if message != "" {
 		message += " "
 	}

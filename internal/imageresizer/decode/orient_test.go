@@ -239,15 +239,23 @@ func TestOrientExactPixels(t *testing.T) {
 		//   1 4
 		{OrientationRotate270, 2, []uint8{3, 6, 2, 5, 1, 4}},
 	}
+	// A grayscale source stays grayscale at one byte per pixel, and any
+	// other becomes opaque RGBA.
+	opaque := image.NewRGBA(source.Bounds())
+	draw.Draw(opaque, opaque.Bounds(), source, image.Point{}, draw.Src)
 	for _, tc := range cases {
-		got := orient(source, tc.orientation).(*image.RGBA)
-		if got.Bounds().Dx() != tc.width {
-			t.Fatalf("orientation %d: width %d, want %d", tc.orientation, got.Bounds().Dx(), tc.width)
+		gray := orient(source, tc.orientation).(*image.Gray)
+		rgba := orient(opaque, tc.orientation).(*image.RGBA)
+		if gray.Bounds().Dx() != tc.width || rgba.Bounds() != gray.Bounds() {
+			t.Fatalf("orientation %d: bounds %v and %v, want width %d", tc.orientation, gray.Bounds(), rgba.Bounds(), tc.width)
 		}
 		for index, want := range tc.rows {
 			x, y := index%tc.width, index/tc.width
-			if value := got.RGBAAt(x, y); value.R != want || value.A != 0xff {
-				t.Fatalf("orientation %d: pixel (%d, %d) = %+v, want gray %d", tc.orientation, x, y, value, want)
+			if value := gray.GrayAt(x, y); value.Y != want {
+				t.Fatalf("orientation %d: gray pixel (%d, %d) = %d, want %d", tc.orientation, x, y, value.Y, want)
+			}
+			if value := rgba.RGBAAt(x, y); value.R != want || value.A != 0xff {
+				t.Fatalf("orientation %d: RGBA pixel (%d, %d) = %+v, want gray %d", tc.orientation, x, y, value, want)
 			}
 		}
 	}
@@ -262,12 +270,13 @@ func TestOrientExactPixels(t *testing.T) {
 
 	// A source whose bounds do not start at the origin is read from its own
 	// bounds: the stored 2 × 2 block at (1, 0) holds 2 3 / 5 6.
-	offset := source.SubImage(image.Rect(1, 0, 3, 2))
-	got := orient(offset, OrientationRotate90).(*image.RGBA)
-	for index, want := range []uint8{5, 2, 6, 3} {
-		x, y := index%2, index/2
-		if value := got.RGBAAt(x, y); value.R != want {
-			t.Fatalf("offset source: pixel (%d, %d) = %+v, want gray %d", x, y, value, want)
+	for name, offset := range map[string]image.Image{"gray": source.SubImage(image.Rect(1, 0, 3, 2)), "RGBA": opaque.SubImage(image.Rect(1, 0, 3, 2))} {
+		got := orient(offset, OrientationRotate90)
+		for index, want := range []uint8{5, 2, 6, 3} {
+			x, y := index%2, index/2
+			if value := color.GrayModel.Convert(got.At(x, y)).(color.Gray); value.Y != want {
+				t.Fatalf("offset %s source: pixel (%d, %d) = %d, want %d", name, x, y, value.Y, want)
+			}
 		}
 	}
 }
@@ -291,8 +300,10 @@ func TestDecodeOrientsGrayAndCMYKJPEGs(t *testing.T) {
 		if bounds := decoded.Pixels.Bounds(); bounds.Dx() != stored.Dy() || bounds.Dy() != stored.Dx() {
 			t.Fatalf("%s: upright bounds %v for stored %v", name, bounds, stored)
 		}
-		if _, ok := decoded.Pixels.(*image.RGBA); !ok {
-			t.Fatalf("%s: reoriented pixels are %T, want *image.RGBA", name, decoded.Pixels)
+		_, gray := decoded.Pixels.(*image.Gray)
+		_, rgba := decoded.Pixels.(*image.RGBA)
+		if (name == "gray.jpg" && !gray) || (name == "cmyk.jpg" && !rgba) {
+			t.Fatalf("%s: reoriented pixels are %T", name, decoded.Pixels)
 		}
 	}
 }

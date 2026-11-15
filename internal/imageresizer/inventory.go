@@ -244,8 +244,11 @@ func failureStatus(err error) (SourceStatus, string) {
 	}
 	switch decodeErr.Kind {
 	case decode.KindRead, decode.KindCanceled:
-		if decodeErr.Err == nil {
+		switch {
+		case decodeErr.Err == nil:
 			return StatusInaccessible, ui.SourceReadFailedDetail
+		case errors.Is(decodeErr, decode.ErrChanged):
+			return StatusInaccessible, ui.SourceChangedDetail
 		}
 		return StatusInaccessible, decodeErr.Err.Error()
 	case decode.KindUnsupported:
@@ -355,14 +358,6 @@ func (v *Inventory) addFile(path string, summary *AddSummary) {
 		summary.Inspect = append(summary.Inspect, Inspection{ID: item.ID, Path: path})
 	}
 	v.items = append(v.items, item)
-}
-
-// merge adds another summary's counts; the queued checks are not merged.
-func (s *AddSummary) merge(other AddSummary) {
-	s.Added += other.Added
-	s.Duplicates += other.Duplicates
-	s.Unsupported += other.Unsupported
-	s.Inaccessible += other.Inaccessible
 }
 
 // claim records the path as listed, or counts it as a duplicate when the

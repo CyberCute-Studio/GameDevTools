@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io"
 	"math"
 	"testing"
 )
@@ -17,7 +19,8 @@ import (
 // standard library decoder's allocations: one byte per plane sample padded
 // to whole minimum coded units, four more per sample for a progressive
 // frame's coefficients, and 4 bytes per pixel for an RGB or CMYK conversion
-// and for the upright copy of a reoriented source.
+// and for the upright copy of a reoriented color source, but one for that of
+// a grayscale source.
 func TestJPEGDecodeBytesFollowsTheDecoderLayout(t *testing.T) {
 	config := func(model color.Model) image.Config {
 		return image.Config{ColorModel: model, Width: 1000, Height: 1000}
@@ -53,12 +56,16 @@ func TestJPEGDecodeBytesFollowsTheDecoderLayout(t *testing.T) {
 			t.Fatalf("%s: jpegDecodeBytes = %d, want %d", tc.name, got, tc.want)
 		}
 	}
+	// A grayscale source stays grayscale when reoriented; any other becomes
+	// RGBA.
 	for _, orientation := range []Orientation{OrientationRotate90, OrientationMirrorHorizontal} {
-		if got := uprightCopyBytes(config(color.GrayModel), orientation); got != 4*pixels {
-			t.Fatalf("upright copy for orientation %d = %d, want %d", orientation, got, 4*pixels)
+		for model, want := range map[color.Model]uint64{color.GrayModel: pixels, color.YCbCrModel: 4 * pixels, color.CMYKModel: 4 * pixels} {
+			if got := uprightCopyBytes(config(model), orientation); got != want {
+				t.Fatalf("upright copy of %v for orientation %d = %d, want %d", model, orientation, got, want)
+			}
 		}
 	}
-	if got := uprightCopyBytes(config(color.GrayModel), OrientationNormal); got != 0 {
+	if got := uprightCopyBytes(config(color.YCbCrModel), OrientationNormal); got != 0 {
 		t.Fatalf("upright copy for an upright source = %d, want 0", got)
 	}
 }
@@ -225,14 +232,37 @@ func TestJPEGConvertsToRGBFollowsTheDecoder(t *testing.T) {
 		if _, converted := decoded.(*image.RGBA); converted != tc.want {
 			t.Fatalf("%s: the decoder returned %T, but the case expects conversion %v", tc.name, decoded, tc.want)
 		}
-		if got := jpegConvertsToRGB(bufio.NewReader(bytes.NewReader(tc.content))); got != tc.want {
-			t.Fatalf("%s: jpegConvertsToRGB = %v, want %v", tc.name, got, tc.want)
+		if got, err := jpegConvertsToRGB(bufio.NewReader(bytes.NewReader(tc.content))); got != tc.want || err != nil {
+			t.Fatalf("%s: jpegConvertsToRGB = %v, %v; want %v", tc.name, got, err, tc.want)
 		}
 	}
-	// A walk that cannot reach the end-of-image marker cannot rule the
-	// conversion out.
-	if !jpegConvertsToRGB(bufio.NewReader(bytes.NewReader(source[:len(source)-2]))) {
-		t.Fatal("jpegConvertsToRGB ruled out the conversion without reaching the end of the image")
+	// A walk that cannot reach the end-of-image marker reports why, as the
+	// decoder fails on the same data.
+	truncatedSource := source[:len(source)-2]
+	if _, err := jpeg.Decode(bytes.NewReader(truncatedSource)); err == nil {
+		t.Fatal("the decoder accepted a JPEG without its end-of-image marker")
+	}
+	if _, err := jpegConvertsToRGB(bufio.NewReader(bytes.NewReader(truncatedSource))); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("jpegConvertsToRGB without the end of the image = %v, want io.ErrUnexpectedEOF", err)
+	}
+	shortSegment := withSegments(source, []byte{0xff, markerAPP14, 0, 1})
+	if _, err := jpegConvertsToRGB(bufio.NewReader(bytes.NewReader(shortSegment))); !errors.Is(err, errShortSegment) {
+		t.Fatalf("jpegConvertsToRGB with a short segment length = %v, want errShortSegment", err)
+	}
+}
+
+// TestTruncatedJPEGInTheConversionBandIsDamaged pins that a source whose
+// planes fit the limit but whose RGB conversion would not, and whose data
+// ends before the end-of-image marker, is reported as damaged — as the
+// decoder would report it — rather than as too large.
+func TestTruncatedJPEGInTheConversionBandIsDamaged(t *testing.T) {
+	// 4:2:0 planes of 20000 × 20000 pixels take 600 MB; the conversion
+	// would add 1.6 GB.
+	source := jpegWithDimensions(t, encodeJPEG(t, image.NewRGBA(image.Rect(0, 0, 16, 16))), 20000, 20000)
+	_, err := Inspect(context.Background(), writeFile(t, "truncated.jpg", source[:len(source)-2]))
+	requireKind(t, err, KindCorrupt, FormatJPEG)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("error = %v, want io.ErrUnexpectedEOF", err)
 	}
 }
 
