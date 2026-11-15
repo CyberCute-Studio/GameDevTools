@@ -45,6 +45,11 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
+	resizerDefaultFolder, resizerFolderErr := imageresizer.DefaultOutputFolder()
+	resizerOptionsStore, err := imageresizer.NewOptionsStore(store, resizerDefaultFolder)
+	if err != nil {
+		return err
+	}
 	loaded := settings.LoadResult{Settings: settings.Default()}
 	if pathErr == nil {
 		loaded = store.Load()
@@ -74,6 +79,13 @@ func runNative() error {
 	if folderErr != nil && optionsManager.Options().OutputFolder == "" {
 		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.OutputFolderUnavailable, folderErr))
 	}
+	resizerOptionsManager, err := imageresizer.NewOptionsManager(resizerOptionsStore, &value)
+	if err != nil {
+		return err
+	}
+	if resizerFolderErr != nil && resizerOptionsManager.Options().OutputFolder == "" {
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.ResizeFolderUnavailable, resizerFolderErr))
+	}
 	if len(loaded.Warnings) > 0 && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}
@@ -84,7 +96,7 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	resizerModule, err := imageresizer.New(resizerRepository, &value)
+	resizerModule, err := imageresizer.New(resizerRepository, resizerOptionsManager, &value)
 	if err != nil {
 		return err
 	}
