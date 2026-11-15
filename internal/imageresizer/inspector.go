@@ -27,12 +27,12 @@ type InspectionResult struct {
 type inspectFunc func(context.Context, string) (decode.Info, error)
 
 // Inspector checks source content on one background goroutine, one file at
-// a time: the GUI thread never decodes (TECH-005), and decoding holds one
-// source in memory at a time (NFR-014). The goroutine starts when work is
-// queued and exits when the queue is empty. Each finished check is handed to
-// deliver on the worker goroutine; the view forwards it to the GUI thread
-// through the shell dispatcher. A check that is dropped or cancelled is
-// never delivered.
+// a time: the GUI thread never decodes (TECH-005), and the queue is decoded
+// one source at a time rather than all at once (NFR-014). The goroutine
+// starts when work is queued and exits when the queue is empty. Each
+// finished check is handed to deliver on the worker goroutine; the view
+// forwards it to the GUI thread through the shell dispatcher. A check that
+// is dropped or cancelled is never delivered.
 //
 // Cancellation reaches a check only at its next read, and a read blocked in
 // the operating system — on an unresponsive network share or an online-only
@@ -41,10 +41,13 @@ type inspectFunc func(context.Context, string) (decode.Info, error)
 // while a replacement serves the rest of the queue at once, so removing a
 // stuck source always frees the others (RSZ-004), however many are stuck. A
 // detached worker exits as soon as the read it is blocked in returns, or
-// once the CPU-only end of a decode whose reads were done finishes, and until
-// then holds only what its check had allocated: nothing for a check that
-// started on a share that had already stopped responding, since it blocks in
-// its first read, before any pixel memory is allocated.
+// once the CPU-only end of a decode whose reads were done finishes. Until
+// then it keeps what its check had allocated while the next check decodes,
+// so for that time a dropped check's memory adds to the current one's: for
+// a moment when its decode was only finishing, for as long as the read
+// blocks when it stopped part-way, and not at all when it blocked in its
+// first read, before any pixel memory was allocated — as any check started
+// on a share that had already stopped responding does.
 //
 // Enqueue, Drop, DropAll, Close, and Closed are safe to call from any
 // goroutine.

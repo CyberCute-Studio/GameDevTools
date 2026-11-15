@@ -336,6 +336,9 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 		{"late-header.png", lateHeaderPNG(20000, 20000), FormatPNG, 20000, 20000},
 		// A tRNS chunk makes the decoder allocate gray as 4-byte NRGBA.
 		{"transparent-gray.png", append(pngHeader(20000, 20000, 8, 0), pngChunk("tRNS", []byte{0, 7})...), FormatPNG, 20000, 20000},
+		// The 1 GiB of gray pixels fit, but not with the two 1 GiB rows the
+		// decoder reads them through.
+		{"wide-row.png", pngHeader(1<<30, 1, 8, 0), FormatPNG, 1 << 30, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -348,11 +351,17 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 	}
 	// The same 8-bit dimensions that a 16-bit source exceeds stay within
 	// the limit, and so does opaque gray, which decodes at one byte per
-	// pixel; with no image data after the header they are damaged rather
-	// than too large.
+	// pixel, and 2^28 8-bit truecolor pixels, whose rows fit the allowance;
+	// with no image data after the header they are damaged rather than too
+	// large. A gray source cut short before its image data, or stopped by a
+	// second header, is costed as what its chunks declared, not as a
+	// transparent one, since the decoder fails on it before allocating.
 	for name, content := range map[string][]byte{
-		"wide.png": pngHeader(16384, 12000, 8, 6),
-		"gray.png": append(pngHeader(20000, 20000, 8, 0), pngChunk("IDAT", nil)...),
+		"wide.png":          pngHeader(16384, 12000, 8, 6),
+		"square.png":        append(pngHeader(16384, 16384, 8, 2), pngChunk("IDAT", nil)...),
+		"gray.png":          append(pngHeader(20000, 20000, 8, 0), pngChunk("IDAT", nil)...),
+		"cut-gray.png":      append(pngHeader(20000, 20000, 8, 0), pngChunk("tEXt", []byte("Comment\x00cut"))...),
+		"second-header.png": append(pngHeader(20000, 20000, 8, 0), pngHeader(20000, 20000, 8, 0)[len(pngSignature):]...),
 	} {
 		_, err := Inspect(context.Background(), writeFile(t, name, content))
 		requireKind(t, err, KindCorrupt, FormatPNG)
@@ -467,82 +476,31 @@ func (f *scriptedFile) Read(buffer []byte) (int, error) {
 }
 
 // TestReadFailureDuringTheScanIsReported pins that a transient read failure
-// while the header is scanned fails the source as unreadable. Otherwise a
-// JPEG scan would see no orientation, the later passes would read fine, and
-// the source would be listed as Ready with its stored rather than upright
-// dimensions (RSZ-018); and a PNG scan cut short assumes a transparency
-// chunk, so this gray source, which fits the limit at one byte per pixel,
-// would be listed as too large. Each header runs past the first segment, so
-// the failing read comes after the signature was sniffed.
+// while the header is scanned fails the source as unreadable rather than as
+// damaged or too large. Otherwise a JPEG scan would see no orientation, the
+// later passes would read fine, and the source would be listed as Ready with
+// its stored rather than upright dimensions (RSZ-018). Each header runs past
+// the first buffer, so the failing read comes after the signature was
+// sniffed.
 func TestReadFailureDuringTheScanIsReported(t *testing.T) {
 	comment := jpegSegment(0xfe, make([]byte, 40000))
 	oriented := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 40, 30))), comment, comment, exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
 	gray := bytes.Join([][]byte{pngHeader(20000, 20000, 8, 0), pngChunk("tEXt", make([]byte, 2*readBufferSize)), pngChunk("IDAT", nil)}, nil)
 
-	info, _, err := decodeSource(newSourceReader(context.Background(), &scriptedFile{Reader: bytes.NewReader(oriented)}), false)
+	info, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(oriented)}}, false)
 	if err != nil || info.Width != 30 || info.Height != 40 {
 		t.Fatalf("intact read = %+v, %v; want 30 × 40", info, err)
 	}
 	// Without image data the gray source is damaged, not too large.
-	_, _, err = decodeSource(newSourceReader(context.Background(), &scriptedFile{Reader: bytes.NewReader(gray)}), false)
+	_, _, err = decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(gray)}}, false)
 	requireKind(t, err, KindCorrupt, FormatPNG)
 
 	for format, content := range map[Format][]byte{FormatJPEG: oriented, FormatPNG: gray} {
 		file := &scriptedFile{Reader: bytes.NewReader(content), failing: true, failFrom: readBufferSize}
-		_, _, err := decodeSource(newSourceReader(context.Background(), file), false)
+		_, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: file}, false)
 		requireKind(t, err, KindRead, format)
 		if !errors.Is(err, errScriptedRead) {
 			t.Fatalf("%v: error = %v, want the read failure", format, err)
-		}
-	}
-}
-
-// changingFile serves one content until it has been rewound rewrittenAt
-// times and another from then on, like a file saved again between two
-// passes of its decode.
-type changingFile struct {
-	*bytes.Reader
-	rewritten   []byte
-	rewrittenAt int
-	seeks       int
-}
-
-func (f *changingFile) Seek(offset int64, whence int) (int64, error) {
-	f.seeks++
-	if f.seeks == f.rewrittenAt {
-		f.Reader = bytes.NewReader(f.rewritten)
-	}
-	return f.Reader.Seek(offset, whence)
-}
-
-// TestRewrittenFileIsNotDecoded pins that each pass of a decode reads the
-// bytes the earlier passes checked: a file rewritten with a larger picture
-// after its header was scanned, or after it was parsed and the memory limit
-// checked, fails as changed instead of being decoded from a header the limit
-// never saw.
-func TestRewrittenFileIsNotDecoded(t *testing.T) {
-	cases := []struct {
-		name               string
-		format             Format
-		original, replaced []byte
-	}{
-		{"png", FormatPNG, encodePNG(t, image.NewRGBA(image.Rect(0, 0, 8, 8))), encodePNG(t, image.NewRGBA(image.Rect(0, 0, 16, 16)))},
-		{"jpeg", FormatJPEG, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), encodeJPEG(t, image.NewGray(image.Rect(0, 0, 16, 16)))},
-	}
-	for _, tc := range cases {
-		info, pixels, err := decodeSource(newSourceReader(context.Background(), &changingFile{Reader: bytes.NewReader(tc.original)}), true)
-		if err != nil || info.Width != 8 || pixels.Bounds().Dx() != 8 {
-			t.Fatalf("%s: unchanged file = %+v, %v", tc.name, info, err)
-		}
-		// The header parse is the first pass after a seek, the decode the
-		// second.
-		for _, pass := range []int{1, 2} {
-			file := &changingFile{Reader: bytes.NewReader(tc.original), rewritten: tc.replaced, rewrittenAt: pass}
-			_, _, err := decodeSource(newSourceReader(context.Background(), file), true)
-			requireKind(t, err, KindRead, tc.format)
-			if !errors.Is(err, ErrChanged) {
-				t.Fatalf("%s rewritten before pass %d: error = %v, want ErrChanged", tc.name, pass, err)
-			}
 		}
 	}
 }
@@ -560,7 +518,7 @@ func TestCancellationAfterTheLastRead(t *testing.T) {
 			cancel()
 		}
 	}}
-	info, pixels, err := decodeSource(newSourceReader(ctx, file), true)
+	info, pixels, err := decodeSource(&sourceReader{ctx: ctx, file: file}, true)
 	requireKind(t, err, KindCanceled, FormatJPEG)
 	if pixels != nil || info != (Info{}) {
 		t.Fatalf("cancelled decode returned %+v with pixels %v", info, pixels != nil)

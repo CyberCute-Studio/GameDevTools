@@ -8,12 +8,8 @@
 // Functions are safe to call from any goroutine and never touch the GUI;
 // callers run them off the GUI thread and deliver results through the shell
 // dispatcher, per TECH-005. Sources are opened read-only and are never
-// modified (RSZ-009). Each pass over a source — the header scan, the header
-// parse, and the decode — sees exactly the bytes the passes before it
-// checked, so a file rewritten during its check fails with ErrChanged instead
-// of being decoded from a header that was never checked. A context cancels a
-// decode at its next read of the source, and once more after decoding,
-// before the orientation transform.
+// modified (RSZ-009). A context cancels a decode at its next read of the
+// source, and once more after decoding, before the orientation transform.
 // The decoder's work after its last read — a progressive JPEG's final
 // reconstruction and the color conversion — is not interruptible, so a
 // cancelled decode of a large source can still spend that CPU time before it
@@ -28,7 +24,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/maphash"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -65,16 +60,18 @@ func (f Format) String() string {
 // for its color type — 1 byte for a palette or gray of up to 8 bits, 2 for
 // 16-bit gray, and otherwise 4 bytes, or 8 at 16 bits per channel, which
 // includes gray made transparent by a tRNS chunk — and twice that when
-// Adam7-interlaced, so an 8-bit truecolor non-interlaced PNG is limited to
-// 2^28 pixels — the same bound the Screenshot module applies to one capture;
-// a JPEG counts its component planes at their sampling, a progressive
-// frame's coefficient buffers, the converted image of an RGB or CMYK frame —
-// including one a segment after its first scan switches to RGB — and the
-// upright copy a reoriented source needs. Larger sources are rejected with a
-// KindTooLarge error from their declared headers, before any pixel memory is
-// allocated, so a crafted header cannot exhaust memory; and since the decode
-// pass must read the same bytes the check read, a header rewritten after the
-// check cannot either.
+// Adam7-interlaced, plus the decoder's row buffers beyond a 16 MiB allowance,
+// so an 8-bit truecolor non-interlaced PNG is limited to 2^28 pixels — the
+// same bound the Screenshot module applies to one capture — and a short,
+// wide one cannot multiply that through its rows; a JPEG counts its
+// component planes at their sampling, a progressive frame's coefficient
+// buffers, the converted image of an RGB or CMYK frame — including one a
+// segment after its first scan switches to RGB — and the upright copy a
+// reoriented source needs. Larger sources are rejected with a KindTooLarge
+// error from their declared headers, before any pixel memory is allocated,
+// so a crafted header cannot exhaust memory. The passes of a decode each
+// read the file from its start, so the bound assumes the file does not
+// change while it is being decoded.
 const MaxDecodedBytes = 1 << 30
 
 // Kind classifies a decode failure so the source list can present the
@@ -122,10 +119,6 @@ var ErrUnrecognized = errors.New("content is not PNG or JPEG image data")
 
 // ErrEmpty is the cause of a KindCorrupt error for an empty file.
 var ErrEmpty = errors.New("the file is empty")
-
-// ErrChanged is the cause of a KindRead error for a file whose content
-// changed between two passes of its decode.
-var ErrChanged = errors.New("the file changed while it was being read")
 
 // errFolder is the cause of a KindRead error for a path that names a folder.
 var errFolder = errors.New("the path is a folder, not a file")
@@ -261,8 +254,7 @@ var (
 )
 
 // readBufferSize is the read granularity, which is also how often a decode
-// observes cancellation, and the size of the segments each pass checks
-// against the passes before it.
+// observes cancellation.
 const readBufferSize = 64 << 10
 
 // header is what the scan before decoding learns: a JPEG's EXIF orientation
@@ -291,7 +283,7 @@ func load(ctx context.Context, path string, keep bool) (Info, image.Image, error
 	} else if stat.IsDir() {
 		return Info{}, nil, &Error{Kind: KindRead, Err: errFolder}
 	}
-	return decodeSource(newSourceReader(ctx, file), keep)
+	return decodeSource(&sourceReader{ctx: ctx, file: file}, keep)
 }
 
 // decodeSource identifies, checks, and decodes an open source; load
@@ -327,8 +319,7 @@ func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Imag
 	// The scans treat a failed read like the end of the header. Without this
 	// a transient failure would pass for a JPEG header without an
 	// orientation, so the later passes would list the source as Ready with
-	// dimensions that are not upright, and a PNG scan cut short assumes a
-	// transparency chunk, which could misreport the source as too large.
+	// dimensions that are not upright.
 	if source.readErr != nil || source.ctx.Err() != nil {
 		return Info{}, nil, source.classify(format, source.readErr)
 	}
@@ -480,37 +471,11 @@ func modelHasAlpha(model color.Model) bool {
 // cancellation at every read and remembers the first genuine read failure,
 // so a decoder error caused by the file system is reported as KindRead
 // rather than as damaged content, and every later read fails with it.
-//
-// Each pass checks the header the next one relies on, so the passes must
-// see the same bytes: the decoder would otherwise allocate for a header
-// rewritten after the limit was checked. The reader therefore reads the file
-// in fixed segments, and hands out a segment an earlier pass also read only
-// after checking it against that pass's hash of it; a segment that differs
-// fails the decode with ErrChanged before any of its bytes reach a parser.
-// The hash is seeded randomly for each reader, so its values cannot be
-// predicted from the file content.
 type sourceReader struct {
 	ctx context.Context
 	// file is the open source; an *os.File outside tests.
 	file    io.ReadSeeker
 	readErr error
-
-	seed maphash.Seed
-	// sums holds the hash of every segment a pass has read, in file order.
-	sums []uint64
-	// segment is the one being served, read into buffer; served counts its
-	// bytes already handed out, and index is the position of the next
-	// segment in the file. ended reports that segment reached the end of
-	// the file.
-	buffer  []byte
-	segment []byte
-	served  int
-	index   int
-	ended   bool
-}
-
-func newSourceReader(ctx context.Context, file io.ReadSeeker) *sourceReader {
-	return &sourceReader{ctx: ctx, file: file, seed: maphash.MakeSeed()}
 }
 
 func (s *sourceReader) Read(buffer []byte) (int, error) {
@@ -520,43 +485,11 @@ func (s *sourceReader) Read(buffer []byte) (int, error) {
 	if s.readErr != nil {
 		return 0, s.readErr
 	}
-	if s.served == len(s.segment) {
-		if s.ended {
-			return 0, io.EOF
-		}
-		if err := s.next(); err != nil {
-			return 0, err
-		}
-		if len(s.segment) == 0 {
-			return 0, io.EOF
-		}
-	}
-	n := copy(buffer, s.segment[s.served:])
-	s.served += n
-	return n, nil
-}
-
-// next reads the following segment of the file and checks it against what
-// an earlier pass read there, or records it for the passes after this one.
-func (s *sourceReader) next() error {
-	if s.buffer == nil {
-		s.buffer = make([]byte, readBufferSize)
-	}
-	n, err := io.ReadFull(s.file, s.buffer)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+	n, err := s.file.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
 		s.readErr = err
-		return err
 	}
-	s.segment, s.served, s.ended = s.buffer[:n], 0, n < len(s.buffer)
-	sum := maphash.Bytes(s.seed, s.segment)
-	if s.index == len(s.sums) {
-		s.sums = append(s.sums, sum)
-	} else if s.sums[s.index] != sum {
-		s.readErr = ErrChanged
-		return ErrChanged
-	}
-	s.index++
-	return nil
+	return n, err
 }
 
 func (s *sourceReader) rewind() error {
@@ -569,7 +502,6 @@ func (s *sourceReader) rewind() error {
 		}
 		return err
 	}
-	s.segment, s.served, s.index, s.ended = nil, 0, 0, false
 	return nil
 }
 

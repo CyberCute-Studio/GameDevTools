@@ -21,6 +21,14 @@ const (
 // maxPNGChunkLength is the largest chunk length the PNG decoder accepts.
 const maxPNGChunkLength = 0x7fffffff
 
+// pngRowAllowance is how much of the PNG decoder's row buffers the estimate
+// leaves out. They grow with the width alone, so for any real image they are
+// a sliver of its pixels — two rows 16384 pixels wide take 128 KiB — but for
+// a short, wide header they can outweigh the image itself. Only rows beyond
+// this allowance count toward MaxDecodedBytes, so they can never multiply
+// the allocation, while a 16384 × 16384 8-bit truecolor source still fits.
+const pngRowAllowance = 16 << 20
+
 // pngLayout is what the chunks before the image data declare, as far as they
 // set the decoder's pixel memory.
 type pngLayout struct {
@@ -30,9 +38,7 @@ type pngLayout struct {
 	colorType     byte
 	interlaced    bool
 	// transparent reports a tRNS chunk, which makes the decoder allocate a
-	// gray or truecolor source as an image with alpha. It is also set when
-	// the scan ended before the image data, so a chunk it did not reach is
-	// costed as one.
+	// gray or truecolor source as an image with alpha.
 	transparent bool
 }
 
@@ -41,7 +47,10 @@ type pngLayout struct {
 // decoder finds it — the decoder skips unknown chunks before IHDR — and
 // notes a tRNS chunk, which the decoder accepts only before the image data.
 // A missing or malformed IHDR reports valid == false; the decoder then
-// reports the damage itself.
+// reports the damage itself. A scan that ends before the image data — the
+// file is cut short, or a chunk the decoder rejects stops it — reports what
+// it saw: the decoder allocates its pixels only at the first IDAT, so it
+// fails on the same data before allocating any.
 func scanPNG(reader *bufio.Reader) pngLayout {
 	var layout pngLayout
 	if _, err := reader.Discard(len(pngSignature)); err != nil {
@@ -60,7 +69,6 @@ func scanPNG(reader *bufio.Reader) pngLayout {
 		case "IHDR":
 			if layout.valid || length != 13 {
 				// The decoder rejects a second or malformed IHDR.
-				layout.transparent = true
 				return layout
 			}
 			var data [13]byte
@@ -89,9 +97,6 @@ func scanPNG(reader *bufio.Reader) pngLayout {
 			break
 		}
 	}
-	// The scan ended before the image data, so a transparency chunk it did
-	// not reach is assumed.
-	layout.transparent = true
 	return layout
 }
 
@@ -114,20 +119,31 @@ func (l pngLayout) pixelBytes() uint64 {
 }
 
 // pngDecodeBytes estimates the pixel memory the PNG decoder allocates for the
-// layout: the image at the decoder's pixel size for its color type, and for
-// an Adam7-interlaced source the seven pass images as well, which together
-// hold as many pixels as the image again. The estimate saturates instead of
-// overflowing.
+// layout: the image at the decoder's pixel size for its color type; for an
+// Adam7-interlaced source the seven pass images as well, which together hold
+// as many pixels as the image again; and the row buffers beyond
+// pngRowAllowance. Each pass reads its data into a current and a previous
+// row of a filter-type byte and the row's packed samples, which never take
+// more bytes per pixel than the decoded image, and no pass is wider than the
+// image. The estimate saturates instead of overflowing.
 func pngDecodeBytes(layout pngLayout) uint64 {
 	perPixel := layout.pixelBytes()
+	width, height := uint64(layout.width), uint64(layout.height)
+	passes, images := uint64(1), perPixel
 	if layout.interlaced {
-		perPixel *= 2
+		passes, images = 7, 2*perPixel
 	}
-	pixels := uint64(layout.width) * uint64(layout.height)
-	if pixels > math.MaxUint64/perPixel {
+	// The width is below 2^31 and a pixel at most 8 bytes, so this cannot
+	// overflow.
+	var rows uint64
+	if all := passes * 2 * (1 + perPixel*width); all > pngRowAllowance {
+		rows = all - pngRowAllowance
+	}
+	pixels := width * height
+	if pixels > (math.MaxUint64-rows)/images {
 		return math.MaxUint64
 	}
-	return pixels * perPixel
+	return pixels*images + rows
 }
 
 // jpegDecodeBytes estimates the pixel memory the JPEG decoder allocates. The

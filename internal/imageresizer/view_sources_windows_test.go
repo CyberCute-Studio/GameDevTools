@@ -594,8 +594,9 @@ func TestNativeViewRemovingTheLastCheckSummarizes(t *testing.T) {
 
 // TestNativeViewCheckSummaryCountsListedItems pins that items removed while
 // checks are pending drop out of the summary — out of the restated add
-// results and out of the check outcomes alike — so it never counts images,
-// or points at failures, that are no longer listed.
+// results, the duplicates they matched included, and out of the check
+// outcomes alike — so it never counts images, or points at failures, that
+// are no longer listed.
 func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
@@ -624,8 +625,9 @@ func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
 	if got := view.list.ItemText(2); got != "damaged.png — Damaged or incomplete" {
 		t.Fatalf("damaged row = %q", got)
 	}
-	// Remove the damaged image and the unsupported file, and an item listed
-	// before this add, which the summary never counted.
+	// Remove the damaged image and the unsupported file, and the item listed
+	// before this add that its duplicate matched, so the summary no longer
+	// reports that path as already in the list.
 	for _, index := range []int{0, 2, 4} {
 		view.list.SetSelected(index, true)
 	}
@@ -635,7 +637,7 @@ func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
 	gate.waitFor(t, gate.started)
 	gate.release <- struct{}{}
 	settle(t, view, dispatcher)
-	if got := view.status.Text(); got != "Success: Added 2 image(s). 1 already in the list. Checked 2 image(s): 2 ready." {
+	if got := view.status.Text(); got != "Success: Added 2 image(s). Checked 2 image(s): 2 ready." {
 		t.Fatalf("status after checking = %q", got)
 	}
 }

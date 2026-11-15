@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
-	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func writeSource(t *testing.T, directory, name string) string {
@@ -56,6 +55,11 @@ func TestInventoryAddClassifiesMixedBatch(t *testing.T) {
 	if items[0].Status != StatusChecking || items[1].Status != StatusChecking {
 		t.Fatalf("supported files must be Checking: %+v, %+v", items[0], items[1])
 	}
+	// Only they are marked as content-checked; the others were rejected up
+	// front.
+	if !items[0].Inspected || !items[1].Inspected || items[2].Inspected || items[3].Inspected {
+		t.Fatalf("Inspected = %v, %v, %v, %v; want true, true, false, false", items[0].Inspected, items[1].Inspected, items[2].Inspected, items[3].Inspected)
+	}
 	if len(summary.Inspect) != 2 || summary.Inspect[0] != (Inspection{ID: items[0].ID, Path: ready}) || summary.Inspect[1] != (Inspection{ID: items[1].ID, Path: upper}) {
 		t.Fatalf("queued checks = %+v", summary.Inspect)
 	}
@@ -83,11 +87,22 @@ func TestInventoryAddDeduplicatesFullPathsCaseInsensitively(t *testing.T) {
 	if summary.Duplicates != 3 {
 		t.Fatalf("duplicates = %d, want 3", summary.Duplicates)
 	}
+	// Each duplicate names the item already listing its path.
+	original := inventory.Item(0).ID
+	if len(summary.DuplicateOf) != 3 || summary.DuplicateOf[0] != original || summary.DuplicateOf[1] != original || summary.DuplicateOf[2] != original {
+		t.Fatalf("DuplicateOf = %v, want the original item %d three times", summary.DuplicateOf, original)
+	}
+	if index, ok := inventory.IndexOf(original); !ok || index != 0 {
+		t.Fatalf("IndexOf(%d) = %d, %v; want 0, true", original, index, ok)
+	}
 	if len(inventory.Items()) != 1 {
 		t.Fatalf("items = %d, want the single original entry", len(inventory.Items()))
 	}
 
 	inventory.Remove([]int{0})
+	if _, ok := inventory.IndexOf(original); ok {
+		t.Fatalf("IndexOf found the removed item %d", original)
+	}
 	summary = inventory.Add([]string{ready})
 	if summary.Added != 1 || summary.Duplicates != 0 {
 		t.Fatalf("re-add after removal = %+v, want 1 added", summary)
@@ -312,7 +327,6 @@ func TestFailureStatusIdentifiesEachKind(t *testing.T) {
 		detail string
 	}{
 		{"read", &decode.Error{Kind: decode.KindRead, Err: os.ErrPermission}, StatusInaccessible, "permission denied"},
-		{"changed", &decode.Error{Kind: decode.KindRead, Format: decode.FormatPNG, Err: decode.ErrChanged}, StatusInaccessible, ui.SourceChangedDetail},
 		{"unrecognized", &decode.Error{Kind: decode.KindUnsupported, Err: decode.ErrUnrecognized}, StatusUnsupported, "not PNG or JPEG image data"},
 		{"feature", &decode.Error{Kind: decode.KindUnsupported, Format: decode.FormatJPEG, Err: errors.New("unsupported JPEG feature: precision")}, StatusUnsupported, "This JPEG file uses a feature the image decoder does not support (unsupported JPEG feature: precision)"},
 		{"corrupt", &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}, StatusCorrupt, "The PNG data is damaged or incomplete and cannot be decoded (invalid checksum)"},

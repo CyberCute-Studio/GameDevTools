@@ -53,14 +53,18 @@ func (s SourceStatus) Label() string {
 // cannot update a later item for the same path. Name is the display name;
 // Path is the absolute source path; Detail carries the status explanation
 // (for example the read error) and stays empty for Ready and Checking items.
-// Info describes the decoded content once the item is Ready.
+// Info describes the decoded content once the item is Ready. Inspected
+// reports that the item was queued for a content check when it was added, as
+// every supported file that exists is, so its Status is that check's outcome
+// once it resolves rather than a rejection made up front.
 type SourceItem struct {
-	ID     uint64
-	Name   string
-	Path   string
-	Status SourceStatus
-	Detail string
-	Info   decode.Info
+	ID        uint64
+	Name      string
+	Path      string
+	Status    SourceStatus
+	Detail    string
+	Info      decode.Info
+	Inspected bool
 }
 
 // RowText is the source-list row: the file name, the upright source
@@ -127,27 +131,31 @@ func formatLabel(format decode.Format) string {
 // AddSummary reports the outcome of one Add call so the view can present the
 // batch result without re-reading the inventory. Added counts the supported
 // files now being checked; Inspect lists their content checks, in order.
+// DuplicateOf holds, for each of the Duplicates, the ID of the item that
+// already lists its path.
 type AddSummary struct {
 	Added        int
 	Duplicates   int
 	Unsupported  int
 	Inaccessible int
 	Inspect      []Inspection
+	DuplicateOf  []uint64
 }
 
 // Inventory is the ordered, deduplicated list of resize sources. It is not
 // safe for concurrent use; the view drives it from the GUI thread and
 // resolves content checks there after the shell dispatcher delivers them.
 type Inventory struct {
-	items    []SourceItem
-	byKey    map[string]struct{}
+	items []SourceItem
+	// byKey maps each listed path's key to its item's ID.
+	byKey    map[string]uint64
 	nextID   uint64
 	checking int
 	readDir  func(string) ([]os.DirEntry, error)
 }
 
 func NewInventory() *Inventory {
-	return &Inventory{byKey: make(map[string]struct{}), readDir: os.ReadDir}
+	return &Inventory{byKey: make(map[string]uint64), readDir: os.ReadDir}
 }
 
 func (v *Inventory) Items() []SourceItem {
@@ -204,16 +212,26 @@ func (v *Inventory) Add(paths []string) AddSummary {
 	return summary
 }
 
+// IndexOf returns the index of the item with the given ID, or ok == false
+// when no listed item has it.
+func (v *Inventory) IndexOf(id uint64) (index int, ok bool) {
+	// Identifiers are allocated in increasing order as items are appended,
+	// and removal keeps the order, so the items stay sorted by ID.
+	index = sort.Search(len(v.items), func(candidate int) bool {
+		return v.items[candidate].ID >= id
+	})
+	if index == len(v.items) || v.items[index].ID != id {
+		return -1, false
+	}
+	return index, true
+}
+
 // Resolve applies a finished content check to the item it belongs to and
 // returns that item's index. A result whose item was removed, or that was
 // already resolved, changes nothing and reports ok == false.
 func (v *Inventory) Resolve(result InspectionResult) (index int, ok bool) {
-	// Identifiers are allocated in increasing order as items are appended,
-	// and removal keeps the order, so the items stay sorted by ID.
-	index = sort.Search(len(v.items), func(candidate int) bool {
-		return v.items[candidate].ID >= result.ID
-	})
-	if index == len(v.items) || v.items[index].ID != result.ID {
+	index, ok = v.IndexOf(result.ID)
+	if !ok {
 		return -1, false
 	}
 	item := &v.items[index]
@@ -244,11 +262,8 @@ func failureStatus(err error) (SourceStatus, string) {
 	}
 	switch decodeErr.Kind {
 	case decode.KindRead, decode.KindCanceled:
-		switch {
-		case decodeErr.Err == nil:
+		if decodeErr.Err == nil {
 			return StatusInaccessible, ui.SourceReadFailedDetail
-		case errors.Is(decodeErr, decode.ErrChanged):
-			return StatusInaccessible, ui.SourceChangedDetail
 		}
 		return StatusInaccessible, decodeErr.Err.Error()
 	case decode.KindUnsupported:
@@ -301,7 +316,7 @@ func (v *Inventory) Remove(indices []int) []uint64 {
 
 func (v *Inventory) Clear() {
 	v.items = nil
-	v.byKey = make(map[string]struct{})
+	v.byKey = make(map[string]uint64)
 	v.checking = 0
 }
 
@@ -327,11 +342,12 @@ func (v *Inventory) addFolder(folder string, summary *AddSummary) {
 // addInaccessible lists a path that cannot be enumerated or queried with its
 // error, so the failure is identified without blocking valid entries.
 func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummary) {
-	if !v.claim(path, summary) {
+	id, claimed := v.claim(path, summary)
+	if !claimed {
 		return
 	}
 	v.items = append(v.items, SourceItem{
-		ID:     v.allocateID(),
+		ID:     id,
 		Name:   filepath.Base(path),
 		Path:   path,
 		Status: StatusInaccessible,
@@ -344,15 +360,17 @@ func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummar
 // queues its content check; the read-only open happens there, off the GUI
 // thread (RSZ-009, TECH-005).
 func (v *Inventory) addFile(path string, summary *AddSummary) {
-	if !v.claim(path, summary) {
+	id, claimed := v.claim(path, summary)
+	if !claimed {
 		return
 	}
-	item := SourceItem{ID: v.allocateID(), Name: filepath.Base(path), Path: path, Status: StatusChecking}
+	item := SourceItem{ID: id, Name: filepath.Base(path), Path: path, Status: StatusChecking}
 	if !SupportedExtension(path) {
 		item.Status = StatusUnsupported
 		item.Detail = ui.SourceUnsupportedDetail
 		summary.Unsupported++
 	} else {
+		item.Inspected = true
 		v.checking++
 		summary.Added++
 		summary.Inspect = append(summary.Inspect, Inspection{ID: item.ID, Path: path})
@@ -360,16 +378,18 @@ func (v *Inventory) addFile(path string, summary *AddSummary) {
 	v.items = append(v.items, item)
 }
 
-// claim records the path as listed, or counts it as a duplicate when the
-// same full path is already in the inventory.
-func (v *Inventory) claim(path string, summary *AddSummary) bool {
+// claim allocates the ID of the item that will list the path, or counts the
+// path as a duplicate of the item already listing the same full path.
+func (v *Inventory) claim(path string, summary *AddSummary) (uint64, bool) {
 	key := pathKey(path)
-	if _, exists := v.byKey[key]; exists {
+	if existing, exists := v.byKey[key]; exists {
 		summary.Duplicates++
-		return false
+		summary.DuplicateOf = append(summary.DuplicateOf, existing)
+		return 0, false
 	}
-	v.byKey[key] = struct{}{}
-	return true
+	id := v.allocateID()
+	v.byKey[key] = id
+	return id, true
 }
 
 // allocateID returns the next item identifier. Identifiers start at 1 so the

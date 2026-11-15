@@ -200,7 +200,6 @@ const (
 	SourceCorruptDetail             = "The %s data is damaged or incomplete and cannot be decoded (%v)."
 	SourceEmptyDetail               = "The file is empty."
 	SourceReadFailedDetail          = "The file could not be read."
-	SourceChangedDetail             = "The file changed while its content was being checked. Remove it and add it again to check the saved file."
 	SourceTooLargeDetail            = "At %s this image needs more than the %d MiB of memory one source may use to decode."
 
 	ImageFileFilterLabel    = "PNG and JPEG images"

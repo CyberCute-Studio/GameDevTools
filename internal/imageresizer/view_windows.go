@@ -96,74 +96,19 @@ type NativeView struct {
 	status          *ui.StatusArea
 }
 
-// checkTally accumulates, since the list last had nothing left to check,
-// what the adds contributed and the outcome of each resolved content check.
-// The finishing summary restates the add results, because small files
-// resolve so quickly that the add notice itself is replaced at once.
-// Removing an item forgets it, so the summary counts only items still in
-// the list.
+// checkTally marks the adds made since the list last had nothing left to
+// check. The finishing summary restates their results, because small files
+// resolve so quickly that the add notice itself is replaced at once. The
+// items those adds listed are exactly the ones from first on, since IDs only
+// grow and removal keeps the order, so the summary reads them — and only
+// those still listed — from the inventory.
 type checkTally struct {
-	// duplicates counts the paths the adds skipped as already listed.
-	duplicates int
-	// added maps each item the adds listed to its status when it was added:
-	// Checking for a file queued for its content check, or Unsupported or
-	// Inaccessible for one rejected up front.
-	added map[uint64]SourceStatus
-	// resolved maps each resolved item's ID to whether it became Ready.
-	resolved map[uint64]bool
-}
-
-// add records one add's results: its duplicates and the items it listed.
-func (c *checkTally) add(summary AddSummary, listed []SourceItem) {
-	c.duplicates += summary.Duplicates
-	if c.added == nil {
-		c.added = make(map[uint64]SourceStatus, len(listed))
-	}
-	for _, item := range listed {
-		c.added[item.ID] = item.Status
-	}
-}
-
-func (c *checkTally) record(id uint64, ready bool) {
-	if c.resolved == nil {
-		c.resolved = make(map[uint64]bool)
-	}
-	c.resolved[id] = ready
-}
-
-func (c *checkTally) forget(ids []uint64) {
-	for _, id := range ids {
-		delete(c.added, id)
-		delete(c.resolved, id)
-	}
-}
-
-// addSummary restates the adds' results for the items still listed.
-func (c checkTally) addSummary() AddSummary {
-	summary := AddSummary{Duplicates: c.duplicates}
-	for _, status := range c.added {
-		switch status {
-		case StatusUnsupported:
-			summary.Unsupported++
-		case StatusInaccessible:
-			summary.Inaccessible++
-		default:
-			summary.Added++
-		}
-	}
-	return summary
-}
-
-// outcomes counts the resolved checks by outcome.
-func (c checkTally) outcomes() (ready, failed int) {
-	for _, isReady := range c.resolved {
-		if isReady {
-			ready++
-		} else {
-			failed++
-		}
-	}
-	return ready, failed
+	// first is the ID of the first item the adds listed, or 0 when no add
+	// is being tallied.
+	first uint64
+	// duplicates holds, for each path the adds skipped as already listed,
+	// the ID of the item listing it.
+	duplicates []uint64
 }
 
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
@@ -702,12 +647,12 @@ func (n *NativeView) addSources(paths []string) {
 	n.refreshSources()
 	n.inspector.Enqueue(summary.Inspect)
 	if n.inventory.Checking() > 0 {
-		// Add only appends, so the items it listed follow the earlier ones.
-		listed := make([]SourceItem, 0, n.inventory.Len()-first)
-		for index := first; index < n.inventory.Len(); index++ {
-			listed = append(listed, n.inventory.Item(index))
+		// An add that starts checking listed a file to check, and Add only
+		// appends, so the items it listed follow the earlier ones.
+		if n.checked.first == 0 && first < n.inventory.Len() {
+			n.checked.first = n.inventory.Item(first).ID
 		}
-		n.checked.add(summary, listed)
+		n.checked.duplicates = append(n.checked.duplicates, summary.DuplicateOf...)
 	}
 	n.list.Focus()
 	n.showSourceNotice(summarizeAdd(summary))
@@ -765,9 +710,7 @@ func (n *NativeView) applyInspections() {
 			continue
 		}
 		resolved = true
-		item := n.inventory.Item(index)
-		n.list.SetItemText(index, item.RowText())
-		n.checked.record(item.ID, item.Status == StatusReady)
+		n.list.SetItemText(index, n.inventory.Item(index).RowText())
 		if len(selection) > 0 && selection[0] == index {
 			refreshDetail = true
 		}
@@ -788,23 +731,48 @@ func (n *NativeView) applyInspections() {
 
 // finishChecks ends the tally once nothing is left to check: it returns the
 // summary of the checks resolved since the list last had nothing to check,
-// and whether any of them is still listed to summarize.
+// and whether any of them is still listed to summarize. Every item the adds
+// queued for a check has resolved by then.
 func (n *NativeView) finishChecks() (ui.Notice, bool) {
 	tally := n.checked
 	n.checked = checkTally{}
-	return summarizeChecks(tally), len(tally.resolved) > 0
+	var added AddSummary
+	ready, failed := 0, 0
+	for index := 0; index < n.inventory.Len(); index++ {
+		item := n.inventory.Item(index)
+		switch {
+		case tally.first == 0 || item.ID < tally.first:
+			// No add is tallied, or the item was listed before them.
+		case item.Inspected:
+			added.Added++
+			if item.Status == StatusReady {
+				ready++
+			} else {
+				failed++
+			}
+		case item.Status == StatusUnsupported:
+			added.Unsupported++
+		default:
+			added.Inaccessible++
+		}
+	}
+	for _, id := range tally.duplicates {
+		if _, listed := n.inventory.IndexOf(id); listed {
+			added.Duplicates++
+		}
+	}
+	return summarizeChecks(added, ready, failed), ready+failed > 0
 }
 
 // summarizeChecks builds the notice shown when the last pending content
 // check resolves: the add results since the list was last fully checked,
 // counting only the images still listed, then how many of those are ready
 // and how many cannot be resized.
-func summarizeChecks(tally checkTally) ui.Notice {
-	message, warn := describeAdd(tally.addSummary())
+func summarizeChecks(added AddSummary, ready, failed int) ui.Notice {
+	message, warn := describeAdd(added)
 	if message != "" {
 		message += " "
 	}
-	ready, failed := tally.outcomes()
 	message += fmt.Sprintf(ui.ImagesChecked, ready+failed, ready)
 	if failed > 0 {
 		message += fmt.Sprintf(ui.ImagesCheckedFailed, failed)
@@ -824,9 +792,7 @@ func (n *NativeView) removeSelectedSources() {
 		return
 	}
 	wasChecking := n.inventory.Checking() > 0
-	removed := n.inventory.Remove(indices)
-	n.inspector.Drop(removed)
-	n.checked.forget(removed)
+	n.inspector.Drop(n.inventory.Remove(indices))
 	n.refreshSources()
 	n.list.Focus()
 	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))}

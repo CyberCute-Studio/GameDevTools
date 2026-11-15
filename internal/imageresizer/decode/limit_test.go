@@ -3,13 +3,16 @@ package decode
 import (
 	"bufio"
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
+	"image/png"
 	"io"
 	"math"
 	"testing"
@@ -75,12 +78,16 @@ func TestJPEGDecodeBytesFollowsTheDecoderLayout(t *testing.T) {
 // of up to 8 bits decodes to 1 byte per pixel, 16-bit gray to 2, and every
 // other layout — including gray that a tRNS chunk makes transparent — to 4,
 // or 8 at 16 bits per channel; an interlaced source counts its pass images
-// too.
+// too. The row buffers count only beyond their allowance, so they leave
+// every real image alone but bound a short, wide one.
 func TestPNGDecodeBytesFollowsTheDecoderPixelTypes(t *testing.T) {
 	layout := func(depth, colorType byte, transparent, interlaced bool) pngLayout {
 		return pngLayout{valid: true, width: 16384, height: 16384, depth: depth, colorType: colorType, transparent: transparent, interlaced: interlaced}
 	}
 	const pixels = 16384 * 16384
+	wide := func(width int, depth, colorType byte, interlaced bool) pngLayout {
+		return pngLayout{valid: true, width: width, height: 1, depth: depth, colorType: colorType, interlaced: interlaced}
+	}
 	cases := []struct {
 		name   string
 		layout pngLayout
@@ -99,6 +106,11 @@ func TestPNGDecodeBytesFollowsTheDecoderPixelTypes(t *testing.T) {
 		{"transparent 16-bit gray", layout(16, 0, true, false), 8 * pixels},
 		{"palette", layout(8, 3, true, false), pixels},
 		{"interlaced palette", layout(4, 3, false, true), 2 * pixels},
+		// Two rows of 2^30 one-byte pixels, each with its filter byte, less
+		// the allowance; and seven passes of two rows of 2^20 four-byte
+		// pixels.
+		{"wide gray", wide(1<<30, 8, 0, false), 1<<30 + 2*(1+1<<30) - pngRowAllowance},
+		{"wide interlaced", wide(1<<20, 8, 6, true), 2*4<<20 + 7*2*(1+4<<20) - pngRowAllowance},
 		{"saturates", pngLayout{valid: true, width: math.MaxInt32, height: math.MaxInt32, depth: 16, colorType: 6, interlaced: true}, math.MaxUint64},
 	}
 	for _, tc := range cases {
@@ -118,6 +130,76 @@ func TestPNGDecodeBytesFollowsTheDecoderPixelTypes(t *testing.T) {
 	}
 }
 
+// TestPNGPixelBytesFollowTheDecoder pins the per-color-type pixel sizes the
+// PNG estimate relies on against the standard library decoder itself, so a
+// Go release that changes the image types it allocates fails here instead of
+// silently loosening the limit: for every color type and bit depth, with and
+// without a tRNS chunk, the decoded image holds exactly pixelBytes per pixel,
+// and the packed samples of a row it reads never take more.
+func TestPNGPixelBytesFollowTheDecoder(t *testing.T) {
+	const width, height = 5, 3
+	channels := map[byte]int{0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+	depths := map[byte][]byte{0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8}, 4: {8, 16}, 6: {8, 16}}
+	// The tRNS payload for each color type that may carry one: a gray
+	// sample, an RGB triple, or one alpha per palette entry.
+	transparency := map[byte][]byte{0: {0, 0}, 2: {0, 0, 0, 0, 0, 0}, 3: {0}}
+	for colorType, allowed := range depths {
+		for _, depth := range allowed {
+			for _, transparent := range []bool{false, true} {
+				if _, ok := transparency[colorType]; transparent && !ok {
+					continue
+				}
+				rowBytes := (channels[colorType]*int(depth)*width + 7) / 8
+				var compressed bytes.Buffer
+				writer := zlib.NewWriter(&compressed)
+				writer.Write(make([]byte, height*(1+rowBytes)))
+				writer.Close()
+				parts := [][]byte{pngHeader(width, height, depth, colorType)}
+				if colorType == pngColorPaletted {
+					parts = append(parts, pngChunk("PLTE", []byte{0, 0, 0}))
+				}
+				if transparent {
+					parts = append(parts, pngChunk("tRNS", transparency[colorType]))
+				}
+				parts = append(parts, pngChunk("IDAT", compressed.Bytes()), pngChunk("IEND", nil))
+				content := bytes.Join(parts, nil)
+
+				name := fmt.Sprintf("color type %d, %d-bit, transparent %v", colorType, depth, transparent)
+				decoded, err := png.Decode(bytes.NewReader(content))
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				var pix []byte
+				switch img := decoded.(type) {
+				case *image.Gray:
+					pix = img.Pix
+				case *image.Gray16:
+					pix = img.Pix
+				case *image.Paletted:
+					pix = img.Pix
+				case *image.RGBA:
+					pix = img.Pix
+				case *image.NRGBA:
+					pix = img.Pix
+				case *image.RGBA64:
+					pix = img.Pix
+				case *image.NRGBA64:
+					pix = img.Pix
+				default:
+					t.Fatalf("%s: the decoder returned %T", name, decoded)
+				}
+				perPixel := scanPNG(bufio.NewReader(bytes.NewReader(content))).pixelBytes()
+				if got := uint64(len(pix)) / (width * height); got != perPixel {
+					t.Fatalf("%s: the decoder allocated %d bytes per pixel, the estimate counts %d", name, got, perPixel)
+				}
+				if uint64(rowBytes) > perPixel*width {
+					t.Fatalf("%s: a row packs %d bytes, more than %d decoded pixels take", name, rowBytes, width)
+				}
+			}
+		}
+	}
+}
+
 // pngChunk frames chunk data with its length and checksum.
 func pngChunk(kind string, data []byte) []byte {
 	body := append([]byte(kind), data...)
@@ -129,9 +211,9 @@ func pngChunk(kind string, data []byte) []byte {
 }
 
 // TestScanPNGFindsTransparencyBeforeTheImageData pins the scan the PNG
-// estimate relies on: it reads the IHDR layout wherever the decoder finds it,
-// notes a tRNS chunk before the first IDAT, and assumes one when it ends
-// before reaching the image data.
+// estimate relies on: it reads the IHDR layout wherever the decoder finds it
+// and notes a tRNS chunk before the first IDAT. One that ends before the
+// image data reports what it saw.
 func TestScanPNGFindsTransparencyBeforeTheImageData(t *testing.T) {
 	ihdr := pngHeaderInterlaced(300, 200, 8, 0, true)
 	text := pngChunk("tEXt", []byte("Comment\x00a note"))
@@ -146,7 +228,9 @@ func TestScanPNGFindsTransparencyBeforeTheImageData(t *testing.T) {
 		{"opaque", join(ihdr, text, data, transparency), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true}},
 		{"transparent", join(ihdr, text, transparency, data), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true, transparent: true}},
 		{"late header", join(pngSignature, text, ihdr[len(pngSignature):], data), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true}},
-		{"no image data", join(ihdr, text), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true, transparent: true}},
+		{"no image data", join(ihdr, text), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true}},
+		{"transparent without image data", join(ihdr, transparency), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true, transparent: true}},
+		{"second header", join(ihdr, transparency, ihdr[len(pngSignature):], data), pngLayout{valid: true, width: 300, height: 200, depth: 8, colorType: 0, interlaced: true, transparent: true}},
 		{"no header", join(pngSignature, text, data), pngLayout{}},
 		{"zero width", join(pngHeader(0, 200, 8, 0), data), pngLayout{}},
 	}
