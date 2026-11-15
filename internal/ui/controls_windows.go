@@ -332,7 +332,7 @@ type ListBox struct {
 }
 
 func NewListBox(parent windows.Handle, id int32) (*ListBox, error) {
-	hwnd, err := createControl(parent, "LISTBOX", "", wsChild|wsVisible|wsTabStop|wsVScroll|lbsNotify|lbsExtendedSel, wsExClientEdge, id)
+	hwnd, err := createControl(parent, "LISTBOX", "", wsChild|wsVisible|wsTabStop|wsVScroll|lbsNotify|lbsExtendedSel|lbsNoIntegralHeight, wsExClientEdge, id)
 	if err != nil {
 		return nil, err
 	}

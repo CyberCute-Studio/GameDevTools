@@ -33,18 +33,19 @@ const (
 	cbSetCurSel         = 0x014e
 	cbnSelChange        = 1
 
-	wsVScroll      = 0x00200000
-	lbsNotify      = 0x0001
-	lbsExtendedSel = 0x0800
-	lbAddString    = 0x0180
-	lbResetContent = 0x0184
-	lbGetCount     = 0x018b
-	lbGetSelCount  = 0x0190
-	lbGetSelItems  = 0x0191
-	lbGetText      = 0x0189
-	lbGetTextLen   = 0x018a
-	lbSetSel       = 0x0185
-	lbnSelChange   = 1
+	wsVScroll           = 0x00200000
+	lbsNotify           = 0x0001
+	lbsExtendedSel      = 0x0800
+	lbsNoIntegralHeight = 0x0100
+	lbAddString         = 0x0180
+	lbResetContent      = 0x0184
+	lbGetCount          = 0x018b
+	lbGetSelCount       = 0x0190
+	lbGetSelItems       = 0x0191
+	lbGetText           = 0x0189
+	lbGetTextLen        = 0x018a
+	lbSetSel            = 0x0185
+	lbnSelChange        = 1
 
 	swHide = 0
 	swShow = 5

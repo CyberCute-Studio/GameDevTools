@@ -393,9 +393,9 @@ func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
 
 	narrow := view.NativeHeight(400, scale, measure)
 	wide := view.NativeHeight(600, scale, measure)
-	// Two extra radio rows (2 × 26 × 2) in the options section and three
-	// stacked source buttons instead of a row (3×36 + 2×8 − 36) at the
-	// narrow width.
+	// Two extra radio rows (2 × 26 = 52) in the options section and three
+	// stacked source buttons instead of one row (3×36 + 2×8 − 36 = 88) at
+	// the narrow width.
 	if narrow != wide+140 {
 		t.Fatalf("stacked rows should add 140: narrow = %d, wide = %d", narrow, wide)
 	}

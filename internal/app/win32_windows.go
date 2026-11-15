@@ -35,6 +35,7 @@ const (
 	bnSetFocus  = 6
 	enSetFocus  = 0x0100
 	cbnSetFocus = 3
+	lbnSetFocus = 4
 
 	sbVert          = 1
 	sbLineUp        = 0
@@ -61,6 +62,10 @@ const (
 	swpNoActivate = 0x0010
 
 	monitorDefaultToNearest = 2
+
+	// gwlpWndProc is GWLP_WNDPROC (-4), expressed as a uintptr for proc calls.
+	gwlpWndProc = ^uintptr(3)
+	gaRoot      = 2
 
 	cwUseDefault = 0x80000000
 
@@ -132,6 +137,10 @@ var (
 	procDragAcceptFiles               = shell32.NewProc("DragAcceptFiles")
 	procDragQueryFileW                = shell32.NewProc("DragQueryFileW")
 	procDragFinish                    = shell32.NewProc("DragFinish")
+	procEnumChildWindows              = user32.NewProc("EnumChildWindows")
+	procSetWindowLongPtrW             = user32.NewProc("SetWindowLongPtrW")
+	procCallWindowProcW               = user32.NewProc("CallWindowProcW")
+	procGetAncestor                   = user32.NewProc("GetAncestor")
 )
 
 type rect struct {

@@ -353,15 +353,7 @@ func (s *nativeShell) updateView() {
 	for id, native := range s.nativeViews {
 		native.NativeShow(id == current.ID())
 	}
-	// Drag-and-drop acceptance follows the active module: only a module that
-	// consumes dropped files registers the shell window with the shell.
-	accept := uintptr(0)
-	if native, exists := s.nativeViews[current.ID()]; exists {
-		if _, target := native.(nativeDropTarget); target {
-			accept = 1
-		}
-	}
-	procDragAcceptFiles.Call(uintptr(s.hwnd), accept)
+	s.updateDropAcceptance()
 }
 
 func (s *nativeShell) noteText() string {
@@ -587,6 +579,75 @@ func dropPaths(drop uintptr) []string {
 	return paths
 }
 
+// DragAcceptFiles registers a single window, and WM_DROPFILES goes to the
+// window under the cursor — over a module view that is almost always a child
+// control, not the shell background. So that a drop works anywhere on the
+// view (RSZ-002), every child is subclassed once with forwardChildDrop and
+// registered alongside the shell window. The map keeps each child's original
+// window procedure until the child is destroyed; both callbacks are fixed
+// package-level functions because the runtime never releases NewCallback
+// functions.
+var (
+	dropForwardCallback  = windows.NewCallback(forwardChildDrop)
+	childDropCallback    = windows.NewCallback(childDropVisit)
+	dropForwardOriginals = map[windows.Handle]uintptr{}
+	dropForwardAccept    uintptr
+)
+
+// forwardChildDrop is the window procedure installed on the shell's child
+// controls: it forwards WM_DROPFILES to the shell window, which owns the
+// drop routing and the HDROP lifetime, and defers every other message to the
+// control's original procedure.
+func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+	if message == wmDropFiles {
+		if root, _, _ := procGetAncestor.Call(uintptr(hwnd), gaRoot); root != 0 {
+			r, _, _ := procSendMessageW.Call(root, wmDropFiles, wParam, 0)
+			return r
+		}
+		procDragFinish.Call(wParam)
+		return 0
+	}
+	previous := dropForwardOriginals[hwnd]
+	if previous == 0 {
+		r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+		return r
+	}
+	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	if message == wmDestroy {
+		delete(dropForwardOriginals, hwnd)
+	}
+	return r
+}
+
+// childDropVisit subclasses one shell child on first sight and applies the
+// current drop acceptance to it.
+func childDropVisit(hwnd windows.Handle, _ uintptr) uintptr {
+	if _, subclassed := dropForwardOriginals[hwnd]; !subclassed {
+		previous, _, _ := procSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, dropForwardCallback)
+		if previous != 0 {
+			dropForwardOriginals[hwnd] = previous
+		}
+	}
+	procDragAcceptFiles.Call(uintptr(hwnd), dropForwardAccept)
+	return 1
+}
+
+// updateDropAcceptance registers the shell window and every child control
+// for file drops while the active module consumes them, so other modules
+// keep the no-drop cursor. Controls are created before the first updateView
+// and never recreated, so the enumeration subclasses each child exactly once.
+func (s *nativeShell) updateDropAcceptance() {
+	accept := uintptr(0)
+	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
+		if _, target := native.(nativeDropTarget); target {
+			accept = 1
+		}
+	}
+	procDragAcceptFiles.Call(uintptr(s.hwnd), accept)
+	dropForwardAccept = accept
+	procEnumChildWindows.Call(uintptr(s.hwnd), childDropCallback, 0)
+}
+
 // filterModuleMessage lets module views pre-handle a queued message before
 // the shell's own dialog processing. The Screenshot overlay session uses it
 // for Escape cancellation and toolbar keyboard navigation while its topmost
@@ -743,7 +804,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	switch message {
 	case wmCommand:
 		notification := highWord(wParam)
-		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus) && lParam != nil {
+		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus || notification == lbnSetFocus) && lParam != nil {
 			shell.ensureControlVisible(windows.Handle(lParam))
 			// Set-focus notifications also reach the owning module view: the
 			// Screenshot shortcut field suspends its global hotkey while it is

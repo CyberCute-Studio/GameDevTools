@@ -175,7 +175,7 @@ const (
 
 	SourceImagesLabel    = "&Source images"
 	SourceImagesHint     = "Drop PNG or JPEG files — or a folder of images — anywhere on this view, or choose files with Add Images. Sources are opened read-only and never modified."
-	SourcePathLabel      = "Full &path"
+	SourcePathLabel      = "Full p&ath"
 	RemoveSelectedAction = "&Remove Selected"
 	ClearListAction      = "&Clear List"
 

@@ -513,3 +513,43 @@ func TestShellWindowProcIgnoresDropsForNonTargets(t *testing.T) {
 		t.Fatal("drop for a module without drop support triggered a layout")
 	}
 }
+
+// TestChildDropForwardsToShellHandler pins the delivery half of RSZ-002:
+// WM_DROPFILES goes to the window under the cursor, which over a module view
+// is a child control, so the child's subclass must forward the drop to the
+// shell's own routing for "drop anywhere on the view" to hold.
+func TestChildDropForwardsToShellHandler(t *testing.T) {
+	native := &dropRecordingView{}
+	shell := newCommandTestShell(t, native)
+	child, err := ui.NewButton(shell.hwnd, "Child", ui.ButtonOptions{ID: 209})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell.updateDropAcceptance()
+	procSendMessageW.Call(uintptr(child.Handle()), wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`}), 0)
+	if len(native.paths) != 1 || native.paths[0] != `C:\Images\a.png` {
+		t.Fatalf("dropped paths through child = %v", native.paths)
+	}
+	if native.layouts == 0 {
+		t.Fatal("child drop did not trigger a layout")
+	}
+}
+
+// TestShellWindowProcScrollsFocusedListIntoView covers the source list
+// (RSZ-005): a list box reports LBN_SETFOCUS rather than the button, edit,
+// or combo notification, and tabbing to it must scroll it into view like
+// every other control.
+func TestShellWindowProcScrollsFocusedListIntoView(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	list, err := ui.NewListBox(shell.hwnd, 601)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 500, 200, 140)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(601)|uintptr(lbnSetFocus)<<16, uintptr(list.Handle()))
+	if shell.scrollY == 0 {
+		t.Fatal("list focus did not scroll the control into view")
+	}
+}
