@@ -21,8 +21,9 @@ import (
 // The clipboard is a single shared desktop resource.
 
 var (
-	procGetDesktopWindow = user32.NewProc("GetDesktopWindow")
-	procGetClipboardData = user32.NewProc("GetClipboardData")
+	procGetDesktopWindow           = user32.NewProc("GetDesktopWindow")
+	procGetClipboardData           = user32.NewProc("GetClipboardData")
+	procGetClipboardSequenceNumber = user32.NewProc("GetClipboardSequenceNumber")
 )
 
 // openClipboardWithRetry opens the clipboard, retrying briefly while
@@ -74,99 +75,130 @@ func holdClipboard(t *testing.T) (release func()) {
 	}
 }
 
-func emptyClipboardForTest(t *testing.T) {
-	t.Helper()
-	if err := openClipboardWithRetry(0); err != nil {
-		t.Fatalf("OpenClipboard: %v", err)
-	}
-	defer procCloseClipboard.Call()
-	if r, _, err := procEmptyClipboard.Call(); r == 0 {
-		t.Fatalf("EmptyClipboard: %v", callError(err))
-	}
+// clipboardSequence returns the Windows clipboard sequence number, which
+// increments every time the clipboard's contents change. A snapshot read
+// between two equal sequence numbers was not disturbed mid-read.
+func clipboardSequence() uint32 {
+	r, _, _ := procGetClipboardSequenceNumber.Call()
+	return uint32(r)
 }
 
-// clipboardImageSize reads back the dimensions of the CF_DIB image on the
-// clipboard, verifying the round trip into a common Windows destination
-// format.
-func clipboardImageSize() (int32, int32, error) {
+// clipboardImage reads back the whole CF_DIB image on the clipboard under
+// one open, so concurrent clipboard users get a single narrow window to
+// disturb the verification instead of one per pixel.
+func clipboardImage() (*image.RGBA, error) {
 	if err := openClipboardWithRetry(0); err != nil {
-		return 0, 0, fmt.Errorf("OpenClipboard: %w", err)
+		return nil, fmt.Errorf("OpenClipboard: %w", err)
 	}
 	defer procCloseClipboard.Call()
 	allocation, _, err := procGetClipboardData.Call(cfDIB, 0)
 	if allocation == 0 {
-		return 0, 0, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(err))
+		return nil, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(err))
 	}
 	data, err := lockGlobalMemory(allocation)
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	defer procGlobalUnlock.Call(allocation)
 	var header bitmapInfoHeader
 	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
 	if header.Size != uint32(unsafe.Sizeof(bitmapInfoHeader{})) || header.BitCount != 32 {
-		return 0, 0, errors.New("unexpected clipboard DIB header")
+		return nil, errors.New("unexpected clipboard DIB header")
 	}
-	return header.Width, header.Height, nil
+	width := int(header.Width)
+	height := int(header.Height)
+	topDown := false
+	if height < 0 { // a negative header height stores rows top-down
+		height = -height
+		topDown = true
+	}
+	if width <= 0 || height <= 0 || width > 65536 || height > 65536 {
+		return nil, fmt.Errorf("unexpected clipboard DIB dimensions %d × %d", width, height)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		sourceRow := height - 1 - y // a positive header height stores rows bottom-up
+		if topDown {
+			sourceRow = y
+		}
+		row := img.Pix[y*img.Stride : y*img.Stride+width*4]
+		address := data + unsafe.Sizeof(header) + uintptr(sourceRow*width)*4
+		procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&row[0])), address, uintptr(len(row)))
+		for x := 0; x < width; x++ {
+			row[x*4], row[x*4+2] = row[x*4+2], row[x*4] // BGRA to RGBA
+			row[x*4+3] = 255
+		}
+	}
+	return img, nil
 }
 
-// clipboardPixel reads back one pixel of the CF_DIB image on the clipboard
-// as RGBA, verifying pixel content survives the round trip without JPEG
-// degradation.
-func clipboardPixel(x, y int) (r, g, b, a uint8, err error) {
-	if callErr := openClipboardWithRetry(0); callErr != nil {
-		return 0, 0, 0, 0, fmt.Errorf("OpenClipboard: %w", callErr)
+// imageDifference describes the first difference between got and want, or
+// the empty string when they match exactly.
+func imageDifference(got, want *image.RGBA) string {
+	if got.Bounds().Size() != want.Bounds().Size() {
+		return fmt.Sprintf("dimensions %v, want %v", got.Bounds().Size(), want.Bounds().Size())
 	}
-	defer procCloseClipboard.Call()
-	allocation, _, callErr := procGetClipboardData.Call(cfDIB, 0)
-	if allocation == 0 {
-		return 0, 0, 0, 0, fmt.Errorf("GetClipboardData(CF_DIB): %w", callError(callErr))
+	bounds := want.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			g := got.RGBAAt(x, y)
+			w := want.RGBAAt(x, y)
+			if g != w {
+				return fmt.Sprintf("pixel (%d,%d) = (%d,%d,%d,%d), want (%d,%d,%d,%d)",
+					x, y, g.R, g.G, g.B, g.A, w.R, w.G, w.B, w.A)
+			}
+		}
 	}
-	data, err := lockGlobalMemory(allocation)
-	if err != nil {
-		return 0, 0, 0, 0, err
+	return ""
+}
+
+// verifyClipboardImage runs set, reads the whole clipboard image back under
+// one open, and retries while the read may have been disturbed by another
+// clipboard user. Parallel go test binaries share the session-global
+// clipboard, and desktop clipboard services touch it at any time, so a test
+// that verifies clipboard contents must expect foreign data to replace what
+// it placed; only a snapshot read while the sequence number stayed constant
+// is trustworthy, and only a snapshot matching the expected image ends the
+// verification. A mismatch that survives every retry is a real failure.
+func verifyClipboardImage(t *testing.T, set func() error, want *image.RGBA) {
+	t.Helper()
+	const attempts = 5
+	lastDifference := ""
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := set(); err != nil {
+			t.Fatalf("place image on the clipboard: %v", err)
+		}
+		before := clipboardSequence()
+		got, err := clipboardImage()
+		after := clipboardSequence()
+		if err != nil || before != after {
+			continue // another clipboard user interfered with the read
+		}
+		difference := imageDifference(got, want)
+		if difference == "" {
+			return
+		}
+		lastDifference = difference
 	}
-	defer procGlobalUnlock.Call(allocation)
-	var header bitmapInfoHeader
-	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
-	// Positive header height stores rows bottom-up.
-	row := int(header.Height) - 1 - y
-	address := data + unsafe.Sizeof(header) + uintptr(row*int(header.Width)+x)*4
-	var value [4]byte
-	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&value[0])), address, 4)
-	return value[2], value[1], value[0], value[3], nil
+	t.Fatalf("clipboard never held the expected image across %d attempts; last stable difference: %s",
+		attempts, lastDifference)
 }
 
 func TestSetClipboardImageRoundTrip(t *testing.T) {
 	img := sampleImage(5, 3)
-	if err := setClipboardImage(0, img); err != nil {
-		t.Fatalf("setClipboardImage: %v", err)
-	}
-	width, height, err := clipboardImageSize()
-	if err != nil {
-		t.Fatalf("read clipboard image size: %v", err)
-	}
-	if width != 5 || height != 3 {
-		t.Fatalf("clipboard image size = %dx%d, want 5x3", width, height)
-	}
-	for y := 0; y < 3; y++ {
-		for x := 0; x < 5; x++ {
-			r, g, b, a, err := clipboardPixel(x, y)
-			if err != nil {
-				t.Fatalf("read clipboard pixel (%d,%d): %v", x, y, err)
-			}
-			want := img.RGBAAt(x, y)
-			if r != want.R || g != want.G || b != want.B || a != 255 {
-				t.Fatalf("clipboard pixel (%d,%d) = (%d,%d,%d,%d), want (%d,%d,%d,255)",
-					x, y, r, g, b, a, want.R, want.G, want.B)
-			}
-		}
-	}
+	verifyClipboardImage(t, func() error {
+		return setClipboardImage(0, img)
+	}, img)
 }
 
 func TestDeliverClipboardAndSave(t *testing.T) {
 	folder := t.TempDir()
-	result := Deliver(sampleImage(4, 2), optionsFor(folder, screenshot.FormatPNG))
+	img := sampleImage(4, 2)
+	var result Result
+	verifyClipboardImage(t, func() error {
+		result = Deliver(img, optionsFor(folder, screenshot.FormatPNG))
+		return result.Clipboard
+	}, img)
 	if !result.OK() {
 		t.Fatalf("Deliver = %+v, want both destinations successful", result)
 	}
@@ -175,13 +207,6 @@ func TestDeliverClipboardAndSave(t *testing.T) {
 	}
 	if got := decodeFile(t, result.Path).Bounds().Size(); got != (image.Point{X: 4, Y: 2}) {
 		t.Fatalf("saved dimensions = %v, want 4x2", got)
-	}
-	width, height, err := clipboardImageSize()
-	if err != nil {
-		t.Fatalf("read clipboard image size: %v", err)
-	}
-	if width != 4 || height != 2 {
-		t.Fatalf("clipboard image size = %dx%d, want 4x2", width, height)
 	}
 }
 
@@ -193,7 +218,11 @@ func TestDeliverSaveFailureKeepsClipboardSuccess(t *testing.T) {
 		t.Fatalf("seed blocking file: %v", err)
 	}
 	img := sampleImage(3, 3)
-	result := Deliver(img, optionsFor(blocker, screenshot.FormatPNG))
+	var result Result
+	verifyClipboardImage(t, func() error {
+		result = Deliver(img, optionsFor(blocker, screenshot.FormatPNG))
+		return result.Clipboard
+	}, img)
 	if result.Clipboard != nil {
 		t.Fatalf("Clipboard = %v, want success", result.Clipboard)
 	}
@@ -203,15 +232,6 @@ func TestDeliverSaveFailureKeepsClipboardSuccess(t *testing.T) {
 	}
 	if result.OK() {
 		t.Fatal("OK() = true despite the failed save")
-	}
-	r, g, b, a, err := clipboardPixel(1, 1)
-	if err != nil {
-		t.Fatalf("read clipboard pixel: %v", err)
-	}
-	want := img.RGBAAt(1, 1)
-	if r != want.R || g != want.G || b != want.B || a != 255 {
-		t.Fatalf("clipboard pixel = (%d,%d,%d,%d), want (%d,%d,%d,255)",
-			r, g, b, a, want.R, want.G, want.B)
 	}
 }
 
@@ -241,12 +261,15 @@ func TestDeliverClipboardFailureKeepsSaveSuccess(t *testing.T) {
 func TestDeliverJPEGDoesNotDegradeClipboard(t *testing.T) {
 	// SCR-062: the clipboard receives the captured pixels, never the
 	// output of JPEG encoding. Quality 1 maximizes the difference.
-	emptyClipboardForTest(t)
 	folder := t.TempDir()
 	options := optionsFor(folder, screenshot.FormatJPEG)
 	options.JPEGQuality = screenshot.MinJPEGQuality
 	img := sampleImage(6, 6)
-	result := Deliver(img, options)
+	var result Result
+	verifyClipboardImage(t, func() error {
+		result = Deliver(img, options)
+		return result.Clipboard
+	}, img)
 	if !result.OK() {
 		t.Fatalf("Deliver = %+v, want both destinations successful", result)
 	}
@@ -254,19 +277,6 @@ func TestDeliverJPEGDoesNotDegradeClipboard(t *testing.T) {
 		t.Fatalf("saved file = %q, want a .jpg file", result.Path)
 	}
 	decodeFile(t, result.Path)
-	for y := 0; y < 6; y++ {
-		for x := 0; x < 6; x++ {
-			r, g, b, a, err := clipboardPixel(x, y)
-			if err != nil {
-				t.Fatalf("read clipboard pixel (%d,%d): %v", x, y, err)
-			}
-			want := img.RGBAAt(x, y)
-			if r != want.R || g != want.G || b != want.B || a != 255 {
-				t.Fatalf("clipboard pixel (%d,%d) = (%d,%d,%d,%d), want exact captured pixels (%d,%d,%d,255)",
-					x, y, r, g, b, a, want.R, want.G, want.B)
-			}
-		}
-	}
 }
 
 func TestResultErrorKinds(t *testing.T) {
