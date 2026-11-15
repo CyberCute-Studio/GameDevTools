@@ -267,6 +267,38 @@ func TestFilterMessageTabNavigatesToolbar(t *testing.T) {
 	controller.Cancel()
 }
 
+// TestCreateToolbarAppliesRequestFont pins the creation half of the font
+// handoff: Begin receives the shell's current body font, and every toolbar
+// control must hold it from the start — the same SetFont path the DPI-change
+// update uses (SCR-054).
+func TestCreateToolbarAppliesRequestFont(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	// A stock font is a guaranteed-valid HFONT: the controls validate the
+	// handle they are handed and keep no record of an invalid one.
+	font, _, _ := procGetStockObject.Call(17) // DEFAULT_GUI_FONT
+	if err := controller.Begin(42, font, ModePresetRectangle, display.Point{X: 320, Y: 240}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+
+	controls := map[string]windows.Handle{
+		"message":      native.message.Handle(),
+		"width label":  native.widthLabel.Handle(),
+		"height label": native.heightLabel.Handle(),
+		"width edit":   native.widthEdit.Handle(),
+		"height edit":  native.heightEdit.Handle(),
+		"position":     native.position.Handle(),
+		"capture":      native.capture.Handle(),
+		"cancel":       native.cancel.Handle(),
+	}
+	for name, hwnd := range controls {
+		if got, _, _ := procSendMessageW.Call(uintptr(hwnd), wmGetFont, 0, 0); got != font {
+			t.Errorf("%s font at creation = %d, want the request font %d", name, got, font)
+		}
+	}
+	controller.Cancel()
+}
+
 // TestNativeSessionAttentionForegroundsToolbar exercises the real SCR-005
 // surface: the controller forwards Attention to the live windows session,
 // which foregrounds the toolbar without disturbing it.
