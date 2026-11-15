@@ -199,6 +199,7 @@ const (
 	SourceFeatureUnsupportedDetail  = "This %s file uses a feature the image decoder does not support (%v)."
 	SourceCorruptDetail             = "The %s data is damaged or incomplete and cannot be decoded (%v)."
 	SourceEmptyDetail               = "The file is empty."
+	SourceReadFailedDetail          = "The file could not be read."
 	SourceTooLargeDetail            = "At %s this image needs more than the %d MiB of memory one source may use to decode."
 
 	ImageFileFilterLabel    = "PNG and JPEG images"

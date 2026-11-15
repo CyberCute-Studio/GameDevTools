@@ -48,6 +48,7 @@ const (
 	lbInsertString      = 0x0181
 	lbDeleteString      = 0x0182
 	lbGetSel            = 0x0187
+	lbSelItemRange      = 0x019b
 	lbGetTopIndex       = 0x018e
 	lbSetTopIndex       = 0x0197
 	lbSetAnchorIndex    = 0x019c

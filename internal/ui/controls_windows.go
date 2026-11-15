@@ -368,29 +368,44 @@ func (l *ListBox) ItemText(index int) string {
 // position are restored around that, so a background status update never
 // disturbs what the user selected or is looking at. Out-of-range indexes are
 // ignored.
+//
+// Setting the caret raises an accessibility focus event even when the
+// caret does not move, which makes a screen reader announce the focused row
+// again. So the selection is restored with LB_SELITEMRANGE, which leaves the
+// caret alone, and the caret and anchor only where the reinsertion moved
+// them: rewriting any other row raises no focus event, and rewriting the
+// focused row raises one, announcing its new text.
 func (l *ListBox) SetItemText(index int, text string) {
 	if index < 0 || index >= l.Count() {
 		return
 	}
-	selected, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetSel, uintptr(index), 0)
-	caret, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetCaretIndex, 0, 0)
-	anchor, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetAnchorIndex, 0, 0)
-	top, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetTopIndex, 0, 0)
-	procSendMessageW.Call(uintptr(l.hwnd), wmSetRedraw, 0, 0)
-	procSendMessageW.Call(uintptr(l.hwnd), lbDeleteString, uintptr(index), 0)
-	procSendMessageW.Call(uintptr(l.hwnd), lbInsertString, uintptr(index), uintptr(unsafe.Pointer(utf16(text))))
+	hwnd := uintptr(l.hwnd)
+	selected, _, _ := procSendMessageW.Call(hwnd, lbGetSel, uintptr(index), 0)
+	caret, _, _ := procSendMessageW.Call(hwnd, lbGetCaretIndex, 0, 0)
+	anchor, _, _ := procSendMessageW.Call(hwnd, lbGetAnchorIndex, 0, 0)
+	top, _, _ := procSendMessageW.Call(hwnd, lbGetTopIndex, 0, 0)
+	procSendMessageW.Call(hwnd, wmSetRedraw, 0, 0)
+	procSendMessageW.Call(hwnd, lbDeleteString, uintptr(index), 0)
+	procSendMessageW.Call(hwnd, lbInsertString, uintptr(index), uintptr(unsafe.Pointer(utf16(text))))
 	if int32(selected) > 0 {
-		procSendMessageW.Call(uintptr(l.hwnd), lbSetSel, 1, uintptr(index))
+		if index <= 0xffff {
+			// The range is packed into 16-bit halves.
+			procSendMessageW.Call(hwnd, lbSelItemRange, 1, uintptr(index)|uintptr(index)<<16)
+		} else {
+			// Beyond the 16-bit range LB_SETSEL moves the caret, which is
+			// then restored below.
+			procSendMessageW.Call(hwnd, lbSetSel, 1, uintptr(index))
+		}
 	}
-	if int32(anchor) >= 0 {
-		procSendMessageW.Call(uintptr(l.hwnd), lbSetAnchorIndex, anchor, 0)
+	if now, _, _ := procSendMessageW.Call(hwnd, lbGetAnchorIndex, 0, 0); int32(anchor) >= 0 && now != anchor {
+		procSendMessageW.Call(hwnd, lbSetAnchorIndex, anchor, 0)
 	}
-	if int32(caret) >= 0 {
-		procSendMessageW.Call(uintptr(l.hwnd), lbSetCaretIndex, caret, 0)
+	if now, _, _ := procSendMessageW.Call(hwnd, lbGetCaretIndex, 0, 0); int32(caret) >= 0 && now != caret {
+		procSendMessageW.Call(hwnd, lbSetCaretIndex, caret, 0)
 	}
-	procSendMessageW.Call(uintptr(l.hwnd), lbSetTopIndex, top, 0)
-	procSendMessageW.Call(uintptr(l.hwnd), wmSetRedraw, 1, 0)
-	procInvalidateRect.Call(uintptr(l.hwnd), 0, 1)
+	procSendMessageW.Call(hwnd, lbSetTopIndex, top, 0)
+	procSendMessageW.Call(hwnd, wmSetRedraw, 1, 0)
+	procInvalidateRect.Call(hwnd, 0, 1)
 }
 
 // SetSelected selects or clears a single item without disturbing the other
@@ -420,6 +435,17 @@ type StatusArea struct {
 
 	parent windows.Handle
 	timer  uintptr
+	// revision counts the notices shown and cleared.
+	revision uint64
+}
+
+// Revision identifies the notice on display: it changes whenever Show or
+// Clear replaces the notice, including when a timed notice expires, even if
+// the new text equals the old. A caller that records the revision after
+// showing its notice can later tell whether that notice is still the one
+// shown.
+func (s *StatusArea) Revision() uint64 {
+	return s.revision
 }
 
 func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
@@ -432,6 +458,7 @@ func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
 
 func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 	s.stopTimer()
+	s.revision++
 	s.SetText(notice.Text())
 	if notice.Text() == "" || timeout <= 0 {
 		return nil
@@ -457,6 +484,7 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 
 func (s *StatusArea) Clear() {
 	s.stopTimer()
+	s.revision++
 	s.SetText("")
 }
 

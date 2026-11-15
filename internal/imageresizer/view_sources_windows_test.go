@@ -435,15 +435,17 @@ func TestNativeViewBatchesCheckResults(t *testing.T) {
 }
 
 // failingDispatcher refuses the first fails posts, then queues like
-// queuedDispatcher.
+// queuedDispatcher, counting every attempt.
 type failingDispatcher struct {
 	queuedDispatcher
-	mu    sync.Mutex
-	fails int
+	mu       sync.Mutex
+	fails    int
+	attempts int
 }
 
 func (d *failingDispatcher) Post(task func()) error {
 	d.mu.Lock()
+	d.attempts++
 	refuse := d.fails > 0
 	if refuse {
 		d.fails--
@@ -455,30 +457,40 @@ func (d *failingDispatcher) Post(task func()) error {
 	return d.queuedDispatcher.Post(task)
 }
 
-// TestNativeViewKeepsResultsWhenAPostFails pins that a refused post loses
-// nothing: the result waits for the next post instead of leaving its item
-// Checking forever.
-func TestNativeViewKeepsResultsWhenAPostFails(t *testing.T) {
-	view, _ := newSourcesTestView(t)
-	dispatcher := &failingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 16)}, fails: 1}
-	view.NativeDispatcher(dispatcher)
-	gate := useGatedInspector(view)
-	directory := t.TempDir()
-	view.NativeDropFiles([]string{writeViewSource(t, directory, "one.png"), writeViewSource(t, directory, "two.png")})
+func (d *failingDispatcher) attempted() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.attempts
+}
 
-	gate.waitFor(t, gate.started)
-	gate.release <- struct{}{}
-	gate.waitFor(t, gate.started)
-	if posted := len(dispatcher.tasks); posted != 0 {
-		t.Fatalf("%d tasks queued after the refused post, want 0", posted)
-	}
-	gate.release <- struct{}{}
+// TestNativeViewRetriesARefusedPost pins that a refused post loses nothing,
+// even for the last result, which no later result follows to post again:
+// the post is retried until it is accepted, so no item stays Checking for
+// good. Once the view is closed a post can only fail, and it is not retried.
+func TestNativeViewRetriesARefusedPost(t *testing.T) {
+	view, _ := newSourcesTestView(t)
+	dispatcher := &failingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 16)}, fails: 2}
+	view.NativeDispatcher(dispatcher)
+	view.NativeDropFiles([]string{writeViewSource(t, t.TempDir(), "only.png")})
 	dispatcher.runNext(t)
-	if got := listContents(view.list); got[0] != "one.png — 4 × 3 px — Ready" || got[1] != "two.png — 4 × 3 px — Ready" {
-		t.Fatalf("rows after the retried post = %v", got)
+	if got := view.list.ItemText(0); got != "only.png — 4 × 3 px — Ready" {
+		t.Fatalf("row after the retried post = %q", got)
 	}
 	if view.inventory.Checking() != 0 {
 		t.Fatalf("%d items still checking", view.inventory.Checking())
+	}
+	if attempts := dispatcher.attempted(); attempts != 3 {
+		t.Fatalf("%d post attempts, want two refused and one accepted", attempts)
+	}
+
+	closed, _ := newSourcesTestView(t)
+	refusing := &failingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 16)}, fails: 1 << 30}
+	closed.NativeDispatcher(refusing)
+	closed.inspector.Close()
+	closed.deliverInspection(InspectionResult{ID: 1})
+	time.Sleep(3 * postRetryDelay)
+	if attempts := refusing.attempted(); attempts != 1 {
+		t.Fatalf("%d post attempts after the view closed, want 1", attempts)
 	}
 }
 
@@ -500,6 +512,68 @@ func TestNativeViewCheckSummaryKeepsOtherNotices(t *testing.T) {
 	}
 	if got := view.list.ItemText(0); got != "one.png — 4 × 3 px — Ready" {
 		t.Fatalf("row after checking = %q", got)
+	}
+
+	// Ownership follows the notice shown, not its text: the same text shown
+	// elsewhere is kept, while an area left empty takes the summary.
+	directory := t.TempDir()
+	view.NativeDropFiles([]string{writeViewSource(t, directory, "two.png")})
+	gate.waitFor(t, gate.started)
+	same := ui.Notice{Kind: ui.NoticeSuccess, Message: "Added 1 image(s). Checking image content…"}
+	if view.status.Text() != same.Text() {
+		t.Fatalf("add notice = %q, want %q", view.status.Text(), same.Text())
+	}
+	_ = view.status.Show(same, 0)
+	gate.release <- struct{}{}
+	settle(t, view, dispatcher)
+	if got := view.status.Text(); got != same.Text() {
+		t.Fatalf("status after checking = %q, want the other notice %q kept", got, same.Text())
+	}
+	view.NativeDropFiles([]string{writeViewSource(t, directory, "three.png")})
+	gate.waitFor(t, gate.started)
+	view.status.Clear()
+	gate.release <- struct{}{}
+	settle(t, view, dispatcher)
+	if got := view.status.Text(); got != "Success: Added 1 image(s). Checked 1 image(s): 1 ready." {
+		t.Fatalf("status after checking into an empty area = %q", got)
+	}
+}
+
+// TestNativeViewRemovingTheLastCheckSummarizes pins that removing the last
+// items still being checked finishes checking with the summary of the other
+// checks, instead of losing it behind the removal notice.
+func TestNativeViewRemovingTheLastCheckSummarizes(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	gate := useGatedInspector(view)
+	directory := t.TempDir()
+	view.NativeDropFiles([]string{
+		writeViewSource(t, directory, "one.png"),
+		writeViewSource(t, directory, "damaged.png"),
+		writeViewSource(t, directory, "slow.png"),
+	})
+	for range 2 {
+		gate.waitFor(t, gate.started)
+		gate.release <- struct{}{}
+		dispatcher.runNext(t)
+	}
+	gate.waitFor(t, gate.started)
+	view.list.SetSelected(2, true)
+	view.NativeCommand(sourcesCommandBase+sourceListCommand, ui.NotificationListSelChange)
+	view.NativeCommand(sourcesCommandBase+removeSelectedCommand, 0)
+	gate.waitFor(t, gate.canceled)
+	if got := view.status.Text(); got != "Warning: Added 3 image(s). Checked 2 image(s): 1 ready. 1 cannot be resized — select an item to see why. Removed 1 image(s)." {
+		t.Fatalf("status after removing the last check = %q", got)
+	}
+
+	// With no other check resolved, the removal is all there is to report.
+	view.NativeDropFiles([]string{writeViewSource(t, directory, "four.png")})
+	gate.waitFor(t, gate.started)
+	view.list.SetSelected(2, true)
+	view.NativeCommand(sourcesCommandBase+sourceListCommand, ui.NotificationListSelChange)
+	view.NativeCommand(sourcesCommandBase+removeSelectedCommand, 0)
+	gate.waitFor(t, gate.canceled)
+	if got := view.status.Text(); got != "Success: Removed 1 image(s)." {
+		t.Fatalf("status after removing the only check = %q", got)
 	}
 }
 

@@ -154,6 +154,9 @@ func TestOrientReaderPathsAgree(t *testing.T) {
 	gray := image.NewGray(reference.Bounds())
 	cmyk := image.NewCMYK(reference.Bounds())
 	ycbcr := image.NewYCbCr(reference.Bounds(), image.YCbCrSubsampleRatio444)
+	// The JPEG decoder's usual 4:2:0 layout shares each chroma sample
+	// between 2 × 2 pixels.
+	subsampled := image.NewYCbCr(reference.Bounds(), image.YCbCrSubsampleRatio420)
 	generic := image.NewNRGBA(reference.Bounds())
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
@@ -161,15 +164,17 @@ func TestOrientReaderPathsAgree(t *testing.T) {
 			gray.SetGray(x, y, color.Gray{Y: value})
 			reference.SetRGBA(x, y, color.RGBA{R: value, G: value, B: value, A: 0xff})
 			cmyk.SetCMYK(x, y, color.CMYK{K: 0xff - value})
-			yi := ycbcr.YOffset(x, y)
-			ci := ycbcr.COffset(x, y)
-			ycbcr.Y[yi], ycbcr.Cb[ci], ycbcr.Cr[ci] = value, 128, 128
+			for _, planes := range []*image.YCbCr{ycbcr, subsampled} {
+				yi := planes.YOffset(x, y)
+				ci := planes.COffset(x, y)
+				planes.Y[yi], planes.Cb[ci], planes.Cr[ci] = value, 128, 128
+			}
 			generic.SetNRGBA(x, y, color.NRGBA{R: value, G: value, B: value, A: 0xff})
 		}
 	}
 	for orientation := OrientationNormal; orientation <= OrientationRotate270; orientation++ {
 		want := orient(reference, orientation)
-		for name, source := range map[string]image.Image{"gray": gray, "cmyk": cmyk, "ycbcr": ycbcr, "generic": generic} {
+		for name, source := range map[string]image.Image{"gray": gray, "cmyk": cmyk, "ycbcr": ycbcr, "ycbcr420": subsampled, "generic": generic} {
 			got := orient(source, orientation)
 			if got.Bounds() != want.Bounds() {
 				t.Fatalf("%s orientation %d: bounds %v, want %v", name, orientation, got.Bounds(), want.Bounds())
@@ -215,6 +220,24 @@ func TestOrientExactPixels(t *testing.T) {
 		//   6 5 4
 		//   3 2 1
 		{OrientationRotate180, 3, []uint8{6, 5, 4, 3, 2, 1}},
+		// Mirrored left to right, 3 × 2:
+		//   3 2 1
+		//   6 5 4
+		{OrientationMirrorHorizontal, 3, []uint8{3, 2, 1, 6, 5, 4}},
+		// Mirrored top to bottom, 3 × 2:
+		//   4 5 6
+		//   1 2 3
+		{OrientationMirrorVertical, 3, []uint8{4, 5, 6, 1, 2, 3}},
+		// Transversed, 2 × 3:
+		//   6 3
+		//   5 2
+		//   4 1
+		{OrientationTransverse, 2, []uint8{6, 3, 5, 2, 4, 1}},
+		// Rotated 90° counterclockwise, 2 × 3:
+		//   3 6
+		//   2 5
+		//   1 4
+		{OrientationRotate270, 2, []uint8{3, 6, 2, 5, 1, 4}},
 	}
 	for _, tc := range cases {
 		got := orient(source, tc.orientation).(*image.RGBA)
@@ -228,8 +251,24 @@ func TestOrientExactPixels(t *testing.T) {
 			}
 		}
 	}
-	if orient(source, OrientationNormal) != image.Image(source) {
-		t.Fatal("OrientationNormal did not return the source unchanged")
+	for _, unchanged := range []Orientation{OrientationNormal, 0, 9} {
+		if orient(source, unchanged) != image.Image(source) {
+			t.Fatalf("orientation %d did not return the source unchanged", unchanged)
+		}
+		if unchanged.Reorients() {
+			t.Fatalf("orientation %d reports that it reorients", unchanged)
+		}
+	}
+
+	// A source whose bounds do not start at the origin is read from its own
+	// bounds: the stored 2 × 2 block at (1, 0) holds 2 3 / 5 6.
+	offset := source.SubImage(image.Rect(1, 0, 3, 2))
+	got := orient(offset, OrientationRotate90).(*image.RGBA)
+	for index, want := range []uint8{5, 2, 6, 3} {
+		x, y := index%2, index/2
+		if value := got.RGBAAt(x, y); value.R != want {
+			t.Fatalf("offset source: pixel (%d, %d) = %+v, want gray %d", x, y, value, want)
+		}
 	}
 }
 

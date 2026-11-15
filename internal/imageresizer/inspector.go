@@ -27,24 +27,40 @@ type InspectionResult struct {
 type inspectFunc func(context.Context, string) (decode.Info, error)
 
 // Inspector checks source content on one background goroutine, one file at
-// a time: the GUI thread never decodes (TECH-005), and at most one source is
-// decoded in memory at once (NFR-014). The goroutine starts when work is
-// queued and exits when the queue is empty. Each finished check is handed to
-// deliver on the worker goroutine; the view forwards it to the GUI thread
-// through the shell dispatcher. A check that is dropped or cancelled is
-// never delivered.
+// a time: the GUI thread never decodes (TECH-005), and decoding is bounded
+// to one source in memory at a time (NFR-014). The goroutine starts when
+// work is queued and exits when the queue is empty. Each finished check is
+// handed to deliver on the worker goroutine; the view forwards it to the GUI
+// thread through the shell dispatcher. A check that is dropped or cancelled
+// is never delivered.
 //
-// Enqueue, Drop, DropAll, and Close are safe to call from any goroutine.
+// Cancellation reaches a check only at its next read, and a read blocked in
+// the operating system — on an unresponsive network share or an online-only
+// file — never returns to observe it. So dropping the in-flight check also
+// detaches its worker: the worker finishes that check on its own and exits,
+// while a replacement serves the rest of the queue at once, so removing the
+// stuck source frees the others. Only one detached worker is tolerated at a
+// time; until it exits, a dropped check's worker keeps the queue, so at most
+// two sources are ever decoded at once.
+//
+// Enqueue, Drop, DropAll, Close, and Closed are safe to call from any
+// goroutine.
 type Inspector struct {
 	inspect inspectFunc
 	deliver func(InspectionResult)
 
-	mu      sync.Mutex
-	queue   []Inspection
-	running bool
-	closed  bool
-	// current and cancelCurrent identify the in-flight check so Drop can
-	// abandon it promptly.
+	mu     sync.Mutex
+	queue  []Inspection
+	closed bool
+	// serving identifies the worker goroutine serving the queue, or is 0
+	// when none runs; lastWorker numbers the workers started.
+	serving    uint64
+	lastWorker uint64
+	// detached reports that a worker released from the queue is still
+	// finishing its dropped check.
+	detached bool
+	// current and cancelCurrent identify the in-flight check of the serving
+	// worker so Drop can abandon it promptly.
 	current       uint64
 	cancelCurrent context.CancelFunc
 
@@ -70,15 +86,22 @@ func (i *Inspector) Enqueue(items []Inspection) {
 		return
 	}
 	i.queue = append(i.queue, items...)
-	if !i.running {
-		i.running = true
-		i.workers.Add(1)
-		go i.run()
+	if i.serving == 0 {
+		i.startLocked()
 	}
 }
 
+// startLocked starts a worker to serve the queue. The caller holds mu.
+func (i *Inspector) startLocked() {
+	i.lastWorker++
+	i.serving = i.lastWorker
+	i.workers.Add(1)
+	go i.run(i.serving)
+}
+
 // Drop abandons the checks for the given item identifiers: queued checks
-// are removed, and an in-flight one is cancelled at its next read.
+// are removed, and an in-flight one is cancelled at its next read and its
+// worker detached, so the remaining checks go on without waiting for it.
 func (i *Inspector) Drop(ids []uint64) {
 	if len(ids) == 0 {
 		return
@@ -97,8 +120,8 @@ func (i *Inspector) Drop(ids []uint64) {
 	}
 	clear(i.queue[len(kept):])
 	i.queue = kept
-	if _, drop := dropping[i.current]; drop && i.cancelCurrent != nil {
-		i.cancelCurrent()
+	if _, drop := dropping[i.current]; drop {
+		i.abandonCurrentLocked()
 	}
 }
 
@@ -107,13 +130,31 @@ func (i *Inspector) DropAll() {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.queue = nil
-	if i.cancelCurrent != nil {
-		i.cancelCurrent()
+	i.abandonCurrentLocked()
+}
+
+// abandonCurrentLocked cancels the serving worker's in-flight check and,
+// unless another detached worker is still finishing, detaches the worker and
+// starts a replacement for whatever is queued. The caller holds mu.
+func (i *Inspector) abandonCurrentLocked() {
+	if i.cancelCurrent == nil {
+		return
+	}
+	i.cancelCurrent()
+	if i.detached {
+		// The worker exits through its cancelled check like any other; the
+		// queue waits for it rather than putting a third source in memory.
+		return
+	}
+	i.detached = true
+	i.serving, i.current, i.cancelCurrent = 0, 0, nil
+	if len(i.queue) > 0 && !i.closed {
+		i.startLocked()
 	}
 }
 
 // Close abandons all work and refuses new checks. It does not wait; Wait
-// blocks until the worker goroutine has exited.
+// blocks until the worker goroutines have exited.
 func (i *Inspector) Close() {
 	i.mu.Lock()
 	i.closed = true
@@ -122,18 +163,33 @@ func (i *Inspector) Close() {
 	i.stop()
 }
 
-// Wait blocks until the worker goroutine, if any, has exited. Callers close
-// the inspector first so the worker does not start further checks.
+// Closed reports whether Close has been called.
+func (i *Inspector) Closed() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.closed
+}
+
+// Wait blocks until every worker goroutine, detached ones included, has
+// exited. Callers close the inspector first so no worker starts further
+// checks.
 func (i *Inspector) Wait() {
 	i.workers.Wait()
 }
 
-func (i *Inspector) run() {
+func (i *Inspector) run(worker uint64) {
 	defer i.workers.Done()
 	for {
 		i.mu.Lock()
+		if i.serving != worker {
+			// Detached while its check was in flight: a replacement owns the
+			// queue now.
+			i.detached = false
+			i.mu.Unlock()
+			return
+		}
 		if i.closed || len(i.queue) == 0 {
-			i.running = false
+			i.serving = 0
 			i.mu.Unlock()
 			return
 		}
@@ -149,7 +205,9 @@ func (i *Inspector) run() {
 		cancel()
 
 		i.mu.Lock()
-		i.current, i.cancelCurrent = 0, nil
+		if i.serving == worker {
+			i.current, i.cancelCurrent = 0, nil
+		}
 		i.mu.Unlock()
 		if !abandoned {
 			i.deliver(InspectionResult{ID: next.ID, Info: info, Err: err})
@@ -161,7 +219,9 @@ func (i *Inspector) run() {
 // thread in batches. At most one drain task is outstanding at a time, so a
 // burst of quick checks costs one dispatcher message — and one shell relayout
 // — per GUI turn rather than one per file, and can never fill the GUI
-// thread's message queue. It is safe for concurrent use.
+// thread's message queue. A drain task whose post is being retried counts as
+// outstanding, so the retry carries every result queued meanwhile. It is
+// safe for concurrent use.
 type resultMailbox struct {
 	mu      sync.Mutex
 	pending []InspectionResult
@@ -179,14 +239,6 @@ func (m *resultMailbox) put(result InspectionResult) bool {
 	}
 	m.posted = true
 	return true
-}
-
-// postFailed records that the drain task could not be posted. The queued
-// results are kept, and the next put posts again.
-func (m *resultMailbox) postFailed() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.posted = false
 }
 
 // take removes and returns every queued result, in arrival order; the next

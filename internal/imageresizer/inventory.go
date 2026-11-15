@@ -88,7 +88,7 @@ func readyDetail(item SourceItem) string {
 	if info.HasAlpha {
 		detail.WriteString(ui.SourceReadyAlpha)
 	}
-	if info.Orientation != decode.OrientationNormal {
+	if info.Orientation.Reorients() {
 		width, height := info.StoredSize()
 		fmt.Fprintf(&detail, ui.SourceReadyOriented, ui.FormatDimensions(width, height))
 	}
@@ -224,7 +224,10 @@ func (v *Inventory) Resolve(result InspectionResult) (index int, ok bool) {
 // explanation, so damaged, unsupported, unreadable, and oversized content
 // are each identified distinctly (RSZ-004). The Inspector never delivers a
 // cancelled check, so KindCanceled only shares the read-failure mapping to
-// keep every kind accounted for.
+// keep every kind accounted for. A read failure is explained by the file
+// system's own message; an error without a cause — which only a decode
+// function other than decode.Inspect could build — still gets an
+// explanation rather than failing on the GUI thread.
 func failureStatus(err error) (SourceStatus, string) {
 	var decodeErr *decode.Error
 	if !errors.As(err, &decodeErr) {
@@ -232,6 +235,9 @@ func failureStatus(err error) (SourceStatus, string) {
 	}
 	switch decodeErr.Kind {
 	case decode.KindRead, decode.KindCanceled:
+		if decodeErr.Err == nil {
+			return StatusInaccessible, ui.SourceReadFailedDetail
+		}
 		return StatusInaccessible, decodeErr.Err.Error()
 	case decode.KindUnsupported:
 		if decodeErr.Format == decode.FormatUnknown {

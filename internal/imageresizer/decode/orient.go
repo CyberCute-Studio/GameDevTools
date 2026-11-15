@@ -38,6 +38,13 @@ func (o Orientation) Valid() bool {
 	return o >= OrientationNormal && o <= OrientationRotate270
 }
 
+// Reorients reports whether making the picture upright moves its pixels:
+// o is one of the standard orientations other than OrientationNormal. The
+// zero value and out-of-range values leave the picture as stored.
+func (o Orientation) Reorients() bool {
+	return o.Valid() && o != OrientationNormal
+}
+
 // SwapsAxes reports whether making the picture upright exchanges its width
 // and height.
 func (o Orientation) SwapsAxes() bool {
@@ -76,67 +83,87 @@ func (o Orientation) target(x, y, width, height int) (int, int) {
 	return x, y
 }
 
-// orient returns src made upright. OrientationNormal returns src unchanged;
-// every other orientation produces a new *image.RGBA in one pass — opaque,
-// since only JPEG sources are reoriented — so
-// a reoriented source needs one extra 4-byte-per-pixel buffer rather than
-// an intermediate conversion as well. The JPEG decoder produces YCbCr,
-// Gray, CMYK, or RGBA images, each of which has a direct pixel reader; any
-// other type falls back to the generic color conversion.
+// steps returns where the stored pixel (0, 0) of a width × height image
+// lands in an upright RGBA buffer with the given stride, and how far the
+// destination moves for each stored column (across) and each stored row
+// (down). Every orientation's target is linear in x and y, so these three
+// offsets place every pixel.
+func (o Orientation) steps(width, height, stride int) (start, across, down int) {
+	offset := func(x, y int) int {
+		tx, ty := o.target(x, y, width, height)
+		return ty*stride + 4*tx
+	}
+	start = offset(0, 0)
+	return start, offset(1, 0) - start, offset(0, 1) - start
+}
+
+// orient returns src made upright. A source that needs no reorientation is
+// returned unchanged; every other orientation produces a new *image.RGBA in
+// one pass — opaque, since only JPEG sources are reoriented — so a
+// reoriented source needs one extra 4-byte-per-pixel buffer rather than an
+// intermediate conversion as well. Each stored row is converted once into a
+// small row buffer and then written out with the orientation's fixed
+// destination steps, so the per-pixel work is a 4-byte copy.
 func orient(src image.Image, o Orientation) image.Image {
-	if !o.Valid() || o == OrientationNormal {
+	if !o.Reorients() {
 		return src
 	}
 	bounds := src.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	uprightWidth, uprightHeight := o.upright(width, height)
 	dst := image.NewRGBA(image.Rect(0, 0, uprightWidth, uprightHeight))
-	read := pixelReader(src)
+	start, across, down := o.steps(width, height, dst.Stride)
+	row := make([]uint8, 4*width)
 	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			r, g, b, a := read(bounds.Min.X+x, bounds.Min.Y+y)
-			tx, ty := o.target(x, y, width, height)
-			offset := ty*dst.Stride + tx*4
+		readRow(src, bounds.Min.X, bounds.Min.Y+y, row)
+		offset := start + y*down
+		for x := 0; x < len(row); x += 4 {
 			pixel := dst.Pix[offset : offset+4 : offset+4]
-			pixel[0], pixel[1], pixel[2], pixel[3] = r, g, b, a
+			pixel[0], pixel[1], pixel[2], pixel[3] = row[x], row[x+1], row[x+2], row[x+3]
+			offset += across
 		}
 	}
 	return dst
 }
 
-// pixelReader returns a function that reads one pixel of src as
-// premultiplied 8-bit RGBA, avoiding the per-pixel interface allocation of
-// image.Image.At for the decoder's concrete types.
-func pixelReader(src image.Image) func(x, y int) (r, g, b, a uint8) {
+// readRow converts the row of src at y, starting at column minX, into
+// premultiplied 8-bit RGBA, filling row. The JPEG decoder produces YCbCr,
+// Gray, CMYK, or RGBA images, each of which is read directly rather than
+// through the per-pixel interface allocation of image.Image.At; any other
+// type falls back to the generic color conversion.
+func readRow(src image.Image, minX, y int, row []uint8) {
+	width := len(row) / 4
 	switch typed := src.(type) {
 	case *image.YCbCr:
-		return func(x, y int) (uint8, uint8, uint8, uint8) {
-			yi := typed.YOffset(x, y)
-			ci := typed.COffset(x, y)
+		for index := range width {
+			yi := typed.YOffset(minX+index, y)
+			ci := typed.COffset(minX+index, y)
 			r, g, b := color.YCbCrToRGB(typed.Y[yi], typed.Cb[ci], typed.Cr[ci])
-			return r, g, b, 0xff
+			pixel := row[4*index : 4*index+4 : 4*index+4]
+			pixel[0], pixel[1], pixel[2], pixel[3] = r, g, b, 0xff
 		}
 	case *image.Gray:
-		return func(x, y int) (uint8, uint8, uint8, uint8) {
-			value := typed.Pix[typed.PixOffset(x, y)]
-			return value, value, value, 0xff
+		values := typed.Pix[typed.PixOffset(minX, y):]
+		for index, value := range values[:width] {
+			pixel := row[4*index : 4*index+4 : 4*index+4]
+			pixel[0], pixel[1], pixel[2], pixel[3] = value, value, value, 0xff
 		}
 	case *image.CMYK:
-		return func(x, y int) (uint8, uint8, uint8, uint8) {
-			offset := typed.PixOffset(x, y)
-			pixel := typed.Pix[offset : offset+4 : offset+4]
-			r, g, b := color.CMYKToRGB(pixel[0], pixel[1], pixel[2], pixel[3])
-			return r, g, b, 0xff
+		values := typed.Pix[typed.PixOffset(minX, y):]
+		for index := range width {
+			ink := values[4*index : 4*index+4 : 4*index+4]
+			r, g, b := color.CMYKToRGB(ink[0], ink[1], ink[2], ink[3])
+			pixel := row[4*index : 4*index+4 : 4*index+4]
+			pixel[0], pixel[1], pixel[2], pixel[3] = r, g, b, 0xff
 		}
 	case *image.RGBA:
-		return func(x, y int) (uint8, uint8, uint8, uint8) {
-			offset := typed.PixOffset(x, y)
-			pixel := typed.Pix[offset : offset+4 : offset+4]
-			return pixel[0], pixel[1], pixel[2], pixel[3]
+		offset := typed.PixOffset(minX, y)
+		copy(row, typed.Pix[offset:offset+len(row)])
+	default:
+		for index := range width {
+			value := color.RGBAModel.Convert(src.At(minX+index, y)).(color.RGBA)
+			pixel := row[4*index : 4*index+4 : 4*index+4]
+			pixel[0], pixel[1], pixel[2], pixel[3] = value.R, value.G, value.B, value.A
 		}
-	}
-	return func(x, y int) (uint8, uint8, uint8, uint8) {
-		pixel := color.RGBAModel.Convert(src.At(x, y)).(color.RGBA)
-		return pixel.R, pixel.G, pixel.B, pixel.A
 	}
 }

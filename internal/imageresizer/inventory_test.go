@@ -318,6 +318,9 @@ func TestFailureStatusIdentifiesEachKind(t *testing.T) {
 		{"too large", &decode.Error{Kind: decode.KindTooLarge, Format: decode.FormatPNG, Width: 70000, Height: 70000, Err: errors.New("limit")}, StatusTooLarge, "At 70000 × 70000 px this image needs more than the 1024 MiB"},
 		{"canceled", &decode.Error{Kind: decode.KindCanceled, Err: context.Canceled}, StatusInaccessible, "context canceled"},
 		{"untyped", errors.New("surprise"), StatusCorrupt, "surprise"},
+		// The zero Kind is a read failure; without a cause it is still
+		// explained rather than dereferenced on the GUI thread.
+		{"read without a cause", &decode.Error{Format: decode.FormatPNG}, StatusInaccessible, "The file could not be read."},
 	}
 	for _, tc := range cases {
 		status, detail := failureStatus(tc.err)
@@ -358,6 +361,14 @@ func TestSourceItemRowAndDetailText(t *testing.T) {
 			item:   SourceItem{Name: "c.png", Path: filepath.Join(directory, "c.png"), Status: StatusReady, Info: decode.Info{Format: decode.FormatJPEG, Width: 10, Height: 20, Orientation: decode.OrientationNormal}},
 			row:    "c.png — 10 × 20 px — Ready",
 			detail: "JPEG image, 10 × 20 px. The content is JPEG data despite the .png extension, so it is processed as JPEG.",
+		},
+		{
+			// Only a standard orientation other than Normal was applied; the
+			// zero value means none was recorded.
+			name:   "no recorded orientation",
+			item:   SourceItem{Name: "e.jpg", Path: filepath.Join(directory, "e.jpg"), Status: StatusReady, Info: decode.Info{Format: decode.FormatJPEG, Width: 8, Height: 6}},
+			row:    "e.jpg — 8 × 6 px — Ready",
+			detail: "JPEG image, 8 × 6 px.",
 		},
 		{
 			name:   "failed",

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows"
 
@@ -61,10 +62,11 @@ type NativeView struct {
 	// checked tallies the content checks resolved since the list last had
 	// nothing left to check, for the summary shown when checking finishes.
 	checked checkTally
-	// sourceNotice is the status text the source list last showed. The
-	// finishing summary replaces only that, never a notice another part of
-	// the view raised in the meantime.
-	sourceNotice string
+	// sourceNotice is the status area's revision right after the source list
+	// last showed its notice. The finishing summary replaces only that
+	// notice, or an area left empty, never a notice another part of the view
+	// raised in the meantime.
+	sourceNotice uint64
 
 	sourceLabel     *ui.Label
 	sourceHint      *ui.Label
@@ -546,8 +548,8 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 // its source, so nothing is lost when the process exits around one, and
 // waiting for the worker could hold the process — and its single-instance
 // lock — for as long as an open or read on a slow network share or an
-// online-only file blocks. Any result the worker still finishes fails to
-// post harmlessly against the destroyed window.
+// online-only file blocks. Any result a worker still finishes fails to post
+// harmlessly against the destroyed window, and the post is not retried.
 func (n *NativeView) NativeDestroy() {
 	n.inspector.Close()
 	n.status.Destroy()
@@ -677,25 +679,37 @@ func (n *NativeView) addSources(paths []string) {
 // finishing summary knows the status area still belongs to the list.
 func (n *NativeView) showSourceNotice(notice ui.Notice) {
 	_ = n.status.Show(notice, 0)
-	n.sourceNotice = notice.Text()
+	n.sourceNotice = n.status.Revision()
 }
+
+// postRetryDelay paces the retries of a refused drain post.
+const postRetryDelay = 100 * time.Millisecond
 
 // deliverInspection runs on the inspector's worker goroutine and hands the
 // result to the GUI thread. Results are batched: a drain task is posted only
 // when none is outstanding, so however quickly checks finish, the view adds
-// at most one message to the GUI thread's queue. A failed post keeps the
-// results for the next one; since this view can never fill the queue
-// itself, in practice a post fails only once the shell window is gone.
-// Without a dispatcher — the shell always
-// provides one — the result is dropped: the inventory must never be touched
-// off the GUI thread.
+// at most one message to the GUI thread's queue. Without a dispatcher — the
+// shell always provides one — the result is dropped: the inventory must
+// never be touched off the GUI thread.
 func (n *NativeView) deliverInspection(result InspectionResult) {
 	if n.dispatcher == nil || !n.results.put(result) {
 		return
 	}
-	if err := n.dispatcher.Post(n.applyInspections); err != nil {
-		n.results.postFailed()
+	n.postResults()
+}
+
+// postResults posts the drain task for the queued results. A refused post —
+// the GUI thread's message queue is momentarily full — is retried after a
+// pause, since no later result may come to post again, and the queued
+// results would otherwise leave their items Checking for good; the drain
+// task stays outstanding meanwhile, so the retry carries every result queued
+// in the meantime. Once the view is destroyed a post can only fail, so the
+// retries stop.
+func (n *NativeView) postResults() {
+	if err := n.dispatcher.Post(n.applyInspections); err == nil || n.inspector.Closed() {
+		return
 	}
+	time.AfterFunc(postRetryDelay, n.postResults)
 }
 
 // applyInspections resolves the delivered content checks into their items on
@@ -726,13 +740,21 @@ func (n *NativeView) applyInspections() {
 	if !resolved || n.inventory.Checking() > 0 {
 		return
 	}
-	tally := n.checked
-	n.checked = checkTally{}
+	summary, _ := n.finishChecks()
 	// A notice raised elsewhere in the view since the list's own — a failed
 	// settings save, say — stays visible; each row still shows its outcome.
-	if n.status.Text() == n.sourceNotice {
-		n.showSourceNotice(summarizeChecks(tally))
+	if n.status.Revision() == n.sourceNotice || n.status.Text() == "" {
+		n.showSourceNotice(summary)
 	}
+}
+
+// finishChecks ends the tally once nothing is left to check: it returns the
+// summary of the checks resolved since the list last had nothing to check,
+// and whether any of them is still listed to summarize.
+func (n *NativeView) finishChecks() (ui.Notice, bool) {
+	tally := n.checked
+	n.checked = checkTally{}
+	return summarizeChecks(tally), len(tally.resolved) > 0
 }
 
 // summarizeChecks builds the notice shown when the last pending content
@@ -763,25 +785,32 @@ func (n *NativeView) removeSelectedSources() {
 		n.showSourceNotice(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone})
 		return
 	}
+	wasChecking := n.inventory.Checking() > 0
 	removed := n.inventory.Remove(indices)
 	n.inspector.Drop(removed)
 	n.checked.forget(removed)
-	if n.inventory.Checking() == 0 {
-		n.checked = checkTally{}
-	}
 	n.refreshSources()
 	n.list.Focus()
-	n.showSourceNotice(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))})
+	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))}
+	if wasChecking && n.inventory.Checking() == 0 {
+		// Removing the last items still being checked finishes checking, so
+		// the outcome of the other checks is summarized ahead of the
+		// removal, as if the last check had resolved.
+		if summary, listed := n.finishChecks(); listed {
+			notice = ui.Notice{Kind: summary.Kind, Message: summary.Message + " " + notice.Message}
+		}
+	}
+	n.showSourceNotice(notice)
 }
 
 // summarizeAdd builds the batch result notice: every add reports what was
 // added and why other files were not, so unsupported or unreadable files
 // never fail silently (RSZ-004).
 func summarizeAdd(summary AddSummary) ui.Notice {
-	if summary.Added == 0 && summary.Duplicates == 0 && summary.Unsupported == 0 && summary.Inaccessible == 0 {
+	message, warn := describeAdd(summary)
+	if message == "" {
 		return ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesAddEmpty}
 	}
-	message, warn := describeAdd(summary)
 	if summary.Added > 0 {
 		// The added files are still Checking; the outcome of their content
 		// checks is summarized once the last one resolves.

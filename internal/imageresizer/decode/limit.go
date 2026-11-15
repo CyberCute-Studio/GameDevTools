@@ -88,7 +88,7 @@ func jpegDecodeBytes(config image.Config, frame jpegFrame, orientation Orientati
 	if config.ColorModel != color.YCbCrModel && config.ColorModel != color.GrayModel {
 		total += 4 * pixels
 	}
-	if orientation.Valid() && orientation != OrientationNormal {
+	if orientation.Reorients() {
 		total += 4 * pixels
 	}
 	return total
@@ -107,8 +107,11 @@ func componentCount(model color.Model) int {
 }
 
 // decodeBytes estimates the pixel memory decoding needs from the header the
-// decoder parsed and what the scan learned before it. A PNG whose IHDR the
-// scan could not read is assumed to be interlaced.
+// decoder parsed and what the scan learned before it. The PNG scan reads
+// only the chunk directly after the signature, but the decoder skips unknown
+// chunks before IHDR, so a PNG can declare its size where the scan never
+// looked: this estimate is then its only limit check, and it assumes the
+// costlier interlaced layout.
 func decodeBytes(format Format, config image.Config, scanned header) uint64 {
 	if format == FormatJPEG {
 		return jpegDecodeBytes(config, scanned.jpeg, scanned.orientation)

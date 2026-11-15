@@ -139,6 +139,66 @@ func TestInspectorDropAbandonsQueuedAndInFlightChecks(t *testing.T) {
 	}
 }
 
+// TestInspectorDropFreesTheQueueFromAStuckCheck pins that removing a source
+// whose read is blocked in the operating system — which never observes the
+// cancellation — lets the remaining checks go on, while at most one such
+// worker is set aside at a time, so no more than two sources are ever
+// decoded at once (NFR-014).
+func TestInspectorDropFreesTheQueueFromAStuckCheck(t *testing.T) {
+	results := newCollector()
+	started := make(chan string, 16)
+	// Stuck checks ignore their context, as a blocked read does.
+	unstick := map[string]chan struct{}{"stuck one": make(chan struct{}), "stuck two": make(chan struct{})}
+	inspector := NewInspector(func(ctx context.Context, path string) (decode.Info, error) {
+		started <- path
+		if gate, stuck := unstick[path]; stuck {
+			<-gate
+			return decode.Info{}, &decode.Error{Kind: decode.KindRead, Err: errors.New("the network path was not found")}
+		}
+		return decode.Info{Format: decode.FormatPNG, Width: 1, Height: 1}, nil
+	}, results.deliver)
+	waitStarted := func(want string) {
+		t.Helper()
+		select {
+		case path := <-started:
+			if path != want {
+				t.Fatalf("started %q, want %q", path, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%q did not start", want)
+		}
+	}
+	noneStarts := func(reason string) {
+		t.Helper()
+		select {
+		case path := <-started:
+			t.Fatalf("%q started while %s", path, reason)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	inspector.Enqueue([]Inspection{{ID: 1, Path: "stuck one"}, {ID: 2, Path: "quick"}, {ID: 3, Path: "stuck two"}, {ID: 4, Path: "last"}})
+	waitStarted("stuck one")
+	inspector.Drop([]uint64{1})
+	waitStarted("quick")
+	if got := results.wait(t, 1); got[0].ID != 2 {
+		t.Fatalf("first delivered result = %+v, want item 2", got[0])
+	}
+	waitStarted("stuck two")
+	inspector.Drop([]uint64{3})
+	noneStarts("the first stuck check is still set aside")
+	close(unstick["stuck one"])
+	noneStarts("the second stuck check still holds the queue")
+	close(unstick["stuck two"])
+	waitStarted("last")
+	got := results.wait(t, 2)
+	inspector.Close()
+	inspector.Wait()
+	if got[1].ID != 4 || results.count() != 2 {
+		t.Fatalf("delivered = %+v, want items 2 and 4 only", got)
+	}
+}
+
 func TestInspectorDropAllAndClose(t *testing.T) {
 	results := newCollector()
 	fake := newBlockingInspect()
@@ -191,19 +251,17 @@ func TestInspectorContainsPanics(t *testing.T) {
 }
 
 // TestResultMailboxPostsOncePerDrain pins the hand-off the view relies on:
-// only the first result after a drain asks for a post, a refused post is
-// retried by the next result, and nothing queued is ever lost.
+// only the first result after a drain asks for a post, and nothing queued is
+// ever lost.
 func TestResultMailboxPostsOncePerDrain(t *testing.T) {
 	var mailbox resultMailbox
 	if !mailbox.put(InspectionResult{ID: 1}) {
 		t.Fatal("the first result did not ask for a post")
 	}
-	if mailbox.put(InspectionResult{ID: 2}) {
-		t.Fatal("a second result asked for a post while one is outstanding")
-	}
-	mailbox.postFailed()
-	if !mailbox.put(InspectionResult{ID: 3}) {
-		t.Fatal("the result after a refused post did not ask for a post")
+	for _, id := range []uint64{2, 3} {
+		if mailbox.put(InspectionResult{ID: id}) {
+			t.Fatalf("result %d asked for a post while one is outstanding", id)
+		}
 	}
 	got := mailbox.take()
 	if len(got) != 3 || got[0].ID != 1 || got[1].ID != 2 || got[2].ID != 3 {

@@ -8,8 +8,12 @@
 // Functions are safe to call from any goroutine and never touch the GUI;
 // callers run them off the GUI thread and deliver results through the shell
 // dispatcher, per TECH-005. Sources are opened read-only and are never
-// modified (RSZ-009). A context cancels a decode at the next read, so a
-// caller can abandon a large source promptly.
+// modified (RSZ-009). A context cancels a decode at its next read of the
+// source, and once more after decoding, before the orientation transform.
+// The decoder's work after its last read — a progressive JPEG's final
+// reconstruction and the color conversion — is not interruptible, so a
+// cancelled decode of a large source can still spend that CPU time before it
+// returns.
 //
 // Metadata other than the normalized orientation — the rest of EXIF, ICC
 // profiles, comments, and timestamps — is not read or preserved.
@@ -26,6 +30,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"runtime/debug"
 )
 
 // Format identifies decoded source content.
@@ -175,18 +180,34 @@ type Image struct {
 	Pixels image.Image
 }
 
+// releaseThreshold is the decoding allowance above which Inspect hands the
+// discarded pixel memory back before it returns.
+const releaseThreshold = 64 << 20
+
+// releaseMemory collects garbage and returns freed memory to the operating
+// system; tests substitute it to observe when Inspect releases.
+var releaseMemory = debug.FreeOSMemory
+
 // Inspect fully decodes the source to validate its content (RSZ-003) and
 // returns its upright dimensions, format, and alpha (RSZ-005) without
-// keeping the pixels or applying the orientation transform.
+// keeping the pixels or applying the orientation transform. The pixels are
+// garbage once it returns. The collector would reclaim them only when the
+// heap next doubles, so back-to-back checks of large sources would hold two
+// of them at once; after a large decode Inspect collects them before
+// returning instead, so a caller checking sources one at a time keeps at
+// most one decoded in memory (NFR-014).
 func Inspect(ctx context.Context, path string) (Info, error) {
-	info, _, err := load(ctx, path, false)
+	info, _, allocated, err := load(ctx, path, false)
+	if allocated >= releaseThreshold {
+		releaseMemory()
+	}
 	return info, err
 }
 
 // Decode decodes the source and returns its pixels with the EXIF
 // orientation applied, so the image is visually upright (RSZ-018).
 func Decode(ctx context.Context, path string) (*Image, error) {
-	info, pixels, err := load(ctx, path, true)
+	info, pixels, _, err := load(ctx, path, true)
 	if err != nil {
 		return nil, err
 	}
@@ -213,23 +234,32 @@ type header struct {
 	png         pngLayout
 }
 
-func load(ctx context.Context, path string, keep bool) (info Info, pixels image.Image, err error) {
+// load opens the source read-only and decodes it. Allocated is the pixel
+// memory the decoders were allowed to allocate: zero when the source was
+// rejected before decoding began, and the full allowance once it began,
+// even if decoding then failed.
+func load(ctx context.Context, path string, keep bool) (info Info, pixels image.Image, allocated uint64, err error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return Info{}, nil, &Error{Kind: KindCanceled, Err: ctxErr}
+		return Info{}, nil, 0, &Error{Kind: KindCanceled, Err: ctxErr}
 	}
 	// os.Open requests read access only: sources are never opened for
 	// writing (RSZ-009).
 	file, openErr := os.Open(path)
 	if openErr != nil {
-		return Info{}, nil, &Error{Kind: KindRead, Err: openErr}
+		return Info{}, nil, 0, &Error{Kind: KindRead, Err: openErr}
 	}
 	defer file.Close()
 	if stat, statErr := file.Stat(); statErr != nil {
-		return Info{}, nil, &Error{Kind: KindRead, Err: statErr}
+		return Info{}, nil, 0, &Error{Kind: KindRead, Err: statErr}
 	} else if stat.IsDir() {
-		return Info{}, nil, &Error{Kind: KindRead, Err: errFolder}
+		return Info{}, nil, 0, &Error{Kind: KindRead, Err: errFolder}
 	}
-	source := &sourceReader{ctx: ctx, file: file}
+	return decodeSource(&sourceReader{ctx: ctx, file: file}, keep)
+}
+
+// decodeSource identifies, checks, and decodes an open source; load
+// describes its results.
+func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Image, allocated uint64, err error) {
 	format := FormatUnknown
 	// The standard library decoders are fuzzed, but a decoder panic on an
 	// unforeseen input must still be contained as this source's failure
@@ -245,12 +275,12 @@ func load(ctx context.Context, path string, keep bool) (info Info, pixels image.
 
 	format, err = sniff(source)
 	if err != nil {
-		return Info{}, nil, err
+		return Info{}, nil, 0, err
 	}
 	// One buffer serves the header scan, the header parse, and the decode.
 	buffered := bufio.NewReaderSize(source, readBufferSize)
 	if err := source.restart(buffered); err != nil {
-		return Info{}, nil, source.classify(format, err)
+		return Info{}, nil, 0, source.classify(format, err)
 	}
 	scanned := header{orientation: OrientationNormal}
 	switch format {
@@ -263,34 +293,49 @@ func load(ctx context.Context, path string, keep bool) (info Info, pixels image.
 		if scanned.png = scanPNG(buffered); scanned.png.valid {
 			layout := scanned.png
 			if err := checkLimit(format, layout.width, layout.height, pngDecodeBytes(layout.width, layout.height, layout.deep, layout.interlaced)); err != nil {
-				return Info{}, nil, err
+				return Info{}, nil, 0, err
 			}
 		}
 	}
+	// The scans treat a failed read like the end of the header, so without
+	// this a transient failure would pass for a header without an
+	// orientation, and the later passes would list the source as Ready with
+	// dimensions that are not upright.
+	if source.readErr != nil {
+		return Info{}, nil, 0, source.classify(format, source.readErr)
+	}
 	if err := source.restart(buffered); err != nil {
-		return Info{}, nil, source.classify(format, err)
+		return Info{}, nil, 0, source.classify(format, err)
 	}
 	config, err := decodeConfig(format, buffered)
 	if err != nil {
-		return Info{}, nil, source.classify(format, err)
+		return Info{}, nil, 0, source.classify(format, err)
 	}
 	if config.Width <= 0 || config.Height <= 0 {
-		return Info{}, nil, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("invalid dimensions %d × %d", config.Width, config.Height)}
+		return Info{}, nil, 0, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("invalid dimensions %d × %d", config.Width, config.Height)}
 	}
 	width, height := scanned.orientation.upright(config.Width, config.Height)
-	if err := checkLimit(format, width, height, decodeBytes(format, config, scanned)); err != nil {
-		return Info{}, nil, err
+	need := decodeBytes(format, config, scanned)
+	if err := checkLimit(format, width, height, need); err != nil {
+		return Info{}, nil, 0, err
 	}
 	if err := source.restart(buffered); err != nil {
-		return Info{}, nil, source.classify(format, err)
+		return Info{}, nil, 0, source.classify(format, err)
 	}
+	allocated = need
 	decoded, err := decodeImage(format, buffered)
 	if err != nil {
-		return Info{}, nil, source.classify(format, err)
+		return Info{}, nil, allocated, source.classify(format, err)
+	}
+	// The decoder reads nothing after the end of the image data, so a
+	// cancellation during its final reconstruction is observed here, before
+	// the orientation transform makes another full pass.
+	if ctxErr := source.ctx.Err(); ctxErr != nil {
+		return Info{}, nil, allocated, &Error{Kind: KindCanceled, Format: format, Err: ctxErr}
 	}
 	bounds := decoded.Bounds()
 	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
-		return Info{}, nil, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("decoded %d × %d pixels, but the header declares %d × %d", bounds.Dx(), bounds.Dy(), config.Width, config.Height)}
+		return Info{}, nil, allocated, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("decoded %d × %d pixels, but the header declares %d × %d", bounds.Dx(), bounds.Dy(), config.Width, config.Height)}
 	}
 	info = Info{
 		Format:      format,
@@ -302,7 +347,7 @@ func load(ctx context.Context, path string, keep bool) (info Info, pixels image.
 	if keep {
 		pixels = orient(decoded, scanned.orientation)
 	}
-	return info, pixels, nil
+	return info, pixels, allocated, nil
 }
 
 // sniff identifies the content from its signature, so a renamed file is
@@ -367,8 +412,9 @@ func modelHasAlpha(model color.Model) bool {
 // and remembers a genuine read failure, so a decoder error caused by the
 // file system is reported as KindRead rather than as damaged content.
 type sourceReader struct {
-	ctx     context.Context
-	file    *os.File
+	ctx context.Context
+	// file is the open source; an *os.File outside tests.
+	file    io.ReadSeeker
 	readErr error
 }
 
