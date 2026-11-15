@@ -23,8 +23,10 @@ func BenchmarkCaptureRectVirtualDesktop(b *testing.B) {
 	}
 	pixels := int64(bounds.Width()) * int64(bounds.Height())
 	b.SetBytes(pixels * 4)
-	b.ReportMetric(float64(pixels)/1e6, "MP")
 	b.ResetTimer()
+	// ReportMetric comes after ResetTimer, which deletes user-reported
+	// metrics, so the captured size survives next to the throughput.
+	b.ReportMetric(float64(pixels)/1e6, "MP")
 	for i := 0; i < b.N; i++ {
 		img, err := CaptureRect(monitor, bounds)
 		if err != nil {

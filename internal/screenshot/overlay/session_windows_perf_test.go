@@ -31,6 +31,7 @@ func benchmarkOverlayAppear(b *testing.B, mode Mode, size display.Point) {
 			b.Skipf("virtual desktop %v is too small for a %d × %d frame", bounds, size.X, size.Y)
 		}
 	}
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StartTimer()
 		err := controller.Begin(0, 0, mode, size, Events{})

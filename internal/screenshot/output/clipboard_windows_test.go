@@ -24,6 +24,7 @@ var (
 	procGetDesktopWindow           = user32.NewProc("GetDesktopWindow")
 	procGetClipboardData           = user32.NewProc("GetClipboardData")
 	procGetClipboardSequenceNumber = user32.NewProc("GetClipboardSequenceNumber")
+	procGlobalSize                 = kernel32.NewProc("GlobalSize")
 )
 
 // openClipboardWithRetry opens the clipboard, retrying briefly while
@@ -102,7 +103,8 @@ func clipboardImage() (*image.RGBA, error) {
 	defer procGlobalUnlock.Call(allocation)
 	var header bitmapInfoHeader
 	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&header)), data, unsafe.Sizeof(header))
-	if header.Size != uint32(unsafe.Sizeof(bitmapInfoHeader{})) || header.BitCount != 32 {
+	if header.Size != uint32(unsafe.Sizeof(bitmapInfoHeader{})) || header.BitCount != 32 ||
+		header.Compression != 0 { // only uncompressed BI_RGB pixel data is readable here
 		return nil, errors.New("unexpected clipboard DIB header")
 	}
 	width := int(header.Width)
@@ -114,6 +116,12 @@ func clipboardImage() (*image.RGBA, error) {
 	}
 	if width <= 0 || height <= 0 || width > 65536 || height > 65536 {
 		return nil, fmt.Errorf("unexpected clipboard DIB dimensions %d × %d", width, height)
+	}
+	// The DIB comes from whatever process last touched the shared
+	// clipboard; never read past the allocation it actually arrived in.
+	required := unsafe.Sizeof(header) + uintptr(width)*uintptr(height)*4
+	if size, _, _ := procGlobalSize.Call(allocation); uintptr(size) < required {
+		return nil, fmt.Errorf("clipboard DIB allocation holds %d bytes, its header requires %d", size, required)
 	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 	for y := 0; y < height; y++ {
@@ -164,6 +172,7 @@ func verifyClipboardImage(t *testing.T, set func() error, want *image.RGBA) {
 	t.Helper()
 	const attempts = 5
 	lastDifference := ""
+	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		if err := set(); err != nil {
 			t.Fatalf("place image on the clipboard: %v", err)
@@ -171,7 +180,11 @@ func verifyClipboardImage(t *testing.T, set func() error, want *image.RGBA) {
 		before := clipboardSequence()
 		got, err := clipboardImage()
 		after := clipboardSequence()
-		if err != nil || before != after {
+		if err != nil {
+			lastErr = err
+			continue // another clipboard user interfered with the read
+		}
+		if before != after {
 			continue // another clipboard user interfered with the read
 		}
 		difference := imageDifference(got, want)
@@ -180,8 +193,12 @@ func verifyClipboardImage(t *testing.T, set func() error, want *image.RGBA) {
 		}
 		lastDifference = difference
 	}
-	t.Fatalf("clipboard never held the expected image across %d attempts; last stable difference: %s",
-		attempts, lastDifference)
+	if lastDifference != "" {
+		t.Fatalf("clipboard never held the expected image across %d attempts; last stable difference: %s",
+			attempts, lastDifference)
+	}
+	t.Fatalf("clipboard image could never be read back undisturbed across %d attempts; last read error: %v",
+		attempts, lastErr)
 }
 
 func TestSetClipboardImageRoundTrip(t *testing.T) {
