@@ -119,8 +119,8 @@ func clipboardImage() (*image.RGBA, error) {
 	}
 	// The DIB comes from whatever process last touched the shared
 	// clipboard; never read past the allocation it actually arrived in.
-	required := unsafe.Sizeof(header) + uintptr(width)*uintptr(height)*4
-	if size, _, _ := procGlobalSize.Call(allocation); uintptr(size) < required {
+	required := uint64(unsafe.Sizeof(header)) + uint64(width)*uint64(height)*4
+	if size, _, _ := procGlobalSize.Call(allocation); uint64(size) < required {
 		return nil, fmt.Errorf("clipboard DIB allocation holds %d bytes, its header requires %d", size, required)
 	}
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -197,8 +197,12 @@ func verifyClipboardImage(t *testing.T, set func() error, want *image.RGBA) {
 		t.Fatalf("clipboard never held the expected image across %d attempts; last stable difference: %s",
 			attempts, lastDifference)
 	}
-	t.Fatalf("clipboard image could never be read back undisturbed across %d attempts; last read error: %v",
-		attempts, lastErr)
+	if lastErr != nil {
+		t.Fatalf("clipboard image could never be read back undisturbed across %d attempts; last read error: %v",
+			attempts, lastErr)
+	}
+	t.Fatalf("clipboard image could never be read back undisturbed across %d attempts; the contents changed during every read",
+		attempts)
 }
 
 func TestSetClipboardImageRoundTrip(t *testing.T) {

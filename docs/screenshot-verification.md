@@ -20,7 +20,7 @@ The performance benchmarks are on-demand rather than part of the default run, be
 go test -run '^$' -bench . -benchtime=30x ./internal/screenshot/overlay ./internal/screenshot/capture ./internal/screenshot/output
 ```
 
-Windows CI (`.github/workflows/ci.yml`) runs the formatting, static-analysis, and test commands on every push and pull request and builds the AMD64 release executable. The same test commands pass there; CI desktops are smaller than the environment of record, and tests adapt to the available virtual desktop.
+Windows CI (`.github/workflows/ci.yml`) runs the formatting, static-analysis, and test commands on pushes to main and on every pull request and builds the AMD64 release executable. The same test commands pass there; CI desktops are smaller than the environment of record, and tests adapt to the available virtual desktop.
 
 ## Environment of record
 
