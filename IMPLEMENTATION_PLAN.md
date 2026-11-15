@@ -181,7 +181,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Deliver safe, responsive bulk PNG/JPEG resizing with module-specific presets, deterministic fitting behavior, collision handling, and per-file outcomes.
 
 19. **RSZ-01 — Add Image Resizer presets and job configuration UI**
-    - **Status:** In Progress | **PR:** TBD | **Depends on:** FND-07, FND-04
+    - **Status:** In Progress | **PR:** [#19](https://github.com/CyberCute-Studio/GameDevTools/pull/19) | **Depends on:** FND-07, FND-04
     - **Requirements:** PRESET-001, PRESET-007, RSZ-010, RSZ-016, RSZ-020, RSZ-021, RSZ-022, RSZ-023, RSZ-025, RSZ-028, RSZ-029.
     - **Deliver:** Resizer view, dimension presets with Stretch/Fit/Crop to Fill, plain-language mode descriptions, output folder/format/name behavior, collision policy selection, JPEG quality, transparency background color, and persistence of job settings.
     - **Verify:** Test all preset modes, built-in Fit defaults, setting validation/persistence, independent preset namespace, and clear mode explanations before a job can start.
