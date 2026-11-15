@@ -247,6 +247,34 @@ func TestInventoryResolveAppliesCheckResults(t *testing.T) {
 	}
 }
 
+// TestInventoryResolveFindsItemsAfterRemoval pins the ID lookup across a
+// list with gaps: removal keeps the items in ID order, so every remaining
+// item is still found at its new index and removed IDs are not.
+func TestInventoryResolveFindsItemsAfterRemoval(t *testing.T) {
+	directory := t.TempDir()
+	paths := make([]string, 0, 9)
+	for _, name := range []string{"a.png", "b.png", "c.png", "d.png", "e.png", "f.png", "g.png", "h.png", "i.png"} {
+		paths = append(paths, writeSource(t, directory, name))
+	}
+	inventory := NewInventory()
+	checks := inventory.Add(paths).Inspect
+	inventory.Remove([]int{0, 3, 4, 8})
+	// The kept items b, c, f, g, h now sit at indexes 0 through 4.
+	for want, original := range []int{1, 2, 5, 6, 7} {
+		if index, ok := inventory.Resolve(InspectionResult{ID: checks[original].ID, Info: decode.Info{Format: decode.FormatPNG, Width: 1, Height: 1}}); !ok || index != want {
+			t.Fatalf("Resolve(%s) = %d, %v; want index %d", filepath.Base(paths[original]), index, ok, want)
+		}
+	}
+	for _, original := range []int{0, 3, 4, 8} {
+		if index, ok := inventory.Resolve(InspectionResult{ID: checks[original].ID}); ok || index != -1 {
+			t.Fatalf("Resolve(removed %s) = %d, %v", filepath.Base(paths[original]), index, ok)
+		}
+	}
+	if inventory.Checking() != 0 {
+		t.Fatalf("Checking() = %d, want 0", inventory.Checking())
+	}
+}
+
 // TestInventoryIgnoresStaleResults pins that a check finishing after its
 // item was removed cannot update anything — including a re-added item for
 // the same path, which gets a new identifier.
@@ -288,7 +316,7 @@ func TestFailureStatusIdentifiesEachKind(t *testing.T) {
 		{"corrupt", &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}, StatusCorrupt, "The PNG data is damaged or incomplete and cannot be decoded (invalid checksum)"},
 		{"empty", &decode.Error{Kind: decode.KindCorrupt, Err: decode.ErrEmpty}, StatusCorrupt, "The file is empty."},
 		{"too large", &decode.Error{Kind: decode.KindTooLarge, Format: decode.FormatPNG, Width: 70000, Height: 70000, Err: errors.New("limit")}, StatusTooLarge, "At 70000 × 70000 px this image needs more than the 1024 MiB"},
-		{"canceled", &decode.Error{Kind: decode.KindCanceled, Err: context.Canceled}, StatusInaccessible, "cancelled"},
+		{"canceled", &decode.Error{Kind: decode.KindCanceled, Err: context.Canceled}, StatusInaccessible, "context canceled"},
 		{"untyped", errors.New("surprise"), StatusCorrupt, "surprise"},
 	}
 	for _, tc := range cases {

@@ -157,8 +157,53 @@ func (i *Inspector) run() {
 	}
 }
 
+// resultMailbox hands finished checks from the worker goroutine to the GUI
+// thread in batches. At most one drain task is outstanding at a time, so a
+// burst of quick checks costs one dispatcher message — and one shell relayout
+// — per GUI turn rather than one per file, and can never fill the GUI
+// thread's message queue. It is safe for concurrent use.
+type resultMailbox struct {
+	mu      sync.Mutex
+	pending []InspectionResult
+	posted  bool
+}
+
+// put queues a result and reports whether the caller must post a drain task:
+// true only when none is outstanding.
+func (m *resultMailbox) put(result InspectionResult) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pending = append(m.pending, result)
+	if m.posted {
+		return false
+	}
+	m.posted = true
+	return true
+}
+
+// postFailed records that the drain task could not be posted. The queued
+// results are kept, and the next put posts again.
+func (m *resultMailbox) postFailed() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.posted = false
+}
+
+// take removes and returns every queued result, in arrival order; the next
+// put posts a new drain task.
+func (m *resultMailbox) take() []InspectionResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	results := m.pending
+	m.pending, m.posted = nil, false
+	return results
+}
+
 // check runs one inspection, containing a panic as that item's failure so
-// one source can never stop the remaining checks (NFR-021).
+// one source can never stop the remaining checks (NFR-021). decode.Inspect
+// recovers its own decoder panics; this guard sits at the goroutine
+// boundary for whatever inspect function the inspector runs, because a
+// panic escaping the worker would end the whole process.
 func (i *Inspector) check(ctx context.Context, path string) (info decode.Info, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {

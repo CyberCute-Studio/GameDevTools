@@ -189,3 +189,30 @@ func TestInspectorContainsPanics(t *testing.T) {
 		t.Fatalf("check after the panic = %+v", got[1])
 	}
 }
+
+// TestResultMailboxPostsOncePerDrain pins the hand-off the view relies on:
+// only the first result after a drain asks for a post, a refused post is
+// retried by the next result, and nothing queued is ever lost.
+func TestResultMailboxPostsOncePerDrain(t *testing.T) {
+	var mailbox resultMailbox
+	if !mailbox.put(InspectionResult{ID: 1}) {
+		t.Fatal("the first result did not ask for a post")
+	}
+	if mailbox.put(InspectionResult{ID: 2}) {
+		t.Fatal("a second result asked for a post while one is outstanding")
+	}
+	mailbox.postFailed()
+	if !mailbox.put(InspectionResult{ID: 3}) {
+		t.Fatal("the result after a refused post did not ask for a post")
+	}
+	got := mailbox.take()
+	if len(got) != 3 || got[0].ID != 1 || got[1].ID != 2 || got[2].ID != 3 {
+		t.Fatalf("take = %+v, want results 1, 2, 3 in order", got)
+	}
+	if rest := mailbox.take(); len(rest) != 0 {
+		t.Fatalf("second take = %+v, want none", rest)
+	}
+	if !mailbox.put(InspectionResult{ID: 4}) {
+		t.Fatal("the first result after a drain did not ask for a post")
+	}
+}

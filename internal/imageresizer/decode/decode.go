@@ -48,12 +48,17 @@ func (f Format) String() string {
 	return "unknown"
 }
 
-// MaxDecodedBytes bounds the pixel memory one decoded source may need. The
-// estimate counts 4 bytes per pixel, or 8 for sources with 16 bits per
-// channel, so an 8-bit source is limited to 2^28 pixels — the same bound the
-// Screenshot module applies to one capture. Larger sources are rejected with
-// a KindTooLarge error from their declared dimensions, before any pixel
-// memory is allocated, so a crafted header cannot exhaust memory.
+// MaxDecodedBytes bounds the pixel memory decoding one source may allocate.
+// The estimate covers every pixel buffer the standard library decoders
+// allocate, not only the decoded image: a PNG counts 4 bytes per pixel, or 8
+// at 16 bits per channel, and twice that when Adam7-interlaced, so an 8-bit
+// non-interlaced PNG is limited to 2^28 pixels — the same bound the
+// Screenshot module applies to one capture; a JPEG counts its component
+// planes at their sampling, a progressive frame's coefficient buffers, the
+// converted image of an RGB or CMYK frame, and the upright copy a reoriented
+// source needs. Larger sources are rejected with a KindTooLarge error from
+// their declared headers, before any pixel memory is allocated, so a crafted
+// header cannot exhaust memory.
 const MaxDecodedBytes = 1 << 30
 
 // Kind classifies a decode failure so the source list can present the
@@ -72,7 +77,7 @@ const (
 	// KindCorrupt means the content is recognizably PNG or JPEG but is
 	// damaged, truncated, or empty.
 	KindCorrupt
-	// KindTooLarge means the declared dimensions would need more than
+	// KindTooLarge means decoding the declared header would need more than
 	// MaxDecodedBytes of pixel memory.
 	KindTooLarge
 	// KindCanceled means the context ended before decoding finished.
@@ -112,7 +117,8 @@ type Error struct {
 	// content was not recognized or could not be read.
 	Format Format
 	// Width and Height are the declared dimensions of a KindTooLarge
-	// source, in stored (pre-orientation) pixels; zero otherwise.
+	// source, upright after its EXIF orientation like Info's; zero
+	// otherwise.
 	Width, Height int
 	Err           error
 }
@@ -188,13 +194,24 @@ func Decode(ctx context.Context, path string) (*Image, error) {
 }
 
 var (
-	pngSignature  = []byte("\x89PNG\r\n\x1a\n")
-	jpegSignature = []byte{0xff, 0xd8, 0xff}
+	pngSignature = []byte("\x89PNG\r\n\x1a\n")
+	// jpegSignature is the SOI marker alone: the decoder accepts stray
+	// bytes between it and the first segment, and the standard library
+	// registers the JPEG format by these two bytes as well.
+	jpegSignature = []byte{0xff, markerSOI}
 )
 
 // readBufferSize is the read granularity, which is also how often a decode
 // observes cancellation.
 const readBufferSize = 64 << 10
+
+// header is what the scan before decoding learns: a JPEG's EXIF orientation
+// and frame, or a PNG's IHDR layout.
+type header struct {
+	orientation Orientation
+	jpeg        jpegFrame
+	png         pngLayout
+}
 
 func load(ctx context.Context, path string, keep bool) (info Info, pixels image.Image, err error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -217,8 +234,8 @@ func load(ctx context.Context, path string, keep bool) (info Info, pixels image.
 	// The standard library decoders are fuzzed, but a decoder panic on an
 	// unforeseen input must still be contained as this source's failure
 	// rather than taking down the batch (NFR-021). A runtime out-of-memory
-	// condition cannot be recovered, which is why the declared dimensions
-	// are bounded before any pixel memory is allocated.
+	// condition cannot be recovered, which is why the pixel memory decoding
+	// needs is bounded from the declared header before any is allocated.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			info, pixels = Info{}, nil
@@ -230,27 +247,44 @@ func load(ctx context.Context, path string, keep bool) (info Info, pixels image.
 	if err != nil {
 		return Info{}, nil, err
 	}
-	orientation := OrientationNormal
-	if format == FormatJPEG {
-		if err := source.rewind(); err != nil {
-			return Info{}, nil, source.classify(format, err)
-		}
-		orientation = readOrientation(bufio.NewReaderSize(source, readBufferSize))
-	}
-	if err := source.rewind(); err != nil {
+	// One buffer serves the header scan, the header parse, and the decode.
+	buffered := bufio.NewReaderSize(source, readBufferSize)
+	if err := source.restart(buffered); err != nil {
 		return Info{}, nil, source.classify(format, err)
 	}
-	config, err := decodeConfig(format, bufio.NewReaderSize(source, readBufferSize))
+	scanned := header{orientation: OrientationNormal}
+	switch format {
+	case FormatJPEG:
+		scanned.orientation, scanned.jpeg = scanJPEG(buffered)
+	case FormatPNG:
+		// The PNG decoder reports dimensions whose pixel count overflows its
+		// own arithmetic as an unsupported feature, so the declared size is
+		// checked before it reads the header.
+		if scanned.png = scanPNG(buffered); scanned.png.valid {
+			layout := scanned.png
+			if err := checkLimit(format, layout.width, layout.height, pngDecodeBytes(layout.width, layout.height, layout.deep, layout.interlaced)); err != nil {
+				return Info{}, nil, err
+			}
+		}
+	}
+	if err := source.restart(buffered); err != nil {
+		return Info{}, nil, source.classify(format, err)
+	}
+	config, err := decodeConfig(format, buffered)
 	if err != nil {
 		return Info{}, nil, source.classify(format, err)
 	}
-	if err := checkLimit(format, config); err != nil {
+	if config.Width <= 0 || config.Height <= 0 {
+		return Info{}, nil, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("invalid dimensions %d × %d", config.Width, config.Height)}
+	}
+	width, height := scanned.orientation.upright(config.Width, config.Height)
+	if err := checkLimit(format, width, height, decodeBytes(format, config, scanned)); err != nil {
 		return Info{}, nil, err
 	}
-	if err := source.rewind(); err != nil {
+	if err := source.restart(buffered); err != nil {
 		return Info{}, nil, source.classify(format, err)
 	}
-	decoded, err := decodeImage(format, bufio.NewReaderSize(source, readBufferSize))
+	decoded, err := decodeImage(format, buffered)
 	if err != nil {
 		return Info{}, nil, source.classify(format, err)
 	}
@@ -258,16 +292,15 @@ func load(ctx context.Context, path string, keep bool) (info Info, pixels image.
 	if bounds.Dx() != config.Width || bounds.Dy() != config.Height {
 		return Info{}, nil, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("decoded %d × %d pixels, but the header declares %d × %d", bounds.Dx(), bounds.Dy(), config.Width, config.Height)}
 	}
-	width, height := orientation.upright(config.Width, config.Height)
 	info = Info{
 		Format:      format,
 		Width:       width,
 		Height:      height,
-		Orientation: orientation,
+		Orientation: scanned.orientation,
 		HasAlpha:    format == FormatPNG && modelHasAlpha(decoded.ColorModel()),
 	}
 	if keep {
-		pixels = orient(decoded, orientation)
+		pixels = orient(decoded, scanned.orientation)
 	}
 	return info, pixels, nil
 }
@@ -309,29 +342,6 @@ func decodeImage(format Format, reader io.Reader) (image.Image, error) {
 		return png.Decode(reader)
 	}
 	return jpeg.Decode(reader)
-}
-
-// checkLimit rejects sources whose declared dimensions would need more than
-// MaxDecodedBytes of pixel memory.
-func checkLimit(format Format, config image.Config) error {
-	if config.Width <= 0 || config.Height <= 0 {
-		return &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("invalid dimensions %d × %d", config.Width, config.Height)}
-	}
-	perPixel := uint64(4)
-	switch config.ColorModel {
-	case color.RGBA64Model, color.NRGBA64Model, color.Gray16Model, color.Alpha16Model:
-		perPixel = 8
-	}
-	if uint64(config.Width)*uint64(config.Height)*perPixel > MaxDecodedBytes {
-		return &Error{
-			Kind:   KindTooLarge,
-			Format: format,
-			Width:  config.Width,
-			Height: config.Height,
-			Err:    fmt.Errorf("%d × %d pixels need more than the %d MiB decoding limit", config.Width, config.Height, MaxDecodedBytes>>20),
-		}
-	}
-	return nil
 }
 
 // modelHasAlpha reports whether PNG pixels decoded with this model carry an
@@ -383,6 +393,16 @@ func (s *sourceReader) rewind() error {
 		}
 		return err
 	}
+	return nil
+}
+
+// restart rewinds the file and discards what buffered holds, so the next
+// pass through buffered reads the file from its first byte.
+func (s *sourceReader) restart(buffered *bufio.Reader) error {
+	if err := s.rewind(); err != nil {
+		return err
+	}
+	buffered.Reset(s)
 	return nil
 }
 

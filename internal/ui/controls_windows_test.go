@@ -182,7 +182,9 @@ func newTestParent(t *testing.T) windows.Handle {
 
 // TestListBoxSetItemTextKeepsSelectionAndScroll pins that rewriting one row
 // in place — as background status updates do — preserves the selection of
-// that row and of the others, the caret, and the scroll position.
+// that row and of the others, the extended-selection anchor, the caret, and
+// the scroll position, including when the rewritten row is the anchor or the
+// caret itself.
 func TestListBoxSetItemTextKeepsSelectionAndScroll(t *testing.T) {
 	parent := newTestParent(t)
 	list, err := NewListBox(parent, 77)
@@ -195,11 +197,13 @@ func TestListBoxSetItemTextKeepsSelectionAndScroll(t *testing.T) {
 	}
 	list.SetSelected(3, true)
 	list.SetSelected(5, true)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetAnchorIndex, 3, 0)
 	procSendMessageW.Call(uintptr(list.Handle()), lbSetCaretIndex, 5, 0)
 	procSendMessageW.Call(uintptr(list.Handle()), lbSetTopIndex, 2, 0)
 
 	list.SetItemText(3, "selected row updated")
 	list.SetItemText(4, "unselected row updated")
+	list.SetItemText(5, "caret row updated")
 	list.SetItemText(99, "ignored")
 
 	if got := list.ItemText(3); got != "selected row updated" {
@@ -213,6 +217,9 @@ func TestListBoxSetItemTextKeepsSelectionAndScroll(t *testing.T) {
 	}
 	if got := list.SelectedIndices(); len(got) != 2 || got[0] != 3 || got[1] != 5 {
 		t.Fatalf("selection = %v, want [3 5]", got)
+	}
+	if anchor, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetAnchorIndex, 0, 0); anchor != 3 {
+		t.Fatalf("anchor = %d, want 3", anchor)
 	}
 	if caret, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetCaretIndex, 0, 0); caret != 5 {
 		t.Fatalf("caret = %d, want 5", caret)

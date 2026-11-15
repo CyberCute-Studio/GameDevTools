@@ -12,6 +12,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -248,7 +249,8 @@ func TestDamagedContentIsCorrupt(t *testing.T) {
 		{"partial-signature.png", pngSignature[:4], FormatPNG},
 		{"truncated.jpg", jpegData[:len(jpegData)/2], FormatJPEG},
 		{"header-only.jpg", jpegData[:20], FormatJPEG},
-		{"partial-signature.jpg", jpegSignature[:2], FormatJPEG},
+		{"partial-signature.jpg", jpegSignature[:1], FormatJPEG},
+		{"signature-only.jpg", jpegSignature, FormatJPEG},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -279,10 +281,17 @@ func TestUnsupportedJPEGFeature(t *testing.T) {
 // pngHeader builds a PNG signature and a valid IHDR chunk declaring the given
 // dimensions, with no image data: enough for DecodeConfig.
 func pngHeader(width, height uint32, bitDepth, colorType byte) []byte {
+	return pngHeaderInterlaced(width, height, bitDepth, colorType, false)
+}
+
+func pngHeaderInterlaced(width, height uint32, bitDepth, colorType byte, interlaced bool) []byte {
 	var ihdr [13]byte
 	binary.BigEndian.PutUint32(ihdr[0:4], width)
 	binary.BigEndian.PutUint32(ihdr[4:8], height)
 	ihdr[8], ihdr[9] = bitDepth, colorType
+	if interlaced {
+		ihdr[12] = 1
+	}
 	chunk := append([]byte("IHDR"), ihdr[:]...)
 	var buffer bytes.Buffer
 	buffer.Write(pngSignature)
@@ -293,8 +302,10 @@ func pngHeader(width, height uint32, bitDepth, colorType byte) []byte {
 }
 
 // TestOversizedSourcesAreRejectedBeforeDecoding pins the decompression-bomb
-// guard: declared dimensions above the memory limit are rejected from the
-// header alone, and 16-bit sources count double.
+// guard: headers whose decoding would allocate more than the memory limit
+// are rejected from the header alone, counting the decoder's working
+// buffers — 16-bit and interlaced PNG, a progressive JPEG's coefficients —
+// and reporting upright dimensions.
 func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -304,7 +315,17 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 	}{
 		{"huge.png", pngHeader(100000, 100000, 8, 6), FormatPNG, 100000, 100000},
 		{"deep.png", pngHeader(16384, 12000, 16, 6), FormatPNG, 16384, 12000},
-		{"huge.jpg", jpegWithDimensions(t, 65000, 65000), FormatJPEG, 65000, 65000},
+		{"interlaced.png", pngHeaderInterlaced(16384, 12000, 8, 6, true), FormatPNG, 16384, 12000},
+		// The PNG decoder itself reports these as an unsupported feature,
+		// a dimension overflow.
+		{"overflow.png", pngHeader(math.MaxInt32, math.MaxInt32, 8, 6), FormatPNG, math.MaxInt32, math.MaxInt32},
+		{"huge.jpg", jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 65000, 65000), FormatJPEG, 65000, 65000},
+		// 2^28 pixels fit 4 bytes each, but the decoder allocates 7.5 bytes
+		// per pixel for a progressive 4:2:0 frame's planes and coefficients.
+		{"progressive.jpg", jpegWithDimensions(t, readFixture(t, "progressive.jpeg"), 16384, 16384), FormatJPEG, 16384, 16384},
+		{"oriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 65000, 30000), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 30000, 65000},
+		// The 256 MiB gray plane fits, but not with the upright copy.
+		{"reoriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 16384, 16384), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 16384, 16384},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,14 +343,17 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 	requireKind(t, err, KindCorrupt, FormatPNG)
 }
 
-// jpegWithDimensions rewrites the SOF0 frame dimensions of a small baseline
-// JPEG, leaving its image data unchanged.
-func jpegWithDimensions(t *testing.T, width, height uint16) []byte {
+// jpegWithDimensions rewrites the frame dimensions of a small baseline or
+// progressive JPEG, leaving its image data unchanged.
+func jpegWithDimensions(t *testing.T, source []byte, width, height uint16) []byte {
 	t.Helper()
-	content := encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8)))
-	index := bytes.Index(content, []byte{0xff, 0xc0})
+	content := append([]byte(nil), source...)
+	index := bytes.Index(content, []byte{0xff, markerSOF0})
 	if index < 0 {
-		t.Fatal("baseline SOF0 marker not found")
+		index = bytes.Index(content, []byte{0xff, markerSOF2})
+	}
+	if index < 0 {
+		t.Fatal("SOF0 or SOF2 marker not found")
 	}
 	// Marker (2), length (2), precision (1), height (2), width (2).
 	binary.BigEndian.PutUint16(content[index+5:], height)

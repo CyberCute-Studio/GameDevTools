@@ -200,7 +200,6 @@ const (
 	SourceCorruptDetail             = "The %s data is damaged or incomplete and cannot be decoded (%v)."
 	SourceEmptyDetail               = "The file is empty."
 	SourceTooLargeDetail            = "At %s this image needs more than the %d MiB of memory one source may use to decode."
-	SourceCheckCanceledDetail       = "The content check was cancelled before it finished. Remove the item and add it again."
 
 	ImageFileFilterLabel    = "PNG and JPEG images"
 	ImagePickerTitle        = "Choose images to resize"

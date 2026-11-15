@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -281,6 +283,8 @@ func newGatedInspect() *gatedInspect {
 	return &gatedInspect{started: make(chan string, 16), release: make(chan struct{}, 16), canceled: make(chan string, 16)}
 }
 
+// inspect reports a released check as Ready, or as damaged when the file
+// name says so.
 func (g *gatedInspect) inspect(ctx context.Context, path string) (decode.Info, error) {
 	g.started <- path
 	select {
@@ -288,6 +292,9 @@ func (g *gatedInspect) inspect(ctx context.Context, path string) (decode.Info, e
 		g.canceled <- path
 		return decode.Info{}, &decode.Error{Kind: decode.KindCanceled, Err: ctx.Err()}
 	case <-g.release:
+		if strings.Contains(filepath.Base(path), "damaged") {
+			return decode.Info{}, &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}
+		}
 		return decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3, Orientation: decode.OrientationNormal}, nil
 	}
 }
@@ -401,8 +408,135 @@ func TestNativeViewRemovingCheckingItemsAbandonsTheirChecks(t *testing.T) {
 	}
 }
 
+// TestNativeViewBatchesCheckResults pins that checks finishing faster than
+// the GUI thread drains them share one dispatcher post, so a large drop can
+// neither flood the GUI thread's message queue nor lose results to a full
+// one.
+func TestNativeViewBatchesCheckResults(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	directory := t.TempDir()
+	paths := make([]string, 0, 5)
+	for _, name := range []string{"a.png", "b.png", "c.png", "d.png", "e.png"} {
+		paths = append(paths, writeViewSource(t, directory, name))
+	}
+	view.NativeDropFiles(paths)
+	// The worker exits once every check has been delivered.
+	view.inspector.Wait()
+	if posted := len(dispatcher.tasks); posted != 1 {
+		t.Fatalf("%d drain tasks posted for 5 undrained results, want 1", posted)
+	}
+	dispatcher.runNext(t)
+	if view.inventory.Checking() != 0 {
+		t.Fatalf("%d items still checking after one drain", view.inventory.Checking())
+	}
+	if got := view.status.Text(); got != "Success: Added 5 image(s). Checked 5 image(s): 5 ready." {
+		t.Fatalf("status after checking = %q", got)
+	}
+}
+
+// failingDispatcher refuses the first fails posts, then queues like
+// queuedDispatcher.
+type failingDispatcher struct {
+	queuedDispatcher
+	mu    sync.Mutex
+	fails int
+}
+
+func (d *failingDispatcher) Post(task func()) error {
+	d.mu.Lock()
+	refuse := d.fails > 0
+	if refuse {
+		d.fails--
+	}
+	d.mu.Unlock()
+	if refuse {
+		return errors.New("PostMessageW: not enough quota")
+	}
+	return d.queuedDispatcher.Post(task)
+}
+
+// TestNativeViewKeepsResultsWhenAPostFails pins that a refused post loses
+// nothing: the result waits for the next post instead of leaving its item
+// Checking forever.
+func TestNativeViewKeepsResultsWhenAPostFails(t *testing.T) {
+	view, _ := newSourcesTestView(t)
+	dispatcher := &failingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 16)}, fails: 1}
+	view.NativeDispatcher(dispatcher)
+	gate := useGatedInspector(view)
+	directory := t.TempDir()
+	view.NativeDropFiles([]string{writeViewSource(t, directory, "one.png"), writeViewSource(t, directory, "two.png")})
+
+	gate.waitFor(t, gate.started)
+	gate.release <- struct{}{}
+	gate.waitFor(t, gate.started)
+	if posted := len(dispatcher.tasks); posted != 0 {
+		t.Fatalf("%d tasks queued after the refused post, want 0", posted)
+	}
+	gate.release <- struct{}{}
+	dispatcher.runNext(t)
+	if got := listContents(view.list); got[0] != "one.png — 4 × 3 px — Ready" || got[1] != "two.png — 4 × 3 px — Ready" {
+		t.Fatalf("rows after the retried post = %v", got)
+	}
+	if view.inventory.Checking() != 0 {
+		t.Fatalf("%d items still checking", view.inventory.Checking())
+	}
+}
+
+// TestNativeViewCheckSummaryKeepsOtherNotices pins that the finishing
+// summary never hides a notice raised after the add, such as a failed
+// settings save.
+func TestNativeViewCheckSummaryKeepsOtherNotices(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	gate := useGatedInspector(view)
+	view.NativeDropFiles([]string{writeViewSource(t, t.TempDir(), "one.png")})
+	gate.waitFor(t, gate.started)
+
+	view.presentResult(fmt.Errorf("%w: the disk is full", ErrPersistence), "")
+	warning := view.status.Text()
+	gate.release <- struct{}{}
+	settle(t, view, dispatcher)
+	if got := view.status.Text(); got != warning {
+		t.Fatalf("status after checking = %q, want the save warning %q kept", got, warning)
+	}
+	if got := view.list.ItemText(0); got != "one.png — 4 × 3 px — Ready" {
+		t.Fatalf("row after checking = %q", got)
+	}
+}
+
+// TestNativeViewCheckSummaryCountsListedItems pins that items removed after
+// their check resolved drop out of the summary, so it never points at
+// failures that are no longer listed.
+func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	gate := useGatedInspector(view)
+	directory := t.TempDir()
+	view.NativeDropFiles([]string{
+		writeViewSource(t, directory, "one.png"),
+		writeViewSource(t, directory, "damaged.png"),
+		writeViewSource(t, directory, "three.png"),
+	})
+	for range 2 {
+		gate.waitFor(t, gate.started)
+		gate.release <- struct{}{}
+		dispatcher.runNext(t)
+	}
+	if got := view.list.ItemText(1); got != "damaged.png — Damaged or incomplete" {
+		t.Fatalf("damaged row = %q", got)
+	}
+	view.list.SetSelected(1, true)
+	view.NativeCommand(sourcesCommandBase+sourceListCommand, ui.NotificationListSelChange)
+	view.NativeCommand(sourcesCommandBase+removeSelectedCommand, 0)
+
+	gate.waitFor(t, gate.started)
+	gate.release <- struct{}{}
+	settle(t, view, dispatcher)
+	if got := view.status.Text(); got != "Success: Added 3 image(s). Checked 2 image(s): 2 ready." {
+		t.Fatalf("status after checking = %q", got)
+	}
+}
+
 // TestNativeViewShutdownStopsInFlightChecks pins that closing the window
-// cancels an in-flight check, so NativeShutdown never waits on a decode.
+// cancels an in-flight check, so its worker stops at the next read.
 func TestNativeViewShutdownStopsInFlightChecks(t *testing.T) {
 	view, _ := newSourcesTestView(t)
 	gate := useGatedInspector(view)

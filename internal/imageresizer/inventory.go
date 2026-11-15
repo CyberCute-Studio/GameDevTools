@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
@@ -198,35 +199,39 @@ func (v *Inventory) Add(paths []string) AddSummary {
 // returns that item's index. A result whose item was removed, or that was
 // already resolved, changes nothing and reports ok == false.
 func (v *Inventory) Resolve(result InspectionResult) (index int, ok bool) {
-	for index := range v.items {
-		item := &v.items[index]
-		if item.ID != result.ID {
-			continue
-		}
-		if item.Status != StatusChecking {
-			return index, false
-		}
-		v.checking--
-		if result.Err != nil {
-			item.Status, item.Detail = failureStatus(result.Err)
-			return index, true
-		}
-		item.Status, item.Detail, item.Info = StatusReady, "", result.Info
+	// Identifiers are allocated in increasing order as items are appended,
+	// and removal keeps the order, so the items stay sorted by ID.
+	index = sort.Search(len(v.items), func(candidate int) bool {
+		return v.items[candidate].ID >= result.ID
+	})
+	if index == len(v.items) || v.items[index].ID != result.ID {
+		return -1, false
+	}
+	item := &v.items[index]
+	if item.Status != StatusChecking {
+		return index, false
+	}
+	v.checking--
+	if result.Err != nil {
+		item.Status, item.Detail = failureStatus(result.Err)
 		return index, true
 	}
-	return -1, false
+	item.Status, item.Detail, item.Info = StatusReady, "", result.Info
+	return index, true
 }
 
 // failureStatus maps a typed decode failure to the list status and its
 // explanation, so damaged, unsupported, unreadable, and oversized content
-// are each identified distinctly (RSZ-004).
+// are each identified distinctly (RSZ-004). The Inspector never delivers a
+// cancelled check, so KindCanceled only shares the read-failure mapping to
+// keep every kind accounted for.
 func failureStatus(err error) (SourceStatus, string) {
 	var decodeErr *decode.Error
 	if !errors.As(err, &decodeErr) {
 		return StatusCorrupt, fmt.Sprintf(ui.SourceCorruptDetail, ui.SourceFormatUnknown, err)
 	}
 	switch decodeErr.Kind {
-	case decode.KindRead:
+	case decode.KindRead, decode.KindCanceled:
 		return StatusInaccessible, decodeErr.Err.Error()
 	case decode.KindUnsupported:
 		if decodeErr.Format == decode.FormatUnknown {
@@ -235,8 +240,6 @@ func failureStatus(err error) (SourceStatus, string) {
 		return StatusUnsupported, fmt.Sprintf(ui.SourceFeatureUnsupportedDetail, formatLabel(decodeErr.Format), decodeErr.Err)
 	case decode.KindTooLarge:
 		return StatusTooLarge, fmt.Sprintf(ui.SourceTooLargeDetail, ui.FormatDimensions(decodeErr.Width, decodeErr.Height), decode.MaxDecodedBytes>>20)
-	case decode.KindCanceled:
-		return StatusInaccessible, ui.SourceCheckCanceledDetail
 	}
 	if errors.Is(decodeErr, decode.ErrEmpty) {
 		return StatusCorrupt, ui.SourceEmptyDetail

@@ -271,7 +271,8 @@ func TestPNGIsNeverReoriented(t *testing.T) {
 }
 
 func scan(content []byte) Orientation {
-	return readOrientation(bufio.NewReader(bytes.NewReader(content)))
+	orientation, _ := scanJPEG(bufio.NewReader(bytes.NewReader(content)))
+	return orientation
 }
 
 func TestReadOrientationScansSegments(t *testing.T) {
@@ -290,6 +291,12 @@ func TestReadOrientationScansSegments(t *testing.T) {
 		{"after JFIF", withSegments(plain, jfif, rotate), OrientationRotate90},
 		{"after XMP", withSegments(plain, xmp, rotate), OrientationRotate90},
 		{"fill bytes", withSegments(plain, fill), OrientationRotate90},
+		// The standard library decoder skips stray bytes between segments,
+		// so the scan must too.
+		{"padding after SOI", withSegments(plain, []byte{0, 0, 0}, rotate), OrientationRotate90},
+		{"padding between segments", withSegments(plain, jfif, []byte{0x00, 0x12}, rotate), OrientationRotate90},
+		{"escaped 0xFF between segments", withSegments(plain, jfif, []byte{0xff, 0x00}, rotate), OrientationRotate90},
+		{"EXIF after the frame", beforeScan(t, plain, rotate), OrientationRotate90},
 		{"LONG type", withSegments(plain, exifSegment(binary.LittleEndian, 3, tiffTypeLong)), OrientationRotate180},
 		{"first EXIF wins", withSegments(plain, exifSegment(binary.BigEndian, 8, tiffTypeShort), rotate), OrientationRotate270},
 		{"zero value", withSegments(plain, exifSegment(binary.BigEndian, 0, tiffTypeShort)), OrientationNormal},
@@ -302,6 +309,55 @@ func TestReadOrientationScansSegments(t *testing.T) {
 	for _, tc := range cases {
 		if got := scan(tc.content); got != tc.want {
 			t.Fatalf("%s: orientation %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// beforeScan inserts a segment directly before a JPEG's first SOS marker,
+// after its frame header.
+func beforeScan(t *testing.T, jpegData, segment []byte) []byte {
+	t.Helper()
+	index := bytes.Index(jpegData, []byte{0xff, markerSOS})
+	if index < 0 {
+		t.Fatal("SOS marker not found")
+	}
+	result := append([]byte(nil), jpegData[:index]...)
+	result = append(result, segment...)
+	return append(result, jpegData[index:]...)
+}
+
+// TestPaddedEXIFStillOrients pins that a file with stray bytes between its
+// header segments — which the decoder accepts — keeps its orientation end
+// to end, rather than decoding sideways.
+func TestPaddedEXIFStillOrients(t *testing.T) {
+	rotate := exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)
+	content := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 40, 24))), []byte{0, 0}, rotate)
+	info, err := Inspect(context.Background(), writeFile(t, "padded.jpg", content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Orientation != OrientationRotate90 || info.Width != 24 || info.Height != 40 {
+		t.Fatalf("Inspect = %+v, want the upright 24 × 40 of orientation 6", info)
+	}
+}
+
+// TestScanJPEGReadsTheFrame pins the frame facts the memory estimate uses:
+// the coding process and the sampling of each fixture.
+func TestScanJPEGReadsTheFrame(t *testing.T) {
+	cases := []struct {
+		name    string
+		content []byte
+		want    jpegFrame
+	}{
+		{"gray", encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), jpegFrame{valid: true, mcuWidth: 8, mcuHeight: 8, samples: 1}},
+		{"baseline", readFixture(t, "baseline.jpeg"), jpegFrame{valid: true, mcuWidth: 16, mcuHeight: 16, samples: 6}},
+		{"progressive", readFixture(t, "progressive.jpeg"), jpegFrame{valid: true, progressive: true, mcuWidth: 16, mcuHeight: 16, samples: 6}},
+		{"cmyk", readFixture(t, "cmyk.jpeg"), jpegFrame{valid: true, mcuWidth: 8, mcuHeight: 8, samples: 4}},
+		{"no frame", []byte{0xff, markerSOI, 0xff, markerEOI}, jpegFrame{}},
+	}
+	for _, tc := range cases {
+		if _, frame := scanJPEG(bufio.NewReader(bytes.NewReader(tc.content))); frame != tc.want {
+			t.Fatalf("%s: frame = %+v, want %+v", tc.name, frame, tc.want)
 		}
 	}
 }
