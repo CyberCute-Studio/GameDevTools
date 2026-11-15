@@ -80,6 +80,7 @@ const (
 	swShowNoActivate = 4
 
 	swpNoSize     = 0x0001
+	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
 
@@ -270,13 +271,18 @@ type dragState struct {
 // live selection state.
 type windowsSession struct {
 	mode          Mode
+	monitor       *display.Monitor
 	bounds        display.Rect
 	overlay       windows.Handle
 	toolbar       windows.Handle
 	message       *ui.Label
+	widthLabel    *ui.Label
+	heightLabel   *ui.Label
 	widthEdit     *ui.Control
 	heightEdit    *ui.Control
 	position      *ui.Label
+	capture       *ui.Button
+	cancel        *ui.Button
 	captureButton windows.Handle
 
 	onSelection func(display.Rect)
@@ -405,6 +411,7 @@ func createNative(request CreateRequest) (NativeSession, error) {
 	}
 	session := &windowsSession{
 		mode:        request.Mode,
+		monitor:     request.Monitor,
 		bounds:      request.Bounds,
 		onSelection: request.OnSelection,
 		onCapture:   request.OnCapture,
@@ -572,9 +579,6 @@ func createDIB(memory uintptr, width, height int32) (uintptr, unsafe.Pointer, er
 }
 
 func (s *windowsSession) createToolbar(request CreateRequest) error {
-	scale := func(value int32) int32 {
-		return display.LogicalToPhysical(value, s.dpi)
-	}
 	width, height := s.toolbarSize.Width, s.toolbarSize.Height
 	x, y := toolbarPlacement(request.Bounds, s.anchor, s.selection, width, height, s.margin)
 	toolbar, _, err := procCreateWindowExW.Call(
@@ -595,7 +599,6 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	if err != nil {
 		return err
 	}
-	s.message = message
 	widthLabel, err := ui.NewMnemonicLabel(s.toolbar, ui.SelectionWidthLabel)
 	if err != nil {
 		return err
@@ -627,52 +630,79 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	if err != nil {
 		return err
 	}
-	font := windows.Handle(request.Font)
-	if font != 0 {
-		labels := []*ui.Label{message, widthLabel, heightLabel}
-		if s.position != nil {
-			labels = append(labels, s.position)
-		}
-		for _, control := range labels {
-			control.SetFont(font)
-		}
-		widthEdit.SetFont(font)
-		heightEdit.SetFont(font)
-		captureButton.SetFont(font)
-		cancelButton.SetFont(font)
-	}
 	// The dimension fields are only meaningful with a selection on screen;
 	// Free Rectangle sessions start without one, Preset Rectangle sessions
 	// with the exact preset frame.
 	enabled := !s.selection.Empty()
 	widthEdit.Enable(enabled)
 	heightEdit.Enable(enabled)
+	s.message = message
+	s.widthLabel = widthLabel
+	s.heightLabel = heightLabel
 	s.widthEdit = widthEdit
 	s.heightEdit = heightEdit
+	s.capture = captureButton
+	s.cancel = cancelButton
 
+	if request.Font != 0 {
+		s.SetFont(request.Font)
+	}
+	s.layoutToolbarControls()
+	s.captureButton = captureButton.Handle()
+	s.syncDimensions()
+	s.syncPosition()
+	return nil
+}
+
+// SetFont applies the shell's body font to every toolbar control. It runs at
+// creation and again when the shell recreates its fonts for a DPI change:
+// the old handle is destroyed in that recreation, so a control left holding
+// it would paint with a fallback font at the wrong size.
+func (s *windowsSession) SetFont(font uintptr) {
+	if s.toolbar == 0 {
+		return
+	}
+	handle := windows.Handle(font)
+	labels := []*ui.Label{s.message, s.widthLabel, s.heightLabel}
+	if s.position != nil {
+		labels = append(labels, s.position)
+	}
+	for _, control := range labels {
+		control.SetFont(handle)
+	}
+	s.widthEdit.SetFont(handle)
+	s.heightEdit.SetFont(handle)
+	s.capture.SetFont(handle)
+	s.cancel.SetFont(handle)
+}
+
+// layoutToolbarControls positions the toolbar's controls for the session's
+// current DPI-scaled measurements. It runs at creation and again when a
+// display change re-scales the toolbar to a new cursor-display DPI.
+func (s *windowsSession) layoutToolbarControls() {
+	scale := func(value int32) int32 {
+		return display.LogicalToPhysical(value, s.dpi)
+	}
+	width := s.toolbarSize.Width
 	inset := scale(toolbarLogicalInset)
-	message.Move(inset, scale(6), width-2*inset, scale(46))
+	s.message.Move(inset, scale(6), width-2*inset, scale(46))
 	rowY := scale(58)
 	labelWidth, editWidth := scale(48), scale(64)
-	widthLabel.Move(inset, rowY+scale(3), labelWidth, scale(20))
-	widthEdit.Move(inset+labelWidth, rowY, editWidth, scale(24))
+	s.widthLabel.Move(inset, rowY+scale(3), labelWidth, scale(20))
+	s.widthEdit.Move(inset+labelWidth, rowY, editWidth, scale(24))
 	heightX := inset + labelWidth + editWidth + inset
-	heightLabel.Move(heightX, rowY+scale(3), labelWidth, scale(20))
-	heightEdit.Move(heightX+labelWidth, rowY, editWidth, scale(24))
+	s.heightLabel.Move(heightX, rowY+scale(3), labelWidth, scale(20))
+	s.heightEdit.Move(heightX+labelWidth, rowY, editWidth, scale(24))
 	buttonWidth, buttonHeight := scale(88), scale(28)
-	cancelButton.Move(width-inset-buttonWidth, rowY-scale(2), buttonWidth, buttonHeight)
+	s.cancel.Move(width-inset-buttonWidth, rowY-scale(2), buttonWidth, buttonHeight)
 	captureX := width - inset - 2*buttonWidth - scale(8)
-	captureButton.Move(captureX, rowY-scale(2), buttonWidth, buttonHeight)
+	s.capture.Move(captureX, rowY-scale(2), buttonWidth, buttonHeight)
 	if s.position != nil {
 		// The X/Y readout (SCR-028) takes the space between the dimension
 		// fields and the Capture button.
 		positionX := heightX + labelWidth + editWidth + scale(8)
 		s.position.Move(positionX, rowY+scale(3), captureX-positionX-scale(8), scale(20))
 	}
-	s.captureButton = captureButton.Handle()
-	s.syncDimensions()
-	s.syncPosition()
-	return nil
 }
 
 // instructions returns the toolbar's guidance text for the session mode.
@@ -750,6 +780,89 @@ func (s *windowsSession) Attention() {
 		return
 	}
 	procSetForegroundWindow.Call(uintptr(s.toolbar))
+}
+
+// DisplayChanged revalidates the session against a changed virtual desktop
+// (SCR-054). The selection keeps its exact dimensions whenever they still
+// fit the new desktop — the Preset Rectangle frame's dimensions never change
+// (SCR-020) — and moves back inside when its coordinates no longer fit,
+// while the Free Rectangle tint is resized to cover the new desktop exactly.
+// A selection whose dimensions exceed the new desktop cannot be kept, and
+// false tells the controller to end the session with an explanation
+// (AC-S12); false is also returned when the new surfaces cannot be
+// allocated, because a session that cannot repaint itself to match the
+// desktop must not stay up intercepting input (SCR-052). The revalidated
+// selection is reported through OnSelection, like every selection change. A
+// notification whose physical topology, cursor-display scaling, and anchor
+// work area all match the session's current measurements changes nothing the
+// surfaces show, so it is answered without re-rendering.
+func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
+	selection, ok := revalidatedSelection(s.selection, bounds)
+	if !ok {
+		return false
+	}
+	// A topology change can move the cursor display and change its scaling,
+	// so the toolbar anchor and the DPI-derived measurements are re-resolved
+	// rather than carried over from the old layout.
+	dpi := uint32(display.ReferenceDPI)
+	anchor := bounds
+	if s.monitor != nil {
+		if item, err := s.monitor.CursorDisplay(); err == nil {
+			dpi = item.DPIX
+			anchor = item.WorkArea
+		}
+	}
+	if bounds == s.bounds && dpi == s.dpi && anchor == s.anchor {
+		return true
+	}
+	// Pointer coordinates from a drag in progress belong to the old desktop;
+	// end the interaction rather than apply them to the new layout.
+	s.drag = dragState{}
+	procReleaseCapture.Call()
+	s.configure(dpi, anchor)
+	s.bounds = bounds
+	s.selection = selection
+	if s.mode == ModePresetRectangle {
+		s.frameOrigin = display.Point{X: selection.Left - s.border, Y: selection.Top - s.border}
+		width, height := selection.Width()+2*s.border, selection.Height()+2*s.border
+		if width != s.pixelWidth || height != s.pixelHeight {
+			if err := s.resizeSurface(width, height); err != nil {
+				return false
+			}
+		}
+		// renderFrame's present repositions and resizes the layered frame
+		// window to the revalidated selection.
+		if err := s.renderFrame(); err != nil {
+			return false
+		}
+	} else {
+		if width, height := bounds.Width(), bounds.Height(); width != s.pixelWidth || height != s.pixelHeight {
+			if err := s.resizeSurface(width, height); err != nil {
+				return false
+			}
+		}
+		// The whole desktop is repainted — re-dimmed with the revalidated
+		// selection drawn into it — and uploaded in one pass that also
+		// repositions the window to the new desktop origin.
+		full := display.Rect{Right: s.pixelWidth, Bottom: s.pixelHeight}
+		s.paintSelection(full)
+		if err := s.present(full); err != nil {
+			return false
+		}
+	}
+	// The toolbar's own window still has the old DPI's size; resize it and
+	// re-lay out its controls before placing it near the selection again.
+	procSetWindowPos.Call(uintptr(s.toolbar), 0,
+		0, 0, uintptr(s.toolbarSize.Width), uintptr(s.toolbarSize.Height),
+		swpNoZOrder|swpNoActivate|swpNoMove)
+	s.layoutToolbarControls()
+	s.syncDimensions()
+	s.syncPosition()
+	s.placeToolbar()
+	if s.onSelection != nil {
+		s.onSelection(selection)
+	}
+	return true
 }
 
 // owns reports whether hwnd is one of the session's windows or a toolbar
@@ -1036,6 +1149,16 @@ func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 		return nil
 	}
 	local := s.toLocal(dirty)
+	s.paintSelection(local)
+	return s.present(local)
+}
+
+// paintSelection paints one band of the backing bitmap, in client
+// coordinates: the band is re-dimmed and the selection's interior, border,
+// and handles are drawn into it. The band must cover the selection's visual
+// bounds; it may be larger, as when the whole desktop is repainted after a
+// display change.
+func (s *windowsSession) paintSelection(local display.Rect) {
 	s.fillLocal(local, dimPixel)
 	if !s.selection.Empty() {
 		sel := s.toLocal(s.selection)
@@ -1047,7 +1170,6 @@ func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 			s.drawHandles(sel)
 		}
 	}
-	return s.present(local)
 }
 
 // drawHandles paints the eight resize handles as white squares with a dark

@@ -14,13 +14,35 @@ var testDesktop = display.Rect{Left: -1920, Top: 0, Right: 1920, Bottom: 1080}
 type fakeNative struct {
 	closed      int
 	ready       []bool
+	fonts       []uintptr
 	onSelection func(display.Rect)
 	onCapture   func()
 	onCancel    func()
+	// displayChanged stubs the session's display-change revalidation; nil
+	// means the session survives any topology change untouched.
+	displayChanged func(bounds display.Rect) bool
 }
 
 func (f *fakeNative) Close()                       { f.closed++ }
 func (f *fakeNative) SetSelectionReady(ready bool) { f.ready = append(f.ready, ready) }
+func (f *fakeNative) SetFont(font uintptr)         { f.fonts = append(f.fonts, font) }
+
+func (f *fakeNative) DisplayChanged(bounds display.Rect) bool {
+	if f.displayChanged == nil {
+		return true
+	}
+	return f.displayChanged(bounds)
+}
+
+// plainNative is a session surface without display-change support, so the
+// controller must end its session rather than leave it covering a desktop
+// it no longer matches (SCR-054).
+type plainNative struct {
+	closed int
+}
+
+func (p *plainNative) Close()                 { p.closed++ }
+func (p *plainNative) SetSelectionReady(bool) {}
 
 // sessionLog records the order of hide, restore, create, and close calls so
 // tests can assert the hide-before-overlay and close-before-restore
@@ -401,4 +423,236 @@ func TestAttentionForwardsToNativeSession(t *testing.T) {
 	}
 	plain.Attention()
 	plain.Cancel()
+}
+
+// TestDisplayChangeKeepsFittingSession covers the SCR-054 happy path: the
+// topology changed but the session's surface revalidated itself, so the
+// session survives with its selection re-reported and the controller's
+// bounds updated. A notification whose physical topology is unchanged is
+// still forwarded to the native surface, which re-resolves scaling and
+// work-area measurements the controller cannot see.
+func TestDisplayChangeKeepsFittingSession(t *testing.T) {
+	controller, fixture := newFixtureController()
+	lost := 0
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
+		OnSessionLost: func(string) { lost++ },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controller.SetSelection(display.Rect{Left: 10, Top: 10, Right: 810, Bottom: 610})
+
+	// An unchanged desktop still reaches the native surface; the surface
+	// answers without re-reporting the selection, and the session is
+	// untouched.
+	forwarded := 0
+	fixture.native.displayChanged = func(bounds display.Rect) bool {
+		forwarded++
+		if bounds != testDesktop {
+			t.Errorf("DisplayChanged bounds = %v, want the unchanged %v", bounds, testDesktop)
+		}
+		return true
+	}
+	controller.DisplayChange()
+	if forwarded != 1 {
+		t.Fatalf("DisplayChanged calls for an unchanged topology = %d, want 1", forwarded)
+	}
+	if len(fixture.native.ready) != 1 {
+		t.Fatalf("SetSelectionReady calls after an unchanged topology = %v, want no re-report", fixture.native.ready)
+	}
+	if len(fixture.log) != 2 {
+		t.Fatalf("an unchanged topology touched the main window: %v", fixture.log)
+	}
+
+	shrunken := display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1080}
+	controller.DesktopBounds = func() (display.Rect, error) { return shrunken, nil }
+	var gotBounds display.Rect
+	fixture.native.displayChanged = func(bounds display.Rect) bool {
+		gotBounds = bounds
+		// The native session re-reports the revalidated selection, clamped
+		// inside the shrunken desktop, exactly like the production surface.
+		fixture.native.onSelection(display.Rect{Left: 10, Top: 10, Right: 810, Bottom: 610})
+		return true
+	}
+	controller.DisplayChange()
+
+	if gotBounds != shrunken {
+		t.Fatalf("DisplayChanged bounds = %v, want %v", gotBounds, shrunken)
+	}
+	if !controller.Active() {
+		t.Fatal("a fitting session was ended by a display change")
+	}
+	if lost != 0 {
+		t.Fatalf("OnSessionLost fired %d times for a kept session", lost)
+	}
+	if len(fixture.native.ready) != 2 || !fixture.native.ready[1] {
+		t.Fatalf("SetSelectionReady calls = %v, want the revalidated selection armed", fixture.native.ready)
+	}
+	if len(fixture.log) != 2 {
+		t.Fatalf("a kept session touched the main window: %v", fixture.log)
+	}
+}
+
+// TestDisplayChangeEndsSessionThatCannotFit covers AC-S12's recovery path:
+// the selection no longer fits the connected displays, so the session ends
+// with an explanation and the main window is restored — no invisible
+// input-capturing surface remains (SCR-052).
+func TestDisplayChangeEndsSessionThatCannotFit(t *testing.T) {
+	controller, fixture := newFixtureController()
+	cancelled := 0
+	var reason string
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
+		OnCancel:      func() { cancelled++ },
+		OnSessionLost: func(got string) { reason = got },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controller.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{Right: 640, Bottom: 480}, nil
+	}
+	fixture.native.displayChanged = func(display.Rect) bool { return false }
+
+	controller.DisplayChange()
+
+	if controller.Active() {
+		t.Fatal("session survived a display change it could not fit")
+	}
+	if fixture.native.closed != 1 {
+		t.Fatalf("native Close calls = %d, want 1", fixture.native.closed)
+	}
+	if !reflect.DeepEqual(fixture.log, []string{"hide", "create", "restore"}) {
+		t.Fatalf("call order after a lost session = %v, want [hide create restore]", fixture.log)
+	}
+	if reason == "" || cancelled != 0 {
+		t.Fatalf("session loss reported as cancel=%d reason=%q, want OnSessionLost only", cancelled, reason)
+	}
+	// A repeated notification finds no session and changes nothing.
+	controller.DisplayChange()
+	if fixture.native.closed != 1 || len(fixture.log) != 3 {
+		t.Fatal("a repeated display change touched the ended session")
+	}
+}
+
+// TestDisplayChangeEndsSessionWhenTopologyUnreadable covers the case where
+// the new layout cannot even be enumerated: the session cannot prove its
+// surface matches the desktop, so it ends rather than guess (SCR-052).
+func TestDisplayChangeEndsSessionWhenTopologyUnreadable(t *testing.T) {
+	controller, fixture := newFixtureController()
+	var reason string
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
+		OnSessionLost: func(got string) { reason = got },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controller.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{}, errors.New("enumeration failed")
+	}
+
+	controller.DisplayChange()
+
+	if controller.Active() {
+		t.Fatal("session survived an unreadable topology")
+	}
+	if reason == "" {
+		t.Fatal("session loss was not explained")
+	}
+	if !reflect.DeepEqual(fixture.log, []string{"hide", "create", "restore"}) {
+		t.Fatalf("call order after a lost session = %v", fixture.log)
+	}
+}
+
+// TestDisplayChangeEndsUnsupportedSession pins the fallback for a native
+// surface without display-change support: leaving it up after the topology
+// moved would mean an overlay sized for a desktop that no longer exists. An
+// unchanged topology leaves it alone, because its surface still matches the
+// desktop.
+func TestDisplayChangeEndsUnsupportedSession(t *testing.T) {
+	controller, fixture := newFixtureController()
+	plain := &plainNative{}
+	controller.Create = func(CreateRequest) (NativeSession, error) {
+		fixture.log = append(fixture.log, "create")
+		return plain, nil
+	}
+	lost := 0
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
+		OnSessionLost: func(string) { lost++ },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	controller.DisplayChange()
+	if !controller.Active() || plain.closed != 0 || lost != 0 {
+		t.Fatalf("an unchanged topology disturbed an unsupported session: active=%v closed=%d lost=%d", controller.Active(), plain.closed, lost)
+	}
+
+	controller.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{Right: 640, Bottom: 480}, nil
+	}
+
+	controller.DisplayChange()
+
+	if controller.Active() || plain.closed != 1 || lost != 1 {
+		t.Fatalf("unsupported session: active=%v closed=%d lost=%d", controller.Active(), plain.closed, lost)
+	}
+	if !reflect.DeepEqual(fixture.log, []string{"hide", "create", "restore"}) {
+		t.Fatalf("call order after a lost session = %v", fixture.log)
+	}
+}
+
+// TestDisplayChangeSessionLostFallsBackToOnCancel keeps sessions without an
+// OnSessionLost handler informed through OnCancel, so a display-change
+// ending is never silent.
+func TestDisplayChangeSessionLostFallsBackToOnCancel(t *testing.T) {
+	controller, fixture := newFixtureController()
+	cancelled := 0
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
+		OnCancel: func() { cancelled++ },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	controller.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{Right: 640, Bottom: 480}, nil
+	}
+	fixture.native.displayChanged = func(display.Rect) bool { return false }
+
+	controller.DisplayChange()
+
+	if cancelled != 1 {
+		t.Fatalf("OnCancel calls = %d, want 1 as the OnSessionLost fallback", cancelled)
+	}
+}
+
+func TestDisplayChangeWithoutSessionIsNoop(t *testing.T) {
+	controller, fixture := newFixtureController()
+	controller.DisplayChange()
+	if len(fixture.log) != 0 {
+		t.Fatalf("display change without a session changed state: %v", fixture.log)
+	}
+}
+
+// TestSetFontForwardsToNativeSession pins the DPI-change font handoff: the
+// shell destroys its previous font while recreating it, so the active
+// session's toolbar must receive the new handle. Without a session, or with
+// a surface that has no toolbar font, nothing happens.
+func TestSetFontForwardsToNativeSession(t *testing.T) {
+	controller, fixture := newFixtureController()
+	controller.SetFont(11)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+
+	controller.SetFont(42)
+
+	if !reflect.DeepEqual(fixture.native.fonts, []uintptr{42}) {
+		t.Fatalf("SetFont calls = %v, want [42] for the active session only", fixture.native.fonts)
+	}
+
+	plain := &plainNative{}
+	controller.Create = func(CreateRequest) (NativeSession, error) { return plain, nil }
+	controller.Cancel()
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	// A surface without font support is left alone.
+	controller.SetFont(43)
+	controller.Cancel()
 }

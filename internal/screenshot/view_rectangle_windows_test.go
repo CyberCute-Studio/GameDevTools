@@ -316,3 +316,99 @@ func TestNativeViewPresetAdHocEditKeepsSavedPreset(t *testing.T) {
 		t.Fatalf("saved preset changed to %+v by an ad hoc edit, want %+v (SCR-029)", after, before)
 	}
 }
+
+// TestNativeViewDisplayChangeEndsStaleSession covers SCR-054's presentation
+// half: a display topology change that invalidates the active session ends
+// it with an explanatory warning, the main window is restored, and no
+// invisible overlay remains (AC-S12). The fake native surface has no
+// display-change support, which forces the controller's end-with-explanation
+// fallback.
+func TestNativeViewDisplayChangeEndsStaleSession(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	log, native, _ := fakeOverlaySession(view)
+
+	captureCalled := false
+	view.captureRectangle = func(display.Rect, func(), CaptureOptions) CaptureResult {
+		captureCalled = true
+		return CaptureResult{}
+	}
+
+	view.NativeAction()
+	if !view.sessions.Active() {
+		t.Fatal("session did not start")
+	}
+	native.onSelection(display.Rect{Left: 10, Top: 10, Right: 110, Bottom: 90})
+	view.sessions.DesktopBounds = func() (display.Rect, error) {
+		return display.Rect{Right: 640, Bottom: 480}, nil
+	}
+	view.sessions.DisplayChange()
+
+	if view.sessions.Active() {
+		t.Fatal("session survived a display change it could not fit")
+	}
+	if captureCalled {
+		t.Fatal("a display-change session ending reached the capture pipeline")
+	}
+	if len(*log) != 3 || (*log)[2] != "restore" {
+		t.Fatalf("session call order after the display change = %v, want [hide create restore]", *log)
+	}
+	if got := view.status.Text(); !strings.HasPrefix(got, "Warning:") || !strings.Contains(got, "display layout changed") {
+		t.Fatalf("status after the display change = %q, want a warning with the reason", got)
+	}
+}
+
+// TestNativeViewShutdownWaitsForInflightRectangleCapture mirrors the Full
+// Display shutdown guarantee for the rectangle pipeline: exiting while the
+// selection's pixels are still being delivered blocks until the worker
+// finishes (NFR-022).
+func TestNativeViewShutdownWaitsForInflightRectangleCapture(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	_, native, _ := fakeOverlaySession(view)
+
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	started := make(chan struct{})
+	release := make(chan struct{})
+	view.captureRectangle = func(region display.Rect, restore func(), options CaptureOptions) CaptureResult {
+		close(started)
+		<-release
+		restore()
+		return CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}
+	}
+
+	view.NativeAction()
+	native.onSelection(display.Rect{Left: 10, Top: 10, Right: 110, Bottom: 90})
+	native.onCapture()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("rectangle capture did not start")
+	}
+	done := make(chan struct{})
+	go func() {
+		view.NativeShutdown()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("NativeShutdown returned while the rectangle capture was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("NativeShutdown did not return after the rectangle capture finished")
+	}
+	dispatcher.runNext(t)
+}

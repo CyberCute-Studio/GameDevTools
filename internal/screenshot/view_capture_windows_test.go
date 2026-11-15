@@ -11,6 +11,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 )
@@ -147,6 +148,7 @@ type fakeOverlayNative struct {
 	closed      int
 	attention   int
 	ready       []bool
+	fonts       []uintptr
 	onSelection func(display.Rect)
 	onCapture   func()
 }
@@ -154,6 +156,7 @@ type fakeOverlayNative struct {
 func (f *fakeOverlayNative) Close()                       { f.closed++ }
 func (f *fakeOverlayNative) SetSelectionReady(ready bool) { f.ready = append(f.ready, ready) }
 func (f *fakeOverlayNative) Attention()                   { f.attention++ }
+func (f *fakeOverlayNative) SetFont(font uintptr)         { f.fonts = append(f.fonts, font) }
 
 // fakeOverlaySession reroutes the view's session controller to fakes and
 // returns the hide/restore/create call log, the native surface Begin
@@ -648,4 +651,69 @@ func TestNativeViewShutdownWaitsForInflightCapture(t *testing.T) {
 		t.Fatal("NativeShutdown did not return after the capture finished")
 	}
 	dispatcher.runNext(t)
+}
+
+// TestNativeViewCaptureFailureCategorizesTypedErrors pins UX-010 for
+// capture failures: a disconnected display, a native graphics failure, and
+// invalid capture geometry are presented as distinct, actionable messages
+// rather than one generic failure (PRD 9.8).
+func TestNativeViewCaptureFailureCategorizesTypedErrors(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+
+	view.finishCapture(CaptureResult{Err: &capture.Error{
+		Kind: capture.KindDisplay, Op: "find display", Err: errors.New(`display \.\DISPLAY2 is no longer connected`),
+	}}, displayCaptureMessages)
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") ||
+		!strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the connected displays") {
+		t.Fatalf("status for a disconnected display = %q", got)
+	}
+
+	view.finishCapture(CaptureResult{Err: &capture.Error{
+		Kind: capture.KindNative, Op: "BitBlt", Err: errors.New("access denied"),
+	}}, selectionCaptureMessages)
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") ||
+		!strings.Contains(got, "access denied") || !strings.Contains(got, "windowed mode") {
+		t.Fatalf("status for a native graphics failure = %q", got)
+	}
+
+	view.finishCapture(CaptureResult{Err: &capture.Error{
+		Kind: capture.KindValidation, Op: "validate region", Err: errors.New("capture rectangle is empty or inverted"),
+	}}, displayCaptureMessages)
+	if got := view.status.Text(); !strings.HasPrefix(got, "Error: Validation error:") {
+		t.Fatalf("status for invalid capture geometry = %q", got)
+	}
+}
+
+// TestNativeViewFontReachesActiveSession pins the DPI-change font handoff at
+// the view: the shell destroys its previous font while recreating it, so the
+// recreated handle must reach an active overlay session's toolbar rather
+// than leave it painting through the destroyed one (SCR-054).
+func TestNativeViewFontReachesActiveSession(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	_, native, _ := fakeOverlaySession(view)
+
+	view.NativeFont(11)
+	view.NativeAction()
+	if !view.sessions.Active() {
+		t.Fatal("session did not start")
+	}
+	if len(native.fonts) != 0 {
+		t.Fatalf("fonts before the session existed = %v, want none", native.fonts)
+	}
+
+	view.NativeFont(42)
+
+	if len(native.fonts) != 1 || native.fonts[0] != 42 {
+		t.Fatalf("fonts after the DPI-change handoff = %v, want [42]", native.fonts)
+	}
 }

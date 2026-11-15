@@ -787,6 +787,15 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 					swpNoZOrder|swpNoActivate,
 				)
 			}
+			// A scaling change keeps the physical display topology identical
+			// while invalidating every DPI-derived measurement, so it reaches
+			// the same subscribers a topology change does — an active overlay
+			// session revalidates its surfaces against the new scaling
+			// (SCR-054). Subscriber callbacks can change the status area's
+			// text; layout after them so a fresh notice is not clipped.
+			if shell.displays != nil {
+				shell.displays.HandleDisplayChange()
+			}
 			shell.layout()
 			return 0
 		}

@@ -134,6 +134,24 @@ func resizeSelection(selection display.Rect, z zone, p display.Point, desktop di
 	return r
 }
 
+// revalidatedSelection checks a live selection against a changed virtual
+// desktop after a display topology change (SCR-054). A selection that still
+// fits keeps its exact dimensions and, where its coordinates remain valid,
+// its position; a selection that reaches outside the new desktop is moved
+// back inside without resizing. A selection whose dimensions exceed the new
+// desktop cannot be kept: the second return value is false and the session
+// must end with an explanation (AC-S12). An empty selection — nothing drawn
+// yet — is always kept.
+func revalidatedSelection(selection display.Rect, desktop display.Rect) (display.Rect, bool) {
+	if selection.Empty() {
+		return display.Rect{}, true
+	}
+	if selection.Width() > desktop.Width() || selection.Height() > desktop.Height() {
+		return display.Rect{}, false
+	}
+	return moveSelection(selection, 0, 0, desktop), true
+}
+
 // sizedSelection applies typed width and height values to the selection,
 // anchored at its top-left corner (SCR-013). The rectangle must keep at
 // least one pixel and fit inside the desktop without moving; the caller

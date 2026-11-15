@@ -148,9 +148,17 @@ func TestShellWindowProcForwardsDisplayChanges(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("display-change callback invocations = %d, want 1", calls)
 	}
+	// A scaling change reaches the same subscribers: the physical topology
+	// is unchanged, but every DPI-derived measurement is invalidated
+	// (SCR-054).
+	shellWindowProc(shell.hwnd, wmDPIChanged, uintptr(96)|uintptr(96)<<16, nil)
+	if calls != 2 {
+		t.Fatalf("DPI-change callback invocations = %d, want 2", calls)
+	}
 	shell.displays = nil
 	shellWindowProc(shell.hwnd, wmDisplayChange, 0, nil)
-	if calls != 1 {
+	shellWindowProc(shell.hwnd, wmDPIChanged, uintptr(96)|uintptr(96)<<16, nil)
+	if calls != 2 {
 		t.Fatalf("nil monitor panicked or renotified: %d calls", calls)
 	}
 }

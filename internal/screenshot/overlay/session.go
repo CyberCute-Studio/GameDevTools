@@ -10,9 +10,10 @@
 //
 // All Controller methods run on the GUI thread. The session windows are
 // unowned topmost popups, so they outlive the main window unless the
-// controller removes them; Cancel, Complete, and Shutdown guarantee that
-// removal (SCR-052, SCR-056). Every input-capturing surface is visible while
-// it intercepts input — the Free Rectangle tint, the Preset Rectangle frame
+// controller removes them; Cancel, Complete, Shutdown, and a display change
+// the session cannot survive all guarantee that removal (SCR-052, SCR-054,
+// SCR-056). Every input-capturing surface is visible while it intercepts
+// input — the Free Rectangle tint, the Preset Rectangle frame
 // ring — so a session can never wedge the desktop behind an invisible
 // surface (SCR-052).
 package overlay
@@ -64,6 +65,13 @@ type Events struct {
 	// OnCancel runs after a cancelled session has been fully cleaned up:
 	// the overlay windows are destroyed and the main window restored.
 	OnCancel func()
+	// OnSessionLost runs, instead of OnCancel, when the session had to end
+	// without the user asking: a display topology change invalidated the
+	// selection or made the new layout unreadable (SCR-054, AC-S12). The
+	// reason is a user-facing explanation; the cleanup is complete before it
+	// runs, so no invisible input-capturing surface remains (SCR-052). When
+	// nil, OnCancel runs instead.
+	OnSessionLost func(reason string)
 }
 
 // NativeSession is the platform surface behind one active session. The
@@ -127,13 +135,16 @@ type session struct {
 	native    NativeSession
 	restore   func()
 	events    Events
+	bounds    display.Rect
 	selection display.Rect
 }
 
 // NewController returns a Controller backed by the production window
-// exclusion and native session windows.
+// exclusion and native session windows. The controller subscribes to the
+// monitor's display-change notifications, so an active session is
+// revalidated whenever the display topology changes (SCR-054).
 func NewController(monitor *display.Monitor) *Controller {
-	return &Controller{
+	controller := &Controller{
 		Monitor:       monitor,
 		DesktopBounds: monitor.VirtualDesktopBounds,
 		Hide: func(windows ...uintptr) (func(), error) {
@@ -145,6 +156,10 @@ func NewController(monitor *display.Monitor) *Controller {
 		},
 		Create: createNative,
 	}
+	if monitor != nil {
+		monitor.Subscribe(controller.DisplayChange)
+	}
+	return controller
 }
 
 // Active reports whether a selection session is on screen.
@@ -174,6 +189,110 @@ func (c *Controller) Attention() {
 	}
 	if native, ok := s.native.(attentionSession); ok {
 		native.Attention()
+	}
+}
+
+// fontSession is implemented by native sessions whose toolbar controls hold
+// a font the shell can replace.
+type fontSession interface {
+	SetFont(font uintptr)
+}
+
+// SetFont hands the shell's current body font to the active session's
+// toolbar. The shell recreates its fonts when its DPI changes and destroys
+// the old handles, so a session created with the previous font must receive
+// the new one or its controls keep painting through a destroyed handle.
+// Without an active session there is nothing to update.
+func (c *Controller) SetFont(font uintptr) {
+	c.mu.Lock()
+	s := c.session
+	c.mu.Unlock()
+	if s == nil {
+		return
+	}
+	if native, ok := s.native.(fontSession); ok {
+		native.SetFont(font)
+	}
+}
+
+// displayChangeSession is implemented by native sessions that can revalidate
+// themselves against a changed virtual desktop: they resize and reposition
+// their surfaces to the new bounds, keep a selection that still fits — its
+// dimensions always, its coordinates where they remain valid — and report
+// the revalidated selection through CreateRequest.OnSelection. False means
+// the session cannot continue in the new layout, and the controller ends it
+// with an explanation (SCR-054, AC-S12).
+type displayChangeSession interface {
+	DisplayChanged(bounds display.Rect) bool
+}
+
+// DisplayChange revalidates the active session after the display topology
+// changed: a display disconnected or reconnected, a resolution or scaling
+// changed, or the layout moved (SCR-054). It runs on the GUI thread through
+// the monitor's subscription. The session survives whenever its selection
+// still fits the new virtual desktop; otherwise it ends with an explanation
+// instead of leaving a stale overlay up (AC-S12). A topology that cannot be
+// enumerated at all is treated the same way, because the session can no
+// longer prove its surface matches the desktop (SCR-052). Sessions with
+// display-change support receive every readable notification, even one whose
+// physical topology is unchanged: a scaling or work-area change keeps the
+// virtual-desktop rectangle identical while still invalidating the session's
+// DPI-derived measurements, and only the native session can tell that from a
+// truly empty notification. Sessions without display-change support are
+// ended when the topology moved — left up, they would cover a desktop they
+// no longer match — and left alone when it did not, because their surface
+// still matches it.
+func (c *Controller) DisplayChange() {
+	c.mu.Lock()
+	s := c.session
+	c.mu.Unlock()
+	if s == nil {
+		return
+	}
+	bounds, err := c.DesktopBounds()
+	if err != nil || bounds.Empty() {
+		c.endDisplayChangeSession(s, ui.CaptureSessionDisplayGone)
+		return
+	}
+	native, ok := s.native.(displayChangeSession)
+	if !ok {
+		if bounds != s.bounds {
+			c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
+		}
+		return
+	}
+	if !native.DisplayChanged(bounds) {
+		c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
+		return
+	}
+	c.mu.Lock()
+	if c.session == s {
+		c.session.bounds = bounds
+	}
+	c.mu.Unlock()
+}
+
+// endDisplayChangeSession ends a session a display change invalidated. The
+// cleanup matches Cancel — the overlay windows are destroyed and the main
+// window restored, so no invisible input-capturing surface survives — but
+// the event carries the reason so the user learns why the selection went
+// away and that starting again is safe (AC-S12).
+func (c *Controller) endDisplayChangeSession(s *session, reason string) {
+	c.mu.Lock()
+	if c.session != s {
+		c.mu.Unlock()
+		return
+	}
+	c.session = nil
+	c.mu.Unlock()
+	s.native.Close()
+	s.restore()
+	if s.events.OnSessionLost != nil {
+		s.events.OnSessionLost(reason)
+		return
+	}
+	if s.events.OnCancel != nil {
+		s.events.OnCancel()
 	}
 }
 
@@ -251,7 +370,7 @@ func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, size display
 		restore()
 		return ErrSessionActive
 	}
-	c.session = &session{native: native, restore: restore, events: events}
+	c.session = &session{native: native, restore: restore, events: events, bounds: bounds}
 	c.mu.Unlock()
 	if selectionReported {
 		c.SetSelection(reported)
