@@ -45,6 +45,16 @@ const (
 	lbGetText           = 0x0189
 	lbGetTextLen        = 0x018a
 	lbSetSel            = 0x0185
+	lbInsertString      = 0x0181
+	lbDeleteString      = 0x0182
+	lbGetSel            = 0x0187
+	lbGetTopIndex       = 0x018e
+	lbSetTopIndex       = 0x0197
+	lbSetAnchorIndex    = 0x019c
+	lbGetAnchorIndex    = 0x019d
+	lbSetCaretIndex     = 0x019e
+	lbGetCaretIndex     = 0x019f
+	wmSetRedraw         = 0x000b
 	lbnSelChange        = 1
 
 	swHide = 0
@@ -93,4 +103,5 @@ var (
 	procSetTimer             = user32.NewProc("SetTimer")
 	procKillTimer            = user32.NewProc("KillTimer")
 	procMessageBoxW          = user32.NewProc("MessageBoxW")
+	procInvalidateRect       = user32.NewProc("InvalidateRect")
 )

@@ -362,6 +362,37 @@ func (l *ListBox) ItemText(index int) string {
 	return windows.UTF16ToString(buffer)
 }
 
+// SetItemText replaces one item's text in place. The list box has no
+// set-text message, so the item is deleted and reinserted; its selection,
+// the caret (focus) item, the extended-selection anchor, and the scroll
+// position are restored around that, so a background status update never
+// disturbs what the user selected or is looking at. Out-of-range indexes are
+// ignored.
+func (l *ListBox) SetItemText(index int, text string) {
+	if index < 0 || index >= l.Count() {
+		return
+	}
+	selected, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetSel, uintptr(index), 0)
+	caret, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetCaretIndex, 0, 0)
+	anchor, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetAnchorIndex, 0, 0)
+	top, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetTopIndex, 0, 0)
+	procSendMessageW.Call(uintptr(l.hwnd), wmSetRedraw, 0, 0)
+	procSendMessageW.Call(uintptr(l.hwnd), lbDeleteString, uintptr(index), 0)
+	procSendMessageW.Call(uintptr(l.hwnd), lbInsertString, uintptr(index), uintptr(unsafe.Pointer(utf16(text))))
+	if int32(selected) > 0 {
+		procSendMessageW.Call(uintptr(l.hwnd), lbSetSel, 1, uintptr(index))
+	}
+	if int32(anchor) >= 0 {
+		procSendMessageW.Call(uintptr(l.hwnd), lbSetAnchorIndex, anchor, 0)
+	}
+	if int32(caret) >= 0 {
+		procSendMessageW.Call(uintptr(l.hwnd), lbSetCaretIndex, caret, 0)
+	}
+	procSendMessageW.Call(uintptr(l.hwnd), lbSetTopIndex, top, 0)
+	procSendMessageW.Call(uintptr(l.hwnd), wmSetRedraw, 1, 0)
+	procInvalidateRect.Call(uintptr(l.hwnd), 0, 1)
+}
+
 // SetSelected selects or clears a single item without disturbing the other
 // selections, so callers can restore the selection after rebuilding a list.
 func (l *ListBox) SetSelected(index int, selected bool) {

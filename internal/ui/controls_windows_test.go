@@ -179,3 +179,45 @@ func newTestParent(t *testing.T) windows.Handle {
 	})
 	return windows.Handle(hwnd)
 }
+
+// TestListBoxSetItemTextKeepsSelectionAndScroll pins that rewriting one row
+// in place — as background status updates do — preserves the selection of
+// that row and of the others, the caret, and the scroll position.
+func TestListBoxSetItemTextKeepsSelectionAndScroll(t *testing.T) {
+	parent := newTestParent(t)
+	list, err := NewListBox(parent, 77)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 0, 200, 60)
+	for index := 0; index < 20; index++ {
+		list.Add("row")
+	}
+	list.SetSelected(3, true)
+	list.SetSelected(5, true)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetCaretIndex, 5, 0)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetTopIndex, 2, 0)
+
+	list.SetItemText(3, "selected row updated")
+	list.SetItemText(4, "unselected row updated")
+	list.SetItemText(99, "ignored")
+
+	if got := list.ItemText(3); got != "selected row updated" {
+		t.Fatalf("row 3 = %q", got)
+	}
+	if got := list.ItemText(4); got != "unselected row updated" {
+		t.Fatalf("row 4 = %q", got)
+	}
+	if list.Count() != 20 {
+		t.Fatalf("count = %d, want 20", list.Count())
+	}
+	if got := list.SelectedIndices(); len(got) != 2 || got[0] != 3 || got[1] != 5 {
+		t.Fatalf("selection = %v, want [3 5]", got)
+	}
+	if caret, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetCaretIndex, 0, 0); caret != 5 {
+		t.Fatalf("caret = %d, want 5", caret)
+	}
+	if top, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetTopIndex, 0, 0); top != 2 {
+		t.Fatalf("top index = %d, want 2", top)
+	}
+}

@@ -86,6 +86,9 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 		t.Fatal(err)
 	}
 	t.Cleanup(view.NativeDestroy)
+	// Registered after NativeDestroy, so it runs first: the content-check
+	// worker is stopped and joined before the controls are torn down.
+	t.Cleanup(view.NativeShutdown)
 	return view, manager
 }
 

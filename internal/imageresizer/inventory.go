@@ -1,22 +1,29 @@
 package imageresizer
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 // SourceStatus is the per-item validation state shown in the source list
-// (RSZ-004, RSZ-005). Full content decoding arrives with RSZ-03; this initial
-// validation covers the extension and read-only accessibility.
+// (RSZ-004, RSZ-005). Adding a file checks its extension and that it exists;
+// a supported file then stays Checking until its content has been decoded
+// off the GUI thread (RSZ-003) and its result is resolved into the item.
 type SourceStatus uint8
 
 const (
 	StatusReady SourceStatus = iota
 	StatusUnsupported
 	StatusInaccessible
+	StatusChecking
+	StatusCorrupt
+	StatusTooLarge
 )
 
 func (s SourceStatus) Label() string {
@@ -25,36 +32,113 @@ func (s SourceStatus) Label() string {
 		return ui.SourceStatusUnsupported
 	case StatusInaccessible:
 		return ui.SourceStatusInaccessible
+	case StatusChecking:
+		return ui.SourceStatusChecking
+	case StatusCorrupt:
+		return ui.SourceStatusCorrupt
+	case StatusTooLarge:
+		return ui.SourceStatusTooLarge
 	default:
 		return ui.SourceStatusReady
 	}
 }
 
-// SourceItem is one inventory entry. Name is the display name; Path is the
-// absolute source path; Detail carries the status explanation (for example
-// the read error) and stays empty for Ready items.
+// SourceItem is one inventory entry. ID is unique within the inventory and
+// never reused, so a content check that finishes after its item was removed
+// cannot update a later item for the same path. Name is the display name;
+// Path is the absolute source path; Detail carries the status explanation
+// (for example the read error) and stays empty for Ready and Checking items.
+// Info describes the decoded content once the item is Ready.
 type SourceItem struct {
+	ID     uint64
 	Name   string
 	Path   string
 	Status SourceStatus
 	Detail string
+	Info   decode.Info
+}
+
+// RowText is the source-list row: the file name, the upright source
+// dimensions once they are known, and the status (RSZ-005).
+func (s SourceItem) RowText() string {
+	if s.Status == StatusReady {
+		return fmt.Sprintf(ui.SourceListReadyFormat, s.Name, ui.FormatDimensions(s.Info.Width, s.Info.Height), s.Status.Label())
+	}
+	return fmt.Sprintf(ui.SourceListFormat, s.Name, s.Status.Label())
+}
+
+// DetailText explains the item's status below the full path: the decoded
+// format, dimensions, alpha, and applied orientation for a Ready item, and
+// the reason for every other status.
+func (s SourceItem) DetailText() string {
+	switch s.Status {
+	case StatusReady:
+		return readyDetail(s)
+	case StatusChecking:
+		return ui.SourceCheckingDetail
+	}
+	return s.Status.Label() + ": " + s.Detail
+}
+
+func readyDetail(item SourceItem) string {
+	info := item.Info
+	var detail strings.Builder
+	fmt.Fprintf(&detail, ui.SourceReadyDetail, formatLabel(info.Format), ui.FormatDimensions(info.Width, info.Height))
+	if info.HasAlpha {
+		detail.WriteString(ui.SourceReadyAlpha)
+	}
+	if info.Orientation != decode.OrientationNormal {
+		width, height := info.StoredSize()
+		fmt.Fprintf(&detail, ui.SourceReadyOriented, ui.FormatDimensions(width, height))
+	}
+	detail.WriteString(".")
+	if extension := strings.ToLower(filepath.Ext(item.Path)); extensionFormat(extension) != info.Format {
+		fmt.Fprintf(&detail, ui.SourceContentMismatch, formatLabel(info.Format), extension, formatLabel(info.Format))
+	}
+	return detail.String()
+}
+
+// extensionFormat is the format a supported extension names.
+func extensionFormat(extension string) decode.Format {
+	switch extension {
+	case ".png":
+		return decode.FormatPNG
+	case ".jpg", ".jpeg":
+		return decode.FormatJPEG
+	}
+	return decode.FormatUnknown
+}
+
+func formatLabel(format decode.Format) string {
+	switch format {
+	case decode.FormatPNG:
+		return ui.ImageFormatPNG
+	case decode.FormatJPEG:
+		return ui.ImageFormatJPEG
+	}
+	return ui.SourceFormatUnknown
 }
 
 // AddSummary reports the outcome of one Add call so the view can present the
-// batch result without re-reading the inventory.
+// batch result without re-reading the inventory. Added counts the supported
+// files now being checked; Inspect lists their content checks, in order.
 type AddSummary struct {
 	Added        int
 	Duplicates   int
 	Unsupported  int
 	Inaccessible int
+	Inspect      []Inspection
 }
 
 // Inventory is the ordered, deduplicated list of resize sources. It is not
-// safe for concurrent use; the view drives it from the GUI thread.
+// safe for concurrent use; the view drives it from the GUI thread and
+// resolves content checks there after the shell dispatcher delivers them.
 type Inventory struct {
-	items   []SourceItem
-	byKey   map[string]struct{}
-	readDir func(string) ([]os.DirEntry, error)
+	items    []SourceItem
+	byKey    map[string]struct{}
+	nextID   uint64
+	checking int
+	readDir  func(string) ([]os.DirEntry, error)
 }
 
 func NewInventory() *Inventory {
@@ -65,21 +149,29 @@ func (v *Inventory) Items() []SourceItem {
 	return append([]SourceItem(nil), v.items...)
 }
 
+// Item returns the item at index, which must be in range.
+func (v *Inventory) Item(index int) SourceItem {
+	return v.items[index]
+}
+
+// Checking reports how many items still await their content check.
+func (v *Inventory) Checking() int {
+	return v.checking
+}
+
 // SupportedExtension reports whether the path carries one of the supported
 // input extensions, case-insensitively (RSZ-003).
 func SupportedExtension(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".png", ".jpg", ".jpeg":
-		return true
-	}
-	return false
+	return extensionFormat(strings.ToLower(filepath.Ext(path))) != decode.FormatUnknown
 }
 
 // Add validates and appends the given paths. A directory adds the supported
 // files directly inside it without recursing (RSZ-008). Explicitly chosen
-// files with an unsupported extension or a failed read still enter the list
-// with their status, so invalid items are identified without blocking the
-// valid ones (RSZ-004); the same full path is never added twice (RSZ-007).
+// files with an unsupported extension or that cannot be found still enter
+// the list with their status, so invalid items are identified without
+// blocking the valid ones (RSZ-004); the same full path is never added twice
+// (RSZ-007). Supported files enter as Checking, and the returned summary
+// lists the content checks the caller runs off the GUI thread.
 func (v *Inventory) Add(paths []string) AddSummary {
 	var summary AddSummary
 	for _, path := range paths {
@@ -94,7 +186,7 @@ func (v *Inventory) Add(paths []string) AddSummary {
 			continue
 		}
 		if info.IsDir() {
-			summary.merge(v.addFolder(path))
+			v.addFolder(path, &summary)
 			continue
 		}
 		v.addFile(path, &summary)
@@ -102,8 +194,59 @@ func (v *Inventory) Add(paths []string) AddSummary {
 	return summary
 }
 
-// Remove deletes the items at the given ascending indexes.
-func (v *Inventory) Remove(indices []int) {
+// Resolve applies a finished content check to the item it belongs to and
+// returns that item's index. A result whose item was removed, or that was
+// already resolved, changes nothing and reports ok == false.
+func (v *Inventory) Resolve(result InspectionResult) (index int, ok bool) {
+	for index := range v.items {
+		item := &v.items[index]
+		if item.ID != result.ID {
+			continue
+		}
+		if item.Status != StatusChecking {
+			return index, false
+		}
+		v.checking--
+		if result.Err != nil {
+			item.Status, item.Detail = failureStatus(result.Err)
+			return index, true
+		}
+		item.Status, item.Detail, item.Info = StatusReady, "", result.Info
+		return index, true
+	}
+	return -1, false
+}
+
+// failureStatus maps a typed decode failure to the list status and its
+// explanation, so damaged, unsupported, unreadable, and oversized content
+// are each identified distinctly (RSZ-004).
+func failureStatus(err error) (SourceStatus, string) {
+	var decodeErr *decode.Error
+	if !errors.As(err, &decodeErr) {
+		return StatusCorrupt, fmt.Sprintf(ui.SourceCorruptDetail, ui.SourceFormatUnknown, err)
+	}
+	switch decodeErr.Kind {
+	case decode.KindRead:
+		return StatusInaccessible, decodeErr.Err.Error()
+	case decode.KindUnsupported:
+		if decodeErr.Format == decode.FormatUnknown {
+			return StatusUnsupported, ui.SourceContentUnrecognizedDetail
+		}
+		return StatusUnsupported, fmt.Sprintf(ui.SourceFeatureUnsupportedDetail, formatLabel(decodeErr.Format), decodeErr.Err)
+	case decode.KindTooLarge:
+		return StatusTooLarge, fmt.Sprintf(ui.SourceTooLargeDetail, ui.FormatDimensions(decodeErr.Width, decodeErr.Height), decode.MaxDecodedBytes>>20)
+	case decode.KindCanceled:
+		return StatusInaccessible, ui.SourceCheckCanceledDetail
+	}
+	if errors.Is(decodeErr, decode.ErrEmpty) {
+		return StatusCorrupt, ui.SourceEmptyDetail
+	}
+	return StatusCorrupt, fmt.Sprintf(ui.SourceCorruptDetail, formatLabel(decodeErr.Format), decodeErr.Err)
+}
+
+// Remove deletes the items at the given ascending indexes and returns their
+// identifiers so the caller can abandon their pending content checks.
+func (v *Inventory) Remove(indices []int) []uint64 {
 	removing := make(map[int]struct{}, len(indices))
 	for _, index := range indices {
 		if index >= 0 && index < len(v.items) {
@@ -111,12 +254,17 @@ func (v *Inventory) Remove(indices []int) {
 		}
 	}
 	if len(removing) == 0 {
-		return
+		return nil
 	}
+	removed := make([]uint64, 0, len(removing))
 	kept := v.items[:0]
 	for index, item := range v.items {
 		if _, drop := removing[index]; drop {
 			delete(v.byKey, pathKey(item.Path))
+			removed = append(removed, item.ID)
+			if item.Status == StatusChecking {
+				v.checking--
+			}
 			continue
 		}
 		kept = append(kept, item)
@@ -127,11 +275,13 @@ func (v *Inventory) Remove(indices []int) {
 		v.items[index] = SourceItem{}
 	}
 	v.items = kept
+	return removed
 }
 
 func (v *Inventory) Clear() {
 	v.items = nil
 	v.byKey = make(map[string]struct{})
+	v.checking = 0
 }
 
 // addFolder adds the supported files directly inside the dropped folder
@@ -139,32 +289,28 @@ func (v *Inventory) Clear() {
 // Unsupported, so dropping a mixed folder does not flood the list with files
 // the user never picked; subfolders are not recursed. An unreadable folder
 // contributes one Inaccessible item for the folder path itself.
-func (v *Inventory) addFolder(folder string) AddSummary {
-	var summary AddSummary
+func (v *Inventory) addFolder(folder string, summary *AddSummary) {
 	entries, err := v.readDir(folder)
 	if err != nil {
-		v.addInaccessible(folder, err, &summary)
-		return summary
+		v.addInaccessible(folder, err, summary)
+		return
 	}
 	for _, entry := range entries {
 		if entry.IsDir() || !SupportedExtension(entry.Name()) {
 			continue
 		}
-		v.addFile(filepath.Join(folder, entry.Name()), &summary)
+		v.addFile(filepath.Join(folder, entry.Name()), summary)
 	}
-	return summary
 }
 
 // addInaccessible lists a path that cannot be enumerated or queried with its
 // error, so the failure is identified without blocking valid entries.
 func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummary) {
-	key := pathKey(path)
-	if _, exists := v.byKey[key]; exists {
-		summary.Duplicates++
+	if !v.claim(path, summary) {
 		return
 	}
-	v.byKey[key] = struct{}{}
 	v.items = append(v.items, SourceItem{
+		ID:     v.allocateID(),
 		Name:   filepath.Base(path),
 		Path:   path,
 		Status: StatusInaccessible,
@@ -173,28 +319,27 @@ func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummar
 	summary.Inaccessible++
 }
 
+// addFile lists one file. A supported extension enters as Checking and
+// queues its content check; the read-only open happens there, off the GUI
+// thread (RSZ-009, TECH-005).
 func (v *Inventory) addFile(path string, summary *AddSummary) {
-	key := pathKey(path)
-	if _, exists := v.byKey[key]; exists {
-		summary.Duplicates++
+	if !v.claim(path, summary) {
 		return
 	}
-	item := SourceItem{Name: filepath.Base(path), Path: path, Status: StatusReady}
+	item := SourceItem{ID: v.allocateID(), Name: filepath.Base(path), Path: path, Status: StatusChecking}
 	if !SupportedExtension(path) {
 		item.Status = StatusUnsupported
 		item.Detail = ui.SourceUnsupportedDetail
 		summary.Unsupported++
-	} else if err := checkReadable(path); err != nil {
-		item.Status = StatusInaccessible
-		item.Detail = err.Error()
-		summary.Inaccessible++
 	} else {
+		v.checking++
 		summary.Added++
+		summary.Inspect = append(summary.Inspect, Inspection{ID: item.ID, Path: path})
 	}
-	v.byKey[key] = struct{}{}
 	v.items = append(v.items, item)
 }
 
+// merge adds another summary's counts; the queued checks are not merged.
 func (s *AddSummary) merge(other AddSummary) {
 	s.Added += other.Added
 	s.Duplicates += other.Duplicates
@@ -202,14 +347,23 @@ func (s *AddSummary) merge(other AddSummary) {
 	s.Inaccessible += other.Inaccessible
 }
 
-// checkReadable proves the file can be opened read-only (RSZ-009): sources
-// are never opened for writing, here or during the job.
-func checkReadable(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
+// claim records the path as listed, or counts it as a duplicate when the
+// same full path is already in the inventory.
+func (v *Inventory) claim(path string, summary *AddSummary) bool {
+	key := pathKey(path)
+	if _, exists := v.byKey[key]; exists {
+		summary.Duplicates++
+		return false
 	}
-	return file.Close()
+	v.byKey[key] = struct{}{}
+	return true
+}
+
+// allocateID returns the next item identifier. Identifiers start at 1 so the
+// zero value never names an item.
+func (v *Inventory) allocateID() uint64 {
+	v.nextID++
+	return v.nextID
 }
 
 // pathKey normalizes a full path for deduplication. Windows paths compare

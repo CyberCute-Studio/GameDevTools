@@ -10,7 +10,9 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -45,12 +47,17 @@ const (
 var formatOrder = []OutputFormat{FormatKeepSource, FormatPNG, FormatJPEG}
 
 type NativeView struct {
-	options   *OptionsManager
-	presets   *preset.NativeManager
-	inventory *Inventory
-	parent    windows.Handle
-	browse    func(windows.Handle, string) (string, bool, error)
-	pickFiles func(windows.Handle, string) ([]string, bool, error)
+	options    *OptionsManager
+	presets    *preset.NativeManager
+	inventory  *Inventory
+	inspector  *Inspector
+	dispatcher core.Dispatcher
+	parent     windows.Handle
+	browse     func(windows.Handle, string) (string, bool, error)
+	pickFiles  func(windows.Handle, string) ([]string, bool, error)
+	// checked tallies the content checks resolved since the list last had
+	// nothing left to check, for the summary shown when checking finishes.
+	checked checkTally
 
 	sourceLabel     *ui.Label
 	sourceHint      *ui.Label
@@ -80,14 +87,33 @@ type NativeView struct {
 	status          *ui.StatusArea
 }
 
+// checkTally accumulates, since the list last had nothing left to check,
+// the add results whose checks are pending and the resolved content checks
+// by outcome. The finishing summary restates the add results, because small
+// files resolve so quickly that the add notice itself is replaced at once.
+type checkTally struct {
+	added  AddSummary
+	ready  int
+	failed int
+}
+
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
-	return &NativeView{
+	view := &NativeView{
 		options:   options,
 		presets:   preset.NewNativeManager(manager),
 		inventory: NewInventory(),
 		browse:    ui.BrowseForFolder,
 		pickFiles: ui.PickImageFiles,
 	}
+	view.inspector = NewInspector(decode.Inspect, view.deliverInspection)
+	return view
+}
+
+// NativeDispatcher receives the shell's GUI-thread dispatcher. Content-check
+// results are posted through it, so the inventory and the source list are
+// only ever updated on the GUI thread (TECH-005).
+func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
+	n.dispatcher = dispatcher
 }
 
 func (n *NativeView) NativeCreate(parent windows.Handle) error {
@@ -412,6 +438,8 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 			return true
 		}
 		n.inventory.Clear()
+		n.inspector.DropAll()
+		n.checked = checkTally{}
 		n.refreshSources()
 		// Clearing disables the Clear button itself, so keyboard focus moves
 		// to the list instead of being stranded on a disabled control.
@@ -477,9 +505,22 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 	return true
 }
 
+// NativeDestroy abandons the queued and in-flight content checks, so the
+// worker stops at its next read instead of decoding for a closing window.
 func (n *NativeView) NativeDestroy() {
+	n.inspector.Close()
 	n.status.Destroy()
 	n.presets.NativeDestroy()
+}
+
+// NativeShutdown blocks until the content-check worker has exited. The shell
+// calls it only after the message loop has ended and the window is
+// destroyed, so the worker never waits on the GUI thread here; NativeDestroy
+// has already cancelled its work, and any final dispatcher post fails
+// harmlessly against the destroyed window.
+func (n *NativeView) NativeShutdown() {
+	n.inspector.Close()
+	n.inspector.Wait()
 }
 
 func (n *NativeView) selectCollision(notification uint16, policy CollisionPolicy) {
@@ -593,8 +634,73 @@ func (n *NativeView) NativeDropFiles(paths []string) {
 func (n *NativeView) addSources(paths []string) {
 	summary := n.inventory.Add(paths)
 	n.refreshSources()
+	n.inspector.Enqueue(summary.Inspect)
+	if n.inventory.Checking() > 0 {
+		n.checked.added.merge(summary)
+	}
 	n.list.Focus()
 	_ = n.status.Show(summarizeAdd(summary), 0)
+}
+
+// deliverInspection runs on the inspector's worker goroutine and hands the
+// result to the GUI thread. Without a dispatcher — the shell always provides
+// one — or once the shell window is gone, the result is dropped: the
+// inventory must never be touched off the GUI thread.
+func (n *NativeView) deliverInspection(result InspectionResult) {
+	if n.dispatcher == nil {
+		return
+	}
+	_ = n.dispatcher.Post(func() {
+		n.applyInspection(result)
+	})
+}
+
+// applyInspection resolves one content check into its item on the GUI
+// thread. Only that row is rewritten, so the user's selection and scroll
+// position survive background updates; the detail below the full path is
+// refreshed when the item is the one it describes. When nothing is left to
+// check, the outcome of the checks is summarized (RSZ-004).
+func (n *NativeView) applyInspection(result InspectionResult) {
+	index, ok := n.inventory.Resolve(result)
+	if !ok {
+		return
+	}
+	item := n.inventory.Item(index)
+	n.list.SetItemText(index, item.RowText())
+	if item.Status == StatusReady {
+		n.checked.ready++
+	} else {
+		n.checked.failed++
+	}
+	if selection := n.list.SelectedIndices(); len(selection) > 0 && selection[0] == index {
+		n.refreshSourceSelection()
+	}
+	if n.inventory.Checking() > 0 {
+		return
+	}
+	tally := n.checked
+	n.checked = checkTally{}
+	_ = n.status.Show(summarizeChecks(tally), 0)
+}
+
+// summarizeChecks builds the notice shown when the last pending content
+// check resolves: the add results since the list was last fully checked,
+// then how many images are ready and how many cannot be resized.
+func summarizeChecks(tally checkTally) ui.Notice {
+	message, warn := describeAdd(tally.added)
+	if message != "" {
+		message += " "
+	}
+	message += fmt.Sprintf(ui.ImagesChecked, tally.ready+tally.failed, tally.ready)
+	if tally.failed > 0 {
+		message += fmt.Sprintf(ui.ImagesCheckedFailed, tally.failed)
+		warn = true
+	}
+	kind := ui.NoticeSuccess
+	if warn {
+		kind = ui.NoticeWarning
+	}
+	return ui.Notice{Kind: kind, Message: message}
 }
 
 func (n *NativeView) removeSelectedSources() {
@@ -603,7 +709,10 @@ func (n *NativeView) removeSelectedSources() {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone}, 0)
 		return
 	}
-	n.inventory.Remove(indices)
+	n.inspector.Drop(n.inventory.Remove(indices))
+	if n.inventory.Checking() == 0 {
+		n.checked = checkTally{}
+	}
 	n.refreshSources()
 	n.list.Focus()
 	_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))}, 0)
@@ -616,6 +725,25 @@ func summarizeAdd(summary AddSummary) ui.Notice {
 	if summary.Added == 0 && summary.Duplicates == 0 && summary.Unsupported == 0 && summary.Inaccessible == 0 {
 		return ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesAddEmpty}
 	}
+	message, warn := describeAdd(summary)
+	if summary.Added > 0 {
+		// The added files are still Checking; the outcome of their content
+		// checks is summarized once the last one resolves.
+		message += ui.ImagesAddedChecking
+	}
+	kind := ui.NoticeSuccess
+	if warn {
+		kind = ui.NoticeWarning
+	}
+	return ui.Notice{Kind: kind, Message: message}
+}
+
+// describeAdd states what one or more adds contributed, and whether any
+// file was rejected up front. It is empty when nothing was offered.
+func describeAdd(summary AddSummary) (string, bool) {
+	if summary.Added == 0 && summary.Duplicates == 0 && summary.Unsupported == 0 && summary.Inaccessible == 0 {
+		return "", false
+	}
 	var message strings.Builder
 	fmt.Fprintf(&message, ui.ImagesAdded, summary.Added)
 	if summary.Duplicates > 0 {
@@ -627,20 +755,17 @@ func summarizeAdd(summary AddSummary) ui.Notice {
 	if summary.Inaccessible > 0 {
 		fmt.Fprintf(&message, ui.ImagesAddedInaccessible, summary.Inaccessible)
 	}
-	kind := ui.NoticeSuccess
-	if summary.Unsupported > 0 || summary.Inaccessible > 0 {
-		kind = ui.NoticeWarning
-	}
-	return ui.Notice{Kind: kind, Message: message.String()}
+	return message.String(), summary.Unsupported > 0 || summary.Inaccessible > 0
 }
 
 // refreshSources rebuilds the list from the inventory (RSZ-005): each row
-// shows the file name and its status, and the full path and status detail of
-// the selected item appear below on demand.
+// shows the file name, the upright source dimensions once its content has
+// been checked, and its status, and the full path and status detail of the
+// selected item appear below on demand.
 func (n *NativeView) refreshSources() {
 	n.list.Reset()
 	for _, item := range n.inventory.Items() {
-		n.list.Add(fmt.Sprintf(ui.SourceListFormat, item.Name, item.Status.Label()))
+		n.list.Add(item.RowText())
 	}
 	n.refreshSourceSelection()
 }
@@ -654,11 +779,7 @@ func (n *NativeView) refreshSourceSelection() {
 	} else {
 		item := items[selection[0]]
 		n.path.SetText(item.Path)
-		detail := ""
-		if item.Status != StatusReady {
-			detail = item.Status.Label() + ": " + item.Detail
-		}
-		n.pathDetail.SetText(detail)
+		n.pathDetail.SetText(item.DetailText())
 	}
 	n.removeButton.Enable(len(selection) > 0)
 	n.clearButton.Enable(len(items) > 0)
