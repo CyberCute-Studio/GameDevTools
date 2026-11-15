@@ -22,6 +22,7 @@ const (
 	wmTimer          = 0x0113
 	wmDisplayChange  = 0x007e
 	wmDPIChanged     = 0x02e0
+	wmDropFiles      = 0x0233
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1
 
@@ -34,6 +35,7 @@ const (
 	bnSetFocus  = 6
 	enSetFocus  = 0x0100
 	cbnSetFocus = 3
+	lbnSetFocus = 4
 
 	sbVert          = 1
 	sbLineUp        = 0
@@ -61,6 +63,10 @@ const (
 
 	monitorDefaultToNearest = 2
 
+	// gwlpWndProc is GWLP_WNDPROC (-4), expressed as a uintptr for proc calls.
+	gwlpWndProc = ^uintptr(3)
+	gaRoot      = 2
+
 	cwUseDefault = 0x80000000
 
 	colorWindow     = 5
@@ -81,6 +87,7 @@ var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
+	shell32  = windows.NewLazySystemDLL("shell32.dll")
 
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
 	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
@@ -127,6 +134,13 @@ var (
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")
 	procSetBkMode                     = gdi32.NewProc("SetBkMode")
 	procSetTextColor                  = gdi32.NewProc("SetTextColor")
+	procDragAcceptFiles               = shell32.NewProc("DragAcceptFiles")
+	procDragQueryFileW                = shell32.NewProc("DragQueryFileW")
+	procDragFinish                    = shell32.NewProc("DragFinish")
+	procEnumChildWindows              = user32.NewProc("EnumChildWindows")
+	procSetWindowLongPtrW             = user32.NewProc("SetWindowLongPtrW")
+	procCallWindowProcW               = user32.NewProc("CallWindowProcW")
+	procGetAncestor                   = user32.NewProc("GetAncestor")
 )
 
 type rect struct {

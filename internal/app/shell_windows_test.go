@@ -415,3 +415,141 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	})
 	return shell
 }
+
+// dropFilesHeader mirrors the Win32 DROPFILES structure: the offset of the
+// double-NUL-terminated, wide-character path list that follows it.
+type dropFilesHeader struct {
+	pFiles uint32
+	x      int32
+	y      int32
+	fNC    int32
+	fWide  int32
+}
+
+var (
+	procGlobalAlloc   = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock    = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock  = kernel32.NewProc("GlobalUnlock")
+	procRtlMoveMemory = kernel32.NewProc("RtlMoveMemory")
+)
+
+// newTestDrop packs paths into a real HDROP so the shell's DragQueryFileW
+// parsing is exercised against the same payload Explorer produces. The
+// shell's DragFinish releases the handle, so the test must not free it.
+func newTestDrop(t *testing.T, paths []string) uintptr {
+	t.Helper()
+	var names []uint16
+	for _, path := range paths {
+		wide, err := windows.UTF16FromString(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, wide...)
+	}
+	names = append(names, 0)
+	header := dropFilesHeader{pFiles: uint32(unsafe.Sizeof(dropFilesHeader{})), fWide: 1}
+	payload := make([]byte, unsafe.Sizeof(header)+uintptr(len(names))*2)
+	payload[0] = byte(header.pFiles)
+	payload[16] = byte(header.fWide)
+	for index, unit := range names {
+		payload[int(unsafe.Sizeof(header))+2*index] = byte(unit)
+		payload[int(unsafe.Sizeof(header))+2*index+1] = byte(unit >> 8)
+	}
+	const gmemMoveableZeroInit = 0x0042
+	handle, _, err := procGlobalAlloc.Call(gmemMoveableZeroInit, uintptr(len(payload)))
+	if handle == 0 {
+		t.Fatalf("GlobalAlloc(HDROP): %v", err)
+	}
+	base, _, err := procGlobalLock.Call(handle)
+	if base == 0 {
+		t.Fatalf("GlobalLock(HDROP): %v", err)
+	}
+	procRtlMoveMemory.Call(base, uintptr(unsafe.Pointer(&payload[0])), uintptr(len(payload)))
+	procGlobalUnlock.Call(handle)
+	return handle
+}
+
+// dropRecordingView records NativeDropFiles calls so the shell's
+// WM_DROPFILES routing can be observed.
+type dropRecordingView struct {
+	recordingNativeView
+	paths []string
+}
+
+func (n *dropRecordingView) NativeDropFiles(paths []string) {
+	n.paths = append(n.paths, paths...)
+}
+
+// TestShellWindowProcRoutesDroppedFiles covers the shell half of RSZ-002: a
+// WM_DROPFILES reaching the shell window is unpacked and delivered to the
+// active module when it accepts drops, with the drop handle released either
+// way.
+func TestShellWindowProcRoutesDroppedFiles(t *testing.T) {
+	native := &dropRecordingView{}
+	shell := newCommandTestShell(t, native)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`, `C:\Images\b.jpg`}), nil)
+	if len(native.paths) != 2 || native.paths[0] != `C:\Images\a.png` || native.paths[1] != `C:\Images\b.jpg` {
+		t.Fatalf("dropped paths = %v", native.paths)
+	}
+	if native.layouts == 0 {
+		t.Fatal("accepted drop did not trigger a layout")
+	}
+
+	layouts := native.layouts
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, nil), nil)
+	if len(native.paths) != 2 {
+		t.Fatalf("empty drop delivered paths: %v", native.paths)
+	}
+	if native.layouts != layouts {
+		t.Fatal("empty drop triggered a layout")
+	}
+}
+
+func TestShellWindowProcIgnoresDropsForNonTargets(t *testing.T) {
+	native := &recordingNativeView{}
+	shell := newCommandTestShell(t, native)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`}), nil)
+	if native.layouts != 0 {
+		t.Fatal("drop for a module without drop support triggered a layout")
+	}
+}
+
+// TestChildDropForwardsToShellHandler pins the delivery half of RSZ-002:
+// WM_DROPFILES goes to the window under the cursor, which over a module view
+// is a child control, so the child's subclass must forward the drop to the
+// shell's own routing for "drop anywhere on the view" to hold.
+func TestChildDropForwardsToShellHandler(t *testing.T) {
+	native := &dropRecordingView{}
+	shell := newCommandTestShell(t, native)
+	child, err := ui.NewButton(shell.hwnd, "Child", ui.ButtonOptions{ID: 209})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell.updateDropAcceptance()
+	procSendMessageW.Call(uintptr(child.Handle()), wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`}), 0)
+	if len(native.paths) != 1 || native.paths[0] != `C:\Images\a.png` {
+		t.Fatalf("dropped paths through child = %v", native.paths)
+	}
+	if native.layouts == 0 {
+		t.Fatal("child drop did not trigger a layout")
+	}
+}
+
+// TestShellWindowProcScrollsFocusedListIntoView covers the source list
+// (RSZ-005): a list box reports LBN_SETFOCUS rather than the button, edit,
+// or combo notification, and tabbing to it must scroll it into view like
+// every other control.
+func TestShellWindowProcScrollsFocusedListIntoView(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	list, err := ui.NewListBox(shell.hwnd, 601)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 500, 200, 140)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(601)|uintptr(lbnSetFocus)<<16, uintptr(list.Handle()))
+	if shell.scrollY == 0 {
+		t.Fatal("list focus did not scroll the control into view")
+	}
+}

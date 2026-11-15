@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"golang.org/x/sys/windows"
 
@@ -18,6 +19,10 @@ import (
 // Resizer preset manager (300), and the Screenshot capture options (400).
 const optionsCommandBase = 500
 
+// sourcesCommandBase keeps the source-list command identifiers clear of the
+// other command ranges.
+const sourcesCommandBase = 600
+
 const (
 	formatCommand = iota + 1
 	qualityCommand
@@ -29,14 +34,33 @@ const (
 	collisionOverwriteCommand
 )
 
+const (
+	sourceListCommand = iota + 1
+	sourcePathCommand
+	addImagesCommand
+	removeSelectedCommand
+	clearListCommand
+)
+
 var formatOrder = []OutputFormat{FormatKeepSource, FormatPNG, FormatJPEG}
 
 type NativeView struct {
-	options *OptionsManager
-	presets *preset.NativeManager
-	parent  windows.Handle
-	browse  func(windows.Handle, string) (string, bool, error)
+	options   *OptionsManager
+	presets   *preset.NativeManager
+	inventory *Inventory
+	parent    windows.Handle
+	browse    func(windows.Handle, string) (string, bool, error)
+	pickFiles func(windows.Handle, string) ([]string, bool, error)
 
+	sourceLabel     *ui.Label
+	sourceHint      *ui.Label
+	list            *ui.ListBox
+	pathLabel       *ui.Label
+	path            *ui.ReadOnlyText
+	pathDetail      *ui.Label
+	addButton       *ui.Button
+	removeButton    *ui.Button
+	clearButton     *ui.Button
 	modeLabel       *ui.Label
 	modeDescription *ui.Label
 	folderLabel     *ui.Label
@@ -58,16 +82,46 @@ type NativeView struct {
 
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
 	return &NativeView{
-		options: options,
-		presets: preset.NewNativeManager(manager),
-		browse:  ui.BrowseForFolder,
+		options:   options,
+		presets:   preset.NewNativeManager(manager),
+		inventory: NewInventory(),
+		browse:    ui.BrowseForFolder,
+		pickFiles: ui.PickImageFiles,
 	}
 }
 
 func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	n.parent = parent
 	base := int32(optionsCommandBase)
+	sources := int32(sourcesCommandBase)
 	var err error
+	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
+		return err
+	}
+	if n.sourceHint, err = ui.NewLabel(parent, ui.SourceImagesHint); err != nil {
+		return err
+	}
+	if n.list, err = ui.NewListBox(parent, sources+sourceListCommand); err != nil {
+		return err
+	}
+	if n.pathLabel, err = ui.NewMnemonicLabel(parent, ui.SourcePathLabel); err != nil {
+		return err
+	}
+	if n.path, err = ui.NewReadOnlyText(parent, sources+sourcePathCommand); err != nil {
+		return err
+	}
+	if n.pathDetail, err = ui.NewLabel(parent, ""); err != nil {
+		return err
+	}
+	if n.addButton, err = ui.NewButton(parent, ui.AddImagesAction, ui.ButtonOptions{ID: sources + addImagesCommand, Group: true}); err != nil {
+		return err
+	}
+	if n.removeButton, err = ui.NewButton(parent, ui.RemoveSelectedAction, ui.ButtonOptions{ID: sources + removeSelectedCommand, Disabled: true}); err != nil {
+		return err
+	}
+	if n.clearButton, err = ui.NewButton(parent, ui.ClearListAction, ui.ButtonOptions{ID: sources + clearListCommand, Disabled: true}); err != nil {
+		return err
+	}
 	if n.modeLabel, err = ui.NewLabel(parent, ui.ResizeModeSummaryLabel); err != nil {
 		return err
 	}
@@ -130,6 +184,15 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
+	n.sourceLabel.SetFont(font)
+	n.sourceHint.SetFont(font)
+	n.list.SetFont(font)
+	n.pathLabel.SetFont(font)
+	n.path.SetFont(font)
+	n.pathDetail.SetFont(font)
+	for _, button := range []*ui.Button{n.addButton, n.removeButton, n.clearButton} {
+		button.SetFont(font)
+	}
 	n.modeLabel.SetFont(font)
 	n.modeDescription.SetFont(font)
 	n.folderLabel.SetFont(font)
@@ -151,6 +214,15 @@ func (n *NativeView) NativeFont(font windows.Handle) {
 }
 
 func (n *NativeView) NativeShow(visible bool) {
+	n.sourceLabel.Show(visible)
+	n.sourceHint.Show(visible)
+	n.list.Show(visible)
+	n.pathLabel.Show(visible)
+	n.path.Show(visible)
+	n.pathDetail.Show(visible)
+	for _, button := range []*ui.Button{n.addButton, n.removeButton, n.clearButton} {
+		button.Show(visible)
+	}
 	n.modeLabel.Show(visible)
 	n.modeDescription.Show(visible)
 	n.folderLabel.Show(visible)
@@ -173,11 +245,12 @@ func (n *NativeView) NativeShow(visible bool) {
 
 func (n *NativeView) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
 	own, _, _, _ := n.optionsSectionHeight(width, scale, measure)
-	return n.presets.NativeHeight(width, scale, measure) + scale(16) + own
+	return n.sourcesSectionHeight(width, scale, measure) + scale(16) + n.presets.NativeHeight(width, scale, measure) + scale(16) + own
 }
 
 func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) {
 	_, qualityMetrics, backgroundMetrics, statusHeight := n.optionsSectionHeight(width, scale, measure)
+	y = n.layoutSourcesSection(x, y, width, scale, measure) + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 	y += n.presets.NativeHeight(width, scale, measure) + scale(16)
 	n.modeLabel.Move(x, y, width, scale(20))
@@ -249,6 +322,57 @@ func stackedOptionsLayout(width int32, scale func(int32) int32) bool {
 	return width < scale(460)
 }
 
+// sourcesSectionHeight mirrors layoutSourcesSection: label, hint, list,
+// full-path display, and the Add/Remove/Clear button row(s).
+func (n *NativeView) sourcesSectionHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
+	height := scale(24) + max(scale(20), measure(n.sourceHint.Text(), width)) + scale(8)
+	height += scale(140) + scale(12)
+	height += scale(24) + scale(28)
+	if text := n.pathDetail.Text(); text != "" {
+		height += scale(4) + max(scale(20), measure(text, width))
+	}
+	height += scale(12)
+	if stackedOptionsLayout(width, scale) {
+		return height + 3*scale(36) + 2*scale(8)
+	}
+	return height + scale(36)
+}
+
+func (n *NativeView) layoutSourcesSection(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
+	n.sourceLabel.Move(x, y, width, scale(20))
+	hintHeight := max(scale(20), measure(n.sourceHint.Text(), width))
+	n.sourceHint.Move(x, y+scale(24), width, hintHeight)
+	y += scale(24) + hintHeight + scale(8)
+	n.list.Move(x, y, width, scale(140))
+	y += scale(140) + scale(12)
+	n.pathLabel.Move(x, y, width, scale(20))
+	n.path.Move(x, y+scale(24), width, scale(28))
+	y += scale(24) + scale(28)
+	if text := n.pathDetail.Text(); text != "" {
+		detailHeight := max(scale(20), measure(text, width))
+		n.pathDetail.Move(x, y+scale(4), width, detailHeight)
+		y += scale(4) + detailHeight
+	}
+	y += scale(12)
+	buttons := []*ui.Button{n.addButton, n.removeButton, n.clearButton}
+	if stackedOptionsLayout(width, scale) {
+		for _, button := range buttons {
+			button.Move(x, y, width, scale(36))
+			y += scale(36) + scale(8)
+		}
+		return y - scale(8)
+	}
+	column := max(int32(1), width/3)
+	for index, button := range buttons {
+		right := x + int32(index+1)*column
+		if index == len(buttons)-1 {
+			right = x + width
+		}
+		button.Move(x+int32(index)*column, y, right-x-int32(index)*column, scale(36))
+	}
+	return y + scale(36)
+}
+
 func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 	if n.quality.HandleCommand(id, notification) {
 		if notification == ui.NotificationEditKillFocus {
@@ -259,6 +383,44 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 	if n.background.HandleCommand(id, notification) {
 		if notification == ui.NotificationEditKillFocus {
 			n.commitBackground()
+		}
+		return true
+	}
+	switch id - sourcesCommandBase {
+	case addImagesCommand:
+		if notification != 0 {
+			return true
+		}
+		paths, chosen, err := n.pickFiles(n.parent, ui.ImagePickerTitle)
+		if err != nil {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.ImagePickerFailed, err)}, 0)
+			return true
+		}
+		if !chosen {
+			return true
+		}
+		n.addSources(paths)
+		return true
+	case removeSelectedCommand:
+		if notification != 0 {
+			return true
+		}
+		n.removeSelectedSources()
+		return true
+	case clearListCommand:
+		if notification != 0 {
+			return true
+		}
+		n.inventory.Clear()
+		n.refreshSources()
+		// Clearing disables the Clear button itself, so keyboard focus moves
+		// to the list instead of being stranded on a disabled control.
+		n.list.Focus()
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared}, 0)
+		return true
+	case sourceListCommand:
+		if notification == ui.NotificationListSelChange {
+			n.refreshSourceSelection()
 		}
 		return true
 	}
@@ -419,6 +581,87 @@ func (n *NativeView) refreshModeDescription() {
 		format = ui.ResizeModeCropDescription
 	}
 	n.modeDescription.SetText(fmt.Sprintf(format, selected.Width, selected.Height))
+}
+
+// NativeDropFiles handles files and folders dropped on the shell window
+// while the Image Resizer module is active (RSZ-002, RSZ-008). The shell
+// enables drag-and-drop only while the active module accepts it.
+func (n *NativeView) NativeDropFiles(paths []string) {
+	n.addSources(paths)
+}
+
+func (n *NativeView) addSources(paths []string) {
+	summary := n.inventory.Add(paths)
+	n.refreshSources()
+	n.list.Focus()
+	_ = n.status.Show(summarizeAdd(summary), 0)
+}
+
+func (n *NativeView) removeSelectedSources() {
+	indices := n.list.SelectedIndices()
+	if len(indices) == 0 {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone}, 0)
+		return
+	}
+	n.inventory.Remove(indices)
+	n.refreshSources()
+	n.list.Focus()
+	_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))}, 0)
+}
+
+// summarizeAdd builds the batch result notice: every add reports what was
+// added and why other files were not, so unsupported or unreadable files
+// never fail silently (RSZ-004).
+func summarizeAdd(summary AddSummary) ui.Notice {
+	if summary.Added == 0 && summary.Duplicates == 0 && summary.Unsupported == 0 && summary.Inaccessible == 0 {
+		return ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesAddEmpty}
+	}
+	var message strings.Builder
+	fmt.Fprintf(&message, ui.ImagesAdded, summary.Added)
+	if summary.Duplicates > 0 {
+		fmt.Fprintf(&message, ui.ImagesAddedDuplicates, summary.Duplicates)
+	}
+	if summary.Unsupported > 0 {
+		fmt.Fprintf(&message, ui.ImagesAddedUnsupported, summary.Unsupported)
+	}
+	if summary.Inaccessible > 0 {
+		fmt.Fprintf(&message, ui.ImagesAddedInaccessible, summary.Inaccessible)
+	}
+	kind := ui.NoticeSuccess
+	if summary.Unsupported > 0 || summary.Inaccessible > 0 {
+		kind = ui.NoticeWarning
+	}
+	return ui.Notice{Kind: kind, Message: message.String()}
+}
+
+// refreshSources rebuilds the list from the inventory (RSZ-005): each row
+// shows the file name and its status, and the full path and status detail of
+// the selected item appear below on demand.
+func (n *NativeView) refreshSources() {
+	n.list.Reset()
+	for _, item := range n.inventory.Items() {
+		n.list.Add(fmt.Sprintf(ui.SourceListFormat, item.Name, item.Status.Label()))
+	}
+	n.refreshSourceSelection()
+}
+
+func (n *NativeView) refreshSourceSelection() {
+	items := n.inventory.Items()
+	selection := n.list.SelectedIndices()
+	if len(selection) == 0 {
+		n.path.SetText("")
+		n.pathDetail.SetText("")
+	} else {
+		item := items[selection[0]]
+		n.path.SetText(item.Path)
+		detail := ""
+		if item.Status != StatusReady {
+			detail = item.Status.Label() + ": " + item.Detail
+		}
+		n.pathDetail.SetText(detail)
+	}
+	n.removeButton.Enable(len(selection) > 0)
+	n.clearButton.Enable(len(items) > 0)
 }
 
 func (n *NativeView) presentResult(err error, success string) {
