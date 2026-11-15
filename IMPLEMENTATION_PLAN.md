@@ -188,7 +188,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** This PR configures jobs but does not execute resizing; Start Resize stays disabled until the batch items land. Job settings persist in a versioned `resize` object inside the Image Resizer module section, validated independently from and preserved alongside the module's `presets` data. The view restates the selected preset's fitting mode in plain language — including the Stretch distortion warning — refreshed after every preset operation, and restates the selected collision policy's consequence, including that Overwrite replaces existing outputs only after job-time confirmation and never touches source files. JPEG quality and the transparency background stay enabled for Keep Source Format because JPEG sources still encode as JPEG.
 
 20. **RSZ-02 — Implement bulk input selection and inventory**
-    - **Status:** In Progress | **PR:** TBD | **Depends on:** RSZ-01, FND-05
+    - **Status:** In Progress | **PR:** [#20](https://github.com/CyberCute-Studio/GameDevTools/pull/20) | **Depends on:** RSZ-01, FND-05
     - **Requirements:** RSZ-001, RSZ-002, RSZ-003, RSZ-004, RSZ-005, RSZ-006, RSZ-007, RSZ-008, RSZ-009.
     - **Deliver:** Multi-file picker, file drag-and-drop, optional nonrecursive folder drop, extension filtering, full-path deduplication, source list, removal/clear actions, read-only file handling, and per-item initial validation/status.
     - **Verify:** Add mixed supported/unsupported files, duplicates, inaccessible files, and drag-and-drop batches. Confirm originals open read-only and invalid items do not block valid inventory entries.
