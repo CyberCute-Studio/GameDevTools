@@ -22,6 +22,7 @@ const (
 	wmTimer          = 0x0113
 	wmDisplayChange  = 0x007e
 	wmDPIChanged     = 0x02e0
+	wmDropFiles      = 0x0233
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1
 
@@ -81,6 +82,7 @@ var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
+	shell32  = windows.NewLazySystemDLL("shell32.dll")
 
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
 	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
@@ -127,6 +129,9 @@ var (
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")
 	procSetBkMode                     = gdi32.NewProc("SetBkMode")
 	procSetTextColor                  = gdi32.NewProc("SetTextColor")
+	procDragAcceptFiles               = shell32.NewProc("DragAcceptFiles")
+	procDragQueryFileW                = shell32.NewProc("DragQueryFileW")
+	procDragFinish                    = shell32.NewProc("DragFinish")
 )
 
 type rect struct {

@@ -324,6 +324,66 @@ func NewReadOnlyText(parent windows.Handle, id int32) (*ReadOnlyText, error) {
 	return &ReadOnlyText{Control{hwnd: hwnd}}, nil
 }
 
+// ListBox is a multi-select list control: extended selection (Shift/Ctrl)
+// with change notifications, used for item inventories such as the Image
+// Resizer source list. Item data stays with the caller, indexed by position.
+type ListBox struct {
+	Control
+}
+
+func NewListBox(parent windows.Handle, id int32) (*ListBox, error) {
+	hwnd, err := createControl(parent, "LISTBOX", "", wsChild|wsVisible|wsTabStop|wsVScroll|lbsNotify|lbsExtendedSel, wsExClientEdge, id)
+	if err != nil {
+		return nil, err
+	}
+	return &ListBox{Control{hwnd: hwnd}}, nil
+}
+
+func (l *ListBox) Add(text string) {
+	procSendMessageW.Call(uintptr(l.hwnd), lbAddString, 0, uintptr(unsafe.Pointer(utf16(text))))
+}
+
+func (l *ListBox) Reset() {
+	procSendMessageW.Call(uintptr(l.hwnd), lbResetContent, 0, 0)
+}
+
+func (l *ListBox) Count() int {
+	count, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetCount, 0, 0)
+	return int(int32(count))
+}
+
+func (l *ListBox) ItemText(index int) string {
+	length, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetTextLen, uintptr(index), 0)
+	if int32(length) <= 0 {
+		return ""
+	}
+	buffer := make([]uint16, int(length)+1)
+	procSendMessageW.Call(uintptr(l.hwnd), lbGetText, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])))
+	return windows.UTF16ToString(buffer)
+}
+
+// SetSelected selects or clears a single item without disturbing the other
+// selections, so callers can restore the selection after rebuilding a list.
+func (l *ListBox) SetSelected(index int, selected bool) {
+	procSendMessageW.Call(uintptr(l.hwnd), lbSetSel, boolPointer(selected), uintptr(index))
+}
+
+// SelectedIndices returns the indexes of every selected item in ascending
+// order.
+func (l *ListBox) SelectedIndices() []int {
+	count, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetSelCount, 0, 0)
+	if int32(count) <= 0 {
+		return nil
+	}
+	indices := make([]int32, int(count))
+	actual, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetSelItems, count, uintptr(unsafe.Pointer(&indices[0])))
+	result := make([]int, 0, int(int32(actual)))
+	for _, index := range indices[:int(int32(actual))] {
+		result = append(result, int(index))
+	}
+	return result
+}
+
 type StatusArea struct {
 	*Label
 

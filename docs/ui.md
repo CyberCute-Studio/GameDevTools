@@ -2,7 +2,7 @@
 
 ## Controls and keyboard behavior
 
-Shared Win32 controls live in `internal/ui`. Use standard `BUTTON`, `EDIT`, and `STATIC` controls rather than custom-painted replacements. Standard controls supply keyboard operation, visible focus, accessibility metadata, and Windows high-contrast behavior. Parent windows must pass unhandled messages through `IsDialogMessageW` so Tab, Shift+Tab, mnemonics, and arrow-key navigation continue to work.
+Shared Win32 controls live in `internal/ui`. Use standard `BUTTON`, `EDIT`, `STATIC`, and `LISTBOX` controls rather than custom-painted replacements. Standard controls supply keyboard operation, visible focus, accessibility metadata, and Windows high-contrast behavior. Parent windows must pass unhandled messages through `IsDialogMessageW` so Tab, Shift+Tab, mnemonics, and arrow-key navigation continue to work.
 
 A dimension input has an adjacent label such as `Width (px)`, a keyboard-focusable edit field, and a validation message directly below it. Field labels immediately precede their edits in tab order and retain mnemonics so Windows can associate the accessible name and keyboard shortcut. Other labels display ampersands literally. Dimension displays use `width × height px` through `ui.FormatDimensions`. Feature modules own their allowed ranges and validation rules; the shared parser only requires a positive whole number representable by `int`.
 
@@ -31,6 +31,10 @@ The reusable native preset manager in `internal/preset` is embedded independentl
 ## Resize job configuration
 
 The Image Resizer view presents the selected preset's fitting mode and its consequence in plain language — including the Stretch distortion warning and the Crop to Fill trimming note — refreshed from the preset library after every preset operation, so the consequence of the job's mode is visible before any job can start. The output format (Keep Source Format, PNG, or JPEG), collision policy (Rename, Skip, or Overwrite), JPEG quality, JPEG transparency background, and output folder persist like the Screenshot capture options. The quality and background fields are disabled only when the format forces PNG output, because Keep Source Format can still encode JPEG sources as JPEG. The collision policy is restated beneath its radio buttons with the exact consequence of the selected policy, including the note that Overwrite replaces existing outputs only after job-time confirmation and never touches source images.
+
+## Resize source list
+
+The Image Resizer source list is a `ui.ListBox`: a multi-select `LISTBOX` with extended (Shift/Ctrl) selection and change notifications. Each row shows the file name and its status (`Ready`, `Unsupported format`, or `Cannot be read`); selecting an item shows its full path in a `ui.ReadOnlyText` and, for items that failed initial validation, the reason on a line below it. Remove Selected and Clear List stay disabled until they apply. Files are added through the multi-select image picker (`ui.PickImageFiles`, filtered to the supported PNG/JPEG extensions) or by dropping files — or a folder of images — anywhere on the view: the shell registers the window with `DragAcceptFiles` only while the active module implements `nativeDropTarget`, unpacks `WM_DROPFILES`, and delivers the paths to that module, so other modules keep the no-drop cursor. Adding validates each path up front (extension, read-only open) without blocking the valid entries, deduplicates full paths case-insensitively, and never modifies the sources; a dropped folder contributes only the supported files directly inside it, without recursing. Batch results are summarized in the view's status area, including counts of duplicates, unsupported files, and unreadable files.
 
 ## Capture overlay sessions
 

@@ -415,3 +415,101 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	})
 	return shell
 }
+
+// dropFilesHeader mirrors the Win32 DROPFILES structure: the offset of the
+// double-NUL-terminated, wide-character path list that follows it.
+type dropFilesHeader struct {
+	pFiles uint32
+	x      int32
+	y      int32
+	fNC    int32
+	fWide  int32
+}
+
+var (
+	procGlobalAlloc   = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock    = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock  = kernel32.NewProc("GlobalUnlock")
+	procRtlMoveMemory = kernel32.NewProc("RtlMoveMemory")
+)
+
+// newTestDrop packs paths into a real HDROP so the shell's DragQueryFileW
+// parsing is exercised against the same payload Explorer produces. The
+// shell's DragFinish releases the handle, so the test must not free it.
+func newTestDrop(t *testing.T, paths []string) uintptr {
+	t.Helper()
+	var names []uint16
+	for _, path := range paths {
+		wide, err := windows.UTF16FromString(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, wide...)
+	}
+	names = append(names, 0)
+	header := dropFilesHeader{pFiles: uint32(unsafe.Sizeof(dropFilesHeader{})), fWide: 1}
+	payload := make([]byte, unsafe.Sizeof(header)+uintptr(len(names))*2)
+	payload[0] = byte(header.pFiles)
+	payload[16] = byte(header.fWide)
+	for index, unit := range names {
+		payload[int(unsafe.Sizeof(header))+2*index] = byte(unit)
+		payload[int(unsafe.Sizeof(header))+2*index+1] = byte(unit >> 8)
+	}
+	const gmemMoveableZeroInit = 0x0042
+	handle, _, err := procGlobalAlloc.Call(gmemMoveableZeroInit, uintptr(len(payload)))
+	if handle == 0 {
+		t.Fatalf("GlobalAlloc(HDROP): %v", err)
+	}
+	base, _, err := procGlobalLock.Call(handle)
+	if base == 0 {
+		t.Fatalf("GlobalLock(HDROP): %v", err)
+	}
+	procRtlMoveMemory.Call(base, uintptr(unsafe.Pointer(&payload[0])), uintptr(len(payload)))
+	procGlobalUnlock.Call(handle)
+	return handle
+}
+
+// dropRecordingView records NativeDropFiles calls so the shell's
+// WM_DROPFILES routing can be observed.
+type dropRecordingView struct {
+	recordingNativeView
+	paths []string
+}
+
+func (n *dropRecordingView) NativeDropFiles(paths []string) {
+	n.paths = append(n.paths, paths...)
+}
+
+// TestShellWindowProcRoutesDroppedFiles covers the shell half of RSZ-002: a
+// WM_DROPFILES reaching the shell window is unpacked and delivered to the
+// active module when it accepts drops, with the drop handle released either
+// way.
+func TestShellWindowProcRoutesDroppedFiles(t *testing.T) {
+	native := &dropRecordingView{}
+	shell := newCommandTestShell(t, native)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`, `C:\Images\b.jpg`}), nil)
+	if len(native.paths) != 2 || native.paths[0] != `C:\Images\a.png` || native.paths[1] != `C:\Images\b.jpg` {
+		t.Fatalf("dropped paths = %v", native.paths)
+	}
+	if native.layouts == 0 {
+		t.Fatal("accepted drop did not trigger a layout")
+	}
+
+	layouts := native.layouts
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, nil), nil)
+	if len(native.paths) != 2 {
+		t.Fatalf("empty drop delivered paths: %v", native.paths)
+	}
+	if native.layouts != layouts {
+		t.Fatal("empty drop triggered a layout")
+	}
+}
+
+func TestShellWindowProcIgnoresDropsForNonTargets(t *testing.T) {
+	native := &recordingNativeView{}
+	shell := newCommandTestShell(t, native)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`}), nil)
+	if native.layouts != 0 {
+		t.Fatal("drop for a module without drop support triggered a layout")
+	}
+}

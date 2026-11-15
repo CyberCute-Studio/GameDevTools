@@ -33,6 +33,19 @@ const (
 	cbSetCurSel         = 0x014e
 	cbnSelChange        = 1
 
+	wsVScroll      = 0x00200000
+	lbsNotify      = 0x0001
+	lbsExtendedSel = 0x0800
+	lbAddString    = 0x0180
+	lbResetContent = 0x0184
+	lbGetCount     = 0x018b
+	lbGetSelCount  = 0x0190
+	lbGetSelItems  = 0x0191
+	lbGetText      = 0x0189
+	lbGetTextLen   = 0x018a
+	lbSetSel       = 0x0185
+	lbnSelChange   = 1
+
 	swHide = 0
 	swShow = 5
 
@@ -57,6 +70,11 @@ const NotificationEditSetFocus = enSetFocus
 // field's text changes, exported so feature modules can clear stale
 // validation text while the user types.
 const NotificationEditChange = enChange
+
+// NotificationListSelChange is the list-box notification sent when the
+// selection changes, exported so feature modules can refresh the details
+// they show for the selected item.
+const NotificationListSelChange = lbnSelChange
 
 var (
 	user32 = windows.NewLazySystemDLL("user32.dll")

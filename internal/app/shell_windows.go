@@ -96,6 +96,14 @@ type nativeShutdown interface {
 	NativeShutdown()
 }
 
+// nativeDropTarget is implemented by module views that accept dropped files
+// — the Image Resizer source list (RSZ-002). The shell registers the window
+// for drag-and-drop only while the active module implements it, so drops on
+// other modules keep the no-drop cursor.
+type nativeDropTarget interface {
+	NativeDropFiles(paths []string)
+}
+
 type shellLayout struct {
 	compact           bool
 	margin            int32
@@ -345,6 +353,15 @@ func (s *nativeShell) updateView() {
 	for id, native := range s.nativeViews {
 		native.NativeShow(id == current.ID())
 	}
+	// Drag-and-drop acceptance follows the active module: only a module that
+	// consumes dropped files registers the shell window with the shell.
+	accept := uintptr(0)
+	if native, exists := s.nativeViews[current.ID()]; exists {
+		if _, target := native.(nativeDropTarget); target {
+			accept = 1
+		}
+	}
+	procDragAcceptFiles.Call(uintptr(s.hwnd), accept)
 }
 
 func (s *nativeShell) noteText() string {
@@ -531,6 +548,43 @@ func (s *nativeShell) waitForBackgroundWork() {
 			shutdown.NativeShutdown()
 		}
 	}
+}
+
+// handleDrop unpacks a WM_DROPFILES payload into paths and offers them to
+// the active module when it is a drop target. The drop handle is always
+// released, including when no module accepts it.
+func (s *nativeShell) handleDrop(drop uintptr) bool {
+	defer procDragFinish.Call(drop)
+	native, exists := s.nativeViews[s.navigator.Current().ID()]
+	if !exists {
+		return false
+	}
+	target, ok := native.(nativeDropTarget)
+	if !ok {
+		return false
+	}
+	paths := dropPaths(drop)
+	if len(paths) == 0 {
+		return false
+	}
+	target.NativeDropFiles(paths)
+	return true
+}
+
+// dropPaths reads every dropped path out of the drop handle.
+func dropPaths(drop uintptr) []string {
+	count, _, _ := procDragQueryFileW.Call(drop, ^uintptr(0), 0, 0)
+	paths := make([]string, 0, int(count))
+	for index := 0; index < int(count); index++ {
+		length, _, _ := procDragQueryFileW.Call(drop, uintptr(index), 0, 0)
+		if length == 0 {
+			continue
+		}
+		buffer := make([]uint16, int(length)+1)
+		procDragQueryFileW.Call(drop, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])), length+1)
+		paths = append(paths, windows.UTF16ToString(buffer))
+	}
+	return paths
 }
 
 // filterModuleMessage lets module views pre-handle a queued message before
@@ -745,6 +799,16 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			}
 			return 0
 		}
+	case wmDropFiles:
+		// Dropped files go only to the active module and only when it
+		// accepts them; DragAcceptFiles in updateView keeps the no-drop
+		// cursor for every other module.
+		if shell != nil {
+			if shell.handleDrop(wParam) {
+				shell.layout()
+			}
+			return 0
+		}
 	case wmMouseWheel:
 		if shell != nil {
 			delta := int32(int16(highWord(wParam)))
@@ -824,6 +888,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDestroy:
 		if shell != nil {
 			delete(shellStates, hwnd)
+			procDragAcceptFiles.Call(uintptr(hwnd), 0)
 			for _, native := range shell.nativeViews {
 				native.NativeDestroy()
 			}
