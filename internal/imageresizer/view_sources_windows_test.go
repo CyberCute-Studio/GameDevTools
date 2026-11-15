@@ -65,6 +65,20 @@ func newSourcesTestView(t *testing.T) (*NativeView, *queuedDispatcher) {
 	return view, dispatcher
 }
 
+// sourceDir returns a temporary folder for the view's test sources. Cleanups
+// run last-in, first-out, so the folder's removal is registered first and the
+// view's content checks are stopped and joined after it, before it runs:
+// Windows cannot delete a file a check still holds open.
+func sourceDir(t *testing.T, view *NativeView) string {
+	t.Helper()
+	directory := t.TempDir()
+	t.Cleanup(func() {
+		view.inspector.Close()
+		view.inspector.Wait()
+	})
+	return directory
+}
+
 // settle runs posted content-check results until no item is still Checking.
 func settle(t *testing.T, view *NativeView, dispatcher *queuedDispatcher) {
 	t.Helper()
@@ -130,7 +144,7 @@ func listContents(list *ui.ListBox) []string {
 
 func TestNativeViewAddImagesThroughPicker(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	ready := writeViewSource(t, directory, "ready.png")
 	unsupported := writeViewSource(t, directory, "notes.bmp")
 	missing := filepath.Join(directory, "missing.jpg")
@@ -196,7 +210,7 @@ func TestNativeViewAddImagesThroughPicker(t *testing.T) {
 
 func TestNativeViewDropFilesAndFolder(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	first := writeViewSource(t, directory, "one.png")
 	writeViewFile(t, directory, "two.JPG", encodeTestJPEG(t, 8, 6))
 	writeViewSource(t, directory, "skipped.bmp")
@@ -227,7 +241,7 @@ func TestNativeViewDropFilesAndFolder(t *testing.T) {
 // dimensions (RSZ-018).
 func TestNativeViewIdentifiesContentProblems(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	valid := encodeTestPNG(t, 20, 10)
 	paths := []string{
 		writeViewFile(t, directory, "text.png", []byte("not an image")),
@@ -324,7 +338,7 @@ func useGatedInspector(view *NativeView) *gatedInspect {
 func TestNativeViewCheckResultsKeepSelection(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	view.NativeDropFiles([]string{
 		writeViewSource(t, directory, "one.png"),
 		writeViewSource(t, directory, "two.png"),
@@ -370,7 +384,7 @@ func TestNativeViewCheckResultsKeepSelection(t *testing.T) {
 func TestNativeViewRemovingCheckingItemsAbandonsTheirChecks(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	first := writeViewSource(t, directory, "one.png")
 	view.NativeDropFiles([]string{first, writeViewSource(t, directory, "two.png")})
 	if path := gate.waitFor(t, gate.started); path != first {
@@ -414,7 +428,7 @@ func TestNativeViewRemovingCheckingItemsAbandonsTheirChecks(t *testing.T) {
 // one.
 func TestNativeViewBatchesCheckResults(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	paths := make([]string, 0, 5)
 	for _, name := range []string{"a.png", "b.png", "c.png", "d.png", "e.png"} {
 		paths = append(paths, writeViewSource(t, directory, name))
@@ -471,7 +485,7 @@ func TestNativeViewRetriesARefusedPost(t *testing.T) {
 	view, _ := newSourcesTestView(t)
 	dispatcher := &failingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 16)}, fails: 2}
 	view.NativeDispatcher(dispatcher)
-	view.NativeDropFiles([]string{writeViewSource(t, t.TempDir(), "only.png")})
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "only.png")})
 	dispatcher.runNext(t)
 	if got := view.list.ItemText(0); got != "only.png — 4 × 3 px — Ready" {
 		t.Fatalf("row after the retried post = %q", got)
@@ -500,7 +514,7 @@ func TestNativeViewRetriesARefusedPost(t *testing.T) {
 func TestNativeViewCheckSummaryKeepsOtherNotices(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
-	view.NativeDropFiles([]string{writeViewSource(t, t.TempDir(), "one.png")})
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "one.png")})
 	gate.waitFor(t, gate.started)
 
 	view.presentResult(fmt.Errorf("%w: the disk is full", ErrPersistence), "")
@@ -516,7 +530,7 @@ func TestNativeViewCheckSummaryKeepsOtherNotices(t *testing.T) {
 
 	// Ownership follows the notice shown, not its text: the same text shown
 	// elsewhere is kept, while an area left empty takes the summary.
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	view.NativeDropFiles([]string{writeViewSource(t, directory, "two.png")})
 	gate.waitFor(t, gate.started)
 	same := ui.Notice{Kind: ui.NoticeSuccess, Message: "Added 1 image(s). Checking image content…"}
@@ -545,7 +559,7 @@ func TestNativeViewCheckSummaryKeepsOtherNotices(t *testing.T) {
 func TestNativeViewRemovingTheLastCheckSummarizes(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	view.NativeDropFiles([]string{
 		writeViewSource(t, directory, "one.png"),
 		writeViewSource(t, directory, "damaged.png"),
@@ -583,7 +597,7 @@ func TestNativeViewRemovingTheLastCheckSummarizes(t *testing.T) {
 func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	gate := useGatedInspector(view)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	view.NativeDropFiles([]string{
 		writeViewSource(t, directory, "one.png"),
 		writeViewSource(t, directory, "damaged.png"),
@@ -614,7 +628,7 @@ func TestNativeViewCheckSummaryCountsListedItems(t *testing.T) {
 func TestNativeViewShutdownStopsInFlightChecks(t *testing.T) {
 	view, _ := newSourcesTestView(t)
 	gate := useGatedInspector(view)
-	view.NativeDropFiles([]string{writeViewSource(t, t.TempDir(), "slow.png")})
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "slow.png")})
 	gate.waitFor(t, gate.started)
 
 	done := make(chan struct{})
@@ -633,7 +647,7 @@ func TestNativeViewShutdownStopsInFlightChecks(t *testing.T) {
 
 func TestNativeViewRemoveSelectedAndClearSources(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	first := writeViewSource(t, directory, "one.png")
 	second := writeViewSource(t, directory, "two.png")
 	third := writeViewSource(t, directory, "three.png")
@@ -695,7 +709,7 @@ func TestNativeViewRemoveSelectedAndClearSources(t *testing.T) {
 
 func TestNativeViewSelectionShowsStatusDetail(t *testing.T) {
 	view, _ := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	unsupported := writeViewSource(t, directory, "notes.bmp")
 	view.NativeDropFiles([]string{unsupported})
 
@@ -711,7 +725,7 @@ func TestNativeViewSelectionShowsStatusDetail(t *testing.T) {
 
 func TestNativeViewEmptyDropReportsNothingFound(t *testing.T) {
 	view, _ := newSourcesTestView(t)
-	directory := t.TempDir()
+	directory := sourceDir(t, view)
 	writeViewSource(t, directory, "only.bmp")
 	view.NativeDropFiles([]string{directory})
 	if view.list.Count() != 0 {

@@ -9,14 +9,16 @@ import (
 
 // JPEG markers the header scan distinguishes.
 const (
-	markerSOI  = 0xd8
-	markerEOI  = 0xd9
-	markerSOS  = 0xda
-	markerSOF0 = 0xc0
-	markerSOF2 = 0xc2
-	markerRST0 = 0xd0
-	markerRST7 = 0xd7
-	markerAPP1 = 0xe1
+	markerSOI   = 0xd8
+	markerEOI   = 0xd9
+	markerSOS   = 0xda
+	markerSOF0  = 0xc0
+	markerSOF2  = 0xc2
+	markerRST0  = 0xd0
+	markerRST7  = 0xd7
+	markerAPP0  = 0xe0
+	markerAPP1  = 0xe1
+	markerAPP14 = 0xee
 )
 
 // exifHeader opens the APP1 payload of an EXIF segment. XMP and other APP1
@@ -110,6 +112,82 @@ func scanJPEG(reader *bufio.Reader) (Orientation, jpegFrame) {
 		}
 	}
 	return orientation, frame
+}
+
+// jpegConvertsToRGB walks every marker segment up to the end-of-image
+// marker, through the entropy-coded data of every scan, and reports whether
+// the standard library decoder converts a three-component frame into a new
+// RGBA image. The decoder decides that only after its last scan, from the
+// last JFIF APP0 segment, the last Adobe APP14 segment, and the frame's
+// component identifiers, so a segment DecodeConfig never reads — one after
+// the first scan, or after the frame header of a file that opened as JFIF,
+// where DecodeConfig stops — can still switch it to the conversion. Segments
+// are skipped exactly as the decoder skips them. A walk that ends before the
+// end-of-image marker reports true: the decoder needs that marker to
+// succeed, so the walk cannot rule the conversion out.
+func jpegConvertsToRGB(reader *bufio.Reader) bool {
+	var soi [2]byte
+	if _, err := io.ReadFull(reader, soi[:]); err != nil || soi[0] != 0xff || soi[1] != markerSOI {
+		return true
+	}
+	jfif, adobe, framed, rgbComponents := false, false, false, false
+	var adobeTransform byte
+	for {
+		marker, ok := nextMarker(reader)
+		if !ok {
+			return true
+		}
+		if marker == markerEOI {
+			break
+		}
+		if marker >= markerRST0 && marker <= markerRST7 {
+			continue
+		}
+		var length [2]byte
+		if _, err := io.ReadFull(reader, length[:]); err != nil {
+			return true
+		}
+		payload := int(binary.BigEndian.Uint16(length[:])) - 2
+		if payload < 0 {
+			return true
+		}
+		// The decoder reads the start of these segments and skips the
+		// rest: 5 bytes of an APP0 identifier, 12 of an Adobe APP14
+		// segment, and a three-component frame header.
+		var head []byte
+		switch {
+		case marker == markerAPP0 && payload >= 5:
+			head = make([]byte, 5)
+		case marker == markerAPP14 && payload >= 12:
+			head = make([]byte, 12)
+		case marker >= markerSOF0 && marker <= markerSOF2 && !framed && payload == 6+3*3:
+			head = make([]byte, payload)
+		}
+		if _, err := io.ReadFull(reader, head); err != nil {
+			return true
+		}
+		if _, err := reader.Discard(payload - len(head)); err != nil {
+			return true
+		}
+		switch {
+		case marker == markerAPP0 && head != nil:
+			jfif = string(head) == "JFIF\x00"
+		case marker == markerAPP14 && head != nil && string(head[:5]) == "Adobe":
+			adobe, adobeTransform = true, head[11]
+		case marker >= markerSOF0 && marker <= markerSOF2 && head != nil:
+			framed = true
+			rgbComponents = head[6] == 'R' && head[9] == 'G' && head[12] == 'B'
+		}
+	}
+	if jfif {
+		return false
+	}
+	if adobe && adobeTransform == 0 {
+		// Adobe transform 0 means the components are stored untransformed,
+		// which the decoder takes as RGB.
+		return true
+	}
+	return rgbComponents
 }
 
 // nextMarker reads through the next marker code the way the standard library

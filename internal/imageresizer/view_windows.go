@@ -856,18 +856,17 @@ func (n *NativeView) refreshSources() {
 }
 
 func (n *NativeView) refreshSourceSelection() {
-	items := n.inventory.Items()
 	selection := n.list.SelectedIndices()
 	if len(selection) == 0 {
 		n.path.SetText("")
 		n.pathDetail.SetText("")
 	} else {
-		item := items[selection[0]]
+		item := n.inventory.Item(selection[0])
 		n.path.SetText(item.Path)
 		n.pathDetail.SetText(item.DetailText())
 	}
 	n.removeButton.Enable(len(selection) > 0)
-	n.clearButton.Enable(len(items) > 0)
+	n.clearButton.Enable(n.inventory.Len() > 0)
 }
 
 func (n *NativeView) presentResult(err error, success string) {

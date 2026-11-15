@@ -27,12 +27,12 @@ type InspectionResult struct {
 type inspectFunc func(context.Context, string) (decode.Info, error)
 
 // Inspector checks source content on one background goroutine, one file at
-// a time: the GUI thread never decodes (TECH-005), and decoding is bounded
-// to one source in memory at a time (NFR-014). The goroutine starts when
-// work is queued and exits when the queue is empty. Each finished check is
-// handed to deliver on the worker goroutine; the view forwards it to the GUI
-// thread through the shell dispatcher. A check that is dropped or cancelled
-// is never delivered.
+// a time: the GUI thread never decodes (TECH-005), and decoding holds one
+// source in memory at a time (NFR-014), or two while a dropped check is set
+// aside as described below. The goroutine starts when work is queued and
+// exits when the queue is empty. Each finished check is handed to deliver on
+// the worker goroutine; the view forwards it to the GUI thread through the
+// shell dispatcher. A check that is dropped or cancelled is never delivered.
 //
 // Cancellation reaches a check only at its next read, and a read blocked in
 // the operating system — on an unresponsive network share or an online-only
@@ -40,8 +40,10 @@ type inspectFunc func(context.Context, string) (decode.Info, error)
 // detaches its worker: the worker finishes that check on its own and exits,
 // while a replacement serves the rest of the queue at once, so removing the
 // stuck source frees the others. Only one detached worker is tolerated at a
-// time; until it exits, a dropped check's worker keeps the queue, so at most
-// two sources are ever decoded at once.
+// time, so at most two sources are ever decoded at once: while it runs, a
+// dropped check's worker keeps the queue, and it is detached in turn as soon
+// as the earlier one exits, so a second stuck source holds the queue no
+// longer than the first.
 //
 // Enqueue, Drop, DropAll, Close, and Closed are safe to call from any
 // goroutine.
@@ -59,6 +61,10 @@ type Inspector struct {
 	// detached reports that a worker released from the queue is still
 	// finishing its dropped check.
 	detached bool
+	// detachPending reports that the serving worker's in-flight check was
+	// dropped while another worker was detached, so it is detached once that
+	// one exits.
+	detachPending bool
 	// current and cancelCurrent identify the in-flight check of the serving
 	// worker so Drop can abandon it promptly.
 	current       uint64
@@ -142,11 +148,20 @@ func (i *Inspector) abandonCurrentLocked() {
 	}
 	i.cancelCurrent()
 	if i.detached {
-		// The worker exits through its cancelled check like any other; the
-		// queue waits for it rather than putting a third source in memory.
+		// The queue waits rather than putting a third source in memory: the
+		// worker goes on once its cancelled check returns, or is detached
+		// when the earlier detached worker exits.
+		i.detachPending = true
 		return
 	}
-	i.detached = true
+	i.detachServingLocked()
+}
+
+// detachServingLocked releases the serving worker from the queue to finish
+// its abandoned check on its own and starts a replacement for whatever is
+// queued. The caller holds mu.
+func (i *Inspector) detachServingLocked() {
+	i.detached, i.detachPending = true, false
 	i.serving, i.current, i.cancelCurrent = 0, 0, nil
 	if len(i.queue) > 0 && !i.closed {
 		i.startLocked()
@@ -183,8 +198,11 @@ func (i *Inspector) run(worker uint64) {
 		i.mu.Lock()
 		if i.serving != worker {
 			// Detached while its check was in flight: a replacement owns the
-			// queue now.
+			// queue now. A check dropped meanwhile may be detached in turn.
 			i.detached = false
+			if i.detachPending {
+				i.detachServingLocked()
+			}
 			i.mu.Unlock()
 			return
 		}
@@ -206,7 +224,7 @@ func (i *Inspector) run(worker uint64) {
 
 		i.mu.Lock()
 		if i.serving == worker {
-			i.current, i.cancelCurrent = 0, nil
+			i.current, i.cancelCurrent, i.detachPending = 0, nil, false
 		}
 		i.mu.Unlock()
 		if !abandoned {

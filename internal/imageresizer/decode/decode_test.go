@@ -237,6 +237,9 @@ func TestDamagedContentIsCorrupt(t *testing.T) {
 	// Flip one byte inside the first chunk after IHDR so its CRC no longer
 	// matches.
 	badChecksum[len(pngSignature)+25+10] ^= 0xff
+	// A transfer that converted line endings turns the signature's CRLF
+	// into LF, which is the damage the PNG signature is designed to reveal.
+	lineEndings := append([]byte("\x89PNG\n\x1a\n"), pngData[len(pngSignature):]...)
 
 	cases := []struct {
 		name    string
@@ -247,6 +250,7 @@ func TestDamagedContentIsCorrupt(t *testing.T) {
 		{"checksum.png", badChecksum, FormatPNG},
 		{"signature-only.png", pngSignature, FormatPNG},
 		{"partial-signature.png", pngSignature[:4], FormatPNG},
+		{"line-endings.png", lineEndings, FormatPNG},
 		{"truncated.jpg", jpegData[:len(jpegData)/2], FormatJPEG},
 		{"header-only.jpg", jpegData[:20], FormatJPEG},
 		{"partial-signature.jpg", jpegSignature[:1], FormatJPEG},
@@ -326,10 +330,11 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 		{"oriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 65000, 30000), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 30000, 65000},
 		// The 256 MiB gray plane fits, but not with the upright copy.
 		{"reoriented.jpg", withSegments(jpegWithDimensions(t, encodeJPEG(t, image.NewGray(image.Rect(0, 0, 8, 8))), 16384, 16384), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort)), FormatJPEG, 16384, 16384},
-		// The decoder skips an unknown chunk before IHDR, where the scan
-		// stops, so the check after the header parse is this source's only
-		// limit.
+		// The decoder skips an unknown chunk before IHDR, and so does the
+		// scan.
 		{"late-header.png", lateHeaderPNG(20000, 20000), FormatPNG, 20000, 20000},
+		// A tRNS chunk makes the decoder allocate gray as 4-byte NRGBA.
+		{"transparent-gray.png", append(pngHeader(20000, 20000, 8, 0), pngChunk("tRNS", []byte{0, 7})...), FormatPNG, 20000, 20000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -341,10 +346,16 @@ func TestOversizedSourcesAreRejectedBeforeDecoding(t *testing.T) {
 		})
 	}
 	// The same 8-bit dimensions that a 16-bit source exceeds stay within
-	// the limit; with no image data after the header they are damaged
-	// rather than too large.
-	_, err := Inspect(context.Background(), writeFile(t, "wide.png", pngHeader(16384, 12000, 8, 6)))
-	requireKind(t, err, KindCorrupt, FormatPNG)
+	// the limit, and so does opaque gray, which decodes at one byte per
+	// pixel; with no image data after the header they are damaged rather
+	// than too large.
+	for name, content := range map[string][]byte{
+		"wide.png": pngHeader(16384, 12000, 8, 6),
+		"gray.png": append(pngHeader(20000, 20000, 8, 0), pngChunk("IDAT", nil)...),
+	} {
+		_, err := Inspect(context.Background(), writeFile(t, name, content))
+		requireKind(t, err, KindCorrupt, FormatPNG)
+	}
 }
 
 // lateHeaderPNG builds a PNG whose IHDR follows an unknown text chunk, which
@@ -490,7 +501,8 @@ func TestCancellationAfterTheLastRead(t *testing.T) {
 
 // TestInspectReleasesLargeDecodes pins NFR-014 across back-to-back checks:
 // after decoding a large source Inspect returns its discarded pixel memory
-// at once, while small or rejected sources skip the forced collection.
+// at once, while small or rejected sources skip the forced collection, and
+// the upright copy Inspect never makes does not count.
 func TestInspectReleasesLargeDecodes(t *testing.T) {
 	releases := 0
 	previous := releaseMemory
@@ -503,13 +515,19 @@ func TestInspectReleasesLargeDecodes(t *testing.T) {
 	if _, err := Inspect(context.Background(), writeFile(t, "huge.png", pngHeader(100000, 100000, 8, 6))); err == nil {
 		t.Fatal("Inspect accepted an oversized source")
 	}
-	if releases != 0 {
-		t.Fatalf("%d releases for small and rejected sources, want 0", releases)
+	// A rotated 4096 × 4096 gray JPEG decodes into a 16 MiB plane; only
+	// Decode adds the 64 MiB upright copy that would pass the threshold.
+	rotated := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 4096, 4096))), exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
+	if _, err := Inspect(context.Background(), writeFile(t, "rotated.jpg", rotated)); err != nil {
+		t.Fatal(err)
 	}
-	// A two-color palette encodes at one bit per pixel, so the file stays
-	// small while its decoding allowance — 4 bytes per pixel — passes the
-	// threshold.
-	large := image.NewPaletted(image.Rect(0, 0, 4096, 4100), color.Palette{color.Black, color.White})
+	if releases != 0 {
+		t.Fatalf("%d releases for small, rejected, and rotated sources, want 0", releases)
+	}
+	// A two-color palette encodes at one bit per pixel and decodes at one
+	// byte per pixel, so the file stays small while its decoding allowance
+	// passes the threshold.
+	large := image.NewPaletted(image.Rect(0, 0, 8192, 8200), color.Palette{color.Black, color.White})
 	if _, err := Inspect(context.Background(), writeFile(t, "large.png", encodePNG(t, large))); err != nil {
 		t.Fatal(err)
 	}

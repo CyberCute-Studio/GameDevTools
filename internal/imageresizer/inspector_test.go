@@ -143,7 +143,9 @@ func TestInspectorDropAbandonsQueuedAndInFlightChecks(t *testing.T) {
 // whose read is blocked in the operating system — which never observes the
 // cancellation — lets the remaining checks go on, while at most one such
 // worker is set aside at a time, so no more than two sources are ever
-// decoded at once (NFR-014).
+// decoded at once (NFR-014). A second stuck source removed meanwhile is set
+// aside as soon as the first one's worker exits, rather than holding the
+// queue until its own read returns.
 func TestInspectorDropFreesTheQueueFromAStuckCheck(t *testing.T) {
 	results := newCollector()
 	started := make(chan string, 16)
@@ -188,14 +190,20 @@ func TestInspectorDropFreesTheQueueFromAStuckCheck(t *testing.T) {
 	inspector.Drop([]uint64{3})
 	noneStarts("the first stuck check is still set aside")
 	close(unstick["stuck one"])
-	noneStarts("the second stuck check still holds the queue")
-	close(unstick["stuck two"])
 	waitStarted("last")
 	got := results.wait(t, 2)
+	if got[1].ID != 4 {
+		t.Fatalf("second delivered result = %+v, want item 4", got[1])
+	}
+	// Work queued later is not held up by the check still stuck either.
+	inspector.Enqueue([]Inspection{{ID: 5, Path: "later"}})
+	waitStarted("later")
+	results.wait(t, 3)
+	close(unstick["stuck two"])
 	inspector.Close()
 	inspector.Wait()
-	if got[1].ID != 4 || results.count() != 2 {
-		t.Fatalf("delivered = %+v, want items 2 and 4 only", got)
+	if got := results.wait(t, 3); got[2].ID != 5 || results.count() != 3 {
+		t.Fatalf("delivered = %+v, want items 2, 4, and 5 only", got)
 	}
 }
 

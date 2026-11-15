@@ -16,31 +16,35 @@ import (
 // (RSZ-004, RSZ-005). Adding a file checks its extension and that it exists;
 // a supported file then stays Checking until its content has been decoded
 // off the GUI thread (RSZ-003) and its result is resolved into the item.
+// The zero value is Checking, so an item is never Ready unless a decode
+// resolved it so.
 type SourceStatus uint8
 
 const (
-	StatusReady SourceStatus = iota
+	StatusChecking SourceStatus = iota
+	StatusReady
 	StatusUnsupported
 	StatusInaccessible
-	StatusChecking
 	StatusCorrupt
 	StatusTooLarge
 )
 
+// Label is the status shown in the source list. A value outside the defined
+// statuses reads as Checking rather than claiming Ready.
 func (s SourceStatus) Label() string {
 	switch s {
+	case StatusReady:
+		return ui.SourceStatusReady
 	case StatusUnsupported:
 		return ui.SourceStatusUnsupported
 	case StatusInaccessible:
 		return ui.SourceStatusInaccessible
-	case StatusChecking:
-		return ui.SourceStatusChecking
 	case StatusCorrupt:
 		return ui.SourceStatusCorrupt
 	case StatusTooLarge:
 		return ui.SourceStatusTooLarge
 	default:
-		return ui.SourceStatusReady
+		return ui.SourceStatusChecking
 	}
 }
 
@@ -153,6 +157,11 @@ func (v *Inventory) Items() []SourceItem {
 // Item returns the item at index, which must be in range.
 func (v *Inventory) Item(index int) SourceItem {
 	return v.items[index]
+}
+
+// Len reports how many items are listed.
+func (v *Inventory) Len() int {
+	return len(v.items)
 }
 
 // Checking reports how many items still await their content check.

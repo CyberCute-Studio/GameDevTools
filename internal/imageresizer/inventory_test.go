@@ -345,6 +345,13 @@ func TestSourceItemRowAndDetailText(t *testing.T) {
 			detail: "The image content is being checked.",
 		},
 		{
+			// An item built without a status is never presented as Ready.
+			name:   "unset status",
+			item:   SourceItem{Name: "a.png", Path: filepath.Join(directory, "a.png")},
+			row:    "a.png — Checking…",
+			detail: "The image content is being checked.",
+		},
+		{
 			name:   "ready PNG with alpha",
 			item:   SourceItem{Name: "a.png", Path: filepath.Join(directory, "a.png"), Status: StatusReady, Info: decode.Info{Format: decode.FormatPNG, Width: 512, Height: 256, Orientation: decode.OrientationNormal, HasAlpha: true}},
 			row:    "a.png — 512 × 256 px — Ready",
@@ -384,5 +391,8 @@ func TestSourceItemRowAndDetailText(t *testing.T) {
 		if got := tc.item.DetailText(); got != tc.detail {
 			t.Fatalf("%s: DetailText = %q, want %q", tc.name, got, tc.detail)
 		}
+	}
+	if got := SourceStatus(255).Label(); got != "Checking…" {
+		t.Fatalf("label of an undefined status = %q, want Checking…", got)
 	}
 }

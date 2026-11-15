@@ -55,15 +55,18 @@ func (f Format) String() string {
 
 // MaxDecodedBytes bounds the pixel memory decoding one source may allocate.
 // The estimate covers every pixel buffer the standard library decoders
-// allocate, not only the decoded image: a PNG counts 4 bytes per pixel, or 8
-// at 16 bits per channel, and twice that when Adam7-interlaced, so an 8-bit
-// non-interlaced PNG is limited to 2^28 pixels — the same bound the
-// Screenshot module applies to one capture; a JPEG counts its component
-// planes at their sampling, a progressive frame's coefficient buffers, the
-// converted image of an RGB or CMYK frame, and the upright copy a reoriented
-// source needs. Larger sources are rejected with a KindTooLarge error from
-// their declared headers, before any pixel memory is allocated, so a crafted
-// header cannot exhaust memory.
+// allocate, not only the decoded image: a PNG counts the decoder's pixel size
+// for its color type — 1 byte for a palette or gray of up to 8 bits, 2 for
+// 16-bit gray, and otherwise 4 bytes, or 8 at 16 bits per channel, which
+// includes gray made transparent by a tRNS chunk — and twice that when
+// Adam7-interlaced, so an 8-bit truecolor non-interlaced PNG is limited to
+// 2^28 pixels — the same bound the Screenshot module applies to one capture;
+// a JPEG counts its component planes at their sampling, a progressive
+// frame's coefficient buffers, the converted image of an RGB or CMYK frame —
+// including one a segment after its first scan switches to RGB — and the
+// upright copy a reoriented source needs. Larger sources are rejected with a
+// KindTooLarge error from their declared headers, before any pixel memory is
+// allocated, so a crafted header cannot exhaust memory.
 const MaxDecodedBytes = 1 << 30
 
 // Kind classifies a decode failure so the source list can present the
@@ -115,6 +118,10 @@ var ErrEmpty = errors.New("the file is empty")
 // errFolder is the cause of a KindRead error for a path that names a folder.
 var errFolder = errors.New("the path is a folder, not a file")
 
+// errSignature is the cause of a KindCorrupt error for content that starts
+// like PNG data but whose signature is damaged.
+var errSignature = errors.New("the PNG file signature is damaged")
+
 // Error describes a failed decode.
 type Error struct {
 	Kind Kind
@@ -164,10 +171,8 @@ type Info struct {
 // StoredSize returns the dimensions as stored in the file, before the
 // orientation is applied.
 func (i Info) StoredSize() (width, height int) {
-	if i.Orientation.SwapsAxes() {
-		return i.Height, i.Width
-	}
-	return i.Width, i.Height
+	// Exchanging the axes is its own inverse.
+	return i.Orientation.upright(i.Width, i.Height)
 }
 
 // Image is a decoded source with its orientation applied.
@@ -180,8 +185,8 @@ type Image struct {
 	Pixels image.Image
 }
 
-// releaseThreshold is the decoding allowance above which Inspect hands the
-// discarded pixel memory back before it returns.
+// releaseThreshold is the pixel memory a decode may allocate above which
+// Inspect hands the discarded memory back before it returns.
 const releaseThreshold = 64 << 20
 
 // releaseMemory collects garbage and returns freed memory to the operating
@@ -216,6 +221,9 @@ func Decode(ctx context.Context, path string) (*Image, error) {
 
 var (
 	pngSignature = []byte("\x89PNG\r\n\x1a\n")
+	// pngIdentifier opens the PNG signature: content that starts with it
+	// but not with the whole signature is a damaged PNG.
+	pngIdentifier = "\x89PNG"
 	// jpegSignature is the SOI marker alone: the decoder accepts stray
 	// bytes between it and the first segment, and the standard library
 	// registers the JPEG format by these two bytes as well.
@@ -237,7 +245,8 @@ type header struct {
 // load opens the source read-only and decodes it. Allocated is the pixel
 // memory the decoders were allowed to allocate: zero when the source was
 // rejected before decoding began, and the full allowance once it began,
-// even if decoding then failed.
+// even if decoding then failed. It counts the upright copy only when keep
+// asks for the pixels, since only then is the copy made.
 func load(ctx context.Context, path string, keep bool) (info Info, pixels image.Image, allocated uint64, err error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return Info{}, nil, 0, &Error{Kind: KindCanceled, Err: ctxErr}
@@ -292,7 +301,7 @@ func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Imag
 		// checked before it reads the header.
 		if scanned.png = scanPNG(buffered); scanned.png.valid {
 			layout := scanned.png
-			if err := checkLimit(format, layout.width, layout.height, pngDecodeBytes(layout.width, layout.height, layout.deep, layout.interlaced)); err != nil {
+			if err := checkLimit(format, layout.width, layout.height, pngDecodeBytes(layout)); err != nil {
 				return Info{}, nil, 0, err
 			}
 		}
@@ -316,13 +325,40 @@ func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Imag
 	}
 	width, height := scanned.orientation.upright(config.Width, config.Height)
 	need := decodeBytes(format, config, scanned)
-	if err := checkLimit(format, width, height, need); err != nil {
+	// The upright copy is counted whenever the orientation calls for it — by
+	// Inspect too, which never makes it — so a source Inspect accepts is
+	// never rejected by Decode.
+	upright := uprightCopyBytes(config, scanned.orientation)
+	if format == FormatJPEG && config.ColorModel == color.YCbCrModel {
+		// The decoder still converts this frame to RGB if a segment
+		// DecodeConfig did not read says so. Only a source that conversion
+		// would push over the limit is walked to its end to settle whether
+		// the decoder makes it; for any smaller one the limit holds either
+		// way.
+		conversion := rgbaBytes(config)
+		if need+upright <= MaxDecodedBytes && need+upright+conversion > MaxDecodedBytes {
+			if err := source.restart(buffered); err != nil {
+				return Info{}, nil, 0, source.classify(format, err)
+			}
+			converts := jpegConvertsToRGB(buffered)
+			if source.readErr != nil || source.ctx.Err() != nil {
+				return Info{}, nil, 0, source.classify(format, source.readErr)
+			}
+			if converts {
+				need += conversion
+			}
+		}
+	}
+	if err := checkLimit(format, width, height, need+upright); err != nil {
 		return Info{}, nil, 0, err
 	}
 	if err := source.restart(buffered); err != nil {
 		return Info{}, nil, 0, source.classify(format, err)
 	}
 	allocated = need
+	if keep {
+		allocated += upright
+	}
 	decoded, err := decodeImage(format, buffered)
 	if err != nil {
 		return Info{}, nil, allocated, source.classify(format, err)
@@ -371,6 +407,10 @@ func sniff(source *sourceReader) (Format, error) {
 		return FormatPNG, &Error{Kind: KindCorrupt, Format: FormatPNG, Err: io.ErrUnexpectedEOF}
 	case n < len(jpegSignature) && string(jpegSignature[:n]) == string(prefix):
 		return FormatJPEG, &Error{Kind: KindCorrupt, Format: FormatJPEG, Err: io.ErrUnexpectedEOF}
+	case n >= len(pngIdentifier) && string(prefix[:len(pngIdentifier)]) == pngIdentifier:
+		// The rest of the PNG signature exists to detect a file damaged by
+		// a transfer that converted its line endings.
+		return FormatPNG, &Error{Kind: KindCorrupt, Format: FormatPNG, Err: errSignature}
 	}
 	return FormatUnknown, &Error{Kind: KindUnsupported, Err: ErrUnrecognized}
 }
