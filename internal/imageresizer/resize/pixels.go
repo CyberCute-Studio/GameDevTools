@@ -143,8 +143,8 @@ func newSource(img image.Image, read image.Rectangle) source {
 	case *image.Paletted:
 		// Every index reads its entry, and an index past the end of the
 		// palette reads opaque black rather than failing: the color the
-		// standard PNG decoder gives one, and consistent with Opaque, which
-		// ignores such indices. (At panics on them instead.)
+		// standard PNG decoder gives one, and consistent with the opacity
+		// check, which ignores such indices. (At panics on them instead.)
 		var table [256][4]int32
 		for index := range table {
 			table[index][3] = 0xffff
@@ -171,16 +171,45 @@ func newSource(img image.Image, read image.Rectangle) source {
 // image's own coordinates, are all opaque, as the Opaque method of the
 // image's SubImage of the region reports it, or failing that the Opaque
 // method of the whole image. An image with neither counts as translucent.
+// A SubImage that is an *image.Paletted is judged by palettedOpaque, which
+// gives Opaque's answer without its failure on a long palette.
 func opaqueWithin(img image.Image, region image.Rectangle) bool {
 	if cropper, ok := img.(interface {
 		SubImage(image.Rectangle) image.Image
 	}); ok {
-		if reporter, ok := cropper.SubImage(region).(interface{ Opaque() bool }); ok {
-			return reporter.Opaque()
+		switch sub := cropper.SubImage(region).(type) {
+		case *image.Paletted:
+			return palettedOpaque(sub)
+		case interface{ Opaque() bool }:
+			return sub.Opaque()
 		}
 	}
 	reporter, ok := img.(interface{ Opaque() bool })
 	return ok && reporter.Opaque()
+}
+
+// palettedOpaque reports whether every pixel of img is opaque — whether
+// every palette entry a pixel indexes has full alpha — as Paletted.Opaque
+// does: an index past the end of the palette counts as opaque. Opaque
+// itself panics on a palette of more than 256 entries, since it looks every
+// entry up in its 256-entry record of the indices present; no pixel can
+// index an entry past the 256th, so those are skipped here.
+func palettedOpaque(img *image.Paletted) bool {
+	var present [256]bool
+	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
+		for _, index := range img.Pix[img.PixOffset(img.Rect.Min.X, y):][:img.Rect.Dx()] {
+			present[index] = true
+		}
+	}
+	for index, entry := range img.Palette[:min(len(img.Palette), len(present))] {
+		if !present[index] {
+			continue
+		}
+		if _, _, _, alpha := entry.RGBA(); alpha != 0xffff {
+			return false
+		}
+	}
+	return true
 }
 
 // readYCbCr writes the 8-bit RGB conversion of n pixels of row py of img,
@@ -314,14 +343,15 @@ func premultiplied(c color.Color) (r, g, b, a int32) {
 }
 
 // premultiply8 returns the 16-bit premultiplied value of an 8-bit straight
-// channel under 8-bit alpha: value·0x101 · alpha·0x101 / 0xffff, rounded.
-// 0xffff = 0xff·0x101 and 0xff is odd, so the division never meets a tie.
+// channel under 8-bit alpha, as premultiplySample computes it.
 func premultiply8(value, alpha uint8) int32 {
-	return (int32(value)*int32(alpha)*0x101 + 0x7f) / 0xff
+	return premultiplySample(int32(value)*0x101, alpha)
 }
 
-// premultiplySample returns premultiply8(value, alpha) for an 8-bit channel
-// already widened to the working sample value·0x101.
+// premultiplySample returns the 16-bit premultiplied value of an 8-bit
+// straight channel already widened to the working sample value·0x101,
+// under 8-bit alpha: value·0x101 · alpha·0x101 / 0xffff, rounded.
+// 0xffff = 0xff·0x101 and 0xff is odd, so the division never meets a tie.
 func premultiplySample(sample int32, alpha uint8) int32 {
 	return (sample*int32(alpha) + 0x7f) / 0xff
 }

@@ -424,6 +424,37 @@ func TestPaletteIndexPastTheEnd(t *testing.T) {
 	}
 }
 
+// TestPaletteLongerThanAnIndexReaches resizes a palette of more than 256
+// entries, on which the standard library's Paletted.Opaque panics, read
+// directly and through At: the entries past the 256th, which no pixel can
+// index, do not decide whether the output keeps alpha, and an entry a pixel
+// indexes does.
+func TestPaletteLongerThanAnIndexReaches(t *testing.T) {
+	palette := make(color.Palette, 300)
+	for i := range palette {
+		palette[i] = color.NRGBA{R: uint8(i), A: 0xff}
+	}
+	palette[299] = color.NRGBA{A: 0x80}
+	src := image.NewPaletted(image.Rect(0, 0, 4, 4), palette)
+	for i := range src.Pix {
+		src.Pix[i] = uint8(255 - i)
+	}
+	// The embedding hides the type, so the resizer reads it through At but
+	// still asks its SubImage, an *image.Paletted, whether it is opaque.
+	embedded := struct{ *image.Paletted }{src}
+	for _, img := range []image.Image{src, embedded} {
+		if got := mustResize(t, img, fit(2, 2)); reflect.TypeOf(got) != reflect.TypeOf(&image.RGBA{}) {
+			t.Errorf("%T with an opaque reachable palette: output %T, want *image.RGBA", img, got)
+		}
+	}
+	palette[src.Pix[5]] = color.NRGBA{A: 0x80}
+	for _, img := range []image.Image{src, embedded} {
+		if got := mustResize(t, img, fit(2, 2)); reflect.TypeOf(got) != reflect.TypeOf(&image.NRGBA{}) {
+			t.Errorf("%T with a translucent indexed entry: output %T, want *image.NRGBA", img, got)
+		}
+	}
+}
+
 // TestYCbCrAndCMYKConvertToEightBitRGB checks that a YCbCr or CMYK source,
 // at every subsample ratio, resizes exactly as its *image.RGBA conversion by
 // the standard library's 8-bit YCbCrToRGB and CMYKToRGB, and an NYCbCrA
@@ -492,8 +523,7 @@ func TestSourceBoundsNeedNotStartAtTheOrigin(t *testing.T) {
 		sub := img.(interface {
 			SubImage(image.Rectangle) image.Image
 		}).SubImage(image.Rect(7, 3, 25, 17))
-		copied := typed(13, 30, 20)[name]
-		moved := moveToOrigin(t, copied, sub.Bounds())
+		moved := moveToOrigin(t, img, sub.Bounds())
 		for _, target := range []Target{fit(9, 9), crop(31, 5)} {
 			for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
 				if !sameImage(mustResample(t, sub, target, o), mustResample(t, moved, target, o)) {

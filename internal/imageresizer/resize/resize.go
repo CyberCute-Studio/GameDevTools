@@ -22,9 +22,10 @@
 // YCbCr and CMYK pixels, and the color of NYCbCrA ones, are first converted
 // to 8-bit RGB by the standard library's conversion, the one the decoder
 // applies when it reorients a JPEG, so reorienting a picture does not
-// change the colors the filter starts from. The filter's overshoot near sharp edges is clamped. Crop to
-// Fill resamples only the cropped region, applying exactly the filter
-// weights that scaling the whole source and cropping afterwards would.
+// change the colors the filter starts from. The filter's overshoot near
+// sharp edges is clamped. Crop to Fill resamples only the cropped region,
+// applying exactly the filter weights that scaling the whole source and
+// cropping afterwards would.
 //
 // Results are deterministic (RSZ-017): the same source and target produce
 // bit-identical output on every platform the package compiles for — every
@@ -242,7 +243,9 @@ func roundDiv(numerator, denominator int64) int64 {
 // only there adds no alpha channel. The image types the decoder returns,
 // and *image.NYCbCrA, are read directly; any other type is read through At,
 // and is opaque if the Opaque method of its SubImage of the region the
-// filter reads, or failing that its own, says so.
+// filter reads, or failing that its own, says so. A paletted region, read
+// either way, is judged as Opaque judges it, by the palette entries its
+// pixels index, without Opaque's panic on a palette of over 256 entries.
 // Resizing to the source's own dimensions changes no pixel beyond its
 // conversion to the output type: a straight-alpha 8-bit, grayscale, or
 // opaque source comes back exactly, a premultiplied one as its straight
