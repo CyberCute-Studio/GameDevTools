@@ -44,7 +44,10 @@
 // under 128 MiB in the worst case and is a few megabytes for typical
 // sources. Resize reads the source but never retains or modifies it, and
 // callers run it off the GUI thread (TECH-005); a context cancels it
-// between source rows, and before it allocates the output.
+// between source rows, and before it allocates the output. A panic during a
+// resize, such as one a malformed source image's own methods raise, is
+// returned as that resize's error rather than unwinding into the caller
+// (NFR-021).
 package resize
 
 import (
@@ -52,6 +55,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"strconv"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 )
@@ -75,7 +79,7 @@ type Kind uint8
 const (
 	// KindInvalid means the target is not a valid resize preset — an
 	// unknown fitting mode, or dimensions outside the preset limits
-	// (PRESET-006) — or the source has no pixels.
+	// (PRESET-006) — or the source has no pixels or could not be read.
 	KindInvalid Kind = iota
 	// KindTooLarge means the source is wider or taller than
 	// MaxSourceDimension.
@@ -102,16 +106,34 @@ var (
 	ErrMode = errors.New("the fitting mode is not Fit, Stretch, or Crop to Fill")
 	// ErrTargetDimension is the cause of a KindInvalid error for a target
 	// width or height outside the preset range.
-	ErrTargetDimension = fmt.Errorf("the target width and height must each be between %d and %d pixels", preset.MinDimension, preset.MaxDimension)
+	ErrTargetDimension = fmt.Errorf("the target width and height must each be between %s and %s pixels", grouped(preset.MinDimension), grouped(preset.MaxDimension))
 	// ErrTargetArea is the cause of a KindInvalid error for a target of more
 	// than the preset pixel limit.
 	ErrTargetArea = fmt.Errorf("the target must not exceed %d megapixels", preset.MaxResizeMegapixels)
 	// ErrEmptySource is the cause of a KindInvalid error for a source
 	// without pixels.
 	ErrEmptySource = errors.New("the source has no pixels")
+	// ErrSourceFailure is the cause of a KindInvalid error for a resize that
+	// panicked, such as in the At method of a malformed image; the error
+	// wraps it with the panic's value.
+	ErrSourceFailure = errors.New("the source could not be read")
 	// ErrSourceDimension is the cause of a KindTooLarge error.
-	ErrSourceDimension = fmt.Errorf("the source is wider or taller than %d pixels", MaxSourceDimension)
+	ErrSourceDimension = fmt.Errorf("the source is wider or taller than %s pixels", grouped(MaxSourceDimension))
 )
+
+// grouped writes a non-negative count with thousands separators, as the
+// preset editor's validation messages write the same limits.
+func grouped(n int) string {
+	digits := strconv.Itoa(n)
+	var out []byte
+	for i := range len(digits) {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, digits[i])
+	}
+	return string(out)
+}
 
 // Error describes a failed resize.
 type Error struct {
@@ -241,18 +263,35 @@ func roundDiv(numerator, denominator int64) int64 {
 // or an *image.NRGBA64. The filter reads the whole source except the
 // margins Crop to Fill removes beyond the filter's reach, so translucency
 // only there adds no alpha channel. The image types the decoder returns,
-// and *image.NYCbCrA, are read directly; any other type is read through At,
-// and is opaque if the Opaque method of its SubImage of the region the
-// filter reads, or failing that its own, says so. A paletted region, read
-// either way, is judged as Opaque judges it, by the palette entries its
-// pixels index, without Opaque's panic on a palette of over 256 entries.
+// and *image.NYCbCrA, are read directly. Any other type is read through At,
+// and its color model decides its kind: only the standard library's 16-bit
+// models keep 16 bits, its gray models are filtered as gray, and its YCbCr
+// and CMYK models are opaque; with any other model the image is opaque if
+// the Opaque method of its SubImage of the region the filter reads, or
+// failing that its own, says so. A paletted region, read either way, is
+// judged as Opaque judges it, by the palette entries its pixels index,
+// without Opaque's panics on a palette of over 256 entries or an indexed
+// nil entry. An index past the end of the palette, a nil palette entry, and
+// a nil color from At read as opaque black. A panic while resizing, such as
+// one from the At method of a malformed image, is returned as a KindInvalid
+// error wrapping ErrSourceFailure rather than unwinding into the caller.
 // Resizing to the source's own dimensions changes no pixel beyond its
 // conversion to the output type: a straight-alpha 8-bit, grayscale, or
 // opaque source comes back exactly, a premultiplied one as its straight
 // color rounded to the nearest step, and a translucent 16-bit one within
 // the precision of its premultiplied form — except that a fully transparent
 // pixel comes back as transparent black, whatever color it stored.
-func Resize(ctx context.Context, source image.Image, target Target) (image.Image, error) {
+func Resize(ctx context.Context, source image.Image, target Target) (resized image.Image, err error) {
+	// The source is read through its own methods, which can panic on a
+	// malformed image. That is this source's failure, so it is contained
+	// here, as the decoder contains a decoder panic, rather than taking down
+	// the caller's batch (NFR-021). A runtime out-of-memory failure cannot be
+	// recovered, which is why the working memory is bounded.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			resized, err = nil, &Error{Kind: KindInvalid, Err: fmt.Errorf("%w: %v", ErrSourceFailure, recovered)}
+		}
+	}()
 	bounds := source.Bounds()
 	geometry, err := Plan(bounds.Dx(), bounds.Dy(), target)
 	if err != nil {

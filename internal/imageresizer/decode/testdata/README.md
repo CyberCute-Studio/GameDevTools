@@ -1,6 +1,6 @@
 # Decoder test fixtures
 
-These JPEG fixtures are copied unchanged from the Go 1.26.5 distribution's `src/image/testdata` directory and are used only by the `decode` package tests. They are © The Go Authors and distributed under the BSD-3-Clause license reproduced in [LICENSE-go](LICENSE-go).
+These JPEG fixtures are copied unchanged from the Go 1.26.5 distribution's `src/image/testdata` directory and are used by the `decode` package tests; `cmyk.jpeg` is also read by the `resize` package's `TestJPEGPixelsMatchTheDecoder`, which checks the resizer's CMYK conversion against this decoder's output, so renaming or removing it must update that test too. They are © The Go Authors and distributed under the BSD-3-Clause license reproduced in [LICENSE-go](LICENSE-go).
 
 | Fixture | Go source file | Purpose |
 |---|---|---|

@@ -55,6 +55,8 @@ func TestJPEGPixelsMatchTheDecoder(t *testing.T) {
 	if err := jpeg.Encode(&encoded, noise(91, image.Rect(0, 0, 45, 31), false), &jpeg.Options{Quality: 90}); err != nil {
 		t.Fatal(err)
 	}
+	// The decoder's own CMYK fixture: the standard encoder writes no CMYK,
+	// and the fixture's README records this use of it.
 	cmyk, err := os.ReadFile(filepath.Join("..", "decode", "testdata", "cmyk.jpeg"))
 	if err != nil {
 		t.Fatal(err)

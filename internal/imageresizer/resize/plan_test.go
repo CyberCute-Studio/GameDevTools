@@ -276,6 +276,20 @@ func TestErrorPresentation(t *testing.T) {
 			t.Errorf("Kind(%d).String() = %q, want %q", kind, got, want)
 		}
 	}
+	// The limits are written as the preset editor writes them.
+	for err, want := range map[error]string{
+		ErrTargetDimension: "the target width and height must each be between 1 and 16,384 pixels",
+		ErrSourceDimension: "the source is wider or taller than 1,048,576 pixels",
+	} {
+		if got := err.Error(); got != want {
+			t.Errorf("message %q, want %q", got, want)
+		}
+	}
+	for n, want := range map[int]string{0: "0", 7: "7", 999: "999", 1000: "1,000", 65535: "65,535", 100_000_000: "100,000,000"} {
+		if got := grouped(n); got != want {
+			t.Errorf("grouped(%d) = %q, want %q", n, got, want)
+		}
+	}
 }
 
 func abs(v int64) int64 {

@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -210,16 +211,23 @@ func TestResizeKeepsThePixelKind(t *testing.T) {
 	// Only the pixels the filter reads decide whether the output keeps
 	// alpha: translucency in a margin Crop to Fill removes adds none, while
 	// translucency the filter reaches does. Cropping 10 × 10 from 40 × 10
-	// keeps the scale, so the filter reads exactly columns 15 to 24.
+	// keeps the scale, so the filter reads exactly columns 15 to 24. The
+	// embedding is read through At, and asked through its SubImage, an
+	// *image.NRGBA, whether that region is opaque.
 	src := noise(9, image.Rect(0, 0, 40, 10), false)
 	src.SetNRGBA(14, 4, color.NRGBA{A: 0x80})
 	src.SetNRGBA(25, 4, color.NRGBA{A: 0x80})
-	if got := mustResize(t, src, crop(10, 10)); reflect.TypeOf(got) != reflect.TypeOf(&image.RGBA{}) {
-		t.Errorf("translucent only beyond the crop: output %T, want *image.RGBA", got)
+	embedded := struct{ *image.NRGBA }{src}
+	for _, img := range []image.Image{src, embedded} {
+		if got := mustResize(t, img, crop(10, 10)); reflect.TypeOf(got) != reflect.TypeOf(&image.RGBA{}) {
+			t.Errorf("%T translucent only beyond the crop: output %T, want *image.RGBA", img, got)
+		}
 	}
 	src.SetNRGBA(15, 4, color.NRGBA{A: 0x80})
-	if got := mustResize(t, src, crop(10, 10)); reflect.TypeOf(got) != reflect.TypeOf(&image.NRGBA{}) {
-		t.Errorf("translucent within the crop: output %T, want *image.NRGBA", got)
+	for _, img := range []image.Image{src, embedded} {
+		if got := mustResize(t, img, crop(10, 10)); reflect.TypeOf(got) != reflect.TypeOf(&image.NRGBA{}) {
+			t.Errorf("%T translucent within the crop: output %T, want *image.NRGBA", img, got)
+		}
 	}
 }
 
@@ -421,6 +429,63 @@ func TestPaletteIndexPastTheEnd(t *testing.T) {
 		if got := color.NRGBAModel.Convert(out.At(2, 0)); got != (color.NRGBA{A: 0xff}) {
 			t.Errorf("palette of %d: an index past the end reads %v, want opaque black", len(palette), got)
 		}
+	}
+}
+
+// TestNilPaletteColorsReadOpaqueBlack resizes palettes the standard
+// library's Paletted.At answers with nil — a nil entry, or an empty palette
+// — read directly and through At: such a pixel reads as opaque black, as an
+// index past the end does, so it resizes exactly as the same pixels with
+// opaque black in place of the nil entries, in each order, without the
+// panic that premultiplying a nil color, or Paletted.Opaque on an indexed
+// nil entry, would raise. Resize itself takes the same path.
+func TestNilPaletteColorsReadOpaqueBlack(t *testing.T) {
+	red, translucent := color.NRGBA{R: 0xff, A: 0xff}, color.NRGBA{G: 0xff, A: 0x80}
+	black := color.RGBA{A: 0xff}
+	rect := image.Rect(0, 0, 4, 3)
+	cases := []struct {
+		name          string
+		palette, want color.Palette
+		indices       []uint8
+	}{
+		{"unused nil entries", color.Palette{red, nil, nil, nil}, color.Palette{red, black, black, black}, []uint8{0}},
+		{"an indexed nil entry", color.Palette{red, nil}, color.Palette{red, black}, []uint8{0, 1}},
+		{"nil entries beside translucency", color.Palette{red, nil, translucent, nil}, color.Palette{red, black, translucent, black}, []uint8{0, 1, 2, 3}},
+		{"an empty palette", color.Palette{}, color.Palette{black}, []uint8{0, 3}},
+	}
+	for _, tc := range cases {
+		src, want := image.NewPaletted(rect, tc.palette), image.NewPaletted(rect, tc.want)
+		for i := range src.Pix {
+			src.Pix[i] = tc.indices[i%len(tc.indices)]
+			want.Pix[i] = src.Pix[i]
+		}
+		for _, img := range []image.Image{src, struct{ *image.Paletted }{src}} {
+			for _, target := range []Target{fit(2, 2), stretch(7, 5)} {
+				for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
+					if !sameImage(mustResample(t, img, target, o), mustResample(t, want, target, o)) {
+						t.Errorf("%s, %T, %+v order %d: resizes unlike opaque black in place of nil", tc.name, img, target, o)
+					}
+				}
+				mustResize(t, img, target)
+			}
+		}
+	}
+}
+
+// TestResizeContainsASourcePanic checks that a source whose own At panics —
+// an embedded palette indexed past its end, which Paletted.At indexes
+// unchecked — fails as a KindInvalid error wrapping ErrSourceFailure and the
+// panic, rather than taking down the caller.
+func TestResizeContainsASourcePanic(t *testing.T) {
+	src := image.NewPaletted(image.Rect(0, 0, 3, 3), color.Palette{color.RGBA{A: 0xff}})
+	src.Pix[4] = 7
+	out, err := Resize(context.Background(), struct{ *image.Paletted }{src}, fit(2, 2))
+	var resizeErr *Error
+	if out != nil || !errors.As(err, &resizeErr) || resizeErr.Kind != KindInvalid || !errors.Is(err, ErrSourceFailure) {
+		t.Fatalf("Resize of a source whose At panics = %v, %v; want a KindInvalid error wrapping ErrSourceFailure", out, err)
+	}
+	if want := "resize: the source could not be read: runtime error: index out of range"; !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("error %q, want it to start %q", err, want)
 	}
 }
 

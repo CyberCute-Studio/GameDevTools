@@ -141,16 +141,19 @@ func newSource(img image.Image, read image.Rectangle) source {
 			}
 		}}
 	case *image.Paletted:
-		// Every index reads its entry, and an index past the end of the
-		// palette reads opaque black rather than failing: the color the
-		// standard PNG decoder gives one, and consistent with the opacity
-		// check, which ignores such indices. (At panics on them instead.)
+		// Every index reads its entry. An index past the end of the palette
+		// reads opaque black rather than failing, the color the standard PNG
+		// decoder gives one, and so does an index of a nil entry, as the At
+		// path reads the nil color Paletted.At returns for it; the opacity
+		// check counts both as opaque. (At panics on an index past the end.)
 		var table [256][4]int32
 		for index := range table {
 			table[index][3] = 0xffff
 		}
 		for index, entry := range img.Palette[:min(len(img.Palette), len(table))] {
-			table[index][0], table[index][1], table[index][2], table[index][3] = premultiplied(entry)
+			if entry != nil {
+				table[index][0], table[index][1], table[index][2], table[index][3] = premultiplied(entry)
+			}
 		}
 		channels := layoutRGBA
 		if opaque() {
@@ -172,7 +175,8 @@ func newSource(img image.Image, read image.Rectangle) source {
 // image's SubImage of the region reports it, or failing that the Opaque
 // method of the whole image. An image with neither counts as translucent.
 // A SubImage that is an *image.Paletted is judged by palettedOpaque, which
-// gives Opaque's answer without its failure on a long palette.
+// gives Opaque's answer without its failures on a long palette or a nil
+// entry.
 func opaqueWithin(img image.Image, region image.Rectangle) bool {
 	if cropper, ok := img.(interface {
 		SubImage(image.Rectangle) image.Image
@@ -193,7 +197,9 @@ func opaqueWithin(img image.Image, region image.Rectangle) bool {
 // does: an index past the end of the palette counts as opaque. Opaque
 // itself panics on a palette of more than 256 entries, since it looks every
 // entry up in its 256-entry record of the indices present; no pixel can
-// index an entry past the 256th, so those are skipped here.
+// index an entry past the 256th, so those are skipped here. It also panics
+// on an indexed nil entry, which counts as opaque here, since it reads as
+// opaque black.
 func palettedOpaque(img *image.Paletted) bool {
 	var present [256]bool
 	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
@@ -202,7 +208,7 @@ func palettedOpaque(img *image.Paletted) bool {
 		}
 	}
 	for index, entry := range img.Palette[:min(len(img.Palette), len(present))] {
-		if !present[index] {
+		if !present[index] || entry == nil {
 			continue
 		}
 		if _, _, _, alpha := entry.RGBA(); alpha != 0xffff {
@@ -254,17 +260,12 @@ func readYCbCr(dst []int32, img *image.YCbCr, px, py, n, stride int) {
 // pixels reads it too.
 func opaque8(img *image.RGBA, origin image.Point) source {
 	return source{layout: layoutRGB, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
-		readOpaque8(dst, img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):], x1-x0)
+		row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
+		for i := range x1 - x0 {
+			p, d := row[4*i:4*i+3], dst[3*i:3*i+3]
+			d[0], d[1], d[2] = int32(p[0])*0x101, int32(p[1])*0x101, int32(p[2])*0x101
+		}
 	}}
-}
-
-// readOpaque8 writes the color of the first n 8-bit RGBA pixels of row to
-// dst.
-func readOpaque8(dst []int32, row []uint8, n int) {
-	for i := range n {
-		p, d := row[4*i:4*i+3], dst[3*i:3*i+3]
-		d[0], d[1], d[2] = int32(p[0])*0x101, int32(p[1])*0x101, int32(p[2])*0x101
-	}
 }
 
 // opaque16 reads the color of an opaque *image.RGBA64, skipping alpha. An
@@ -272,30 +273,30 @@ func readOpaque8(dst []int32, row []uint8, n int) {
 // its pixels reads it too.
 func opaque16(img *image.RGBA64, origin image.Point) source {
 	return source{layout: layoutRGB, deep: true, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
-		readOpaque16(dst, img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):], x1-x0)
+		row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
+		for i := range x1 - x0 {
+			p, d := row[8*i:8*i+6], dst[3*i:3*i+3]
+			d[0], d[1], d[2] = sample16(p[0:2]), sample16(p[2:4]), sample16(p[4:6])
+		}
 	}}
 }
 
-// readOpaque16 writes the color of the first n 16-bit RGBA pixels of row to
-// dst.
-func readOpaque16(dst []int32, row []uint8, n int) {
-	for i := range n {
-		p, d := row[8*i:8*i+6], dst[3*i:3*i+3]
-		d[0], d[1], d[2] = sample16(p[0:2]), sample16(p[2:4]), sample16(p[4:6])
-	}
-}
-
 // genericSource reads an image of any type through At. Its layout follows
-// the color model: a grayscale model is filtered as gray, a 16-bit model
-// keeps 16 bits in the output, and an image reporting the region the filter
-// reads opaque, as opaqueWithin asks it, drops alpha, as do the
-// always-opaque YCbCr and CMYK models.
+// the color model, of which only the standard library's are recognized: its
+// gray models are filtered as gray, its 16-bit models keep 16 bits in the
+// output and every other model 8, and an image reporting the region the
+// filter reads opaque, as opaqueWithin asks it, drops alpha, as do the
+// always-opaque YCbCr and CMYK models. A nil color reads as opaque black.
 func genericSource(img image.Image, origin image.Point, read image.Rectangle) source {
 	model := img.ColorModel()
 	if model == color.GrayModel || model == color.Gray16Model {
 		return source{layout: layoutGray, deep: model == color.Gray16Model, fetchCost: 20, fetch: func(dst []int32, y, x0, x1 int) {
 			for i := range x1 - x0 {
-				dst[i] = int32(color.Gray16Model.Convert(img.At(origin.X+x0+i, origin.Y+y)).(color.Gray16).Y)
+				var gray int32
+				if c := img.At(origin.X+x0+i, origin.Y+y); c != nil {
+					gray = int32(color.Gray16Model.Convert(c).(color.Gray16).Y)
+				}
+				dst[i] = gray
 			}
 		}}
 	}
@@ -320,9 +321,13 @@ func genericSource(img image.Image, origin image.Point, read image.Rectangle) so
 // premultiplied with rounding rather than with the truncation of their RGBA
 // methods, so an 8-bit pixel survives the round trip through the filter
 // unchanged, and YCbCr, NYCbCrA, and CMYK colors take the 8-bit conversion
-// to RGB rather than the 16-bit one of their RGBA methods.
+// to RGB rather than the 16-bit one of their RGBA methods. A nil color,
+// which At returns for a nil palette entry or from an empty palette, is
+// opaque black, as the fast paths read a palette entry that is missing.
 func premultiplied(c color.Color) (r, g, b, a int32) {
 	switch c := c.(type) {
+	case nil:
+		return 0, 0, 0, 0xffff
 	case color.NRGBA:
 		return premultiply8(c.R, c.A), premultiply8(c.G, c.A), premultiply8(c.B, c.A), int32(c.A) * 0x101
 	case color.NRGBA64:
