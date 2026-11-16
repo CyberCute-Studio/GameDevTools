@@ -375,7 +375,7 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		n.width.Focus()
 		return "", 0, 0, "", false
 	}
-	if width > MaxDimension {
+	if !ValidDimension(width) {
 		n.width.Error.SetText(ui.FormatError(ui.ErrorValidation, fmt.Errorf(ui.PresetDimensionRange, "Width")))
 		n.width.Focus()
 		return "", 0, 0, "", false
@@ -385,7 +385,7 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		n.height.Focus()
 		return "", 0, 0, "", false
 	}
-	if height > MaxDimension {
+	if !ValidDimension(height) {
 		n.height.Error.SetText(ui.FormatError(ui.ErrorValidation, fmt.Errorf(ui.PresetDimensionRange, "Height")))
 		n.height.Focus()
 		return "", 0, 0, "", false
@@ -400,7 +400,7 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		case 2:
 			mode = ResizeCropToFill
 		}
-		if int64(width)*int64(height) > MaxResizeMegapixels*1_000_000 {
+		if !WithinResizePixelLimit(width, height) {
 			n.height.Error.SetText(ui.FormatError(ui.ErrorValidation, errors.New(ui.PresetResizePixelLimit)))
 			n.height.Focus()
 			return "", 0, 0, "", false
