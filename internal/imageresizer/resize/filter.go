@@ -6,8 +6,10 @@ import (
 )
 
 // order is which axis the separable filter resamples first. Both give the
-// same picture, within one 16-bit step of rounding; the choice only changes
-// how much work and memory the resize takes.
+// same picture, within one 16-bit step of rounding, and the choice is made
+// to save work and memory. It depends only on the geometry and on how the
+// source's pixels are read, so a given source and target always take the
+// same order and give the same bits.
 type order uint8
 
 const (
@@ -23,22 +25,38 @@ const (
 	orderVerticalFirst
 )
 
-// windowBudget bounds the window of resampled rows the horizontal-first
-// order keeps, in bytes.
-const windowBudget = 64 << 20
+// rowBudget bounds the working rows of the horizontal-first order, in
+// bytes, as horizontalFirstBytes counts them. The vertical-first order's
+// working rows take 16 bytes per sample of a source row of at most
+// MaxSourceDimension four-channel pixels, 64 MiB, and one output row of at
+// most 256 KiB, so either order's rows stay within 64.25 MiB. Each axis's
+// weight table and the scratch that builds it add at most 24.4 MiB (see
+// newAxis), which keeps the working memory under 114 MiB.
+const rowBudget = 64 << 20
 
 // resample filters the source onto the geometry's output in the given
-// order.
+// order. It observes the context between its preparatory steps, so a
+// cancellation arriving while it builds the weights or checks the source's
+// opacity stops it before it allocates the output.
 func resample(ctx context.Context, img image.Image, geometry Geometry, o order) (image.Image, error) {
+	canceled := func() (image.Image, error) {
+		return nil, &Error{Kind: KindCanceled, Err: ctx.Err()}
+	}
 	bounds := img.Bounds()
-	src := newSource(img)
 	horizontal := newAxis(bounds.Dx(), geometry.ScaledWidth, geometry.Crop.Min.X, geometry.Width)
 	vertical := newAxis(bounds.Dy(), geometry.ScaledHeight, geometry.Crop.Min.Y, geometry.Height)
+	if ctx.Err() != nil {
+		return canceled()
+	}
+	src := newSource(img, image.Rect(horizontal.lo, vertical.lo, horizontal.hi, vertical.hi))
+	if ctx.Err() != nil {
+		return canceled()
+	}
 	if o == orderAuto {
 		o = chooseOrder(horizontal, vertical, src)
 	}
 	out := newSink(src, geometry.Width, geometry.Height)
-	f := filter{done: ctx.Done(), src: src, out: out, horizontal: horizontal, vertical: vertical, channels: int(src.layout)}
+	f := filter{done: ctx.Done(), src: src, out: out, horizontal: horizontal, vertical: vertical}
 	var completed bool
 	if o == orderHorizontalFirst {
 		completed = f.horizontalFirst()
@@ -46,24 +64,23 @@ func resample(ctx context.Context, img image.Image, geometry Geometry, o order) 
 		completed = f.verticalFirst()
 	}
 	if !completed {
-		return nil, &Error{Kind: KindCanceled, Err: ctx.Err()}
+		return canceled()
 	}
 	return out.img, nil
 }
 
 // chooseOrder estimates the work of each order — reading a source pixel
 // costs the source's fetchCost, and applying one weight to a pixel's samples
-// costs one — and picks the cheaper, unless the horizontal-first window of
-// resampled rows would exceed windowBudget. Horizontal-first reads each
-// source row once; vertical-first reads a row again for every output row
-// that combines it, which a costly read, such as a JPEG's YCbCr conversion,
-// makes dearer. The vertical-first order's working rows hold at most
-// MaxSourceDimension pixels, so it always fits.
+// costs one — and picks the cheaper, unless the horizontal-first order's
+// working rows would exceed rowBudget. Horizontal-first reads each source
+// row once; vertical-first reads a row again for every output row that
+// combines it, which a costly read, such as a JPEG's YCbCr conversion,
+// makes dearer. The vertical-first order's working rows always fit, as
+// rowBudget describes.
 func chooseOrder(horizontal, vertical *axis, src source) order {
 	width, height := int64(len(horizontal.start)), int64(len(vertical.start))
 	columns, rows := int64(horizontal.hi-horizontal.lo), int64(vertical.hi-vertical.lo)
-	window := int64(vertical.widest) * width * int64(src.layout) * 4
-	if window > windowBudget {
+	if horizontalFirstBytes(horizontal, vertical, src.layout) > rowBudget {
 		return orderVerticalFirst
 	}
 	horizontalFirst := rows*(columns*src.fetchCost+int64(horizontal.total())) + width*int64(vertical.total())
@@ -74,13 +91,27 @@ func chooseOrder(horizontal, vertical *axis, src source) order {
 	return orderHorizontalFirst
 }
 
+// horizontalFirstBytes is the memory of the horizontal-first order's working
+// rows: the window of resampled rows with the record of which source row
+// each slot holds, the source row being resampled, and an output row's sums
+// and finished samples.
+func horizontalFirstBytes(horizontal, vertical *axis, l layout) int64 {
+	rowLength := int64(len(horizontal.start)) * int64(l)
+	slots := int64(vertical.widest)
+	return slots*(4*rowLength+4) + 4*int64(horizontal.hi-horizontal.lo)*int64(l) + 12*rowLength
+}
+
 // filter runs one resize.
 type filter struct {
 	done                 <-chan struct{}
 	src                  source
 	out                  sink
 	horizontal, vertical *axis
-	channels             int
+}
+
+// channels is the number of samples per pixel in every working row.
+func (f *filter) channels() int {
+	return int(f.src.layout)
 }
 
 // canceled reports whether the context has ended.
@@ -100,38 +131,40 @@ func (f *filter) canceled() bool {
 // row never evict each other. It reports whether it finished before the
 // context ended.
 func (f *filter) horizontalFirst() bool {
-	width := len(f.horizontal.start)
-	rowLength := width * f.channels
+	channels := f.channels()
+	rowLength := len(f.horizontal.start) * channels
 	slots := f.vertical.widest
 	window := make([]int32, slots*rowLength)
-	slotRow := make([]int, slots)
+	// slotRow is the source row each slot holds, or −1. Rows are below
+	// MaxSourceDimension, which int32 holds.
+	slotRow := make([]int32, slots)
 	for i := range slotRow {
 		slotRow[i] = -1
 	}
-	sourceRow := make([]int32, (f.horizontal.hi-f.horizontal.lo)*f.channels)
+	sourceRow := make([]int32, (f.horizontal.hi-f.horizontal.lo)*channels)
 	sums := make([]int64, rowLength)
 	finished := make([]int32, rowLength)
-	rows := make([][]int32, slots)
 	for y := range len(f.vertical.start) {
 		if f.canceled() {
 			return false
 		}
 		first, weights := f.vertical.taps(y)
-		for k := range weights {
+		clear(sums)
+		for k, weight := range weights {
 			r := first + k
 			slot := r % slots
 			resampled := window[slot*rowLength : (slot+1)*rowLength]
-			if slotRow[slot] != r {
+			if slotRow[slot] != int32(r) {
 				if f.canceled() {
 					return false
 				}
 				f.src.fetch(sourceRow, r, f.horizontal.lo, f.horizontal.hi)
 				f.resampleRow(resampled, sourceRow, firstShift)
-				slotRow[slot] = r
+				slotRow[slot] = int32(r)
 			}
-			rows[k] = resampled
+			accumulate(sums, resampled, weight)
 		}
-		combineRows(finished, rows[:len(weights)], weights, sums, secondShift)
+		roundSums(finished, sums, secondShift)
 		f.out.store(finished, y)
 	}
 	return true
@@ -141,11 +174,12 @@ func (f *filter) horizontalFirst() bool {
 // working row, then resamples that row horizontally. It reports whether it
 // finished before the context ended.
 func (f *filter) verticalFirst() bool {
-	rowLength := (f.horizontal.hi - f.horizontal.lo) * f.channels
+	channels := f.channels()
+	rowLength := (f.horizontal.hi - f.horizontal.lo) * channels
 	sourceRow := make([]int32, rowLength)
 	sums := make([]int64, rowLength)
 	combined := make([]int32, rowLength)
-	finished := make([]int32, len(f.horizontal.start)*f.channels)
+	finished := make([]int32, len(f.horizontal.start)*channels)
 	for y := range len(f.vertical.start) {
 		if f.canceled() {
 			return false
@@ -171,7 +205,7 @@ func (f *filter) verticalFirst() bool {
 func (f *filter) resampleRow(dst, row []int32, shift uint) {
 	a, lo := f.horizontal, f.horizontal.lo
 	half := int64(1) << (shift - 1)
-	switch f.channels {
+	switch f.channels() {
 	case 1:
 		for x := range a.start {
 			first, weights := a.taps(x)
@@ -214,17 +248,6 @@ func (f *filter) resampleRow(dst, row []int32, shift uint) {
 			d[0], d[1], d[2], d[3] = int32((s0+half)>>shift), int32((s1+half)>>shift), int32((s2+half)>>shift), int32((s3+half)>>shift)
 		}
 	}
-}
-
-// combineRows applies the vertical weights to rows of samples, element by
-// element, rounding each sum by shift into dst. sums is scratch space of
-// dst's length.
-func combineRows(dst []int32, rows [][]int32, weights []int32, sums []int64, shift uint) {
-	clear(sums)
-	for k, row := range rows {
-		accumulate(sums, row, weights[k])
-	}
-	roundSums(dst, sums, shift)
 }
 
 // accumulate adds weight·row to sums, element by element.

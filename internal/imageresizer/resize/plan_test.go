@@ -199,7 +199,8 @@ func TestPlanStretchAlwaysProducesTheTarget(t *testing.T) {
 
 // TestPlanValidatesTheTarget pins PRESET-006 at the resize boundary: 1 to
 // 16,384 pixels per axis and at most 100 megapixels, and a known fitting
-// mode. The target is checked before the source.
+// mode. The rules are checked in the preset library's order — dimensions,
+// mode, then area — and the target before the source.
 func TestPlanValidatesTheTarget(t *testing.T) {
 	valid := []Target{fit(10000, 10000), stretch(16384, 6103), crop(6103, 16384), fit(1, 1), crop(16384, 1)}
 	for _, target := range valid {
@@ -219,7 +220,8 @@ func TestPlanValidatesTheTarget(t *testing.T) {
 		{crop(512, -1), ErrTargetDimension},
 		{Target{Width: 512, Height: 512}, ErrMode},
 		{Target{Width: 512, Height: 512, Mode: "zoom"}, ErrMode},
-		{Target{Width: 0, Height: 0, Mode: "zoom"}, ErrMode},
+		{Target{Width: 0, Height: 0, Mode: "zoom"}, ErrTargetDimension},
+		{Target{Width: 10000, Height: 10001, Mode: "zoom"}, ErrMode},
 	}
 	for _, tc := range invalid {
 		for _, err := range []error{tc.target.Validate(), planErr(1000, 500, tc.target), planErr(0, 0, tc.target)} {

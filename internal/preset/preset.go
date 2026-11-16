@@ -43,7 +43,9 @@ func ValidResizeMode(mode ResizeMode) bool {
 }
 
 // WithinResizePixelLimit reports whether a width × height Image Resizer
-// target is at most MaxResizeMegapixels (PRESET-006).
+// target is at most MaxResizeMegapixels (PRESET-006). It checks the area
+// alone, for dimensions ValidDimension has accepted: a zero or negative
+// dimension, or one beyond MaxDimension, can pass it.
 func WithinResizePixelLimit(width, height int) bool {
 	return int64(width)*int64(height) <= MaxResizeMegapixels*1_000_000
 }

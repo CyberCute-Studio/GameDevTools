@@ -1,10 +1,15 @@
 package resize
 
 import (
+	"context"
 	"image"
+	"image/color"
 	"math"
+	"runtime"
 	"slices"
 	"testing"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 )
 
 // TestCatmullRomValues pins the kernel at its defining points: one at the
@@ -138,9 +143,10 @@ func TestReductionReadsEverySourceSample(t *testing.T) {
 	}
 }
 
-// TestExtremeSourcesStayBounded resizes sources at MaxSourceDimension on
-// one axis: the work is proportional to the source, and the working memory
-// to its longer side, not to its scaled size.
+// TestExtremeSourcesStayBounded resizes real sources at MaxSourceDimension
+// on one axis to the planned bounds, without the work growing with the
+// scaled size, which Crop to Fill makes 1,572,864 rows here.
+// TestWorkingMemoryStaysBounded measures the memory.
 func TestExtremeSourcesStayBounded(t *testing.T) {
 	wide := image.NewGray(image.Rect(0, 0, MaxSourceDimension, 2))
 	tall := image.NewGray(image.Rect(0, 0, 2, MaxSourceDimension))
@@ -158,5 +164,67 @@ func TestExtremeSourcesStayBounded(t *testing.T) {
 	}
 	if got := mustResize(t, tall, stretch(16384, 2)).Bounds(); got != image.Rect(0, 0, 16384, 2) {
 		t.Fatalf("tall source stretched to 16384 × 2: %v", got)
+	}
+}
+
+// virtual is a uniform source of any size whose pixels take no memory,
+// read through At. Its first read cancels the resize, which by then has
+// allocated every working buffer.
+type virtual struct {
+	rect   image.Rectangle
+	model  color.Model
+	pixel  color.Color
+	cancel context.CancelFunc
+}
+
+func (v virtual) ColorModel() color.Model { return v.model }
+func (v virtual) Bounds() image.Rectangle { return v.rect }
+func (v virtual) At(x, y int) color.Color {
+	v.cancel()
+	return v.pixel
+}
+
+// TestWorkingMemoryStaysBounded measures what Resize allocates beyond its
+// output for the most demanding shapes the source bound admits — axes of
+// MaxSourceDimension reduced to a sliver, to the widest output row, or to
+// the tallest output column, read with four channels — which the package
+// documentation promises stays under 128 MiB.
+func TestWorkingMemoryStaysBounded(t *testing.T) {
+	huge := image.Rect(0, 0, MaxSourceDimension, MaxSourceDimension)
+	// Boxed once, so reading them allocates nothing.
+	translucent := color.Color(color.NRGBA{R: 10, G: 20, B: 30, A: 40})
+	gray := color.Color(color.Gray16{Y: 0x1234})
+	cases := []struct {
+		name          string
+		rect          image.Rectangle
+		model         color.Model
+		pixel         color.Color
+		target        Target
+		bytesPerPixel int
+	}{
+		{"square to a sliver", huge, color.NRGBAModel, translucent, stretch(4, 3), 4},
+		{"square cropped to a sliver", huge, color.NRGBAModel, translucent, crop(4, 3), 4},
+		{"square to the widest row", huge, color.NRGBAModel, translucent, stretch(preset.MaxDimension, 1), 4},
+		{"square to the tallest column", huge, color.NRGBAModel, translucent, stretch(1, preset.MaxDimension), 4},
+		{"narrow column to a sliver", image.Rect(0, 0, 3, MaxSourceDimension), color.NRGBAModel, translucent, stretch(3, 4), 4},
+		{"gray column to a sliver", image.Rect(0, 0, 16, MaxSourceDimension), color.GrayModel, gray, stretch(16, 3), 1},
+	}
+	for _, tc := range cases {
+		ctx, cancel := context.WithCancel(context.Background())
+		src := virtual{rect: tc.rect, model: tc.model, pixel: tc.pixel, cancel: cancel}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		_, err := Resize(ctx, src, tc.target)
+		runtime.ReadMemStats(&after)
+		cancel()
+		if !isCanceled(err) {
+			t.Fatalf("%s: Resize = %v, want it cancelled at its first read", tc.name, err)
+		}
+		output := uint64(tc.target.Width * tc.target.Height * tc.bytesPerPixel)
+		working := after.TotalAlloc - before.TotalAlloc - output
+		t.Logf("%s: %.1f MiB of working memory", tc.name, float64(working)/(1<<20))
+		if working >= 128<<20 {
+			t.Errorf("%s: %.1f MiB of working memory, want under 128 MiB", tc.name, float64(working)/(1<<20))
+		}
 	}
 }

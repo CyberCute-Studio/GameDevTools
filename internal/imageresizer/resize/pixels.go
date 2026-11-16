@@ -31,8 +31,8 @@ type source struct {
 	// relative to applying one filter weight to a pixel's samples, as
 	// measured on windows/arm64: 1 to copy 8-bit samples or 16-bit gray; 2
 	// to premultiply, read 16-bit color, look up a palette entry, or convert
-	// CMYK; 5 to convert YCbCr; and 20 to read through At. chooseOrder
-	// weighs it.
+	// CMYK; 3 to convert YCbCr; 5 to convert and premultiply NYCbCrA; and 20
+	// to read through At. chooseOrder weighs it.
 	fetchCost int64
 	// fetch writes the samples of source pixels [x0, x1) of row y, both
 	// relative to the source bounds, to dst.
@@ -40,9 +40,14 @@ type source struct {
 }
 
 // newSource chooses the pixel layout and a row reader for the image. The
-// standard library's image types are read directly; others through At.
-func newSource(img image.Image) source {
+// image types the decoder returns, and *image.NYCbCrA, are read directly;
+// any other type through At. read is the region of the source the filter
+// reads, relative to its bounds: the layout carries alpha only when a pixel
+// there is translucent, so translucency the filter never reads, such as in
+// a margin Crop to Fill removes, adds no alpha channel.
+func newSource(img image.Image, read image.Rectangle) source {
 	origin := img.Bounds().Min
+	opaque := func() bool { return opaqueWithin(img, read.Add(origin)) }
 	switch img := img.(type) {
 	case *image.Gray:
 		return source{layout: layoutGray, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
@@ -59,7 +64,7 @@ func newSource(img image.Image) source {
 			}
 		}}
 	case *image.RGBA:
-		if img.Opaque() {
+		if opaque() {
 			return opaque8(img, origin)
 		}
 		return source{layout: layoutRGBA, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
@@ -69,7 +74,7 @@ func newSource(img image.Image) source {
 			}
 		}}
 	case *image.NRGBA:
-		if img.Opaque() {
+		if opaque() {
 			return opaque8(&image.RGBA{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, origin)
 		}
 		return source{layout: layoutRGBA, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
@@ -80,7 +85,7 @@ func newSource(img image.Image) source {
 			}
 		}}
 	case *image.RGBA64:
-		if img.Opaque() {
+		if opaque() {
 			return opaque16(img, origin)
 		}
 		return source{layout: layoutRGBA, deep: true, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
@@ -90,7 +95,7 @@ func newSource(img image.Image) source {
 			}
 		}}
 	case *image.NRGBA64:
-		if img.Opaque() {
+		if opaque() {
 			return opaque16(&image.RGBA64{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, origin)
 		}
 		return source{layout: layoutRGBA, deep: true, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
@@ -105,14 +110,23 @@ func newSource(img image.Image) source {
 		// The 8-bit conversion is the one the decoder applies when it
 		// reorients a JPEG, so an upright and a reoriented picture of the
 		// same pixels start from the same colors.
-		return source{layout: layoutRGB, fetchCost: 5, fetch: func(dst []int32, y, x0, x1 int) {
-			py := origin.Y + y
-			for i := range x1 - x0 {
-				px := origin.X + x0 + i
-				yi, ci := img.YOffset(px, py), img.COffset(px, py)
-				r, g, b := color.YCbCrToRGB(img.Y[yi], img.Cb[ci], img.Cr[ci])
-				d := dst[3*i : 3*i+3]
-				d[0], d[1], d[2] = int32(r)*0x101, int32(g)*0x101, int32(b)*0x101
+		return source{layout: layoutRGB, fetchCost: 3, fetch: func(dst []int32, y, x0, x1 int) {
+			readYCbCr(dst, img, origin.X+x0, origin.Y+y, x1-x0, int(layoutRGB))
+		}}
+	case *image.NYCbCrA:
+		// The color converts as a YCbCr image's does, and the alpha applies
+		// as an *image.NRGBA's does.
+		if opaque() {
+			return source{layout: layoutRGB, fetchCost: 3, fetch: func(dst []int32, y, x0, x1 int) {
+				readYCbCr(dst, &img.YCbCr, origin.X+x0, origin.Y+y, x1-x0, int(layoutRGB))
+			}}
+		}
+		return source{layout: layoutRGBA, fetchCost: 5, fetch: func(dst []int32, y, x0, x1 int) {
+			px, py := origin.X+x0, origin.Y+y
+			readYCbCr(dst, &img.YCbCr, px, py, x1-x0, int(layoutRGBA))
+			for i, a := range img.A[img.AOffset(px, py):][:x1-x0] {
+				d := dst[4*i : 4*i+4]
+				d[0], d[1], d[2], d[3] = premultiplySample(d[0], a), premultiplySample(d[1], a), premultiplySample(d[2], a), int32(a)*0x101
 			}
 		}}
 	case *image.CMYK:
@@ -139,7 +153,7 @@ func newSource(img image.Image) source {
 			table[index][0], table[index][1], table[index][2], table[index][3] = premultiplied(entry)
 		}
 		channels := layoutRGBA
-		if img.Opaque() {
+		if opaque() {
 			channels = layoutRGB
 		}
 		return source{layout: channels, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
@@ -150,7 +164,60 @@ func newSource(img image.Image) source {
 			}
 		}}
 	}
-	return genericSource(img, origin)
+	return genericSource(img, origin, read)
+}
+
+// opaqueWithin reports whether the pixels of img within region, in the
+// image's own coordinates, are all opaque, as the Opaque method of the
+// image's SubImage of the region reports it, or failing that the Opaque
+// method of the whole image. An image with neither counts as translucent.
+func opaqueWithin(img image.Image, region image.Rectangle) bool {
+	if cropper, ok := img.(interface {
+		SubImage(image.Rectangle) image.Image
+	}); ok {
+		if reporter, ok := cropper.SubImage(region).(interface{ Opaque() bool }); ok {
+			return reporter.Opaque()
+		}
+	}
+	reporter, ok := img.(interface{ Opaque() bool })
+	return ok && reporter.Opaque()
+}
+
+// readYCbCr writes the 8-bit RGB conversion of n pixels of row py of img,
+// from column px, to dst as working samples, one pixel every stride
+// samples. Along a row the luma samples are consecutive and the chroma
+// index advances once per subsampled column, so the offsets are computed
+// once per row rather than for every pixel, as YOffset and COffset would.
+func readYCbCr(dst []int32, img *image.YCbCr, px, py, n, stride int) {
+	luma := img.Y[img.YOffset(px, py):][:n]
+	if img.Rect.Min.X < 0 {
+		// COffset divides columns rounding toward zero, which a shift does
+		// not reproduce left of zero.
+		for i, l := range luma {
+			c := img.COffset(px+i, py)
+			r, g, b := color.YCbCrToRGB(l, img.Cb[c], img.Cr[c])
+			d := dst[stride*i : stride*i+3]
+			d[0], d[1], d[2] = int32(r)*0x101, int32(g)*0x101, int32(b)*0x101
+		}
+		return
+	}
+	// COffset's column term is x/h − Rect.Min.X/h for the horizontal
+	// subsampling factor h, which is 1 << shift; on non-negative columns
+	// the division is the shift.
+	var shift uint
+	switch img.SubsampleRatio {
+	case image.YCbCrSubsampleRatio422, image.YCbCrSubsampleRatio420:
+		shift = 1
+	case image.YCbCrSubsampleRatio411, image.YCbCrSubsampleRatio410:
+		shift = 2
+	}
+	row := img.COffset(img.Rect.Min.X, py) - img.Rect.Min.X>>shift
+	for i, l := range luma {
+		c := row + (px+i)>>shift
+		r, g, b := color.YCbCrToRGB(l, img.Cb[c], img.Cr[c])
+		d := dst[stride*i : stride*i+3]
+		d[0], d[1], d[2] = int32(r)*0x101, int32(g)*0x101, int32(b)*0x101
+	}
 }
 
 // opaque8 reads the color of an opaque *image.RGBA, skipping alpha. An
@@ -191,9 +258,10 @@ func readOpaque16(dst []int32, row []uint8, n int) {
 
 // genericSource reads an image of any type through At. Its layout follows
 // the color model: a grayscale model is filtered as gray, a 16-bit model
-// keeps 16 bits in the output, and an image reporting itself opaque drops
-// alpha, as do the always-opaque YCbCr and CMYK models.
-func genericSource(img image.Image, origin image.Point) source {
+// keeps 16 bits in the output, and an image reporting the region the filter
+// reads opaque, as opaqueWithin asks it, drops alpha, as do the
+// always-opaque YCbCr and CMYK models.
+func genericSource(img image.Image, origin image.Point, read image.Rectangle) source {
 	model := img.ColorModel()
 	if model == color.GrayModel || model == color.Gray16Model {
 		return source{layout: layoutGray, deep: model == color.Gray16Model, fetchCost: 20, fetch: func(dst []int32, y, x0, x1 int) {
@@ -203,10 +271,7 @@ func genericSource(img image.Image, origin image.Point) source {
 		}}
 	}
 	deep := model == color.RGBA64Model || model == color.NRGBA64Model || model == color.Alpha16Model
-	opaque := model == color.YCbCrModel || model == color.CMYKModel
-	if reporter, ok := img.(interface{ Opaque() bool }); ok && !opaque {
-		opaque = reporter.Opaque()
-	}
+	opaque := model == color.YCbCrModel || model == color.CMYKModel || opaqueWithin(img, read.Add(origin))
 	channels := layoutRGBA
 	if opaque {
 		channels = layoutRGB
@@ -225,8 +290,8 @@ func genericSource(img image.Image, origin image.Point) source {
 // the image fast paths compute them. Straight 8-bit and 16-bit colors are
 // premultiplied with rounding rather than with the truncation of their RGBA
 // methods, so an 8-bit pixel survives the round trip through the filter
-// unchanged, and YCbCr and CMYK colors take the 8-bit conversion to RGB
-// rather than the 16-bit one of their RGBA methods.
+// unchanged, and YCbCr, NYCbCrA, and CMYK colors take the 8-bit conversion
+// to RGB rather than the 16-bit one of their RGBA methods.
 func premultiplied(c color.Color) (r, g, b, a int32) {
 	switch c := c.(type) {
 	case color.NRGBA:
@@ -237,6 +302,9 @@ func premultiplied(c color.Color) (r, g, b, a int32) {
 	case color.YCbCr:
 		r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
 		return int32(r) * 0x101, int32(g) * 0x101, int32(b) * 0x101, 0xffff
+	case color.NYCbCrA:
+		r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+		return premultiply8(r, c.A), premultiply8(g, c.A), premultiply8(b, c.A), int32(c.A) * 0x101
 	case color.CMYK:
 		r, g, b := color.CMYKToRGB(c.C, c.M, c.Y, c.K)
 		return int32(r) * 0x101, int32(g) * 0x101, int32(b) * 0x101, 0xffff
@@ -250,6 +318,12 @@ func premultiplied(c color.Color) (r, g, b, a int32) {
 // 0xffff = 0xff·0x101 and 0xff is odd, so the division never meets a tie.
 func premultiply8(value, alpha uint8) int32 {
 	return (int32(value)*int32(alpha)*0x101 + 0x7f) / 0xff
+}
+
+// premultiplySample returns premultiply8(value, alpha) for an 8-bit channel
+// already widened to the working sample value·0x101.
+func premultiplySample(sample int32, alpha uint8) int32 {
+	return (sample*int32(alpha) + 0x7f) / 0xff
 }
 
 // premultiply16 returns the premultiplied value of a 16-bit straight channel

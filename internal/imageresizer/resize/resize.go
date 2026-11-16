@@ -19,10 +19,10 @@
 // lend no color to their neighbors, and an output pixel whose alpha rounds to
 // zero is stored as transparent black. The stored sRGB values are filtered
 // directly, as most image tools do, rather than converted to linear light;
-// YCbCr and CMYK pixels are first converted to 8-bit RGB by the standard
-// library's conversion, the one the decoder applies when it reorients a
-// JPEG, so reorienting a picture does not change the colors the filter
-// starts from. The filter's overshoot near sharp edges is clamped. Crop to
+// YCbCr and CMYK pixels, and the color of NYCbCrA ones, are first converted
+// to 8-bit RGB by the standard library's conversion, the one the decoder
+// applies when it reorients a JPEG, so reorienting a picture does not
+// change the colors the filter starts from. The filter's overshoot near sharp edges is clamped. Crop to
 // Fill resamples only the cropped region, applying exactly the filter
 // weights that scaling the whole source and cropping afterwards would.
 //
@@ -38,10 +38,12 @@
 // Resize allocates the output image plus working memory that does not grow
 // with the source's area. The weight tables grow with the source's
 // dimensions, which MaxSourceDimension bounds, and the filter streams the
-// source a row at a time, so the working memory stays under 128 MiB in the
-// worst case and is a few megabytes for typical sources. Resize reads the
-// source but never retains or modifies it, and callers run it off the GUI
-// thread (TECH-005); a context cancels it between source rows.
+// source a row at a time, keeping no more working rows than a fixed budget
+// holds, so the working memory — weight tables and rows together — stays
+// under 128 MiB in the worst case and is a few megabytes for typical
+// sources. Resize reads the source but never retains or modifies it, and
+// callers run it off the GUI thread (TECH-005); a context cancels it
+// between source rows, and before it allocates the output.
 package resize
 
 import (
@@ -133,15 +135,17 @@ type Target struct {
 }
 
 // Validate checks the target against the Image Resizer preset rules
-// (PRESET-006): a known fitting mode, 1 to 16,384 pixels per axis, and at
-// most 100 megapixels. It applies the preset library's own checks, so a
-// target and a saved preset cannot be judged differently.
+// (PRESET-006): 1 to 16,384 pixels per axis, a known fitting mode, and at
+// most 100 megapixels. It applies the preset library's own checks in the
+// order the preset library applies them to a saved preset, so a target and
+// a saved preset cannot be judged differently, and one that breaks several
+// rules is reported for the same one.
 func (t Target) Validate() error {
-	if !preset.ValidResizeMode(t.Mode) {
-		return &Error{Kind: KindInvalid, Err: ErrMode}
-	}
 	if !preset.ValidDimension(t.Width) || !preset.ValidDimension(t.Height) {
 		return &Error{Kind: KindInvalid, Err: ErrTargetDimension}
+	}
+	if !preset.ValidResizeMode(t.Mode) {
+		return &Error{Kind: KindInvalid, Err: ErrMode}
 	}
 	if !preset.WithinResizePixelLimit(t.Width, t.Height) {
 		return &Error{Kind: KindInvalid, Err: ErrTargetArea}
@@ -232,8 +236,13 @@ func roundDiv(numerator, denominator int64) int64 {
 // kind of pixels: a grayscale source gives an *image.Gray, or an
 // *image.Gray16 at 16 bits per sample; an opaque color source gives an
 // *image.RGBA, or an *image.RGBA64 at 16 bits per channel; and a source with
-// any translucent pixel gives an *image.NRGBA, or an *image.NRGBA64.
-// Sources outside the standard library's image types are read through At.
+// a translucent pixel among those the filter reads gives an *image.NRGBA,
+// or an *image.NRGBA64. The filter reads the whole source except the
+// margins Crop to Fill removes beyond the filter's reach, so translucency
+// only there adds no alpha channel. The image types the decoder returns,
+// and *image.NYCbCrA, are read directly; any other type is read through At,
+// and is opaque if the Opaque method of its SubImage of the region the
+// filter reads, or failing that its own, says so.
 // Resizing to the source's own dimensions changes no pixel beyond its
 // conversion to the output type: a straight-alpha 8-bit, grayscale, or
 // opaque source comes back exactly, a premultiplied one as its straight

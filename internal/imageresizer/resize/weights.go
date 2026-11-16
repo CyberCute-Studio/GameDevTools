@@ -65,10 +65,12 @@ func newAxis(sourceLength, scaledLength, first, count int) *axis {
 	// The filter covers an open interval 2·reach/(2l) source samples wide,
 	// so no output has more weights than that plus two, or than the source
 	// has samples. Allocating that bound up front keeps the table from
-	// growing — and briefly doubling — while it fills: it comes to about
-	// 4·sourceLength weights for a reduction and 6·count for an
+	// growing — and briefly doubling — while it fills: it comes to at most
+	// 4·sourceLength + 2·count weights for a reduction and 6·count for an
 	// enlargement. The filter values of one output, kept so each is
-	// evaluated once, need at most the same bound.
+	// evaluated once, need at most the same bound. At MaxSourceDimension
+	// and preset.MaxDimension that is 16.125 MiB of weights, 8 MiB of
+	// values, and 256 KiB of starts and offsets: under 24.4 MiB an axis.
 	perOutput := min(s, 2*reach/(2*l)+2)
 	a := &axis{
 		start:   make([]int, count),

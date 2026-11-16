@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -88,6 +89,20 @@ func typed(seed uint64, width, height int) map[string]image.Image {
 		opaquePaletted.Pix[i] = uint8(rng.Uint32())
 	}
 	images["Paletted"], images["opaque Paletted"] = paletted, opaquePaletted
+
+	nycbcra := image.NewNYCbCrA(rect, image.YCbCrSubsampleRatio420)
+	opaqueNYCbCrA := image.NewNYCbCrA(rect, image.YCbCrSubsampleRatio422)
+	for i := range nycbcra.Y {
+		nycbcra.Y[i], nycbcra.A[i] = uint8(rng.Uint32()), uint8(rng.Uint32())
+		opaqueNYCbCrA.Y[i], opaqueNYCbCrA.A[i] = uint8(rng.Uint32()), 0xff
+	}
+	for i := range nycbcra.Cb {
+		nycbcra.Cb[i], nycbcra.Cr[i] = uint8(rng.Uint32()), uint8(rng.Uint32())
+	}
+	for i := range opaqueNYCbCrA.Cb {
+		opaqueNYCbCrA.Cb[i], opaqueNYCbCrA.Cr[i] = uint8(rng.Uint32()), uint8(rng.Uint32())
+	}
+	images["NYCbCrA"], images["opaque NYCbCrA"] = nycbcra, opaqueNYCbCrA
 	return images
 }
 
@@ -179,6 +194,7 @@ func TestResizeKeepsThePixelKind(t *testing.T) {
 		"Gray": &image.Gray{}, "Gray16": &image.Gray16{},
 		"RGBA64": &image.NRGBA64{}, "NRGBA64": &image.NRGBA64{}, "opaque NRGBA64": &image.RGBA64{},
 		"CMYK": &image.RGBA{}, "Paletted": &image.NRGBA{}, "opaque Paletted": &image.RGBA{},
+		"NYCbCrA": &image.NRGBA{}, "opaque NYCbCrA": &image.RGBA{},
 	}
 	for name, img := range typed(3, 9, 7) {
 		wantType := reflect.TypeOf(&image.RGBA{})
@@ -190,6 +206,20 @@ func TestResizeKeepsThePixelKind(t *testing.T) {
 				t.Errorf("%s (%T): output %v, want %v", name, img, got, wantType)
 			}
 		}
+	}
+	// Only the pixels the filter reads decide whether the output keeps
+	// alpha: translucency in a margin Crop to Fill removes adds none, while
+	// translucency the filter reaches does. Cropping 10 × 10 from 40 × 10
+	// keeps the scale, so the filter reads exactly columns 15 to 24.
+	src := noise(9, image.Rect(0, 0, 40, 10), false)
+	src.SetNRGBA(14, 4, color.NRGBA{A: 0x80})
+	src.SetNRGBA(25, 4, color.NRGBA{A: 0x80})
+	if got := mustResize(t, src, crop(10, 10)); reflect.TypeOf(got) != reflect.TypeOf(&image.RGBA{}) {
+		t.Errorf("translucent only beyond the crop: output %T, want *image.RGBA", got)
+	}
+	src.SetNRGBA(15, 4, color.NRGBA{A: 0x80})
+	if got := mustResize(t, src, crop(10, 10)); reflect.TypeOf(got) != reflect.TypeOf(&image.NRGBA{}) {
+		t.Errorf("translucent within the crop: output %T, want *image.NRGBA", got)
 	}
 }
 
@@ -217,9 +247,10 @@ func TestResizeUnchangedSizeIsExact(t *testing.T) {
 // which stores straight color. Straight 8-bit and 16-bit sources must come
 // back exactly, except that a translucent 16-bit color is only as precise as
 // its 16-bit premultiplied value; a premultiplied source must come back as
-// its straight color rounded to the nearest step; and a YCbCr or CMYK source
-// as its 8-bit RGB conversion, the decoder's. A fully transparent pixel
-// comes back as transparent black.
+// its straight color rounded to the nearest step; a YCbCr or CMYK source as
+// its 8-bit RGB conversion, the decoder's; and an NYCbCrA source as that
+// conversion under its alpha. A fully transparent pixel comes back as
+// transparent black.
 func sameColor(source, output color.Color) bool {
 	round := func(value, alpha uint32, steps float64) float64 {
 		return math.Round(float64(value) * steps / float64(alpha))
@@ -230,6 +261,13 @@ func sameColor(source, output color.Color) bool {
 	case color.YCbCr:
 		r, g, b := color.YCbCrToRGB(s.Y, s.Cb, s.Cr)
 		return output == color.RGBA{R: r, G: g, B: b, A: 0xff}
+	case color.NYCbCrA:
+		o := color.NRGBAModel.Convert(output).(color.NRGBA)
+		if s.A == 0 {
+			return o == color.NRGBA{}
+		}
+		r, g, b := color.YCbCrToRGB(s.Y, s.Cb, s.Cr)
+		return o == color.NRGBA{R: r, G: g, B: b, A: s.A}
 	case color.CMYK:
 		r, g, b := color.CMYKToRGB(s.C, s.M, s.Y, s.K)
 		return output == color.RGBA{R: r, G: g, B: b, A: 0xff}
@@ -386,33 +424,45 @@ func TestPaletteIndexPastTheEnd(t *testing.T) {
 	}
 }
 
-// TestJPEGPixelsConvertAsTheDecoderDoes checks that a YCbCr or CMYK source
-// resizes exactly as its *image.RGBA conversion by the standard library's
-// 8-bit YCbCrToRGB and CMYKToRGB — what the decoder produces when it
-// reorients a JPEG — so reorienting a picture does not change the colors
-// the filter starts from.
-func TestJPEGPixelsConvertAsTheDecoderDoes(t *testing.T) {
+// TestYCbCrAndCMYKConvertToEightBitRGB checks that a YCbCr or CMYK source,
+// at every subsample ratio, resizes exactly as its *image.RGBA conversion by
+// the standard library's 8-bit YCbCrToRGB and CMYKToRGB, and an NYCbCrA
+// source as that conversion under its alpha in an *image.NRGBA.
+// TestJPEGPixelsMatchTheDecoder ties the conversion to the decoder's own.
+func TestYCbCrAndCMYKConvertToEightBitRGB(t *testing.T) {
 	for name, img := range typed(71, 29, 23) {
-		if _, ok := img.(*image.YCbCr); !ok && name != "CMYK" {
+		var converted interface {
+			image.Image
+			Set(x, y int, c color.Color)
+		}
+		switch img.(type) {
+		case *image.YCbCr, *image.CMYK:
+			converted = image.NewRGBA(img.Bounds())
+		case *image.NYCbCrA:
+			converted = image.NewNRGBA(img.Bounds())
+		default:
 			continue
 		}
-		converted := image.NewRGBA(img.Bounds())
 		for y := range 23 {
 			for x := range 29 {
 				var r, g, b uint8
+				alpha := uint8(0xff)
 				switch c := img.At(x, y).(type) {
 				case color.YCbCr:
 					r, g, b = color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+				case color.NYCbCrA:
+					r, g, b = color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+					alpha = c.A
 				case color.CMYK:
 					r, g, b = color.CMYKToRGB(c.C, c.M, c.Y, c.K)
 				}
-				converted.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 0xff})
+				converted.Set(x, y, color.NRGBA{R: r, G: g, B: b, A: alpha})
 			}
 		}
 		for _, target := range []Target{fit(10, 10), stretch(61, 7), crop(40, 40)} {
 			for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
 				if !sameImage(mustResample(t, img, target, o), mustResample(t, converted, target, o)) {
-					t.Errorf("%s %+v order %d: resizes differently from its decoder conversion", name, target, o)
+					t.Errorf("%s %+v order %d: resizes differently from its 8-bit conversion", name, target, o)
 				}
 			}
 		}
@@ -483,6 +533,8 @@ func moveToOrigin(t *testing.T, img image.Image, region image.Rectangle) image.I
 	case *image.YCbCr:
 		// YCbCr images are not settable, so the sub-image is compared with
 		// itself read through At, whose offsets the standard library owns.
+		return generic{img.SubImage(region)}
+	case *image.NYCbCrA:
 		return generic{img.SubImage(region)}
 	default:
 		t.Fatalf("unexpected type %T", img)
@@ -677,15 +729,21 @@ func TestOrdersAgree(t *testing.T) {
 
 // TestChooseOrder pins the order choice: the cheaper order for an ordinary
 // reduction or enlargement, weighing how costly the source's pixels are to
-// read, and vertical-first whenever the window of resampled rows would
-// exceed its budget.
+// read, and vertical-first whenever the horizontal-first order's working
+// rows would exceed their budget.
 func TestChooseOrder(t *testing.T) {
 	axes := func(sourceWidth, sourceHeight int, target Target) (*axis, *axis) {
 		g := mustPlan(t, sourceWidth, sourceHeight, target)
 		return newAxis(sourceWidth, g.ScaledWidth, g.Crop.Min.X, g.Width), newAxis(sourceHeight, g.ScaledHeight, g.Crop.Min.Y, g.Height)
 	}
-	rgb := newSource(image.NewRGBA(image.Rect(0, 0, 1, 1)))
-	ycbcr := newSource(image.NewYCbCr(image.Rect(0, 0, 1, 1), image.YCbCrSubsampleRatio420))
+	pixel := image.Rect(0, 0, 1, 1)
+	opaque := image.NewRGBA(pixel)
+	opaque.Pix[3] = 0xff
+	rgb, rgba := newSource(opaque, pixel), newSource(image.NewRGBA(pixel), pixel)
+	ycbcr := newSource(image.NewYCbCr(pixel, image.YCbCrSubsampleRatio420), pixel)
+	if rgb.layout != layoutRGB || rgba.layout != layoutRGBA || ycbcr.layout != layoutRGB {
+		t.Fatalf("layouts %d, %d, %d; want RGB, RGBA, RGB", rgb.layout, rgba.layout, ycbcr.layout)
+	}
 	cases := []struct {
 		name                      string
 		src                       source
@@ -703,8 +761,13 @@ func TestChooseOrder(t *testing.T) {
 		// than once, which outweighs widening them all.
 		{"JPEG slightly wider and much shorter", ycbcr, 2000, 4000, stretch(2600, 100), orderHorizontalFirst},
 		{"RGB slightly wider and much shorter", rgb, 2000, 4000, stretch(2600, 100), orderVerticalFirst},
+		{"translucent slightly wider and much shorter", rgba, 2000, 4000, stretch(2600, 100), orderVerticalFirst},
 		// The window would hold 4 × 65536 / 16 rows of 4096 pixels.
 		{"window over budget", rgb, 4096, 65536, stretch(4096, 16), orderVerticalFirst},
+		// The window of 2^20 rows of four four-channel pixels is exactly the
+		// budget, and the slot records and the source row it resamples are
+		// beyond it; horizontal-first would otherwise be cheaper.
+		{"working rows over budget", rgba, MaxSourceDimension, MaxSourceDimension, stretch(4, 3), orderVerticalFirst},
 		{"narrower and much taller", rgb, 4000, 100, stretch(40, 4000), orderHorizontalFirst},
 	}
 	for _, tc := range cases {
@@ -792,4 +855,75 @@ func TestResizeObservesCancellation(t *testing.T) {
 func isCanceled(err error) bool {
 	var resizeErr *Error
 	return errors.As(err, &resizeErr) && resizeErr.Kind == KindCanceled && errors.Is(err, context.Canceled)
+}
+
+// cancelOnOpaque cancels a context when asked whether it is opaque, which
+// Resize asks while it prepares, before it reads a pixel.
+type cancelOnOpaque struct{ cancelling }
+
+func (c cancelOnOpaque) Opaque() bool {
+	c.cancel()
+	return true
+}
+
+// TestResizeObservesCancellationWhilePreparing checks that a cancellation
+// arriving before filtering starts stops the resize before it allocates the
+// output or reads a pixel.
+func TestResizeObservesCancellationWhilePreparing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reads := 0
+	img := cancelOnOpaque{cancelling{generic: generic{noise(63, image.Rect(0, 0, 300, 200), false)}, reads: &reads, cancel: cancel}}
+	target := fit(4000, 4000)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out, err := Resize(ctx, img, target)
+	runtime.ReadMemStats(&after)
+	if out != nil || !isCanceled(err) {
+		t.Fatalf("Resize cancelled while preparing = %v, %v; want a KindCanceled error", out, err)
+	}
+	if reads != 0 {
+		t.Fatalf("%d pixels read after the cancellation, want none", reads)
+	}
+	// The 4000 × 2667 output would take over 40 MB.
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+		t.Fatalf("%d bytes allocated, want the output left unallocated", allocated)
+	}
+}
+
+// TestYCbCrRowsMatchTheirOffsets checks the per-row offsets readYCbCr
+// computes against the standard library's YOffset and COffset, through
+// YCbCrAt, for every subsample ratio, every starting column, and bounds
+// starting at even, odd, and negative columns.
+func TestYCbCrRowsMatchTheirOffsets(t *testing.T) {
+	rng := rand.New(rand.NewPCG(81, 1))
+	ratios := []image.YCbCrSubsampleRatio{
+		image.YCbCrSubsampleRatio444, image.YCbCrSubsampleRatio422, image.YCbCrSubsampleRatio420,
+		image.YCbCrSubsampleRatio440, image.YCbCrSubsampleRatio411, image.YCbCrSubsampleRatio410,
+	}
+	for _, ratio := range ratios {
+		for _, rect := range []image.Rectangle{image.Rect(0, 0, 13, 5), image.Rect(7, 3, 20, 8), image.Rect(-7, -3, 6, 2), image.Rect(-8, 1, 5, 6)} {
+			img := image.NewYCbCr(rect, ratio)
+			for i := range img.Y {
+				img.Y[i] = uint8(rng.Uint32())
+			}
+			for i := range img.Cb {
+				img.Cb[i], img.Cr[i] = uint8(rng.Uint32()), uint8(rng.Uint32())
+			}
+			for y := rect.Min.Y; y < rect.Max.Y; y++ {
+				for x0 := rect.Min.X; x0 < rect.Max.X; x0++ {
+					n := rect.Max.X - x0
+					dst := make([]int32, 3*n)
+					readYCbCr(dst, img, x0, y, n, 3)
+					for i := range n {
+						c := img.YCbCrAt(x0+i, y)
+						r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+						if want := []int32{int32(r) * 0x101, int32(g) * 0x101, int32(b) * 0x101}; !reflect.DeepEqual(dst[3*i:3*i+3], want) {
+							t.Fatalf("%v %v: pixel (%d, %d) read as %v, want %v", ratio, rect, x0+i, y, dst[3*i:3*i+3], want)
+						}
+					}
+				}
+			}
+		}
+	}
 }
