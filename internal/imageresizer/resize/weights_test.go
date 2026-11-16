@@ -168,27 +168,47 @@ func TestExtremeSourcesStayBounded(t *testing.T) {
 }
 
 // virtual is a uniform source of any size whose pixels take no memory,
-// read through At. Its first read cancels the resize, which by then has
-// allocated every working buffer.
+// read through At, which its probe observes.
 type virtual struct {
-	rect   image.Rectangle
-	model  color.Model
-	pixel  color.Color
-	cancel context.CancelFunc
+	rect  image.Rectangle
+	model color.Model
+	pixel color.Color
+	probe *probe
+}
+
+// probe counts a virtual source's reads. At read mark it records how much
+// the process has allocated so far, and at read stop it cancels the resize,
+// which by then is filtering.
+type probe struct {
+	reads, mark, stop int
+	stats             runtime.MemStats
+	marked            uint64
+	cancel            context.CancelFunc
 }
 
 func (v virtual) ColorModel() color.Model { return v.model }
 func (v virtual) Bounds() image.Rectangle { return v.rect }
 func (v virtual) At(x, y int) color.Color {
-	v.cancel()
+	p := v.probe
+	switch p.reads++; p.reads {
+	case p.mark:
+		runtime.ReadMemStats(&p.stats)
+		p.marked = p.stats.TotalAlloc
+	case p.stop:
+		p.cancel()
+	}
 	return v.pixel
 }
 
 // TestWorkingMemoryStaysBounded measures what Resize allocates beyond its
 // output for the most demanding shapes the source bound admits — axes of
 // MaxSourceDimension reduced to a sliver, to the widest output row, or to
-// the tallest output column, read with four channels — which the package
-// documentation promises stays under 128 MiB.
+// the tallest output column, read with four channels, and the
+// horizontal-first order with its working rows just within their budget —
+// which the package documentation promises stays under 128 MiB. Each resize
+// is cancelled once it has filtered a few source rows, so the measurement
+// covers the filtering as well as the setup, and between two reads two
+// source rows apart nothing proportional to a row may be allocated.
 func TestWorkingMemoryStaysBounded(t *testing.T) {
 	huge := image.Rect(0, 0, MaxSourceDimension, MaxSourceDimension)
 	// Boxed once, so reading them allocates nothing.
@@ -208,23 +228,33 @@ func TestWorkingMemoryStaysBounded(t *testing.T) {
 		{"square to the tallest column", huge, color.NRGBAModel, translucent, stretch(1, preset.MaxDimension), 4},
 		{"narrow column to a sliver", image.Rect(0, 0, 3, MaxSourceDimension), color.NRGBAModel, translucent, stretch(3, 4), 4},
 		{"gray column to a sliver", image.Rect(0, 0, 16, MaxSourceDimension), color.GrayModel, gray, stretch(16, 3), 1},
+		// TestChooseOrder pins the horizontal-first order for this shape.
+		{"working rows just within budget", image.Rect(0, 0, MaxSourceDimension, 376), color.NRGBAModel, translucent, stretch(preset.MaxDimension, 8), 4},
 	}
 	for _, tc := range cases {
 		ctx, cancel := context.WithCancel(context.Background())
-		src := virtual{rect: tc.rect, model: tc.model, pixel: tc.pixel, cancel: cancel}
+		// A row is read in at most rect.Dx() reads, after the opacity check's
+		// one read of a translucent source.
+		row := tc.rect.Dx()
+		p := &probe{mark: 1 + row + row/2, stop: 1 + 3*row + row/2, cancel: cancel}
+		src := virtual{rect: tc.rect, model: tc.model, pixel: tc.pixel, probe: p}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		_, err := Resize(ctx, src, tc.target)
 		runtime.ReadMemStats(&after)
 		cancel()
-		if !isCanceled(err) {
-			t.Fatalf("%s: Resize = %v, want it cancelled at its first read", tc.name, err)
+		if !isCanceled(err) || p.reads < p.stop {
+			t.Fatalf("%s: Resize = %v after %d reads, want it cancelled after read %d", tc.name, err, p.reads, p.stop)
 		}
 		output := uint64(tc.target.Width * tc.target.Height * tc.bytesPerPixel)
 		working := after.TotalAlloc - before.TotalAlloc - output
 		t.Logf("%s: %.1f MiB of working memory", tc.name, float64(working)/(1<<20))
 		if working >= 128<<20 {
 			t.Errorf("%s: %.1f MiB of working memory, want under 128 MiB", tc.name, float64(working)/(1<<20))
+		}
+		// Only the error the cancellation returns is allocated after the mark.
+		if filtering := after.TotalAlloc - p.marked; filtering >= 1<<10 {
+			t.Errorf("%s: %d bytes allocated while filtering two source rows, want none per row", tc.name, filtering)
 		}
 	}
 }

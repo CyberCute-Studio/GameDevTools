@@ -2,10 +2,13 @@ package resize
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"testing"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func fit(width, height int) Target {
@@ -233,6 +236,48 @@ func TestPlanValidatesTheTarget(t *testing.T) {
 	}
 }
 
+// TestValidateAgreesWithThePresetLibrary checks Target.Validate against the
+// preset library's own validation of a saved Image Resizer preset over every
+// combination of valid and invalid widths, heights, and modes: both accept
+// the same targets, and a target breaking several rules is reported for the
+// same one, so reordering either check fails here.
+func TestValidateAgreesWithThePresetLibrary(t *testing.T) {
+	library, err := preset.NewLibrary(shell.ModuleImageResizer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := map[string]error{
+		fmt.Sprintf(ui.PresetDimensionRange, "Width"):  ErrTargetDimension,
+		fmt.Sprintf(ui.PresetDimensionRange, "Height"): ErrTargetDimension,
+		ui.PresetResizeMode:                            ErrMode,
+		ui.PresetResizePixelLimit:                      ErrTargetArea,
+	}
+	dimensions := []int{-1, 0, 1, 6103, 16384, 16385}
+	modes := []preset.ResizeMode{preset.ResizeFit, preset.ResizeStretch, preset.ResizeCropToFill, "", "zoom"}
+	for _, width := range dimensions {
+		for _, height := range dimensions {
+			for _, mode := range modes {
+				target := Target{Width: width, Height: height, Mode: mode}
+				_, saveErr := library.Create(fmt.Sprintf("%d × %d %s", width, height, mode), width, height, mode)
+				err := target.Validate()
+				if saveErr == nil {
+					if err != nil {
+						t.Errorf("%+v: the library accepts it, Validate = %v", target, err)
+					}
+					continue
+				}
+				want, ok := rules[saveErr.Error()]
+				if !ok {
+					t.Fatalf("%+v: unexpected library error %v", target, saveErr)
+				}
+				if !errors.Is(err, want) {
+					t.Errorf("%+v: the library reports %q, Validate = %v, want %v", target, saveErr, err, want)
+				}
+			}
+		}
+	}
+}
+
 func planErr(sourceWidth, sourceHeight int, target Target) error {
 	_, err := Plan(sourceWidth, sourceHeight, target)
 	return err
@@ -271,23 +316,23 @@ func TestErrorPresentation(t *testing.T) {
 	if got := (&Error{Kind: KindCanceled, Err: errors.New("context canceled")}).Error(); got != "resize canceled: context canceled" {
 		t.Errorf("canceled Error() = %q", got)
 	}
-	for kind, want := range map[Kind]string{KindInvalid: "invalid", KindTooLarge: "too large", KindCanceled: "canceled", Kind(9): "Kind(9)"} {
+	for kind, want := range map[Kind]string{KindInvalid: "invalid", KindTooLarge: "too large", KindCanceled: "canceled", KindFailed: "failed", Kind(9): "Kind(9)"} {
 		if got := kind.String(); got != want {
 			t.Errorf("Kind(%d).String() = %q, want %q", kind, got, want)
 		}
 	}
-	// The limits are written as the preset editor writes them.
+	// The messages write their limits as the preset editor does, so they
+	// name the constants' values.
+	if preset.MinDimension != 1 || preset.MaxDimension != 16384 || preset.MaxResizeMegapixels != 100 || MaxSourceDimension != 1_048_576 {
+		t.Errorf("limits %d, %d, %d, and %d differ from the ones the messages name", preset.MinDimension, preset.MaxDimension, preset.MaxResizeMegapixels, MaxSourceDimension)
+	}
 	for err, want := range map[error]string{
 		ErrTargetDimension: "the target width and height must each be between 1 and 16,384 pixels",
+		ErrTargetArea:      "the target must not exceed 100 megapixels",
 		ErrSourceDimension: "the source is wider or taller than 1,048,576 pixels",
 	} {
 		if got := err.Error(); got != want {
 			t.Errorf("message %q, want %q", got, want)
-		}
-	}
-	for n, want := range map[int]string{0: "0", 7: "7", 999: "999", 1000: "1,000", 65535: "65,535", 100_000_000: "100,000,000"} {
-		if got := grouped(n); got != want {
-			t.Errorf("grouped(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

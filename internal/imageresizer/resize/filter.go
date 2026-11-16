@@ -37,7 +37,9 @@ const rowBudget = 64 << 20
 // resample filters the source onto the geometry's output in the given
 // order. It observes the context between its preparatory steps, so a
 // cancellation arriving while it builds the weights or checks the source's
-// opacity stops it before it allocates the output.
+// opacity stops it before it allocates the output; the opacity check of a
+// source read through At, which reads every pixel of an opaque one, itself
+// stops at the next row.
 func resample(ctx context.Context, img image.Image, geometry Geometry, o order) (image.Image, error) {
 	canceled := func() (image.Image, error) {
 		return nil, &Error{Kind: KindCanceled, Err: ctx.Err()}
@@ -48,7 +50,7 @@ func resample(ctx context.Context, img image.Image, geometry Geometry, o order) 
 	if ctx.Err() != nil {
 		return canceled()
 	}
-	src := newSource(img, image.Rect(horizontal.lo, vertical.lo, horizontal.hi, vertical.hi))
+	src := newSource(img, image.Rect(horizontal.lo, vertical.lo, horizontal.hi, vertical.hi), ctx.Done())
 	if ctx.Err() != nil {
 		return canceled()
 	}

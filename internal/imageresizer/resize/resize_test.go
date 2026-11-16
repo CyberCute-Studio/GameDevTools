@@ -108,10 +108,8 @@ func typed(seed uint64, width, height int) map[string]image.Image {
 }
 
 // generic hides an image's concrete type, so the resizer reads it through
-// At, while still reporting whether it is opaque.
+// At.
 type generic struct{ image.Image }
-
-func (g generic) Opaque() bool { return g.Image.(interface{ Opaque() bool }).Opaque() }
 
 func mustResize(t *testing.T, img image.Image, target Target) image.Image {
 	t.Helper()
@@ -212,8 +210,8 @@ func TestResizeKeepsThePixelKind(t *testing.T) {
 	// alpha: translucency in a margin Crop to Fill removes adds none, while
 	// translucency the filter reaches does. Cropping 10 × 10 from 40 × 10
 	// keeps the scale, so the filter reads exactly columns 15 to 24. The
-	// embedding is read through At, and asked through its SubImage, an
-	// *image.NRGBA, whether that region is opaque.
+	// embedding is read through At, which judges that region's opacity by
+	// reading its pixels.
 	src := noise(9, image.Rect(0, 0, 40, 10), false)
 	src.SetNRGBA(14, 4, color.NRGBA{A: 0x80})
 	src.SetNRGBA(25, 4, color.NRGBA{A: 0x80})
@@ -474,18 +472,67 @@ func TestNilPaletteColorsReadOpaqueBlack(t *testing.T) {
 
 // TestResizeContainsASourcePanic checks that a source whose own At panics —
 // an embedded palette indexed past its end, which Paletted.At indexes
-// unchecked — fails as a KindInvalid error wrapping ErrSourceFailure and the
-// panic, rather than taking down the caller.
+// unchecked — fails as a KindFailed error wrapping ErrUnexpected and the
+// panic's runtime error, rather than taking down the caller, and that a
+// panic with a value that is not an error is reported with that value.
 func TestResizeContainsASourcePanic(t *testing.T) {
 	src := image.NewPaletted(image.Rect(0, 0, 3, 3), color.Palette{color.RGBA{A: 0xff}})
 	src.Pix[4] = 7
 	out, err := Resize(context.Background(), struct{ *image.Paletted }{src}, fit(2, 2))
 	var resizeErr *Error
-	if out != nil || !errors.As(err, &resizeErr) || resizeErr.Kind != KindInvalid || !errors.Is(err, ErrSourceFailure) {
-		t.Fatalf("Resize of a source whose At panics = %v, %v; want a KindInvalid error wrapping ErrSourceFailure", out, err)
+	var runtimeErr runtime.Error
+	if out != nil || !errors.As(err, &resizeErr) || resizeErr.Kind != KindFailed || !errors.Is(err, ErrUnexpected) || !errors.As(err, &runtimeErr) {
+		t.Fatalf("Resize of a source whose At panics = %v, %v; want a KindFailed error wrapping ErrUnexpected and a runtime.Error", out, err)
 	}
-	if want := "resize: the source could not be read: runtime error: index out of range"; !strings.HasPrefix(err.Error(), want) {
+	if want := "resize: unexpected failure: runtime error: index out of range"; !strings.HasPrefix(err.Error(), want) {
 		t.Fatalf("error %q, want it to start %q", err, want)
+	}
+	out, err = Resize(context.Background(), panicking{src}, fit(2, 2))
+	if out != nil || !errors.As(err, &resizeErr) || resizeErr.Kind != KindFailed || !errors.Is(err, ErrUnexpected) || err.Error() != "resize: unexpected failure: unreadable pixel" {
+		t.Fatalf("Resize of a source whose At panics with a string = %v, %v; want a KindFailed error naming the value", out, err)
+	}
+}
+
+// panicking reads through At, which panics with a string.
+type panicking struct{ image.Image }
+
+func (panicking) At(x, y int) color.Color { panic("unreadable pixel") }
+
+// faded embeds an opaque *image.NRGBA but shows every pixel at a quarter of
+// its alpha through its own At, so the SubImage and Opaque methods it
+// inherits from the embedded image describe pixels other than the ones it
+// shows.
+type faded struct{ *image.NRGBA }
+
+func (f faded) At(x, y int) color.Color {
+	c := f.NRGBAAt(x, y)
+	c.A = 0x40
+	return c
+}
+
+// TestOpacityIsJudgedByThePixelsAtReturns checks that a source read through
+// At keeps alpha exactly when a pixel its At returns is translucent: an
+// embedding whose inherited SubImage and Opaque call it opaque while its At
+// shows translucent pixels resizes exactly as those pixels do, and an opaque
+// image with neither method loses its alpha channel.
+func TestOpacityIsJudgedByThePixelsAtReturns(t *testing.T) {
+	src := noise(91, image.Rect(0, 0, 12, 9), false)
+	img := faded{src}
+	shown := image.NewNRGBA(src.Rect)
+	for y := range 9 {
+		for x := range 12 {
+			shown.Set(x, y, img.At(x, y))
+		}
+	}
+	for _, target := range []Target{fit(5, 5), stretch(12, 9), crop(4, 7)} {
+		for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
+			if !sameImage(mustResample(t, img, target, o), mustResample(t, shown, target, o)) {
+				t.Errorf("%+v order %d: resizes unlike the pixels its At shows", target, o)
+			}
+		}
+	}
+	if got := mustResize(t, struct{ image.Image }{src}, fit(5, 5)); reflect.TypeOf(got) != reflect.TypeOf(&image.RGBA{}) {
+		t.Errorf("an opaque image without SubImage or Opaque: output %T, want *image.RGBA", got)
 	}
 }
 
@@ -504,8 +551,8 @@ func TestPaletteLongerThanAnIndexReaches(t *testing.T) {
 	for i := range src.Pix {
 		src.Pix[i] = uint8(255 - i)
 	}
-	// The embedding hides the type, so the resizer reads it through At but
-	// still asks its SubImage, an *image.Paletted, whether it is opaque.
+	// The embedding hides the type, so the resizer reads it through At and
+	// judges its opacity by the colors At returns.
 	embedded := struct{ *image.Paletted }{src}
 	for _, img := range []image.Image{src, embedded} {
 		if got := mustResize(t, img, fit(2, 2)); reflect.TypeOf(got) != reflect.TypeOf(&image.RGBA{}) {
@@ -834,8 +881,8 @@ func TestChooseOrder(t *testing.T) {
 	pixel := image.Rect(0, 0, 1, 1)
 	opaque := image.NewRGBA(pixel)
 	opaque.Pix[3] = 0xff
-	rgb, rgba := newSource(opaque, pixel), newSource(image.NewRGBA(pixel), pixel)
-	ycbcr := newSource(image.NewYCbCr(pixel, image.YCbCrSubsampleRatio420), pixel)
+	rgb, rgba := newSource(opaque, pixel, nil), newSource(image.NewRGBA(pixel), pixel, nil)
+	ycbcr := newSource(image.NewYCbCr(pixel, image.YCbCrSubsampleRatio420), pixel, nil)
 	if rgb.layout != layoutRGB || rgba.layout != layoutRGBA || ycbcr.layout != layoutRGB {
 		t.Fatalf("layouts %d, %d, %d; want RGB, RGBA, RGB", rgb.layout, rgba.layout, ycbcr.layout)
 	}
@@ -863,6 +910,12 @@ func TestChooseOrder(t *testing.T) {
 		// budget, and the slot records and the source row it resamples are
 		// beyond it; horizontal-first would otherwise be cheaper.
 		{"working rows over budget", rgba, MaxSourceDimension, MaxSourceDimension, stretch(4, 3), orderVerticalFirst},
+		// A window of 187 rows of 16,384 four-channel pixels and the
+		// 1,048,576-pixel source row take 63.5 MiB, just within the budget,
+		// which TestWorkingMemoryStaysBounded measures; 192 rows take
+		// 64.75 MiB, beyond it.
+		{"working rows just within budget", rgba, MaxSourceDimension, 376, stretch(16384, 8), orderHorizontalFirst},
+		{"working rows just over budget", rgba, MaxSourceDimension, 384, stretch(16384, 8), orderVerticalFirst},
 		{"narrower and much taller", rgb, 4000, 100, stretch(40, 4000), orderHorizontalFirst},
 	}
 	for _, tc := range cases {
@@ -925,6 +978,9 @@ func (c cancelling) At(x, y int) color.Color {
 // it ends part-way, in both orders, without reading the rest of the source.
 func TestResizeObservesCancellation(t *testing.T) {
 	src := noise(61, image.Rect(0, 0, 300, 200), true)
+	// The opacity check reads the first pixel, finds it translucent, and
+	// reads no more.
+	src.Pix[3] = 0x80
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if out, err := Resize(ctx, src, fit(100, 100)); out != nil || !isCanceled(err) {
@@ -934,15 +990,15 @@ func TestResizeObservesCancellation(t *testing.T) {
 	for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
 		ctx, cancel := context.WithCancel(context.Background())
 		reads := 0
-		img := cancelling{generic: generic{src}, reads: &reads, after: 3 * 300, cancel: cancel}
+		img := cancelling{generic: generic{src}, reads: &reads, after: 1 + 3*300, cancel: cancel}
 		out, err := resample(ctx, img, g, o)
 		cancel()
 		if out != nil || !isCanceled(err) {
 			t.Fatalf("order %d: resample cancelled part-way = %v, %v; want a KindCanceled error", o, out, err)
 		}
 		// Cancellation is observed before the next source row is read.
-		if reads != 3*300 {
-			t.Fatalf("order %d: %d pixels read, want the 3 rows read before the cancellation", o, reads)
+		if reads != 1+3*300 {
+			t.Fatalf("order %d: %d pixels read, want the opacity check's one and the 3 rows read before the cancellation", o, reads)
 		}
 	}
 }
@@ -952,23 +1008,15 @@ func isCanceled(err error) bool {
 	return errors.As(err, &resizeErr) && resizeErr.Kind == KindCanceled && errors.Is(err, context.Canceled)
 }
 
-// cancelOnOpaque cancels a context when asked whether it is opaque, which
-// Resize asks while it prepares, before it reads a pixel.
-type cancelOnOpaque struct{ cancelling }
-
-func (c cancelOnOpaque) Opaque() bool {
-	c.cancel()
-	return true
-}
-
 // TestResizeObservesCancellationWhilePreparing checks that a cancellation
-// arriving before filtering starts stops the resize before it allocates the
-// output or reads a pixel.
+// arriving before filtering starts — here during the costliest preparatory
+// step, the opacity check that reads an opaque source through At — stops
+// that check at the next row and the resize before it allocates the output.
 func TestResizeObservesCancellationWhilePreparing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reads := 0
-	img := cancelOnOpaque{cancelling{generic: generic{noise(63, image.Rect(0, 0, 300, 200), false)}, reads: &reads, cancel: cancel}}
+	img := cancelling{generic: generic{noise(63, image.Rect(0, 0, 300, 200), false)}, reads: &reads, after: 1, cancel: cancel}
 	target := fit(4000, 4000)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
@@ -977,8 +1025,8 @@ func TestResizeObservesCancellationWhilePreparing(t *testing.T) {
 	if out != nil || !isCanceled(err) {
 		t.Fatalf("Resize cancelled while preparing = %v, %v; want a KindCanceled error", out, err)
 	}
-	if reads != 0 {
-		t.Fatalf("%d pixels read after the cancellation, want none", reads)
+	if reads != 300 {
+		t.Fatalf("%d pixels read, want the one row the opacity check was reading when cancelled", reads)
 	}
 	// The 4000 × 2667 output would take over 40 MB.
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {

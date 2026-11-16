@@ -44,10 +44,12 @@ type source struct {
 // any other type through At. read is the region of the source the filter
 // reads, relative to its bounds: the layout carries alpha only when a pixel
 // there is translucent, so translucency the filter never reads, such as in
-// a margin Crop to Fill removes, adds no alpha channel.
-func newSource(img image.Image, read image.Rectangle) source {
+// a margin Crop to Fill removes, adds no alpha channel. done ends the
+// opacity check of an image read through At early (see genericSource).
+func newSource(img image.Image, read image.Rectangle, done <-chan struct{}) source {
 	origin := img.Bounds().Min
-	opaque := func() bool { return opaqueWithin(img, read.Add(origin)) }
+	region := read.Add(origin)
+	opaque := func() bool { return opaqueWithin(img, region) }
 	switch img := img.(type) {
 	case *image.Gray:
 		return source{layout: layoutGray, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
@@ -144,8 +146,11 @@ func newSource(img image.Image, read image.Rectangle) source {
 		// Every index reads its entry. An index past the end of the palette
 		// reads opaque black rather than failing, the color the standard PNG
 		// decoder gives one, and so does an index of a nil entry, as the At
-		// path reads the nil color Paletted.At returns for it; the opacity
-		// check counts both as opaque. (At panics on an index past the end.)
+		// path reads the nil color Paletted.At returns for it. (At panics on
+		// an index past the end.) The region is opaque if every entry its
+		// pixels index is, as Paletted.Opaque judges it, but judged from the
+		// table, so a nil entry or a palette of over 256 entries, on which
+		// Opaque panics, cannot fail.
 		var table [256][4]int32
 		for index := range table {
 			table[index][3] = 0xffff
@@ -155,9 +160,15 @@ func newSource(img image.Image, read image.Rectangle) source {
 				table[index][0], table[index][1], table[index][2], table[index][3] = premultiplied(entry)
 			}
 		}
-		channels := layoutRGBA
-		if opaque() {
-			channels = layoutRGB
+		channels := layoutRGB
+	rows:
+		for y := region.Min.Y; y < region.Max.Y; y++ {
+			for _, index := range img.Pix[img.PixOffset(region.Min.X, y):][:region.Dx()] {
+				if table[index][3] != 0xffff {
+					channels = layoutRGBA
+					break rows
+				}
+			}
 		}
 		return source{layout: channels, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
@@ -167,55 +178,18 @@ func newSource(img image.Image, read image.Rectangle) source {
 			}
 		}}
 	}
-	return genericSource(img, origin, read)
+	return genericSource(img, origin, region, done)
 }
 
-// opaqueWithin reports whether the pixels of img within region, in the
-// image's own coordinates, are all opaque, as the Opaque method of the
-// image's SubImage of the region reports it, or failing that the Opaque
-// method of the whole image. An image with neither counts as translucent.
-// A SubImage that is an *image.Paletted is judged by palettedOpaque, which
-// gives Opaque's answer without its failures on a long palette or a nil
-// entry.
+// opaqueWithin reports whether the pixels of img, one of the standard image
+// types read directly, within region, in the image's own coordinates, are
+// all opaque, as the Opaque method of the image's SubImage of the region
+// reports it.
 func opaqueWithin(img image.Image, region image.Rectangle) bool {
-	if cropper, ok := img.(interface {
+	sub := img.(interface {
 		SubImage(image.Rectangle) image.Image
-	}); ok {
-		switch sub := cropper.SubImage(region).(type) {
-		case *image.Paletted:
-			return palettedOpaque(sub)
-		case interface{ Opaque() bool }:
-			return sub.Opaque()
-		}
-	}
-	reporter, ok := img.(interface{ Opaque() bool })
-	return ok && reporter.Opaque()
-}
-
-// palettedOpaque reports whether every pixel of img is opaque — whether
-// every palette entry a pixel indexes has full alpha — as Paletted.Opaque
-// does: an index past the end of the palette counts as opaque. Opaque
-// itself panics on a palette of more than 256 entries, since it looks every
-// entry up in its 256-entry record of the indices present; no pixel can
-// index an entry past the 256th, so those are skipped here. It also panics
-// on an indexed nil entry, which counts as opaque here, since it reads as
-// opaque black.
-func palettedOpaque(img *image.Paletted) bool {
-	var present [256]bool
-	for y := img.Rect.Min.Y; y < img.Rect.Max.Y; y++ {
-		for _, index := range img.Pix[img.PixOffset(img.Rect.Min.X, y):][:img.Rect.Dx()] {
-			present[index] = true
-		}
-	}
-	for index, entry := range img.Palette[:min(len(img.Palette), len(present))] {
-		if !present[index] || entry == nil {
-			continue
-		}
-		if _, _, _, alpha := entry.RGBA(); alpha != 0xffff {
-			return false
-		}
-	}
-	return true
+	}).SubImage(region)
+	return sub.(interface{ Opaque() bool }).Opaque()
 }
 
 // readYCbCr writes the 8-bit RGB conversion of n pixels of row py of img,
@@ -283,11 +257,15 @@ func opaque16(img *image.RGBA64, origin image.Point) source {
 
 // genericSource reads an image of any type through At. Its layout follows
 // the color model, of which only the standard library's are recognized: its
-// gray models are filtered as gray, its 16-bit models keep 16 bits in the
-// output and every other model 8, and an image reporting the region the
-// filter reads opaque, as opaqueWithin asks it, drops alpha, as do the
-// always-opaque YCbCr and CMYK models. A nil color reads as opaque black.
-func genericSource(img image.Image, origin image.Point, read image.Rectangle) source {
+// gray models are filtered as gray, and its 16-bit models keep 16 bits in
+// the output and every other model 8. With any model but gray, alpha is
+// dropped only if every pixel of region, the region the filter reads in the
+// image's own coordinates, is opaque as At returns it, as opaqueThroughAt
+// judges by reading them. The image's own SubImage and Opaque methods are not
+// asked: a type that embeds a standard image and overrides At inherits them
+// from the embedded image, so they can describe pixels its At does not
+// return. A nil color reads as opaque black.
+func genericSource(img image.Image, origin image.Point, region image.Rectangle, done <-chan struct{}) source {
 	model := img.ColorModel()
 	if model == color.GrayModel || model == color.Gray16Model {
 		return source{layout: layoutGray, deep: model == color.Gray16Model, fetchCost: 20, fetch: func(dst []int32, y, x0, x1 int) {
@@ -301,9 +279,8 @@ func genericSource(img image.Image, origin image.Point, read image.Rectangle) so
 		}}
 	}
 	deep := model == color.RGBA64Model || model == color.NRGBA64Model || model == color.Alpha16Model
-	opaque := model == color.YCbCrModel || model == color.CMYKModel || opaqueWithin(img, read.Add(origin))
 	channels := layoutRGBA
-	if opaque {
+	if opaqueThroughAt(img, region, done) {
 		channels = layoutRGB
 	}
 	return source{layout: channels, deep: deep, fetchCost: 20, fetch: func(dst []int32, y, x0, x1 int) {
@@ -314,6 +291,28 @@ func genericSource(img image.Image, origin image.Point, read image.Rectangle) so
 			copy(dst[n*i:n*i+n], pixel[:n])
 		}
 	}}
+}
+
+// opaqueThroughAt reports whether every pixel of img within region, in the
+// image's own coordinates, is opaque as premultiplied reads the color At
+// returns, so the filter drops alpha only where it would discard nothing. It
+// stops at the first translucent pixel. A read through At is costly, so it
+// also checks done before each row and stops, reporting false, once done is
+// closed; resample then reports the cancellation.
+func opaqueThroughAt(img image.Image, region image.Rectangle, done <-chan struct{}) bool {
+	for y := region.Min.Y; y < region.Max.Y; y++ {
+		select {
+		case <-done:
+			return false
+		default:
+		}
+		for x := region.Min.X; x < region.Max.X; x++ {
+			if _, _, _, alpha := premultiplied(img.At(x, y)); alpha != 0xffff {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // premultiplied returns a color's 16-bit premultiplied channels, computed as
