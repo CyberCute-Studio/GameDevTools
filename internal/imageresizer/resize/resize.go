@@ -36,18 +36,20 @@
 // its exact value, and the pixels are filtered in integer arithmetic on one
 // goroutine.
 //
-// Resize allocates the output image plus working memory that does not grow
-// with the source's area. The weight tables grow with the source's
-// dimensions, which MaxSourceDimension bounds, and the filter streams the
-// source a row at a time, keeping no more working rows than a fixed budget
-// holds, so the working memory — weight tables and rows together — stays
-// under 128 MiB in the worst case and is a few megabytes for typical
-// sources. Resize reads the source but never retains or modifies it, and
-// callers run it off the GUI thread (TECH-005); a context cancels it
-// between source rows, and before it allocates the output. A panic during a
-// resize, such as one a malformed source image's own methods raise, is
-// returned as that resize's error, an unexpected failure (KindFailed),
-// rather than unwinding into the caller (NFR-021).
+// Resize allocates the output image, which the target's PRESET-006 limit of
+// 100 megapixels bounds at 800,000,000 bytes (8 bytes a pixel at 16 bits per
+// channel with alpha), plus working memory that does not grow with the
+// source's area. The weight tables grow with the source's dimensions, which
+// MaxSourceDimension bounds, and the filter streams the source a row at a
+// time, keeping no more working rows than a fixed budget holds, so the
+// working memory — weight tables and rows together — stays under 128 MiB in
+// the worst case and is a few megabytes for typical sources. Resize reads
+// the source but never retains or modifies it, and callers run it off the
+// GUI thread (TECH-005); a context cancels it between source rows, and
+// before it allocates the output. A panic during a resize, such as one a
+// malformed source image's own methods raise, is returned as that resize's
+// error, an unexpected failure (KindFailed), rather than unwinding into the
+// caller (NFR-021).
 package resize
 
 import (
@@ -116,8 +118,9 @@ var (
 	// preset.MaxDimension, written as the preset editor writes it.
 	ErrTargetDimension = errors.New("the target width and height must each be between 1 and 16,384 pixels")
 	// ErrTargetArea is the cause of a KindInvalid error for a target of more
-	// than the preset pixel limit.
-	ErrTargetArea = fmt.Errorf("the target must not exceed %d megapixels", preset.MaxResizeMegapixels)
+	// than the preset pixel limit, preset.MaxResizeMegapixels, written as the
+	// preset editor writes it.
+	ErrTargetArea = errors.New("the target must not exceed 100 megapixels")
 	// ErrEmptySource is the cause of a KindInvalid error for a source
 	// without pixels.
 	ErrEmptySource = errors.New("the source has no pixels")
@@ -287,7 +290,7 @@ func Resize(ctx context.Context, source image.Image, target Target) (resized ima
 	// The stack is not kept: the error is the per-item message the batch
 	// reports, and the diagnostics log records no free-form text. A runtime
 	// out-of-memory failure cannot be recovered, which is why the working
-	// memory is bounded.
+	// memory is bounded and the validated target bounds the output.
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			cause := fmt.Errorf("%w: %v", ErrUnexpected, recovered)
