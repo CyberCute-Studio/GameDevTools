@@ -19,6 +19,16 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
+// The shell finds a module view's optional hooks by interface assertion, so a
+// signature that drifted would silently drop the hook. The Image Resizer view
+// depends on its hooks — without the dispatcher, no content check would ever
+// reach the list — so its conformance is checked when the program compiles.
+var (
+	_ nativeView            = (*imageresizer.NativeView)(nil)
+	_ nativeDispatcherAware = (*imageresizer.NativeView)(nil)
+	_ nativeDropTarget      = (*imageresizer.NativeView)(nil)
+)
+
 func runNative() error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

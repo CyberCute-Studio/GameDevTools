@@ -86,6 +86,14 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 		t.Fatal(err)
 	}
 	t.Cleanup(view.NativeDestroy)
+	// Registered after NativeDestroy, so it runs first: the content-check
+	// worker is stopped and joined before the controls are torn down. A
+	// folder the test creates later is removed before this runs, so tests
+	// that add sources take their folders from sourceDir.
+	t.Cleanup(func() {
+		view.inspector.Close()
+		view.inspector.Wait()
+	})
 	return view, manager
 }
 

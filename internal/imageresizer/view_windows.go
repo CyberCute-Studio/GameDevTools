@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -45,12 +48,25 @@ const (
 var formatOrder = []OutputFormat{FormatKeepSource, FormatPNG, FormatJPEG}
 
 type NativeView struct {
-	options   *OptionsManager
-	presets   *preset.NativeManager
-	inventory *Inventory
-	parent    windows.Handle
-	browse    func(windows.Handle, string) (string, bool, error)
-	pickFiles func(windows.Handle, string) ([]string, bool, error)
+	options    *OptionsManager
+	presets    *preset.NativeManager
+	inventory  *Inventory
+	inspector  *Inspector
+	dispatcher core.Dispatcher
+	parent     windows.Handle
+	browse     func(windows.Handle, string) (string, bool, error)
+	pickFiles  func(windows.Handle, string) ([]string, bool, error)
+	// results carries finished content checks from the inspector's worker
+	// to the GUI thread.
+	results resultMailbox
+	// checked tallies the content checks resolved since the list last had
+	// nothing left to check, for the summary shown when checking finishes.
+	checked checkTally
+	// sourceNotice is the status area's revision right after the source list
+	// last showed its notice. The finishing summary replaces only that
+	// notice, or an area left empty, never a notice another part of the view
+	// raised in the meantime.
+	sourceNotice uint64
 
 	sourceLabel     *ui.Label
 	sourceHint      *ui.Label
@@ -80,14 +96,38 @@ type NativeView struct {
 	status          *ui.StatusArea
 }
 
+// checkTally marks the adds made since the list last had nothing left to
+// check. The finishing summary restates their results, because small files
+// resolve so quickly that the add notice itself is replaced at once. The
+// items those adds listed are exactly the ones from first on, since IDs only
+// grow and removal keeps the order, so the summary reads them — and only
+// those still listed — from the inventory.
+type checkTally struct {
+	// first is the ID of the first item the adds listed, or 0 when no add
+	// is being tallied.
+	first uint64
+	// duplicates holds, for each path the adds skipped as already listed,
+	// the ID of the item listing it.
+	duplicates []uint64
+}
+
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
-	return &NativeView{
+	view := &NativeView{
 		options:   options,
 		presets:   preset.NewNativeManager(manager),
 		inventory: NewInventory(),
 		browse:    ui.BrowseForFolder,
 		pickFiles: ui.PickImageFiles,
 	}
+	view.inspector = NewInspector(decode.Inspect, view.deliverInspection)
+	return view
+}
+
+// NativeDispatcher receives the shell's GUI-thread dispatcher. Content-check
+// results are posted through it, so the inventory and the source list are
+// only ever updated on the GUI thread (TECH-005).
+func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
+	n.dispatcher = dispatcher
 }
 
 func (n *NativeView) NativeCreate(parent windows.Handle) error {
@@ -412,11 +452,13 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 			return true
 		}
 		n.inventory.Clear()
+		n.inspector.DropAll()
+		n.checked = checkTally{}
 		n.refreshSources()
 		// Clearing disables the Clear button itself, so keyboard focus moves
 		// to the list instead of being stranded on a disabled control.
 		n.list.Focus()
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared}, 0)
+		n.showSourceNotice(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared})
 		return true
 	case sourceListCommand:
 		if notification == ui.NotificationListSelChange {
@@ -477,7 +519,16 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 	return true
 }
 
+// NativeDestroy abandons the queued and in-flight content checks, so the
+// worker stops at its next read instead of decoding for a closing window.
+// The view deliberately has no NativeShutdown: a content check only reads
+// its source, so nothing is lost when the process exits around one, and
+// waiting for the worker could hold the process — and its single-instance
+// lock — for as long as an open or read on a slow network share or an
+// online-only file blocks. Any result a worker still finishes fails to post
+// harmlessly against the destroyed window, and the post is not retried.
 func (n *NativeView) NativeDestroy() {
+	n.inspector.Close()
 	n.status.Destroy()
 	n.presets.NativeDestroy()
 }
@@ -591,30 +642,196 @@ func (n *NativeView) NativeDropFiles(paths []string) {
 }
 
 func (n *NativeView) addSources(paths []string) {
+	first := n.inventory.Len()
 	summary := n.inventory.Add(paths)
 	n.refreshSources()
+	n.inspector.Enqueue(summary.Inspect)
+	if n.inventory.Checking() > 0 {
+		// An add that starts checking listed a file to check, and Add only
+		// appends, so the items it listed follow the earlier ones.
+		if n.checked.first == 0 && first < n.inventory.Len() {
+			n.checked.first = n.inventory.Item(first).ID
+		}
+		n.checked.duplicates = append(n.checked.duplicates, summary.DuplicateOf...)
+	}
 	n.list.Focus()
-	_ = n.status.Show(summarizeAdd(summary), 0)
+	n.showSourceNotice(summarizeAdd(summary))
+}
+
+// showSourceNotice shows a source-list notice and remembers it, so the
+// finishing summary knows the status area still belongs to the list.
+func (n *NativeView) showSourceNotice(notice ui.Notice) {
+	_ = n.status.Show(notice, 0)
+	n.sourceNotice = n.status.Revision()
+}
+
+// postRetryDelay paces the retries of a refused drain post.
+const postRetryDelay = 100 * time.Millisecond
+
+// deliverInspection runs on the inspector's worker goroutine and hands the
+// result to the GUI thread. Results are batched: a drain task is posted only
+// when none is outstanding, so however quickly checks finish, the view adds
+// at most one message to the GUI thread's queue. Without a dispatcher — the
+// shell always provides one — the result is dropped: the inventory must
+// never be touched off the GUI thread.
+func (n *NativeView) deliverInspection(result InspectionResult) {
+	if n.dispatcher == nil || !n.results.put(result) {
+		return
+	}
+	n.postResults()
+}
+
+// postResults posts the drain task for the queued results. A refused post —
+// the GUI thread's message queue is momentarily full — is retried after a
+// pause, since no later result may come to post again, and the queued
+// results would otherwise leave their items Checking for good; the drain
+// task stays outstanding meanwhile, so the retry carries every result queued
+// in the meantime. Once the view is destroyed a post can only fail, so the
+// retries stop.
+func (n *NativeView) postResults() {
+	if err := n.dispatcher.Post(n.applyInspections); err == nil || n.inspector.Closed() {
+		return
+	}
+	time.AfterFunc(postRetryDelay, n.postResults)
+}
+
+// applyInspections resolves the delivered content checks into their items on
+// the GUI thread. Only their rows are rewritten, so the user's selection and
+// scroll position survive background updates; the detail below the full path
+// is refreshed when it describes one of them. When nothing is left to check,
+// the outcome of the checks is summarized (RSZ-004).
+func (n *NativeView) applyInspections() {
+	resolved := false
+	refreshDetail := false
+	selection := n.list.SelectedIndices()
+	for _, result := range n.results.take() {
+		index, ok := n.inventory.Resolve(result)
+		if !ok {
+			continue
+		}
+		resolved = true
+		n.list.SetItemText(index, n.inventory.Item(index).RowText())
+		if len(selection) > 0 && selection[0] == index {
+			refreshDetail = true
+		}
+	}
+	if refreshDetail {
+		n.refreshSourceSelection()
+	}
+	if !resolved || n.inventory.Checking() > 0 {
+		return
+	}
+	summary, _ := n.finishChecks()
+	// A notice raised elsewhere in the view since the list's own — a failed
+	// settings save, say — stays visible; each row still shows its outcome.
+	if n.status.Revision() == n.sourceNotice || n.status.Text() == "" {
+		n.showSourceNotice(summary)
+	}
+}
+
+// finishChecks ends the tally once nothing is left to check: it returns the
+// summary of the checks resolved since the list last had nothing to check,
+// and whether any of them is still listed to summarize. Every item the adds
+// queued for a check has resolved by then.
+func (n *NativeView) finishChecks() (ui.Notice, bool) {
+	tally := n.checked
+	n.checked = checkTally{}
+	var added AddSummary
+	ready, failed := 0, 0
+	for index := 0; index < n.inventory.Len(); index++ {
+		item := n.inventory.Item(index)
+		switch {
+		case tally.first == 0 || item.ID < tally.first:
+			// No add is tallied, or the item was listed before them.
+		case item.Inspected:
+			added.Added++
+			if item.Status == StatusReady {
+				ready++
+			} else {
+				failed++
+			}
+		case item.Status == StatusUnsupported:
+			added.Unsupported++
+		default:
+			added.Inaccessible++
+		}
+	}
+	for _, id := range tally.duplicates {
+		if _, listed := n.inventory.IndexOf(id); listed {
+			added.Duplicates++
+		}
+	}
+	return summarizeChecks(added, ready, failed), ready+failed > 0
+}
+
+// summarizeChecks builds the notice shown when the last pending content
+// check resolves: the add results since the list was last fully checked,
+// counting only the images still listed, then how many of those are ready
+// and how many cannot be resized.
+func summarizeChecks(added AddSummary, ready, failed int) ui.Notice {
+	message, warn := describeAdd(added)
+	if message != "" {
+		message += " "
+	}
+	message += fmt.Sprintf(ui.ImagesChecked, ready+failed, ready)
+	if failed > 0 {
+		message += fmt.Sprintf(ui.ImagesCheckedFailed, failed)
+		warn = true
+	}
+	kind := ui.NoticeSuccess
+	if warn {
+		kind = ui.NoticeWarning
+	}
+	return ui.Notice{Kind: kind, Message: message}
 }
 
 func (n *NativeView) removeSelectedSources() {
 	indices := n.list.SelectedIndices()
 	if len(indices) == 0 {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone}, 0)
+		n.showSourceNotice(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone})
 		return
 	}
-	n.inventory.Remove(indices)
+	wasChecking := n.inventory.Checking() > 0
+	n.inspector.Drop(n.inventory.Remove(indices))
 	n.refreshSources()
 	n.list.Focus()
-	_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))}, 0)
+	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.ImagesRemoved, len(indices))}
+	if wasChecking && n.inventory.Checking() == 0 {
+		// Removing the last items still being checked finishes checking, so
+		// the outcome of the other checks is summarized ahead of the
+		// removal, as if the last check had resolved.
+		if summary, listed := n.finishChecks(); listed {
+			notice = ui.Notice{Kind: summary.Kind, Message: summary.Message + " " + notice.Message}
+		}
+	}
+	n.showSourceNotice(notice)
 }
 
 // summarizeAdd builds the batch result notice: every add reports what was
 // added and why other files were not, so unsupported or unreadable files
 // never fail silently (RSZ-004).
 func summarizeAdd(summary AddSummary) ui.Notice {
-	if summary.Added == 0 && summary.Duplicates == 0 && summary.Unsupported == 0 && summary.Inaccessible == 0 {
+	message, warn := describeAdd(summary)
+	if message == "" {
 		return ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesAddEmpty}
+	}
+	if summary.Added > 0 {
+		// The added files are still Checking; the outcome of their content
+		// checks is summarized once the last one resolves.
+		message += ui.ImagesAddedChecking
+	}
+	kind := ui.NoticeSuccess
+	if warn {
+		kind = ui.NoticeWarning
+	}
+	return ui.Notice{Kind: kind, Message: message}
+}
+
+// describeAdd states what one or more adds contributed, and whether any
+// file was rejected up front. It is empty when nothing was offered.
+func describeAdd(summary AddSummary) (string, bool) {
+	if summary.Added == 0 && summary.Duplicates == 0 && summary.Unsupported == 0 && summary.Inaccessible == 0 {
+		return "", false
 	}
 	var message strings.Builder
 	fmt.Fprintf(&message, ui.ImagesAdded, summary.Added)
@@ -627,41 +844,33 @@ func summarizeAdd(summary AddSummary) ui.Notice {
 	if summary.Inaccessible > 0 {
 		fmt.Fprintf(&message, ui.ImagesAddedInaccessible, summary.Inaccessible)
 	}
-	kind := ui.NoticeSuccess
-	if summary.Unsupported > 0 || summary.Inaccessible > 0 {
-		kind = ui.NoticeWarning
-	}
-	return ui.Notice{Kind: kind, Message: message.String()}
+	return message.String(), summary.Unsupported > 0 || summary.Inaccessible > 0
 }
 
 // refreshSources rebuilds the list from the inventory (RSZ-005): each row
-// shows the file name and its status, and the full path and status detail of
-// the selected item appear below on demand.
+// shows the file name, the upright source dimensions once its content has
+// been checked, and its status, and the full path and status detail of the
+// selected item appear below on demand.
 func (n *NativeView) refreshSources() {
 	n.list.Reset()
 	for _, item := range n.inventory.Items() {
-		n.list.Add(fmt.Sprintf(ui.SourceListFormat, item.Name, item.Status.Label()))
+		n.list.Add(item.RowText())
 	}
 	n.refreshSourceSelection()
 }
 
 func (n *NativeView) refreshSourceSelection() {
-	items := n.inventory.Items()
 	selection := n.list.SelectedIndices()
 	if len(selection) == 0 {
 		n.path.SetText("")
 		n.pathDetail.SetText("")
 	} else {
-		item := items[selection[0]]
+		item := n.inventory.Item(selection[0])
 		n.path.SetText(item.Path)
-		detail := ""
-		if item.Status != StatusReady {
-			detail = item.Status.Label() + ": " + item.Detail
-		}
-		n.pathDetail.SetText(detail)
+		n.pathDetail.SetText(item.DetailText())
 	}
 	n.removeButton.Enable(len(selection) > 0)
-	n.clearButton.Enable(len(items) > 0)
+	n.clearButton.Enable(n.inventory.Len() > 0)
 }
 
 func (n *NativeView) presentResult(err error, success string) {

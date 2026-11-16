@@ -147,6 +147,39 @@ func TestStatusAreaPresentsAndClearsNotice(t *testing.T) {
 	}
 }
 
+// TestStatusAreaRevisionIdentifiesTheNotice pins that every replacement —
+// even by identical text, a clear, or an expiring timer — changes the
+// revision, so a caller can tell whether its own notice is still shown.
+func TestStatusAreaRevisionIdentifiesTheNotice(t *testing.T) {
+	area, err := NewStatusArea(newTestParent(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notice := Notice{Kind: NoticeInfo, Message: "Checking"}
+	_ = area.Show(notice, 0)
+	shown := area.Revision()
+	if area.Revision() != shown {
+		t.Fatal("the revision changed without a new notice")
+	}
+	_ = area.Show(notice, 0)
+	if area.Revision() == shown {
+		t.Fatal("an identical notice kept the revision")
+	}
+	shown = area.Revision()
+	area.Clear()
+	if area.Revision() == shown {
+		t.Fatal("clearing kept the revision")
+	}
+	if err := area.Show(notice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	shown = area.Revision()
+	area.HandleTimer(area.timer)
+	if area.Revision() == shown {
+		t.Fatal("an expired notice kept the revision")
+	}
+}
+
 func TestStatusAreaReportsTimerFailure(t *testing.T) {
 	area := &StatusArea{Label: &Label{Control{hwnd: 1}}, parent: 1}
 	if err := area.Show(Notice{Message: "Saved"}, time.Second); err == nil {
@@ -178,4 +211,149 @@ func newTestParent(t *testing.T) windows.Handle {
 		procDestroyWindow.Call(hwnd)
 	})
 	return windows.Handle(hwnd)
+}
+
+// TestListBoxSetItemTextKeepsSelectionAndScroll pins that rewriting one row
+// in place — as background status updates do — preserves the selection of
+// that row and of the others, the extended-selection anchor, the caret, and
+// the scroll position, including when the rewritten row is the anchor or the
+// caret itself.
+func TestListBoxSetItemTextKeepsSelectionAndScroll(t *testing.T) {
+	parent := newTestParent(t)
+	list, err := NewListBox(parent, 77)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 0, 200, 60)
+	for index := 0; index < 20; index++ {
+		list.Add("row")
+	}
+	list.SetSelected(3, true)
+	list.SetSelected(5, true)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetAnchorIndex, 3, 0)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetCaretIndex, 5, 0)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetTopIndex, 2, 0)
+
+	list.SetItemText(3, "selected row updated")
+	list.SetItemText(4, "unselected row updated")
+	list.SetItemText(5, "caret row updated")
+	list.SetItemText(99, "ignored")
+
+	if got := list.ItemText(3); got != "selected row updated" {
+		t.Fatalf("row 3 = %q", got)
+	}
+	if got := list.ItemText(4); got != "unselected row updated" {
+		t.Fatalf("row 4 = %q", got)
+	}
+	if list.Count() != 20 {
+		t.Fatalf("count = %d, want 20", list.Count())
+	}
+	if got := list.SelectedIndices(); len(got) != 2 || got[0] != 3 || got[1] != 5 {
+		t.Fatalf("selection = %v, want [3 5]", got)
+	}
+	if anchor, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetAnchorIndex, 0, 0); anchor != 3 {
+		t.Fatalf("anchor = %d, want 3", anchor)
+	}
+	if caret, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetCaretIndex, 0, 0); caret != 5 {
+		t.Fatalf("caret = %d, want 5", caret)
+	}
+	if top, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetTopIndex, 0, 0); top != 2 {
+		t.Fatalf("top index = %d, want 2", top)
+	}
+}
+
+var (
+	procSetWinEventHook  = user32.NewProc("SetWinEventHook")
+	procUnhookWinEvent   = user32.NewProc("UnhookWinEvent")
+	procPeekMessageW     = user32.NewProc("PeekMessageW")
+	procDispatchMessageW = user32.NewProc("DispatchMessageW")
+)
+
+const (
+	eventObjectFocus = 0x8005
+	pmRemove         = 1
+)
+
+// focusEvents records the accessibility focus events a window raises — what
+// a screen reader announces — through an out-of-context hook on the calling
+// thread. take pumps the thread's messages, which delivers the queued
+// events, and returns the focused item of each event since the last take.
+func focusEvents(t *testing.T, window windows.Handle) (take func() []int32) {
+	t.Helper()
+	var items []int32
+	callback := windows.NewCallback(func(_, _, hwnd, _, child, _, _ uintptr) uintptr {
+		if windows.Handle(hwnd) == window {
+			items = append(items, int32(child))
+		}
+		return 0
+	})
+	hook, _, err := procSetWinEventHook.Call(eventObjectFocus, eventObjectFocus, 0, callback, uintptr(windows.GetCurrentProcessId()), uintptr(windows.GetCurrentThreadId()), 0)
+	if hook == 0 {
+		t.Fatalf("SetWinEventHook: %v", err)
+	}
+	t.Cleanup(func() { procUnhookWinEvent.Call(hook) })
+	return func() []int32 {
+		var message [64]byte
+		for {
+			if available, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&message[0])), 0, 0, 0, pmRemove); available == 0 {
+				break
+			}
+			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message[0])))
+		}
+		taken := items
+		items = nil
+		return taken
+	}
+}
+
+// TestListBoxSetItemTextRaisesNoStrayFocusEvents pins that background row
+// updates leave a screen reader alone: rewriting a row other than the
+// focused one raises no accessibility focus event, so the focused row is not
+// announced again, and rewriting the focused row raises exactly one, for its
+// new text. Setting the caret raises the event even when the caret does not
+// move, so the caret is restored only when the reinsertion moved it.
+func TestListBoxSetItemTextRaisesNoStrayFocusEvents(t *testing.T) {
+	parent := newTestParent(t)
+	procShowWindow.Call(uintptr(parent), 5)
+	list, err := NewListBox(parent, 78)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 0, 200, 120)
+	for index := 0; index < 20; index++ {
+		list.Add("row")
+	}
+	list.Focus()
+	list.SetSelected(3, true)
+	list.SetSelected(5, true)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetAnchorIndex, 3, 0)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetCaretIndex, 3, 0)
+	take := focusEvents(t, list.Handle())
+	take()
+
+	// Child identifiers are 1-based item indexes.
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetCaretIndex, 4, 0)
+	procSendMessageW.Call(uintptr(list.Handle()), lbSetCaretIndex, 3, 0)
+	if got := take(); len(got) != 2 || got[1] != 4 {
+		t.Skipf("this session does not deliver list-box focus events (got %v)", got)
+	}
+	for _, index := range []int{1, 5, 8} {
+		list.SetItemText(index, "updated")
+		if got := take(); len(got) != 0 {
+			t.Fatalf("rewriting row %d raised focus events for items %v, want none", index, got)
+		}
+	}
+	list.SetItemText(3, "focused row updated")
+	if got := take(); len(got) != 1 || got[0] != 4 {
+		t.Fatalf("rewriting the focused row raised focus events for items %v, want one for item 4", got)
+	}
+	if got := list.SelectedIndices(); len(got) != 2 || got[0] != 3 || got[1] != 5 {
+		t.Fatalf("selection = %v, want [3 5]", got)
+	}
+	if caret, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetCaretIndex, 0, 0); caret != 3 {
+		t.Fatalf("caret = %d, want 3", caret)
+	}
+	if anchor, _, _ := procSendMessageW.Call(uintptr(list.Handle()), lbGetAnchorIndex, 0, 0); anchor != 3 {
+		t.Fatalf("anchor = %d, want 3", anchor)
+	}
 }
