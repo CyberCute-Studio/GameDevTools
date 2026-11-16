@@ -2,6 +2,7 @@ package resize
 
 import (
 	"image"
+	"math"
 	"slices"
 	"testing"
 )
@@ -36,9 +37,10 @@ var axisCases = []struct{ source, scaled, first, count int }{
 }
 
 // TestAxisWeightsSumToUnity checks every output sample's weights: they sum
-// to exactly one in fixed point, start and end with nonzero weights, and
-// read only source samples inside the axis, which lo, hi, and widest
-// bound.
+// to exactly one in fixed point, each lies within one unit of the float64
+// reference's weight however many the output has, they start and end with
+// nonzero weights, and they read only source samples inside the axis, which
+// lo, hi, and widest bound.
 func TestAxisWeightsSumToUnity(t *testing.T) {
 	for _, tc := range axisCases {
 		a := newAxis(tc.source, tc.scaled, tc.first, tc.count)
@@ -53,6 +55,18 @@ func TestAxisWeightsSumToUnity(t *testing.T) {
 			}
 			if first < 0 || first+len(weights) > tc.source {
 				t.Fatalf("%+v: output %d reads source samples [%d, %d) outside [0, %d)", tc, i, first, first+len(weights), tc.source)
+			}
+			// The reference evaluates the kernel at real-valued positions, so
+			// it differs from the exact weights by far less than the slack.
+			exact := referenceWeights(tc.source, tc.scaled, tc.first+i, 1)[0]
+			for j, w := range exact {
+				var got int32
+				if k := j - first; k >= 0 && k < len(weights) {
+					got = weights[k]
+				}
+				if math.Abs(float64(got)-w*unitWeight) > 1.001 {
+					t.Fatalf("%+v: output %d weighs source sample %d at %d, reference %.3f", tc, i, j, got, w*unitWeight)
+				}
 			}
 			var sum int64
 			for _, w := range weights {

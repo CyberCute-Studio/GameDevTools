@@ -35,7 +35,7 @@ func resample(ctx context.Context, img image.Image, geometry Geometry, o order) 
 	horizontal := newAxis(bounds.Dx(), geometry.ScaledWidth, geometry.Crop.Min.X, geometry.Width)
 	vertical := newAxis(bounds.Dy(), geometry.ScaledHeight, geometry.Crop.Min.Y, geometry.Height)
 	if o == orderAuto {
-		o = chooseOrder(horizontal, vertical, src.layout)
+		o = chooseOrder(horizontal, vertical, src)
 	}
 	out := newSink(src, geometry.Width, geometry.Height)
 	f := filter{done: ctx.Done(), src: src, out: out, horizontal: horizontal, vertical: vertical, channels: int(src.layout)}
@@ -51,20 +51,23 @@ func resample(ctx context.Context, img image.Image, geometry Geometry, o order) 
 	return out.img, nil
 }
 
-// chooseOrder estimates the sample operations of each order — reading a
-// source row into working samples and each weight applied count one per
-// channel — and picks the cheaper, unless the horizontal-first window of
-// resampled rows would exceed windowBudget. The vertical-first order's
-// working rows hold at most MaxSourceDimension pixels, so it always fits.
-func chooseOrder(horizontal, vertical *axis, channels layout) order {
+// chooseOrder estimates the work of each order — reading a source pixel
+// costs the source's fetchCost, and applying one weight to a pixel's samples
+// costs one — and picks the cheaper, unless the horizontal-first window of
+// resampled rows would exceed windowBudget. Horizontal-first reads each
+// source row once; vertical-first reads a row again for every output row
+// that combines it, which a costly read, such as a JPEG's YCbCr conversion,
+// makes dearer. The vertical-first order's working rows hold at most
+// MaxSourceDimension pixels, so it always fits.
+func chooseOrder(horizontal, vertical *axis, src source) order {
 	width, height := int64(len(horizontal.start)), int64(len(vertical.start))
 	columns, rows := int64(horizontal.hi-horizontal.lo), int64(vertical.hi-vertical.lo)
-	window := int64(vertical.widest) * width * int64(channels) * 4
+	window := int64(vertical.widest) * width * int64(src.layout) * 4
 	if window > windowBudget {
 		return orderVerticalFirst
 	}
-	horizontalFirst := rows*(columns+int64(horizontal.total())) + width*int64(vertical.total())
-	verticalFirst := 2*columns*int64(vertical.total()) + height*int64(horizontal.total())
+	horizontalFirst := rows*(columns*src.fetchCost+int64(horizontal.total())) + width*int64(vertical.total())
+	verticalFirst := columns*int64(vertical.total())*(src.fetchCost+1) + height*int64(horizontal.total())
 	if verticalFirst < horizontalFirst {
 		return orderVerticalFirst
 	}

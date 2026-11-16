@@ -26,6 +26,28 @@ const (
 	ResizeCropToFill ResizeMode = "crop-to-fill"
 )
 
+// ValidDimension reports whether a preset width or height is within the
+// supported range of MinDimension to MaxDimension pixels (PRESET-006).
+func ValidDimension(pixels int) bool {
+	return pixels >= MinDimension && pixels <= MaxDimension
+}
+
+// ValidResizeMode reports whether mode is one of the Image Resizer fitting
+// modes.
+func ValidResizeMode(mode ResizeMode) bool {
+	switch mode {
+	case ResizeFit, ResizeStretch, ResizeCropToFill:
+		return true
+	}
+	return false
+}
+
+// WithinResizePixelLimit reports whether a width × height Image Resizer
+// target is at most MaxResizeMegapixels (PRESET-006).
+func WithinResizePixelLimit(width, height int) bool {
+	return int64(width)*int64(height) <= MaxResizeMegapixels*1_000_000
+}
+
 func (m *ResizeMode) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		return errors.New("resize mode cannot be null")
@@ -260,10 +282,10 @@ func validatePreset(module shell.ModuleID, candidate Preset) (Preset, error) {
 	if strings.ContainsRune(candidate.Name, '\x00') {
 		return Preset{}, errors.New(ui.PresetNameInvalid)
 	}
-	if candidate.Width < MinDimension || candidate.Width > MaxDimension {
+	if !ValidDimension(candidate.Width) {
 		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, "Width")
 	}
-	if candidate.Height < MinDimension || candidate.Height > MaxDimension {
+	if !ValidDimension(candidate.Height) {
 		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, "Height")
 	}
 	switch module {
@@ -272,12 +294,10 @@ func validatePreset(module shell.ModuleID, candidate Preset) (Preset, error) {
 			return Preset{}, errors.New(ui.PresetScreenshotResizeMode)
 		}
 	case shell.ModuleImageResizer:
-		switch candidate.ResizeMode {
-		case ResizeFit, ResizeStretch, ResizeCropToFill:
-		default:
+		if !ValidResizeMode(candidate.ResizeMode) {
 			return Preset{}, errors.New(ui.PresetResizeMode)
 		}
-		if int64(candidate.Width)*int64(candidate.Height) > MaxResizeMegapixels*1_000_000 {
+		if !WithinResizePixelLimit(candidate.Width, candidate.Height) {
 			return Preset{}, errors.New(ui.PresetResizePixelLimit)
 		}
 	default:

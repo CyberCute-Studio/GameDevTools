@@ -67,7 +67,8 @@ func newAxis(sourceLength, scaledLength, first, count int) *axis {
 	// has samples. Allocating that bound up front keeps the table from
 	// growing — and briefly doubling — while it fills: it comes to about
 	// 4·sourceLength weights for a reduction and 6·count for an
-	// enlargement.
+	// enlargement. The filter values of one output, kept so each is
+	// evaluated once, need at most the same bound.
 	perOutput := min(s, 2*reach/(2*l)+2)
 	a := &axis{
 		start:   make([]int, count),
@@ -75,32 +76,39 @@ func newAxis(sourceLength, scaledLength, first, count int) *axis {
 		weights: make([]int32, 0, int64(count)*perOutput),
 		lo:      sourceLength,
 	}
+	values := make([]float64, 0, perOutput)
 	for i := range count {
 		position := (2*int64(first+i) + 1) * s
 		// |(2j+1)·l − position| < reach bounds the source samples the
 		// filter covers; the clamp to the source drops those outside it.
 		low := max(floorDiv(position-reach-l, 2*l)+1, 0)
 		high := min(ceilDiv(position+reach-l, 2*l), s)
+		values = values[:0]
 		var sum float64
 		for j := low; j < high; j++ {
-			sum += catmullRom((2*j+1)*l-position, denominator)
+			value := catmullRom((2*j+1)*l-position, denominator)
+			values = append(values, value)
+			sum += value
 		}
+		// Each weight is the step between consecutive rounded running totals
+		// of the normalized values rather than its own value rounded, so it
+		// stays within one unit of its exact value however many weights the
+		// output has, keeps that value's sign, and the weights sum to exactly
+		// unitWeight: the last running total, added in the same order as sum,
+		// is sum itself, and sum/sum is exactly one. A uniform area therefore
+		// stays exactly uniform.
 		base := len(a.weights)
-		heaviest, quantized := base, int64(0)
-		for j := low; j < high; j++ {
-			weight := int64(math.Round(float64(catmullRom((2*j+1)*l-position, denominator) / sum * unitWeight)))
-			a.weights = append(a.weights, int32(weight))
-			quantized += weight
-			if int32(weight) > a.weights[heaviest] {
-				heaviest = len(a.weights) - 1
-			}
+		var running float64
+		var previous int64
+		for _, value := range values {
+			running += value
+			total := int64(math.Round(running / sum * unitWeight))
+			a.weights = append(a.weights, int32(total-previous))
+			previous = total
 		}
-		// Rounding each weight separately can leave the sum a few units off;
-		// the heaviest weight absorbs the difference, so a uniform area stays
-		// exactly uniform.
-		a.weights[heaviest] += int32(unitWeight - quantized)
-		// Exact zeros at either end, where a source sample center lands on a
-		// zero of the filter, cost work and change nothing.
+		// Zero weights at either end, where a source sample center lands on a
+		// zero of the filter or a tail value rounds away, cost work and change
+		// nothing.
 		taps := a.weights[base:]
 		leading, trailing := 0, len(taps)
 		for taps[leading] == 0 {

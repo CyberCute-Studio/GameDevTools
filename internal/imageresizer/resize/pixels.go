@@ -1,6 +1,7 @@
 package resize
 
 import (
+	"encoding/binary"
 	"image"
 	"image/color"
 )
@@ -26,6 +27,13 @@ type source struct {
 	// deep reports whether the source has 16 bits per channel, which the
 	// output keeps.
 	deep bool
+	// fetchCost is the cost of reading one pixel into working samples,
+	// relative to applying one filter weight to a pixel's samples, as
+	// measured on windows/arm64: 1 to copy 8-bit samples or 16-bit gray; 2
+	// to premultiply, read 16-bit color, look up a palette entry, or convert
+	// CMYK; 5 to convert YCbCr; and 20 to read through At. chooseOrder
+	// weighs it.
+	fetchCost int64
 	// fetch writes the samples of source pixels [x0, x1) of row y, both
 	// relative to the source bounds, to dst.
 	fetch func(dst []int32, y, x0, x1 int)
@@ -37,30 +45,24 @@ func newSource(img image.Image) source {
 	origin := img.Bounds().Min
 	switch img := img.(type) {
 	case *image.Gray:
-		return source{layout: layoutGray, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutGray, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range x1 - x0 {
 				dst[i] = int32(row[i]) * 0x101
 			}
 		}}
 	case *image.Gray16:
-		return source{layout: layoutGray, deep: true, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutGray, deep: true, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range x1 - x0 {
-				dst[i] = int32(row[2*i])<<8 | int32(row[2*i+1])
+				dst[i] = sample16(row[2*i : 2*i+2])
 			}
 		}}
 	case *image.RGBA:
 		if img.Opaque() {
-			return source{layout: layoutRGB, fetch: func(dst []int32, y, x0, x1 int) {
-				row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
-				for i := range x1 - x0 {
-					p, d := row[4*i:4*i+3], dst[3*i:3*i+3]
-					d[0], d[1], d[2] = int32(p[0])*0x101, int32(p[1])*0x101, int32(p[2])*0x101
-				}
-			}}
+			return opaque8(img, origin)
 		}
-		return source{layout: layoutRGBA, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutRGBA, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range 4 * (x1 - x0) {
 				dst[i] = int32(row[i]) * 0x101
@@ -68,15 +70,9 @@ func newSource(img image.Image) source {
 		}}
 	case *image.NRGBA:
 		if img.Opaque() {
-			return source{layout: layoutRGB, fetch: func(dst []int32, y, x0, x1 int) {
-				row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
-				for i := range x1 - x0 {
-					p, d := row[4*i:4*i+3], dst[3*i:3*i+3]
-					d[0], d[1], d[2] = int32(p[0])*0x101, int32(p[1])*0x101, int32(p[2])*0x101
-				}
-			}}
+			return opaque8(&image.RGBA{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, origin)
 		}
-		return source{layout: layoutRGBA, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutRGBA, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range x1 - x0 {
 				p, d := row[4*i:4*i+4], dst[4*i:4*i+4]
@@ -85,15 +81,9 @@ func newSource(img image.Image) source {
 		}}
 	case *image.RGBA64:
 		if img.Opaque() {
-			return source{layout: layoutRGB, deep: true, fetch: func(dst []int32, y, x0, x1 int) {
-				row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
-				for i := range x1 - x0 {
-					p, d := row[8*i:8*i+6], dst[3*i:3*i+3]
-					d[0], d[1], d[2] = sample16(p[0:2]), sample16(p[2:4]), sample16(p[4:6])
-				}
-			}}
+			return opaque16(img, origin)
 		}
-		return source{layout: layoutRGBA, deep: true, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutRGBA, deep: true, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range 4 * (x1 - x0) {
 				dst[i] = sample16(row[2*i : 2*i+2])
@@ -101,15 +91,9 @@ func newSource(img image.Image) source {
 		}}
 	case *image.NRGBA64:
 		if img.Opaque() {
-			return source{layout: layoutRGB, deep: true, fetch: func(dst []int32, y, x0, x1 int) {
-				row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
-				for i := range x1 - x0 {
-					p, d := row[8*i:8*i+6], dst[3*i:3*i+3]
-					d[0], d[1], d[2] = sample16(p[0:2]), sample16(p[2:4]), sample16(p[4:6])
-				}
-			}}
+			return opaque16(&image.RGBA64{Pix: img.Pix, Stride: img.Stride, Rect: img.Rect}, origin)
 		}
-		return source{layout: layoutRGBA, deep: true, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutRGBA, deep: true, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range x1 - x0 {
 				p, d := row[8*i:8*i+8], dst[4*i:4*i+4]
@@ -118,30 +102,39 @@ func newSource(img image.Image) source {
 			}
 		}}
 	case *image.YCbCr:
-		return source{layout: layoutRGB, fetch: func(dst []int32, y, x0, x1 int) {
+		// The 8-bit conversion is the one the decoder applies when it
+		// reorients a JPEG, so an upright and a reoriented picture of the
+		// same pixels start from the same colors.
+		return source{layout: layoutRGB, fetchCost: 5, fetch: func(dst []int32, y, x0, x1 int) {
 			py := origin.Y + y
 			for i := range x1 - x0 {
 				px := origin.X + x0 + i
 				yi, ci := img.YOffset(px, py), img.COffset(px, py)
-				r, g, b, _ := color.YCbCr{Y: img.Y[yi], Cb: img.Cb[ci], Cr: img.Cr[ci]}.RGBA()
+				r, g, b := color.YCbCrToRGB(img.Y[yi], img.Cb[ci], img.Cr[ci])
 				d := dst[3*i : 3*i+3]
-				d[0], d[1], d[2] = int32(r), int32(g), int32(b)
+				d[0], d[1], d[2] = int32(r)*0x101, int32(g)*0x101, int32(b)*0x101
 			}
 		}}
 	case *image.CMYK:
-		return source{layout: layoutRGB, fetch: func(dst []int32, y, x0, x1 int) {
+		// The 8-bit conversion matches the decoder's, as for YCbCr.
+		return source{layout: layoutRGB, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			for i := range x1 - x0 {
 				p := row[4*i : 4*i+4]
-				r, g, b, _ := color.CMYK{C: p[0], M: p[1], Y: p[2], K: p[3]}.RGBA()
+				r, g, b := color.CMYKToRGB(p[0], p[1], p[2], p[3])
 				d := dst[3*i : 3*i+3]
-				d[0], d[1], d[2] = int32(r), int32(g), int32(b)
+				d[0], d[1], d[2] = int32(r)*0x101, int32(g)*0x101, int32(b)*0x101
 			}
 		}}
 	case *image.Paletted:
-		// Every index reads its entry; an index past the end of the palette
-		// reads transparent black rather than failing.
+		// Every index reads its entry, and an index past the end of the
+		// palette reads opaque black rather than failing: the color the
+		// standard PNG decoder gives one, and consistent with Opaque, which
+		// ignores such indices. (At panics on them instead.)
 		var table [256][4]int32
+		for index := range table {
+			table[index][3] = 0xffff
+		}
 		for index, entry := range img.Palette[:min(len(img.Palette), len(table))] {
 			table[index][0], table[index][1], table[index][2], table[index][3] = premultiplied(entry)
 		}
@@ -149,7 +142,7 @@ func newSource(img image.Image) source {
 		if img.Opaque() {
 			channels = layoutRGB
 		}
-		return source{layout: channels, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: channels, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
 			row := img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):]
 			n := int(channels)
 			for i := range x1 - x0 {
@@ -160,6 +153,42 @@ func newSource(img image.Image) source {
 	return genericSource(img, origin)
 }
 
+// opaque8 reads the color of an opaque *image.RGBA, skipping alpha. An
+// opaque *image.NRGBA stores its pixels alike, so an *image.RGBA view of its
+// pixels reads it too.
+func opaque8(img *image.RGBA, origin image.Point) source {
+	return source{layout: layoutRGB, fetchCost: 1, fetch: func(dst []int32, y, x0, x1 int) {
+		readOpaque8(dst, img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):], x1-x0)
+	}}
+}
+
+// readOpaque8 writes the color of the first n 8-bit RGBA pixels of row to
+// dst.
+func readOpaque8(dst []int32, row []uint8, n int) {
+	for i := range n {
+		p, d := row[4*i:4*i+3], dst[3*i:3*i+3]
+		d[0], d[1], d[2] = int32(p[0])*0x101, int32(p[1])*0x101, int32(p[2])*0x101
+	}
+}
+
+// opaque16 reads the color of an opaque *image.RGBA64, skipping alpha. An
+// opaque *image.NRGBA64 stores its pixels alike, so an *image.RGBA64 view of
+// its pixels reads it too.
+func opaque16(img *image.RGBA64, origin image.Point) source {
+	return source{layout: layoutRGB, deep: true, fetchCost: 2, fetch: func(dst []int32, y, x0, x1 int) {
+		readOpaque16(dst, img.Pix[img.PixOffset(origin.X+x0, origin.Y+y):], x1-x0)
+	}}
+}
+
+// readOpaque16 writes the color of the first n 16-bit RGBA pixels of row to
+// dst.
+func readOpaque16(dst []int32, row []uint8, n int) {
+	for i := range n {
+		p, d := row[8*i:8*i+6], dst[3*i:3*i+3]
+		d[0], d[1], d[2] = sample16(p[0:2]), sample16(p[2:4]), sample16(p[4:6])
+	}
+}
+
 // genericSource reads an image of any type through At. Its layout follows
 // the color model: a grayscale model is filtered as gray, a 16-bit model
 // keeps 16 bits in the output, and an image reporting itself opaque drops
@@ -167,7 +196,7 @@ func newSource(img image.Image) source {
 func genericSource(img image.Image, origin image.Point) source {
 	model := img.ColorModel()
 	if model == color.GrayModel || model == color.Gray16Model {
-		return source{layout: layoutGray, deep: model == color.Gray16Model, fetch: func(dst []int32, y, x0, x1 int) {
+		return source{layout: layoutGray, deep: model == color.Gray16Model, fetchCost: 20, fetch: func(dst []int32, y, x0, x1 int) {
 			for i := range x1 - x0 {
 				dst[i] = int32(color.Gray16Model.Convert(img.At(origin.X+x0+i, origin.Y+y)).(color.Gray16).Y)
 			}
@@ -182,7 +211,7 @@ func genericSource(img image.Image, origin image.Point) source {
 	if opaque {
 		channels = layoutRGB
 	}
-	return source{layout: channels, deep: deep, fetch: func(dst []int32, y, x0, x1 int) {
+	return source{layout: channels, deep: deep, fetchCost: 20, fetch: func(dst []int32, y, x0, x1 int) {
 		n := int(channels)
 		for i := range x1 - x0 {
 			var pixel [4]int32
@@ -192,10 +221,12 @@ func genericSource(img image.Image, origin image.Point) source {
 	}}
 }
 
-// premultiplied returns a color's 16-bit premultiplied channels. Straight
-// 8-bit and 16-bit colors are premultiplied with rounding, as the image
-// fast paths do, rather than with the truncation of their RGBA methods, so
-// an 8-bit pixel survives the round trip through the filter unchanged.
+// premultiplied returns a color's 16-bit premultiplied channels, computed as
+// the image fast paths compute them. Straight 8-bit and 16-bit colors are
+// premultiplied with rounding rather than with the truncation of their RGBA
+// methods, so an 8-bit pixel survives the round trip through the filter
+// unchanged, and YCbCr and CMYK colors take the 8-bit conversion to RGB
+// rather than the 16-bit one of their RGBA methods.
 func premultiplied(c color.Color) (r, g, b, a int32) {
 	switch c := c.(type) {
 	case color.NRGBA:
@@ -203,6 +234,12 @@ func premultiplied(c color.Color) (r, g, b, a int32) {
 	case color.NRGBA64:
 		alpha := int32(c.A)
 		return premultiply16(int32(c.R), alpha), premultiply16(int32(c.G), alpha), premultiply16(int32(c.B), alpha), alpha
+	case color.YCbCr:
+		r, g, b := color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+		return int32(r) * 0x101, int32(g) * 0x101, int32(b) * 0x101, 0xffff
+	case color.CMYK:
+		r, g, b := color.CMYKToRGB(c.C, c.M, c.Y, c.K)
+		return int32(r) * 0x101, int32(g) * 0x101, int32(b) * 0x101, 0xffff
 	}
 	r32, g32, b32, a32 := c.RGBA()
 	return int32(r32), int32(g32), int32(b32), int32(a32)
@@ -221,9 +258,9 @@ func premultiply16(value, alpha int32) int32 {
 	return int32((uint64(value)*uint64(alpha) + 0x7fff) / 0xffff)
 }
 
-// sample16 reads a big-endian 16-bit sample.
+// sample16 reads a big-endian 16-bit sample as a working sample.
 func sample16(p []uint8) int32 {
-	return int32(p[0])<<8 | int32(p[1])
+	return int32(binary.BigEndian.Uint16(p))
 }
 
 // sink writes finished output rows to the output image.
@@ -283,16 +320,21 @@ func newSink(src source, width, height int) sink {
 			for i := range width {
 				p, s := pix[4*i:4*i+4], row[4*i:4*i+4]
 				alpha := clamp16(s[3])
-				if alpha == 0 {
+				// A pixel whose alpha rounds to zero is stored as transparent
+				// black, like one whose alpha is exactly zero, rather than
+				// keeping a color nothing shows.
+				opacity := to8(alpha)
+				if opacity == 0 {
 					p[0], p[1], p[2], p[3] = 0, 0, 0, 0
 					continue
 				}
-				// The filter's overshoot can leave a color above its alpha,
-				// which no straight color can represent.
+				// The color is recovered at the 16-bit alpha's precision. The
+				// filter's overshoot can leave it above its alpha, which no
+				// straight color can represent.
 				p[0] = unpremultiply8(min(clamp16(s[0]), alpha), alpha)
 				p[1] = unpremultiply8(min(clamp16(s[1]), alpha), alpha)
 				p[2] = unpremultiply8(min(clamp16(s[2]), alpha), alpha)
-				p[3] = to8(alpha)
+				p[3] = opacity
 			}
 		}}
 	}
@@ -338,7 +380,7 @@ func unpremultiply16(value, alpha int32) int32 {
 	return int32((int64(value)*2*0xffff + int64(alpha)) / (2 * int64(alpha)))
 }
 
-// put16 writes a big-endian 16-bit sample.
+// put16 writes a clamped working sample as a big-endian 16-bit sample.
 func put16(p []uint8, v int32) {
-	p[0], p[1] = uint8(v>>8), uint8(v)
+	binary.BigEndian.PutUint16(p, uint16(v))
 }

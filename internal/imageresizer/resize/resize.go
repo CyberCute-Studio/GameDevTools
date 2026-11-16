@@ -16,18 +16,24 @@
 // widened in proportion to the reduction when downscaling so every source
 // pixel contributes, which suits both enlargement and reduction (RSZ-017).
 // Colors are filtered with premultiplied alpha, so fully transparent pixels
-// lend no color to their neighbors, and the stored sRGB values are filtered
-// directly, as most image tools do, rather than converted to linear light.
-// The filter's overshoot near sharp edges is clamped. Crop to Fill resamples
-// only the cropped region, applying exactly the filter weights that scaling
-// the whole source and cropping afterwards would.
+// lend no color to their neighbors, and an output pixel whose alpha rounds to
+// zero is stored as transparent black. The stored sRGB values are filtered
+// directly, as most image tools do, rather than converted to linear light;
+// YCbCr and CMYK pixels are first converted to 8-bit RGB by the standard
+// library's conversion, the one the decoder applies when it reorients a
+// JPEG, so reorienting a picture does not change the colors the filter
+// starts from. The filter's overshoot near sharp edges is clamped. Crop to
+// Fill resamples only the cropped region, applying exactly the filter
+// weights that scaling the whole source and cropping afterwards would.
 //
 // Results are deterministic (RSZ-017): the same source and target produce
-// bit-identical output on every platform and in every run. Sample positions
-// are exact rational numbers, the filter weights are computed with float64
-// operations kept from fusing into platform-dependent multiply-adds and are
-// quantized to fixed point, and the pixels are filtered in integer
-// arithmetic on one goroutine.
+// bit-identical output on every platform the package compiles for — every
+// 64-bit one — and in every run. Sample positions are exact rational
+// numbers, the filter weights are computed with float64 operations kept from
+// fusing into platform-dependent multiply-adds and are quantized to fixed
+// point by rounding their running total, which keeps each within one unit of
+// its exact value, and the pixels are filtered in integer arithmetic on one
+// goroutine.
 //
 // Resize allocates the output image plus working memory that does not grow
 // with the source's area. The weight tables grow with the source's
@@ -53,6 +59,12 @@ import (
 // 65,535-pixel limit of JPEG and any practical PNG; the decoder's memory
 // bound already limits the source's area.
 const MaxSourceDimension = 1 << 20
+
+// A scaled axis and its crop offset reach 2^34 pixels, which only a 64-bit
+// int holds, so the package fails to compile where int is narrower rather
+// than miscomputing there. The application supports 64-bit Windows only
+// (NFR-001, NFR-004).
+const _ int = 1 << 62
 
 // Kind classifies a resize failure.
 type Kind uint8
@@ -122,17 +134,16 @@ type Target struct {
 
 // Validate checks the target against the Image Resizer preset rules
 // (PRESET-006): a known fitting mode, 1 to 16,384 pixels per axis, and at
-// most 100 megapixels.
+// most 100 megapixels. It applies the preset library's own checks, so a
+// target and a saved preset cannot be judged differently.
 func (t Target) Validate() error {
-	switch t.Mode {
-	case preset.ResizeFit, preset.ResizeStretch, preset.ResizeCropToFill:
-	default:
+	if !preset.ValidResizeMode(t.Mode) {
 		return &Error{Kind: KindInvalid, Err: ErrMode}
 	}
-	if t.Width < preset.MinDimension || t.Width > preset.MaxDimension || t.Height < preset.MinDimension || t.Height > preset.MaxDimension {
+	if !preset.ValidDimension(t.Width) || !preset.ValidDimension(t.Height) {
 		return &Error{Kind: KindInvalid, Err: ErrTargetDimension}
 	}
-	if int64(t.Width)*int64(t.Height) > preset.MaxResizeMegapixels*1_000_000 {
+	if !preset.WithinResizePixelLimit(t.Width, t.Height) {
 		return &Error{Kind: KindInvalid, Err: ErrTargetArea}
 	}
 	return nil
@@ -144,7 +155,8 @@ type Geometry struct {
 	Width, Height int
 	// ScaledWidth and ScaledHeight are the dimensions the whole source is
 	// scaled to. They equal Width and Height except under Crop to Fill,
-	// where the axis that overflows the target is longer.
+	// where the axis that overflows the target is longer: up to
+	// MaxSourceDimension × preset.MaxDimension = 2^34 pixels.
 	ScaledWidth, ScaledHeight int
 	// Crop is the region of the scaled source kept as the output: all of it
 	// except under Crop to Fill. Its Min is the number of scaled columns
@@ -226,7 +238,8 @@ func roundDiv(numerator, denominator int64) int64 {
 // conversion to the output type: a straight-alpha 8-bit, grayscale, or
 // opaque source comes back exactly, a premultiplied one as its straight
 // color rounded to the nearest step, and a translucent 16-bit one within
-// the precision of its premultiplied form.
+// the precision of its premultiplied form — except that a fully transparent
+// pixel comes back as transparent black, whatever color it stored.
 func Resize(ctx context.Context, source image.Image, target Target) (image.Image, error) {
 	bounds := source.Bounds()
 	geometry, err := Plan(bounds.Dx(), bounds.Dy(), target)

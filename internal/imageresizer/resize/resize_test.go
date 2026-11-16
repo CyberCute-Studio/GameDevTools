@@ -218,7 +218,7 @@ func TestResizeUnchangedSizeIsExact(t *testing.T) {
 // back exactly, except that a translucent 16-bit color is only as precise as
 // its 16-bit premultiplied value; a premultiplied source must come back as
 // its straight color rounded to the nearest step; and a YCbCr or CMYK source
-// as its 16-bit RGB conversion rounded to 8 bits. A fully transparent pixel
+// as its 8-bit RGB conversion, the decoder's. A fully transparent pixel
 // comes back as transparent black.
 func sameColor(source, output color.Color) bool {
 	round := func(value, alpha uint32, steps float64) float64 {
@@ -227,6 +227,12 @@ func sameColor(source, output color.Color) bool {
 	switch s := source.(type) {
 	case color.Gray, color.Gray16:
 		return source == output
+	case color.YCbCr:
+		r, g, b := color.YCbCrToRGB(s.Y, s.Cb, s.Cr)
+		return output == color.RGBA{R: r, G: g, B: b, A: 0xff}
+	case color.CMYK:
+		r, g, b := color.CMYKToRGB(s.C, s.M, s.Y, s.K)
+		return output == color.RGBA{R: r, G: g, B: b, A: 0xff}
 	case color.NRGBA:
 		o := color.NRGBAModel.Convert(output).(color.NRGBA)
 		if s.A == 0 {
@@ -335,21 +341,102 @@ func TestTransparentPixelsLendNoColor(t *testing.T) {
 	}
 }
 
+// TestNearlyTransparentPixelsAreTransparentBlack checks that an 8-bit output
+// pixel whose filtered alpha rounds to zero is stored as transparent black,
+// as one whose alpha is exactly zero is, rather than keeping a color nothing
+// shows. A 16-bit resize of the same pixels proves the case arises: some of
+// its alphas are nonzero yet round to zero at 8 bits.
+func TestNearlyTransparentPixelsAreTransparentBlack(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 10, 1))
+	src.SetNRGBA(9, 0, color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 1})
+	deep := image.NewNRGBA64(src.Rect)
+	deep.SetNRGBA64(9, 0, color.NRGBA64{R: 0xffff, G: 0xffff, B: 0xffff, A: 0x101})
+	for _, target := range []Target{stretch(37, 1), stretch(100, 3), fit(23, 23)} {
+		out := mustResize(t, src, target).(*image.NRGBA)
+		wide := mustResize(t, deep, target).(*image.NRGBA64)
+		vanishing := 0
+		for y := range out.Rect.Dy() {
+			for x := range out.Rect.Dx() {
+				if a := wide.NRGBA64At(x, y).A; a != 0 && to8(int32(a)) == 0 {
+					vanishing++
+				}
+				if c := out.NRGBAAt(x, y); c.A == 0 && c != (color.NRGBA{}) {
+					t.Fatalf("%+v: pixel (%d, %d) is %v, want transparent black", target, x, y, c)
+				}
+			}
+		}
+		if vanishing == 0 {
+			t.Fatalf("%+v: no alpha rounds to zero, so the check proved nothing", target)
+		}
+	}
+}
+
+// TestPaletteIndexPastTheEnd checks that a palette index with no entry
+// reads opaque black, as the standard PNG decoder renders one, whether the
+// palette is opaque or translucent.
+func TestPaletteIndexPastTheEnd(t *testing.T) {
+	for _, palette := range []color.Palette{{color.RGBA{R: 0xff, A: 0xff}}, {color.RGBA{R: 0xff, A: 0xff}, color.NRGBA{G: 0xff, A: 0x80}}} {
+		src := image.NewPaletted(image.Rect(0, 0, 3, 1), palette)
+		src.Pix[1] = uint8(len(palette) - 1)
+		src.Pix[2] = 5
+		out := mustResize(t, src, fit(3, 1))
+		if got := color.NRGBAModel.Convert(out.At(2, 0)); got != (color.NRGBA{A: 0xff}) {
+			t.Errorf("palette of %d: an index past the end reads %v, want opaque black", len(palette), got)
+		}
+	}
+}
+
+// TestJPEGPixelsConvertAsTheDecoderDoes checks that a YCbCr or CMYK source
+// resizes exactly as its *image.RGBA conversion by the standard library's
+// 8-bit YCbCrToRGB and CMYKToRGB — what the decoder produces when it
+// reorients a JPEG — so reorienting a picture does not change the colors
+// the filter starts from.
+func TestJPEGPixelsConvertAsTheDecoderDoes(t *testing.T) {
+	for name, img := range typed(71, 29, 23) {
+		if _, ok := img.(*image.YCbCr); !ok && name != "CMYK" {
+			continue
+		}
+		converted := image.NewRGBA(img.Bounds())
+		for y := range 23 {
+			for x := range 29 {
+				var r, g, b uint8
+				switch c := img.At(x, y).(type) {
+				case color.YCbCr:
+					r, g, b = color.YCbCrToRGB(c.Y, c.Cb, c.Cr)
+				case color.CMYK:
+					r, g, b = color.CMYKToRGB(c.C, c.M, c.Y, c.K)
+				}
+				converted.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 0xff})
+			}
+		}
+		for _, target := range []Target{fit(10, 10), stretch(61, 7), crop(40, 40)} {
+			for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
+				if !sameImage(mustResample(t, img, target, o), mustResample(t, converted, target, o)) {
+					t.Errorf("%s %+v order %d: resizes differently from its decoder conversion", name, target, o)
+				}
+			}
+		}
+	}
+}
+
 // TestFastPathsMatchTheGenericPath reads every standard image type both
-// directly and through At, which must give identical output.
+// directly and through At, which must give identical output in each order.
+// (Resize itself may choose different orders for the two, since a read
+// through At costs more.)
 func TestFastPathsMatchTheGenericPath(t *testing.T) {
 	for name, img := range typed(11, 17, 12) {
 		for _, target := range []Target{fit(8, 8), stretch(40, 9), crop(23, 31)} {
-			direct, viaAt := mustResize(t, img, target), mustResize(t, generic{img}, target)
-			if !sameImage(direct, viaAt) {
-				t.Errorf("%s %+v: the direct and generic paths differ", name, target)
+			for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
+				if !sameImage(mustResample(t, img, target, o), mustResample(t, generic{img}, target, o)) {
+					t.Errorf("%s %+v order %d: the direct and generic paths differ", name, target, o)
+				}
 			}
 		}
 	}
 }
 
 // TestSourceBoundsNeedNotStartAtTheOrigin resizes a sub-image, which must
-// match resizing a copy of the same pixels at the origin.
+// match resizing a copy of the same pixels at the origin in each order.
 func TestSourceBoundsNeedNotStartAtTheOrigin(t *testing.T) {
 	for name, img := range typed(13, 30, 20) {
 		sub := img.(interface {
@@ -358,8 +445,10 @@ func TestSourceBoundsNeedNotStartAtTheOrigin(t *testing.T) {
 		copied := typed(13, 30, 20)[name]
 		moved := moveToOrigin(t, copied, sub.Bounds())
 		for _, target := range []Target{fit(9, 9), crop(31, 5)} {
-			if !sameImage(mustResize(t, sub, target), mustResize(t, moved, target)) {
-				t.Errorf("%s %+v: a sub-image resizes differently from its pixels at the origin", name, target)
+			for _, o := range []order{orderHorizontalFirst, orderVerticalFirst} {
+				if !sameImage(mustResample(t, sub, target, o), mustResample(t, moved, target, o)) {
+					t.Errorf("%s %+v order %d: a sub-image resizes differently from its pixels at the origin", name, target, o)
+				}
 			}
 		}
 	}
@@ -416,9 +505,14 @@ func reference(img image.Image, g Geometry) [][4]float64 {
 	weightsY := referenceWeights(b.Dy(), g.ScaledHeight, g.Crop.Min.Y, g.Height)
 	premultiplied := func(x, y int) [4]float64 {
 		c := img.At(b.Min.X+x, b.Min.Y+y)
-		if n, ok := c.(color.NRGBA); ok {
+		switch n := c.(type) {
+		case color.NRGBA:
 			a := float64(n.A) / 255
 			return [4]float64{float64(n.R) / 255 * a, float64(n.G) / 255 * a, float64(n.B) / 255 * a, a}
+		case color.YCbCr:
+			// The resizer converts YCbCr as the decoder does, to 8 bits.
+			r, g, bl := color.YCbCrToRGB(n.Y, n.Cb, n.Cr)
+			return [4]float64{float64(r) / 255, float64(g) / 255, float64(bl) / 255, 1}
 		}
 		r, gr, bl, a := c.RGBA()
 		return [4]float64{float64(r) / 0xffff, float64(gr) / 0xffff, float64(bl) / 0xffff, float64(a) / 0xffff}
@@ -582,31 +676,40 @@ func TestOrdersAgree(t *testing.T) {
 }
 
 // TestChooseOrder pins the order choice: the cheaper order for an ordinary
-// reduction or enlargement, and vertical-first whenever the window of
-// resampled rows would exceed its budget.
+// reduction or enlargement, weighing how costly the source's pixels are to
+// read, and vertical-first whenever the window of resampled rows would
+// exceed its budget.
 func TestChooseOrder(t *testing.T) {
 	axes := func(sourceWidth, sourceHeight int, target Target) (*axis, *axis) {
 		g := mustPlan(t, sourceWidth, sourceHeight, target)
 		return newAxis(sourceWidth, g.ScaledWidth, g.Crop.Min.X, g.Width), newAxis(sourceHeight, g.ScaledHeight, g.Crop.Min.Y, g.Height)
 	}
+	rgb := newSource(image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	ycbcr := newSource(image.NewYCbCr(image.Rect(0, 0, 1, 1), image.YCbCrSubsampleRatio420))
 	cases := []struct {
 		name                      string
+		src                       source
 		sourceWidth, sourceHeight int
 		target                    Target
 		want                      order
 	}{
-		{"uniform reduction", 4000, 3000, fit(1024, 1024), orderHorizontalFirst},
-		{"uniform enlargement", 100, 100, fit(1000, 1000), orderHorizontalFirst},
+		{"uniform reduction", rgb, 4000, 3000, fit(1024, 1024), orderHorizontalFirst},
+		{"uniform JPEG reduction", ycbcr, 4000, 3000, fit(1024, 1024), orderHorizontalFirst},
+		{"uniform enlargement", rgb, 100, 100, fit(1000, 1000), orderHorizontalFirst},
 		// Widening a few columns per row is cheap; combining thousands of
 		// full-width rows first would not be.
-		{"wider and much shorter", 2000, 4000, stretch(4000, 100), orderVerticalFirst},
+		{"wider and much shorter", rgb, 2000, 4000, stretch(4000, 100), orderVerticalFirst},
+		// Vertical-first would convert each JPEG row about four times rather
+		// than once, which outweighs widening them all.
+		{"JPEG slightly wider and much shorter", ycbcr, 2000, 4000, stretch(2600, 100), orderHorizontalFirst},
+		{"RGB slightly wider and much shorter", rgb, 2000, 4000, stretch(2600, 100), orderVerticalFirst},
 		// The window would hold 4 × 65536 / 16 rows of 4096 pixels.
-		{"window over budget", 4096, 65536, stretch(4096, 16), orderVerticalFirst},
-		{"narrower and much taller", 4000, 100, stretch(40, 4000), orderHorizontalFirst},
+		{"window over budget", rgb, 4096, 65536, stretch(4096, 16), orderVerticalFirst},
+		{"narrower and much taller", rgb, 4000, 100, stretch(40, 4000), orderHorizontalFirst},
 	}
 	for _, tc := range cases {
 		horizontal, vertical := axes(tc.sourceWidth, tc.sourceHeight, tc.target)
-		if got := chooseOrder(horizontal, vertical, layoutRGB); got != tc.want {
+		if got := chooseOrder(horizontal, vertical, tc.src); got != tc.want {
 			t.Errorf("%s: chooseOrder = %d, want %d", tc.name, got, tc.want)
 		}
 	}
@@ -626,9 +729,9 @@ func TestResizeIsDeterministic(t *testing.T) {
 	}{
 		{"NRGBA", fit(64, 64), "fc0c12e6be1826b9540dffe6de0cc91cab2149c0ef76c27db6d1f113a7ddf9ee"},
 		{"opaque NRGBA", stretch(300, 41), "37db23c8b6d9519a23ab9e7f898b17e7a0ff3286d9dec8dc4d6a537c1a12343e"},
-		{"YCbCr 4:2:0", crop(97, 97), "c55361e835497e86f372aa7fb2a1efb95f7361494de485969eef24a381fd3ac7"},
-		{"Gray16", fit(500, 500), "8be488b3c72048f7ac2031dfb643ef121113394697fe989ab91e6f9bdd2167ec"},
-		{"NRGBA64", crop(33, 180), "daafef10b2d263160051dea295bc1e692418e3712ce39efa00192d3c9104c8f5"},
+		{"YCbCr 4:2:0", crop(97, 97), "72c696d96ced94bf42ccc13462faa689349942f4cefa08ef984f53a926d7e9d6"},
+		{"Gray16", fit(500, 500), "45b59ff0af340d5d1667f4640fa24d5cc0299124e431a236bd82c4656e221881"},
+		{"NRGBA64", crop(33, 180), "98da847b84ace341b84cef4700f05232ea44b540b70de2c41d7c9c49cefae992"},
 	}
 	for _, tc := range cases {
 		first := mustResize(t, images[tc.image], tc.target)
