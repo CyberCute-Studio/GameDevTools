@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 )
@@ -57,6 +58,11 @@ func (s *OptionsStore) Load(value settings.Settings) (ResizeOptions, error) {
 	options.Collision = stored.Collision
 	options.JPEGQuality = stored.JPEGQuality
 	options.Background = stored.Background
+	if stored.OutputFolder == "" {
+		// decodeOptions dropped a folder only earlier builds accepted, so
+		// the default folder replaces it, unvalidated as above.
+		return options, options.validateEncoding()
+	}
 	options.OutputFolder = stored.OutputFolder
 	return options, options.Validate()
 }
@@ -112,13 +118,22 @@ func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
 		return storedOptions{}, false, fmt.Errorf("unsupported resize options version %d", stored.Version)
 	}
 	options := ResizeOptions{
-		Format:       stored.Format,
-		Collision:    stored.Collision,
-		JPEGQuality:  stored.JPEGQuality,
-		Background:   stored.Background,
-		OutputFolder: stored.OutputFolder,
+		Format:      stored.Format,
+		Collision:   stored.Collision,
+		JPEGQuality: stored.JPEGQuality,
+		Background:  stored.Background,
 	}
-	if err := options.Validate(); err != nil {
+	if err := options.validateEncoding(); err != nil {
+		return storedOptions{}, false, fmt.Errorf("validate stored resize options: %w", err)
+	}
+	if errors.Is(output.ValidateFolder(stored.OutputFolder), output.ErrFolderName) {
+		// Builds before output planning accepted a folder path with a name
+		// that ends in a space or a period, which jobs now refuse. Such a
+		// folder is dropped, and Load puts the default folder in its place,
+		// rather than the whole settings file failing validation and every
+		// module losing its settings.
+		stored.OutputFolder = ""
+	} else if err := validateOutputFolder(stored.OutputFolder); err != nil {
 		return storedOptions{}, false, fmt.Errorf("validate stored resize options: %w", err)
 	}
 	return stored, true, nil

@@ -59,6 +59,14 @@ func DefaultOptions(outputFolder string) ResizeOptions {
 }
 
 func (o ResizeOptions) Validate() error {
+	if err := o.validateEncoding(); err != nil {
+		return err
+	}
+	return validateOutputFolder(o.OutputFolder)
+}
+
+// validateEncoding checks every option but the output folder.
+func (o ResizeOptions) validateEncoding() error {
 	if !o.Format.Valid() {
 		return errors.New(ui.ResizeFormatInvalid)
 	}
@@ -68,10 +76,8 @@ func (o ResizeOptions) Validate() error {
 	if o.JPEGQuality < MinJPEGQuality || o.JPEGQuality > MaxJPEGQuality {
 		return errors.New(ui.JPEGQualityRange)
 	}
-	if _, err := ParseBackground(o.Background); err != nil {
-		return err
-	}
-	return validateOutputFolder(o.OutputFolder)
+	_, err := ParseBackground(o.Background)
+	return err
 }
 
 // ParseJPEGQuality converts the quality field text into the supported 1–100

@@ -165,6 +165,99 @@ func TestOptionsStoreValidSection(t *testing.T) {
 	}
 }
 
+// TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault: earlier builds
+// saved an output folder whose path has a name ending in a space or a
+// period, which output planning now refuses. Loading such a file keeps every
+// other setting, the preset library included, and only the folder falls
+// back to the default, rather than the whole file being reset as invalid.
+func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
+	folder := testFolder(t)
+	for _, saved := range []string{folder + ".", filepath.Join(folder+" ", "Resized")} {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		store := settings.NewStore(settings.Paths{ConfigFile: path})
+		preset.RegisterValidators(store)
+		optionsStore, err := NewOptionsStore(store, folder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repository, err := preset.NewRepository(shell.ModuleImageResizer, store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value := settings.Default()
+		presetManager, err := preset.NewManager(repository, &value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := presetManager.Create("Icon", 512, 512, preset.ResizeCropToFill); err != nil {
+			t.Fatal(err)
+		}
+		options := ResizeOptions{Format: FormatJPEG, Collision: CollisionSkip, JPEGQuality: 55, Background: "#102030", OutputFolder: folder}
+		if err := optionsStore.Save(&value, options); err != nil {
+			t.Fatal(err)
+		}
+		// Write the folder an earlier build would have saved.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		quoted, err := json.Marshal(folder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := json.Marshal(saved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		edited := strings.Replace(string(data), string(quoted), string(legacy), 1)
+		if edited == string(data) {
+			t.Fatalf("the saved settings do not hold the folder %s: %s", quoted, data)
+		}
+		if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		defaultFolder := testFolder(t)
+		restarted := settings.NewStore(settings.Paths{ConfigFile: path})
+		preset.RegisterValidators(restarted)
+		restartedOptions, err := NewOptionsStore(restarted, defaultFolder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded := restarted.Load()
+		if len(loaded.Warnings) != 0 {
+			t.Fatalf("%q: load warnings = %v", saved, loaded.Warnings)
+		}
+		restored, err := restartedOptions.Load(loaded.Settings)
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		want := options
+		want.OutputFolder = defaultFolder
+		if restored != want {
+			t.Fatalf("%q: restored options = %+v, want %+v", saved, restored, want)
+		}
+		restartedRepository, err := preset.NewRepository(shell.ModuleImageResizer, restarted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		library, err := restartedRepository.Load(loaded.Settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(library.Custom()) != 1 || library.Custom()[0].Name != "Icon" {
+			t.Fatalf("%q: the preset library was lost: %+v", saved, library.Custom())
+		}
+		// Saving another module's settings keeps validating the file.
+		if err := restartedRepository.Save(&loaded.Settings, library); err != nil {
+			t.Fatalf("%q: save presets: %v", saved, err)
+		}
+		if backups, _ := filepath.Glob(path + ".corrupt-*"); len(backups) != 0 {
+			t.Fatalf("%q: the settings file was backed up as invalid: %v", saved, backups)
+		}
+	}
+}
+
 func TestMalformedResizeOptionsRecoverThroughStore(t *testing.T) {
 	folder := testFolder(t)
 	directory := t.TempDir()

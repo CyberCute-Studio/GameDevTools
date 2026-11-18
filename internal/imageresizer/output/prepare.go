@@ -64,7 +64,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -208,21 +207,26 @@ var (
 	ErrFolderEmpty       = errors.New("the output folder is empty")
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
-	ErrFolderName        = errors.New("the folder's name ends in a space or a period, which Windows removes")
+	ErrFolderName        = errors.New("a folder name in the path ends in a space or a period, which Windows removes")
 )
 
 // ValidateFolder checks an output folder path the way the persisted options
 // and Prepare both require: it is not empty, is valid text, is absolute, and
-// the folder's own name does not end in a space or a period.
+// no folder name in it ends in a space or a period.
 //
 // A path that is not valid UTF-8, as Go holds a Windows name with an
 // unpaired surrogate, cannot be kept in the settings file, whose JSON
 // replaces such bytes with U+FFFD, and a U+FFFD replacement character marks
 // a path such a lossy conversion changed; either may name another folder
 // than the one chosen. Windows removes trailing spaces and periods from the
-// last name of a path it creates or opens, but not from a name a longer path
-// leads through, so for such a folder the folder Prepare creates and checks
-// would not be the folder its destinations lie in.
+// last name of a path it creates or opens, but not all of them from a name
+// a longer path leads through: for an output folder with such a name, the
+// folder Prepare creates and checks would not be the folder its destinations
+// lie in, and creating a missing folder with such a name on the way to it
+// would leave a stray folder without them that the rest of the path never
+// reaches. An extended-length path, marked \\?\ or \??\, is one Windows takes
+// verbatim, so every name in it keeps its spaces and periods and the rule
+// does not apply.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -233,10 +237,16 @@ func ValidateFolder(folder string) error {
 		return ErrFolderNotAbsolute
 	}
 	clean := filepath.Clean(folder)
-	name := clean[len(filepath.VolumeName(clean)):]
-	name = name[strings.LastIndexAny(name, `\/`)+1:]
-	if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
-		return ErrFolderName
+	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) {
+		return nil
+	}
+	names := strings.FieldsFunc(clean[len(filepath.VolumeName(clean)):], func(character rune) bool {
+		return character == '\\' || character == '/'
+	})
+	for _, name := range names {
+		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
+			return ErrFolderName
+		}
 	}
 	return nil
 }
@@ -249,13 +259,19 @@ func ValidateFolder(folder string) error {
 // are kept as they are, so two names that differ only in them keep distinct
 // keys rather than both becoming U+FFFD.
 func PathKey(path string) string {
-	clean := filepath.Clean(path)
-	if utf8.ValidString(clean) {
-		return strings.ToUpper(clean)
+	return foldCase(filepath.Clean(path))
+}
+
+// foldCase upper-cases text for case-insensitive comparison, as PathKey
+// does, keeping every byte that is not valid UTF-8, which strings.ToUpper
+// would turn into U+FFFD.
+func foldCase(text string) string {
+	if utf8.ValidString(text) {
+		return strings.ToUpper(text)
 	}
 	var key strings.Builder
-	key.Grow(len(clean))
-	for rest := clean; rest != ""; {
+	key.Grow(len(text))
+	for rest := text; rest != ""; {
 		character, size := utf8.DecodeRuneInString(rest)
 		if character == utf8.RuneError && size == 1 {
 			key.WriteByte(rest[0])
@@ -577,9 +593,7 @@ func validateFile(path string) error {
 // that the path names a folder (RSZ-030).
 func prepareFolder(files fileSystem, folder string) error {
 	if err := files.MkdirAll(folder); err != nil {
-		if errors.Is(err, syscall.ENOTDIR) {
-			// os.MkdirAll reports a file standing at the folder's path, or
-			// at the path of a folder that would hold it, as ENOTDIR.
+		if fileInTheWay(files, folder) {
 			err = fmt.Errorf("%w: %w", ErrNotFolder, err)
 		}
 		return kindError(KindFolder, "create output folder", err)
@@ -594,6 +608,25 @@ func prepareFolder(files fileSystem, folder string) error {
 	return nil
 }
 
+// fileInTheWay reports whether a file, rather than a folder, stands at the
+// folder's path or at the path of a folder that would hold it: whether the
+// nearest of those paths that can be inspected is not a folder. The error
+// os.MkdirAll returns cannot tell, as the ENOTDIR it reports for a file in
+// the way is, on Windows, ERROR_PATH_NOT_FOUND, which a missing drive,
+// share, or folder reports too.
+func fileInTheWay(files fileSystem, folder string) bool {
+	for path := folder; ; {
+		if info, err := files.Stat(path); err == nil {
+			return !info.IsDir()
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return false
+		}
+		path = parent
+	}
+}
+
 // fileSystem is the filesystem access planning needs, so tests can inject
 // failures the real filesystem cannot produce on demand.
 type fileSystem interface {
@@ -604,14 +637,21 @@ type fileSystem interface {
 	// following links, so two paths to one file report the same identity,
 	// and the file's number of names.
 	Identity(path string) (fileID, uint32, error)
-	// StoredFile reports whether an entry Lstat reports as irregular is a
-	// file whose reparse point only says how its data is stored, rather
-	// than a link or a folder.
-	StoredFile(path string) (bool, error)
-	// EntryName returns the name under which the folder lists the entry the
-	// path's last element opens. It differs from that element when the
-	// element is another name for the entry, such as its 8.3 short name.
-	EntryName(path string) (string, error)
+	// Entry returns how the folder lists the entry the path's last element
+	// opens, the entry itself rather than what a link leads to.
+	Entry(path string) (entry, error)
+}
+
+// entry is how a folder lists one of its entries.
+type entry struct {
+	// name is the entry's name in the folder. It differs from the last
+	// element of a path that opens the entry under another name, such as its
+	// 8.3 short name.
+	name string
+	// file reports that the entry is a file rather than a folder or a link:
+	// it has no reparse point, or one that only says how its data is stored,
+	// as a file OneDrive keeps in sync has.
+	file bool
 }
 
 type osFiles struct{}
@@ -620,8 +660,7 @@ func (osFiles) MkdirAll(path string) error                   { return os.MkdirAl
 func (osFiles) Stat(path string) (fs.FileInfo, error)        { return os.Stat(path) }
 func (osFiles) Lstat(path string) (fs.FileInfo, error)       { return os.Lstat(path) }
 func (osFiles) Identity(path string) (fileID, uint32, error) { return identify(path) }
-func (osFiles) StoredFile(path string) (bool, error)         { return storedFile(path) }
-func (osFiles) EntryName(path string) (string, error)        { return entryName(path) }
+func (osFiles) Entry(path string) (entry, error)             { return findEntry(path) }
 
 // probe is the cached result of inspecting one destination path: whether an
 // entry has its name, and that entry's type.
@@ -807,7 +846,7 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		p.claimed[key] = index
 		item.Action = ActionCreate
 		return true, nil
-	case p.collision != CollisionOverwrite, !p.file(item.Destination, found.mode), !p.named(item.Destination):
+	case p.collision != CollisionOverwrite, !p.ownFile(item.Destination, found.mode):
 		// Rename and Skip never replace a file, so whether an existing file
 		// is a source under another name changes nothing they do; no policy
 		// replaces a folder or a link; and a file the destination name only
@@ -848,7 +887,10 @@ func (p *planner) resolve(index int, item *Item) error {
 	base := filepath.Base(item.Destination)
 	extension := filepath.Ext(base)
 	prefix := strings.TrimSuffix(base, extension)
-	pattern := strings.ToUpper(prefix) + "\x00" + strings.ToUpper(extension)
+	// The pattern folds case as PathKey does, so two names that differ only
+	// in bytes that are not valid UTF-8, whose numbered names never collide,
+	// keep their own searches.
+	pattern := foldCase(prefix) + "\x00" + foldCase(extension)
 	unchecked := 0
 	for suffix := max(p.next[pattern], 2); suffix <= maxSuffix; suffix++ {
 		if err := p.ctx.Err(); err != nil {
@@ -933,30 +975,35 @@ func (p *planner) probe(key, path string) probe {
 }
 
 // file reports whether the entry at path, of the given type, is a file: a
-// regular file, or one Lstat reports as irregular whose reparse point only
-// says how its data is stored. Since Go 1.23, os.Lstat reports a Windows file
-// with a reparse point other than a symbolic link as irregular, and that
-// includes every file OneDrive keeps in sync; such a file has its data and
-// its name where it stands, like any other. A folder, a link, a junction,
-// and an irregular entry whose reparse point cannot be read are not files.
+// regular file, or one Lstat reports as irregular that its folder lists as a
+// file. Since Go 1.23, os.Lstat reports a Windows file with a reparse point
+// other than a symbolic link as irregular, and that includes every file
+// OneDrive keeps in sync; such a file has its data and its name where it
+// stands, like any other. A folder, a link, a junction, and an irregular
+// entry its folder cannot list are not files.
 func (p *planner) file(path string, mode fs.FileMode) bool {
 	switch mode.Type() {
 	case 0:
 		return true
 	case fs.ModeIrregular:
-		stored, err := p.files.StoredFile(path)
-		return err == nil && stored
+		listed, err := p.files.Entry(path)
+		return err == nil && listed.file
 	}
 	return false
 }
 
-// named reports whether the folder lists the existing entry at path under
-// the path's own name, compared case-insensitively. Windows also opens a
-// file through its 8.3 short name, so PHOTOG~1.png can reach photograph.png;
-// such a path, or one whose entry cannot be listed, is not the entry's name.
-func (p *planner) named(path string) bool {
-	listed, err := p.files.EntryName(path)
-	return err == nil && PathKey(listed) == PathKey(filepath.Base(path))
+// ownFile reports whether the existing entry at path, of the given type, is
+// a file, as file decides, that its folder lists under the path's own name,
+// compared case-insensitively: the only entry Overwrite replaces. One
+// listing of the entry answers both. Windows also opens a file through its
+// 8.3 short name, so PHOTOG~1.png can reach photograph.png; such a path, or
+// one whose entry cannot be listed, does not name the entry.
+func (p *planner) ownFile(path string, mode fs.FileMode) bool {
+	if kind := mode.Type(); kind != 0 && kind != fs.ModeIrregular {
+		return false
+	}
+	listed, err := p.files.Entry(path)
+	return err == nil && listed.file && PathKey(listed.name) == PathKey(filepath.Base(path))
 }
 
 // replaceable decides whether an Overwrite job may replace the existing file

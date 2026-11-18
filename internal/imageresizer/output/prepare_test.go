@@ -185,6 +185,36 @@ func TestEncodedFormatAndExtension(t *testing.T) {
 	}
 }
 
+// TestValidateFolder: no folder name in an output folder's path may end in a
+// space or a period, which Windows removes, except in an extended-length
+// path, which Windows takes verbatim.
+func TestValidateFolder(t *testing.T) {
+	tests := []struct {
+		folder string
+		want   error
+	}{
+		{`C:\Art\Resized`, nil},
+		{`C:\Art\...name`, nil},
+		{`\\server\share\Resized`, nil},
+		{`C:\`, nil},
+		{`C:\Art.\Resized`, ErrFolderName},
+		{`C:\Art \Resized`, ErrFolderName},
+		{`C:/Art./Resized`, ErrFolderName},
+		{`C:\Art\Resized.`, ErrFolderName},
+		{`\\server\share\Art \Resized`, ErrFolderName},
+		{`\\.\C:\Art.\Resized`, ErrFolderName},
+		{`\\?\C:\Art.\Resized `, nil},
+		{`//?/C:/Art./Resized`, nil},
+		{`\??\C:\Art \Resized.`, nil},
+		{`\\?\UNC\server\share\Art.`, nil},
+	}
+	for _, test := range tests {
+		if err := ValidateFolder(test.folder); !errors.Is(err, test.want) || (err == nil) != (test.want == nil) {
+			t.Errorf("ValidateFolder(%q) = %v, want %v", test.folder, err, test.want)
+		}
+	}
+}
+
 func TestPathKey(t *testing.T) {
 	if PathKey(`C:\In\photo.PNG`) != PathKey(`c:\in\.\PHOTO.png`) {
 		t.Fatal("paths differing in letter case and a . element have different keys")
@@ -215,6 +245,24 @@ func TestPrepareKeepsApartNamesWithDifferentSurrogates(t *testing.T) {
 	plan := mustPrepare(t, jobRequest(t.TempDir(), CollisionSkip,
 		png(filepath.Join(t.TempDir(), high+".png")), png(filepath.Join(t.TempDir(), low+".png"))))
 	assertItems(t, plan, []expect{{high + ".png", ActionCreate, ReasonNone}, {low + ".png", ActionCreate, ReasonNone}})
+	materialize(t, plan, "result")
+}
+
+// TestPrepareNumbersNamesWithDifferentSurrogatesApart: the Rename search for
+// a name resumes past the numbers an earlier item with the same name passed
+// over, and two names that differ only in unpaired surrogates are not the
+// same name, so each takes its own first unused number.
+func TestPrepareNumbersNamesWithDifferentSurrogatesApart(t *testing.T) {
+	high, low := "\xed\xa0\x80", "\xed\xb0\x80"
+	out := t.TempDir()
+	// Both sources lie in the output folder, so neither result may take its
+	// natural name.
+	plan := mustPrepare(t, jobRequest(out, CollisionRename,
+		png(filepath.Join(out, "x"+high+".png")), png(filepath.Join(out, "x"+low+".png"))))
+	assertItems(t, plan, []expect{
+		{"x" + high + "_2.png", ActionCreate, ReasonSource},
+		{"x" + low + "_2.png", ActionCreate, ReasonSource},
+	})
 	materialize(t, plan, "result")
 }
 
@@ -313,6 +361,11 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		{name: "folder ending in a space", mutate: func(r *Request) { r.Folder += " " }, want: ErrFolderName},
 		{name: "folder ending in a period", mutate: func(r *Request) { r.Folder += "." }, want: ErrFolderName},
 		{name: "folder ending in periods and a separator", mutate: func(r *Request) { r.Folder += `..\` }, want: ErrFolderName},
+		// Creating a missing folder with such a name on the way would leave
+		// a stray folder the rest of the path never reaches.
+		{name: "parent ending in a space", mutate: func(r *Request) {
+			r.Folder = filepath.Join(filepath.Dir(r.Folder), "sub ", "out")
+		}, want: ErrFolderName},
 		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
 		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
 		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
@@ -382,11 +435,11 @@ func TestPrepareRequiresOverwriteConfirmation(t *testing.T) {
 // faultyFiles wraps the real filesystem with injectable failures.
 type faultyFiles struct {
 	osFiles
-	mkdirAll   func(path string) error
-	stat       func(path string) (fs.FileInfo, error)
-	lstat      func(path string) (fs.FileInfo, error)
-	identity   func(path string) (fileID, uint32, error)
-	storedFile func(path string) (bool, error)
+	mkdirAll func(path string) error
+	stat     func(path string) (fs.FileInfo, error)
+	lstat    func(path string) (fs.FileInfo, error)
+	identity func(path string) (fileID, uint32, error)
+	entry    func(path string) (entry, error)
 }
 
 func (f faultyFiles) MkdirAll(path string) error {
@@ -417,11 +470,11 @@ func (f faultyFiles) Identity(path string) (fileID, uint32, error) {
 	return f.osFiles.Identity(path)
 }
 
-func (f faultyFiles) StoredFile(path string) (bool, error) {
-	if f.storedFile != nil {
-		return f.storedFile(path)
+func (f faultyFiles) Entry(path string) (entry, error) {
+	if f.entry != nil {
+		return f.entry(path)
 	}
-	return f.osFiles.StoredFile(path)
+	return f.osFiles.Entry(path)
 }
 
 // fakeInfo describes a file that exists only in a test.
@@ -458,10 +511,27 @@ func TestPrepareReportsUnusableFolders(t *testing.T) {
 	t.Run("blocked parent", func(t *testing.T) {
 		blocker := filepath.Join(t.TempDir(), "not-a-folder")
 		writeFile(t, blocker, "file")
-		_, err := Prepare(context.Background(), jobRequest(filepath.Join(blocker, "out"), CollisionRename, source))
+		for _, folder := range []string{filepath.Join(blocker, "out"), filepath.Join(blocker, "a", "b", "out")} {
+			_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, source))
+			assertKind(t, err, KindFolder)
+			if !errors.Is(err, ErrNotFolder) {
+				t.Fatalf("%s: error = %v, want ErrNotFolder", folder, err)
+			}
+		}
+	})
+
+	// On Windows the ENOTDIR os.MkdirAll reports for a file in the way is
+	// ERROR_PATH_NOT_FOUND, which a missing drive, share, or folder reports
+	// too, so only a file found on the folder's path is in the way.
+	t.Run("path not found", func(t *testing.T) {
+		files := faultyFiles{mkdirAll: func(path string) error {
+			return &fs.PathError{Op: "mkdir", Path: path, Err: windows.ERROR_PATH_NOT_FOUND}
+		}}
+		folder := filepath.Join(t.TempDir(), "gone", "out")
+		_, err := prepare(context.Background(), jobRequest(folder, CollisionRename, source), files)
 		assertKind(t, err, KindFolder)
-		if !errors.Is(err, ErrNotFolder) {
-			t.Fatalf("error = %v, want ErrNotFolder", err)
+		if errors.Is(err, ErrNotFolder) {
+			t.Fatalf("a path that cannot be found is reported as a file in the way: %v", err)
 		}
 	})
 
@@ -667,7 +737,9 @@ func TestPrepareExistingDestinations(t *testing.T) {
 // file with a reparse point other than a symbolic link, such as every file
 // OneDrive keeps in sync, as irregular. Such a file is still a file that a
 // confirmed Overwrite replaces; an irregular entry that is a link, a
-// folder, or cannot be inspected is not.
+// folder, or cannot be listed is not. One listing of the entry tells both
+// whether it is a file and whether its folder lists it under the
+// destination's own name.
 func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 	irregular := func(mode fs.FileMode) func(string) (fs.FileInfo, error) {
 		return func(path string) (fs.FileInfo, error) {
@@ -678,55 +750,61 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 			return fakeInfo{name: info.Name(), mode: mode}, nil
 		}
 	}
+	renamed := map[Collision]expect{
+		CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+		CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+		CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
+	}
+	replaced := map[Collision]expect{
+		CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+		CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+		CollisionOverwrite: {"x.png", ActionReplace, ReasonNone},
+	}
 	tests := []struct {
 		name   string
 		mode   fs.FileMode
-		stored func(string) (bool, error)
+		listed func(string) (entry, error)
 		want   map[Collision]expect
 	}{
 		{
 			name:   "placeholder",
 			mode:   fs.ModeIrregular,
-			stored: func(string) (bool, error) { return true, nil },
-			want: map[Collision]expect{
-				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
-				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
-				CollisionOverwrite: {"x.png", ActionReplace, ReasonNone},
-			},
+			listed: func(string) (entry, error) { return entry{name: "x.png", file: true}, nil },
+			want:   replaced,
+		},
+		{
+			name:   "regular file listed in another letter case",
+			mode:   0,
+			listed: func(string) (entry, error) { return entry{name: "X.PNG", file: true}, nil },
+			want:   replaced,
 		},
 		{
 			name:   "link",
 			mode:   fs.ModeIrregular,
-			stored: func(string) (bool, error) { return false, nil },
-			want: map[Collision]expect{
-				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
-				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
-				CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
-			},
+			listed: func(string) (entry, error) { return entry{name: "x.png"}, nil },
+			want:   renamed,
 		},
 		{
-			name: "uninspectable",
+			name:   "file listed under another name",
+			mode:   fs.ModeIrregular,
+			listed: func(string) (entry, error) { return entry{name: "x-long-name.png", file: true}, nil },
+			want:   renamed,
+		},
+		{
+			name: "unlistable",
 			mode: fs.ModeIrregular,
-			stored: func(path string) (bool, error) {
-				return false, &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+			listed: func(path string) (entry, error) {
+				return entry{}, &fs.PathError{Op: "find", Path: path, Err: fs.ErrPermission}
 			},
-			want: map[Collision]expect{
-				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
-				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
-				CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
-			},
+			want: renamed,
 		},
 		{
 			name: "irregular folder",
 			mode: fs.ModeIrregular | fs.ModeDir,
-			stored: func(string) (bool, error) {
-				return true, errors.New("a folder must not be inspected as a stored file")
+			listed: func(string) (entry, error) {
+				return entry{name: "x.png", file: true}, errors.New("a folder must not be listed as a possible file")
 			},
-			want: map[Collision]expect{
-				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
-				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
-				CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
-			},
+			want: renamed,
 		},
 	}
 	for _, test := range tests {
@@ -743,9 +821,9 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 						}
 						return os.Lstat(path)
 					},
-					storedFile: func(path string) (bool, error) {
+					entry: func(path string) (entry, error) {
 						inspections++
-						return test.stored(path)
+						return test.listed(path)
 					},
 				}
 				plan, err := prepare(context.Background(), jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))), files)
@@ -753,14 +831,14 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 					t.Fatalf("%s: prepare: %v", policy, err)
 				}
 				assertItems(t, plan, []expect{test.want[policy]})
-				// Only Overwrite replaces, so only it asks how an irregular
-				// file is stored, and never for a folder.
+				// Only Overwrite replaces, so only it lists the entry, once,
+				// and never for a folder.
 				want := 0
 				if policy == CollisionOverwrite && !test.mode.IsDir() {
 					want = 1
 				}
 				if inspections != want {
-					t.Fatalf("%s inspected the reparse point %d times, want %d", policy, inspections, want)
+					t.Fatalf("%s listed the entry %d times, want %d", policy, inspections, want)
 				}
 			}
 		})

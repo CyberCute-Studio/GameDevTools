@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -26,11 +25,6 @@ type fileID struct {
 	volume uint32
 	index  uint64
 }
-
-// longPathLimit is the path length from which Windows path functions need
-// the extended-length prefix. It matches the os package, which leaves room
-// for an 8.3 name below MAX_PATH.
-const longPathLimit = 248
 
 // shareAll lets every other open of a file proceed while planning holds a
 // handle to it.
@@ -72,48 +66,31 @@ func fileMissing(err error) bool {
 // symbolic link.
 const reparseTagNameSurrogate = 0x20000000
 
-// fileAttributeTagInfo is FILE_ATTRIBUTE_TAG_INFO.
-type fileAttributeTagInfo struct {
-	FileAttributes uint32
-	ReparseTag     uint32
-}
-
-// storedFile reports whether the path names a file, not a folder, whose
-// reparse point is no link but only says how its data is stored, such as a
-// placeholder OneDrive keeps in sync. It inspects the entry itself rather
-// than what its reparse point leads to, and requests no access to its
-// contents, so it never makes OneDrive download a file.
-func storedFile(path string) (bool, error) {
-	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT)
-	if err != nil {
-		return false, err
-	}
-	defer windows.CloseHandle(handle)
-	var information fileAttributeTagInfo
-	if err := windows.GetFileInformationByHandleEx(handle, windows.FileAttributeTagInfo,
-		(*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information))); err != nil {
-		return false, &fs.PathError{Op: "read reparse tag", Path: path, Err: err}
-	}
-	return information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 &&
-		information.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 &&
-		information.ReparseTag&reparseTagNameSurrogate == 0, nil
-}
-
-// entryName returns the name under which the folder lists the entry the
-// path's last element opens: its long name, even when the element is its
-// 8.3 short name. It lists the entry itself, not what a link leads to.
-func entryName(path string) (string, error) {
+// findEntry lists the entry the path's last element opens: its long name,
+// even when the element is its 8.3 short name, and whether it is a file,
+// neither a folder nor a link. A file's reparse point that is no link, such
+// as a OneDrive placeholder's, only says how its data is stored. It lists
+// the entry itself, not what a link leads to, and opens nothing, so it never
+// makes OneDrive download a file.
+func findEntry(path string) (entry, error) {
 	name, err := windows.UTF16PtrFromString(extendedPath(path))
 	if err != nil {
-		return "", &fs.PathError{Op: "find", Path: path, Err: err}
+		return entry{}, &fs.PathError{Op: "find", Path: path, Err: err}
 	}
 	var data windows.Win32finddata
 	handle, err := windows.FindFirstFile(name, &data)
 	if err != nil {
-		return "", &fs.PathError{Op: "find", Path: path, Err: err}
+		return entry{}, &fs.PathError{Op: "find", Path: path, Err: err}
 	}
 	windows.FindClose(handle)
-	return windows.UTF16ToString(data.FileName[:]), nil
+	// FindFirstFile reports the reparse tag of a reparse point in
+	// dwReserved0.
+	link := data.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 &&
+		data.Reserved0&reparseTagNameSurrogate != 0
+	return entry{
+		name: windows.UTF16ToString(data.FileName[:]),
+		file: data.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 && !link,
+	}, nil
 }
 
 // open opens the path without requesting access to its contents.
@@ -129,27 +106,30 @@ func open(path string, flags uint32) (windows.Handle, error) {
 	return handle, nil
 }
 
-// extendedPath gives a long absolute path the extended-length prefix the
-// way the os package does, so identities are read for the files os.Lstat
-// and the decoder reach. Like os, it resolves the path with GetFullPathName
-// before adding the prefix, which drops trailing spaces and dots from the
-// last name and resolves forward slashes, ".", and ".." as Windows does for
-// a short path, and it leaves alone a path already marked extended with any
-// separators. The planner passes only absolute paths.
+// extendedPath resolves an absolute path with GetFullPathName, which drops
+// trailing spaces and periods from the last name and resolves forward
+// slashes, ".", and ".." exactly as Windows does for any path it is not told
+// to take verbatim, and marks the result extended-length, so a path of any
+// length names the file Windows itself opens for it. os.Lstat and the
+// decoder reach that same file, whether the os package passes the path on
+// as it is or resolves and marks it the same way, so identities are read
+// for the files they reach. A path already marked extended, with any
+// separators, is taken verbatim and left alone. The planner passes only
+// absolute paths.
 func extendedPath(path string) string {
 	if len(path) >= 4 && (path[:4] == `\??\` ||
 		os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) && path[2] == '?' && os.IsPathSeparator(path[3])) {
 		return path
 	}
-	if len(path) < longPathLimit || !filepath.IsAbs(path) {
+	if !filepath.IsAbs(path) {
 		return path
 	}
 	full, err := windows.FullPath(path)
-	if err != nil {
+	switch {
+	case err != nil:
 		return path
-	}
-	if os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) {
-		if path[2] == '.' && os.IsPathSeparator(path[3]) {
+	case len(full) >= 2 && os.IsPathSeparator(full[0]) && os.IsPathSeparator(full[1]):
+		if len(full) >= 4 && full[2] == '.' && os.IsPathSeparator(full[3]) {
 			// A device path would change its meaning with the prefix.
 			return full
 		}

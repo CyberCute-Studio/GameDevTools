@@ -155,25 +155,30 @@ func TestIdentifyReadsLongPaths(t *testing.T) {
 	}
 }
 
-// TestIdentifyResolvesLongPathsAsTheOSPackageDoes: a long path reaches the
-// file os.Lstat and the decoder reach, even when Windows drops a trailing
-// space or dot from its last name or the path is marked extended with
-// forward slashes. A source listed that way is therefore still recognized
-// by its identity, and a confirmed Overwrite never replaces it.
-func TestIdentifyResolvesLongPathsAsTheOSPackageDoes(t *testing.T) {
+// TestIdentifyResolvesPathsAsTheOSPackageDoes: a short or long path reaches
+// the file os.Lstat and the decoder reach, even when Windows drops a
+// trailing space or dot from its last name, the path uses forward slashes,
+// or it is marked extended with forward slashes. A source listed that way is
+// therefore still recognized by its identity, and a confirmed Overwrite
+// never replaces it.
+func TestIdentifyResolvesPathsAsTheOSPackageDoes(t *testing.T) {
+	short := filepath.Join(t.TempDir(), "shallow.png")
+	writeFile(t, short, "pixels")
 	folder := t.TempDir()
 	for len(folder) < 300 {
 		folder = filepath.Join(folder, strings.Repeat("d", 40))
 	}
 	path := filepath.Join(folder, "deep.png")
 	writeFile(t, path, "pixels")
-	want := mustIdentify(t, path)
-	for _, alias := range []string{path + " ", path + ".", `//?/` + filepath.ToSlash(path)} {
-		if _, err := os.Lstat(alias); err != nil {
-			t.Fatalf("os.Lstat(%q): %v", alias, err)
-		}
-		if got := mustIdentify(t, alias); got != want {
-			t.Errorf("identify(%q) = %+v, want %+v", alias, got, want)
+	for _, file := range []string{short, path} {
+		want := mustIdentify(t, file)
+		for _, alias := range []string{file + " ", file + ".", filepath.ToSlash(file), `//?/` + filepath.ToSlash(file)} {
+			if _, err := os.Lstat(alias); err != nil {
+				t.Fatalf("os.Lstat(%q): %v", alias, err)
+			}
+			if got := mustIdentify(t, alias); got != want {
+				t.Errorf("identify(%q) = %+v, want %+v", alias, got, want)
+			}
 		}
 	}
 
@@ -191,7 +196,15 @@ func TestExtendedPath(t *testing.T) {
 	long := `C:\` + strings.Repeat(`folder\`, 40) + "x.png"
 	share := `\\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"
 	tests := []struct{ path, want string }{
-		{`C:\short\x.png`, `C:\short\x.png`},
+		// Every absolute path is resolved and marked, whatever its length,
+		// so no threshold of the os package's decides how it is read.
+		{`C:\short\x.png`, `\\?\C:\short\x.png`},
+		{`C:\short\x.png .`, `\\?\C:\short\x.png`},
+		{`C:/short/./x.png`, `\\?\C:\short\x.png`},
+		{`C:\`, `\\?\C:\`},
+		{`\\server\share\x.png`, `\\?\UNC\server\share\x.png`},
+		{`\\.\C:\x.png`, `\\.\C:\x.png`},
+		{`short\x.png`, `short\x.png`},
 		{long, `\\?\` + long},
 		{share, `\\?\UNC\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"},
 		{`\\?\` + long, `\\?\` + long},
@@ -211,32 +224,45 @@ func TestExtendedPath(t *testing.T) {
 	}
 }
 
-// TestStoredFile: only a file whose reparse point is no link counts as a
-// stored file; a junction, a folder, and a plain file do not.
-func TestStoredFile(t *testing.T) {
+// TestFindEntry: the folder lists a plain file, and a file whose reparse
+// point is no link, as files, and a folder or a junction as neither, each
+// under its own name, even when the path reaches it through its 8.3 short
+// name or a long path.
+func TestFindEntry(t *testing.T) {
 	folder := t.TempDir()
-	plain := filepath.Join(folder, "plain.png")
-	writeFile(t, plain, "pixels")
-	if stored, err := storedFile(plain); err != nil || stored {
-		t.Fatalf("storedFile(plain file) = %v, %v", stored, err)
-	}
-	if stored, err := storedFile(folder); err != nil || stored {
-		t.Fatalf("storedFile(folder) = %v, %v", stored, err)
-	}
-	if linked := filepath.Join(t.TempDir(), "junction"); junction(t, linked, folder) {
-		if stored, err := storedFile(linked); err != nil || stored {
-			t.Fatalf("storedFile(junction) = %v, %v", stored, err)
+	assertEntry := func(path string, want entry) {
+		t.Helper()
+		if got, err := findEntry(path); err != nil || got != want {
+			t.Fatalf("findEntry(%s) = %+v, %v, want %+v", path, got, err, want)
 		}
 	}
-	if _, err := storedFile(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("storedFile(missing) = %v, want a not-exist error", err)
+	plain := filepath.Join(folder, "Plain photograph.png")
+	writeFile(t, plain, "pixels")
+	assertEntry(plain, entry{name: "Plain photograph.png", file: true})
+	assertEntry(strings.ToUpper(plain), entry{name: "Plain photograph.png", file: true})
+	if short, err := shortName(plain); err == nil && !strings.EqualFold(filepath.Base(short), filepath.Base(plain)) {
+		assertEntry(short, entry{name: "Plain photograph.png", file: true})
 	}
+	assertEntry(folder, entry{name: filepath.Base(folder)})
+	if linked := filepath.Join(t.TempDir(), "junction"); junction(t, linked, folder) {
+		assertEntry(linked, entry{name: "junction"})
+	}
+	if _, err := findEntry(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("findEntry(missing) = %v, want a not-exist error", err)
+	}
+
+	deep := folder
+	for len(deep) < 300 {
+		deep = filepath.Join(deep, strings.Repeat("d", 40))
+	}
+	long := filepath.Join(deep, "deep.png")
+	writeFile(t, long, "pixels")
+	assertEntry(long, entry{name: "deep.png", file: true})
+
 	marked := filepath.Join(folder, "marked.png")
 	writeFile(t, marked, "pixels")
 	dataReparsePoint(t, marked)
-	if stored, err := storedFile(marked); err != nil || !stored {
-		t.Fatalf("storedFile(file with a data reparse point) = %v, %v", stored, err)
-	}
+	assertEntry(marked, entry{name: "marked.png", file: true})
 }
 
 // TestPrepareClassifiesReparsePointsAtDestinations: a junction with a
@@ -734,7 +760,9 @@ func setDACL(t *testing.T, path, sddl string) {
 }
 
 // TestPrepareReportsInvalidFolderPaths pins RSZ-030 for paths Windows
-// refuses: reserved characters and a drive that does not exist.
+// refuses: reserved characters and a drive that does not exist. Neither is a
+// file in the way, though Windows reports a missing drive with the error
+// code os.MkdirAll also returns for one.
 func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
 	source := png(filepath.Join(t.TempDir(), "x.png"))
 	folders := []string{filepath.Join(t.TempDir(), `bad<name>`)}
@@ -744,5 +772,55 @@ func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
 	for _, folder := range folders {
 		_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, source))
 		assertKind(t, err, KindFolder)
+		if errors.Is(err, ErrNotFolder) {
+			t.Errorf("%s: error = %v, reported as a file in the way", folder, err)
+		}
+	}
+}
+
+// TestPrepareRefusesFolderNamesWindowsChanges: Windows drops a trailing
+// space or period from a folder it creates, but not always from a path that
+// leads through it, so a missing folder with such a name on the way to the
+// output folder is refused before anything is created, rather than left
+// behind as a stray folder under the shortened name.
+func TestPrepareRefusesFolderNamesWindowsChanges(t *testing.T) {
+	source := png(filepath.Join(t.TempDir(), "x.png"))
+	for _, name := range []string{"sub ", "sub.", "sub..", "sub. ", "sub ."} {
+		parent := t.TempDir()
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, name, "Resized"), CollisionRename, source))
+		assertKind(t, err, KindValidation)
+		if !errors.Is(err, ErrFolderName) {
+			t.Fatalf("%q: error = %v, want ErrFolderName", name, err)
+		}
+		if entries, err := os.ReadDir(parent); err != nil || len(entries) != 0 {
+			t.Fatalf("%q: the parent holds %v (%v) after a refused request", name, entries, err)
+		}
+	}
+}
+
+// TestPrepareTakesExtendedLengthFoldersVerbatim: Windows changes no name in
+// an extended-length path, so an output folder whose name ends in a period
+// is created and planned into under exactly that name.
+func TestPrepareTakesExtendedLengthFoldersVerbatim(t *testing.T) {
+	parent := t.TempDir()
+	out := `\\?\` + filepath.Join(parent, "out.")
+	// os.RemoveAll cannot remove a folder named out. through the temporary
+	// folder's ordinary path, so the test removes it, after its files.
+	t.Cleanup(func() {
+		entries, _ := os.ReadDir(out)
+		for _, file := range entries {
+			os.Remove(filepath.Join(out, file.Name()))
+		}
+		os.Remove(out)
+	})
+	plan := mustPrepare(t, jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+	if plan.Folder != out {
+		t.Fatalf("Folder = %q, want %q", plan.Folder, out)
+	}
+	assertItems(t, plan, []expect{{"x.png", ActionCreate, ReasonNone}})
+	materialize(t, plan, "result")
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "out." || !entries[0].IsDir() {
+		t.Fatalf("the parent holds %v (%v), want only the folder out.", entries, err)
 	}
 }

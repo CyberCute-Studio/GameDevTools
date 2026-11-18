@@ -91,7 +91,7 @@ const (
 	OutputFolderRequired    = "An output folder is required. Choose a folder with Browse."
 	OutputFolderInvalid     = "The output folder contains characters that are not valid text. Choose the folder again."
 	OutputFolderNotAbsolute = "The output folder must be an absolute local path. Choose the folder again."
-	OutputFolderNameInvalid = "The output folder's name ends in a space or a period, which Windows removes from folder names. Choose another folder."
+	OutputFolderNameInvalid = "A folder name in the output folder's path ends in a space or a period, which Windows removes from folder names. Choose another folder."
 
 	CaptureModeSelected    = "Capture mode is now %s."
 	OutputFormatSelected   = "Screenshots are saved as %s."

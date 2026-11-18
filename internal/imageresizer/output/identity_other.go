@@ -5,6 +5,7 @@ package output
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 )
 
@@ -27,14 +28,14 @@ func fileMissing(err error) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
-// storedFile reports no irregular entry as a file outside Windows, so such
-// an entry is never replaced.
-func storedFile(string) (bool, error) {
-	return false, nil
-}
-
-// entryName returns the path's last element outside Windows, which has no
-// second names such as 8.3 short names.
-func entryName(path string) (string, error) {
-	return filepath.Base(path), nil
+// findEntry describes the entry at path outside Windows, which has no second
+// names such as 8.3 short names, so its name is the path's last element, and
+// where only a regular file is a file, so an irregular entry is never
+// replaced.
+func findEntry(path string) (entry, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return entry{}, err
+	}
+	return entry{name: filepath.Base(path), file: info.Mode().IsRegular()}, nil
 }
