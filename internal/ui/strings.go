@@ -161,8 +161,8 @@ const (
 	ResizeBackgroundInvalid = "Enter a background color as # followed by six hexadecimal digits, such as #FFFFFF."
 
 	ResizeCollisionRenameDescription    = "Rename (default): the new file is saved as name_2, name_3, and so on until an unused name is found. Existing files stay untouched."
-	ResizeCollisionSkipDescription      = "Skip: the item is marked Skipped and the existing file stays untouched."
-	ResizeCollisionOverwriteDescription = "Overwrite: existing output files are replaced, but only after you confirm when the job starts. Source images are never overwritten."
+	ResizeCollisionSkipDescription      = "Skip: the item is marked Skipped and the existing file stays untouched, as does a source image with that name. When two images in the job would produce the same file name, only the first is saved."
+	ResizeCollisionOverwriteDescription = "Overwrite: an existing file with the output's name is replaced, but only after you confirm when the job starts. Source images are never overwritten: an output that would replace a source image, or another output of the same job, is saved as name_2, name_3, and so on instead."
 
 	ResizeFormatSelected     = "Resized images are saved as %s."
 	ResizeFormatKeepSelected = "Resized images keep their source format."
