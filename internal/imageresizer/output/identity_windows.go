@@ -99,6 +99,23 @@ func storedFile(path string) (bool, error) {
 		information.ReparseTag&reparseTagNameSurrogate == 0, nil
 }
 
+// entryName returns the name under which the folder lists the entry the
+// path's last element opens: its long name, even when the element is its
+// 8.3 short name. It lists the entry itself, not what a link leads to.
+func entryName(path string) (string, error) {
+	name, err := windows.UTF16PtrFromString(extendedPath(path))
+	if err != nil {
+		return "", &fs.PathError{Op: "find", Path: path, Err: err}
+	}
+	var data windows.Win32finddata
+	handle, err := windows.FindFirstFile(name, &data)
+	if err != nil {
+		return "", &fs.PathError{Op: "find", Path: path, Err: err}
+	}
+	windows.FindClose(handle)
+	return windows.UTF16ToString(data.FileName[:]), nil
+}
+
 // open opens the path without requesting access to its contents.
 func open(path string, flags uint32) (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(extendedPath(path))

@@ -30,8 +30,10 @@
 // result instead, and Skip skips it. Overwrite replaces an existing file
 // only when it can prove the file is none of the sources; when the file's
 // identity cannot be read, or a listed file's cannot and the file may be
-// that one, the result is renamed rather than risk a source. Rename and Skip
-// never replace anything, so they do not read identities.
+// that one, the result is renamed rather than risk a source. It replaces
+// only a file its folder lists under the destination's own name, never one
+// the name reaches as an 8.3 short name. Rename and Skip never replace
+// anything, so they do not read identities.
 //
 // Prepare validates the request, creates the output folder when it does not
 // exist (RSZ-030), and inspects the destinations as the filesystem stands
@@ -63,6 +65,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -195,23 +198,31 @@ var (
 	// accept.
 	ErrNameTooLong = fmt.Errorf("the output file name would be longer than %d characters", maxNameLength)
 	// ErrNoUnusedName is the cause of the KindDestination error attached to
-	// an item for which the Rename search found no unused name.
-	ErrNoUnusedName = fmt.Errorf("no unused output file name was found after %d attempts", maxSuffix-1)
+	// an item for which the Rename search found no unused name: every
+	// numbered name it may take was already used, by this item's search or
+	// an earlier one with the same name.
+	ErrNoUnusedName = fmt.Errorf("no unused output file name was found among the numbered names _2 to _%d", maxSuffix)
 
-	// ErrFolderEmpty, ErrFolderText, and ErrFolderNotAbsolute are the causes
-	// ValidateFolder reports.
+	// ErrFolderEmpty, ErrFolderText, ErrFolderNotAbsolute, and ErrFolderName
+	// are the causes ValidateFolder reports.
 	ErrFolderEmpty       = errors.New("the output folder is empty")
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
+	ErrFolderName        = errors.New("the folder's name ends in a space or a period, which Windows removes")
 )
 
 // ValidateFolder checks an output folder path the way the persisted options
-// and Prepare both require: it is not empty, is valid text, and is absolute.
+// and Prepare both require: it is not empty, is valid text, is absolute, and
+// the folder's own name does not end in a space or a period.
+//
 // A path that is not valid UTF-8, as Go holds a Windows name with an
 // unpaired surrogate, cannot be kept in the settings file, whose JSON
 // replaces such bytes with U+FFFD, and a U+FFFD replacement character marks
 // a path such a lossy conversion changed; either may name another folder
-// than the one chosen.
+// than the one chosen. Windows removes trailing spaces and periods from the
+// last name of a path it creates or opens, but not from a name a longer path
+// leads through, so for such a folder the folder Prepare creates and checks
+// would not be the folder its destinations lie in.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -221,15 +232,39 @@ func ValidateFolder(folder string) error {
 	case !filepath.IsAbs(folder):
 		return ErrFolderNotAbsolute
 	}
+	clean := filepath.Clean(folder)
+	name := clean[len(filepath.VolumeName(clean)):]
+	name = name[strings.LastIndexAny(name, `\/`)+1:]
+	if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
+		return ErrFolderName
+	}
 	return nil
 }
 
 // PathKey normalizes a full path for comparison. Windows paths compare
 // case-insensitively, so "photo.PNG" and "PHOTO.png" name the same file.
 // The source inventory deduplicates sources by it, and output planning
-// compares destinations with sources and with each other by it.
+// compares destinations with sources and with each other by it. Bytes that
+// are not valid UTF-8, such as the WTF-8 Go holds an unpaired surrogate in,
+// are kept as they are, so two names that differ only in them keep distinct
+// keys rather than both becoming U+FFFD.
 func PathKey(path string) string {
-	return strings.ToUpper(filepath.Clean(path))
+	clean := filepath.Clean(path)
+	if utf8.ValidString(clean) {
+		return strings.ToUpper(clean)
+	}
+	var key strings.Builder
+	key.Grow(len(clean))
+	for rest := clean; rest != ""; {
+		character, size := utf8.DecodeRuneInString(rest)
+		if character == utf8.RuneError && size == 1 {
+			key.WriteByte(rest[0])
+		} else {
+			key.WriteRune(unicode.ToUpper(character))
+		}
+		rest = rest[size:]
+	}
+	return key.String()
 }
 
 // Source is one processable source of a job: a file whose content was
@@ -431,10 +466,10 @@ func successors(items []Item) []int {
 	return links
 }
 
-// OutputFormat is the format a source is encoded in under the job's output
+// EncodedFormat is the format a source is encoded in under the job's output
 // format option: the source's own content format for Keep Source Format,
 // otherwise the chosen format (RSZ-022).
-func OutputFormat(option Format, content decode.Format) decode.Format {
+func EncodedFormat(option Format, content decode.Format) decode.Format {
 	switch option {
 	case FormatPNG:
 		return decode.FormatPNG
@@ -573,6 +608,10 @@ type fileSystem interface {
 	// file whose reparse point only says how its data is stored, rather
 	// than a link or a folder.
 	StoredFile(path string) (bool, error)
+	// EntryName returns the name under which the folder lists the entry the
+	// path's last element opens. It differs from that element when the
+	// element is another name for the entry, such as its 8.3 short name.
+	EntryName(path string) (string, error)
 }
 
 type osFiles struct{}
@@ -582,6 +621,7 @@ func (osFiles) Stat(path string) (fs.FileInfo, error)        { return os.Stat(pa
 func (osFiles) Lstat(path string) (fs.FileInfo, error)       { return os.Lstat(path) }
 func (osFiles) Identity(path string) (fileID, uint32, error) { return identify(path) }
 func (osFiles) StoredFile(path string) (bool, error)         { return storedFile(path) }
+func (osFiles) EntryName(path string) (string, error)        { return entryName(path) }
 
 // probe is the cached result of inspecting one destination path: whether an
 // entry has its name, and that entry's type.
@@ -596,7 +636,7 @@ type verdict struct {
 	// reason is ReasonNone when the file may be replaced, otherwise why it
 	// may not: ReasonSource, ReasonUnverified, or ReasonDuplicate.
 	reason Reason
-	// id is the file's identity, when it could be read.
+	// id is the identity of a file that may be replaced, for ReasonNone.
 	id fileID
 	// owner is the index of the item that already replaces the file, for
 	// ReasonDuplicate, and otherwise -1.
@@ -705,7 +745,7 @@ func (p *planner) plan() ([]Item, error) {
 		if err := p.ctx.Err(); err != nil {
 			return nil, kindError(KindCanceled, "plan outputs", err)
 		}
-		format := OutputFormat(p.format, source.Format)
+		format := EncodedFormat(p.format, source.Format)
 		item := Item{
 			Source:      source.Path,
 			Format:      format,
@@ -767,10 +807,13 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		p.claimed[key] = index
 		item.Action = ActionCreate
 		return true, nil
-	case p.collision != CollisionOverwrite, !p.file(item.Destination, found.mode):
+	case p.collision != CollisionOverwrite, !p.file(item.Destination, found.mode), !p.named(item.Destination):
 		// Rename and Skip never replace a file, so whether an existing file
-		// is a source under another name changes nothing they do, and no
-		// policy replaces a folder or a link.
+		// is a source under another name changes nothing they do; no policy
+		// replaces a folder or a link; and a file the destination name only
+		// reaches, as an 8.3 short name reaches a file with another long
+		// name, is not the file with the output's name that Overwrite
+		// replaces.
 		item.Reason = ReasonExists
 		return false, nil
 	}
@@ -836,7 +879,9 @@ func (p *planner) resolve(index int, item *Item) error {
 			unchecked++
 			if unchecked&(unchecked-1) == 0 {
 				if _, err := p.files.Stat(p.folder); err != nil {
-					p.fail(item, "check destination", found.err)
+					// The folder is what stops the search, so its failure,
+					// not the name's, is the reason the item fails.
+					p.fail(item, "open output folder", err)
 					return nil
 				}
 			}
@@ -905,6 +950,15 @@ func (p *planner) file(path string, mode fs.FileMode) bool {
 	return false
 }
 
+// named reports whether the folder lists the existing entry at path under
+// the path's own name, compared case-insensitively. Windows also opens a
+// file through its 8.3 short name, so PHOTOG~1.png can reach photograph.png;
+// such a path, or one whose entry cannot be listed, is not the entry's name.
+func (p *planner) named(path string) bool {
+	listed, err := p.files.EntryName(path)
+	return err == nil && PathKey(listed) == PathKey(filepath.Base(path))
+}
+
 // replaceable decides whether an Overwrite job may replace the existing file
 // at a natural destination: only when its identity proves it is none of the
 // sources and no earlier item replaces it. Only a context error is returned.
@@ -913,21 +967,20 @@ func (p *planner) replaceable(key, path string) (verdict, error) {
 	if found.err != nil {
 		return verdict{reason: ReasonUnverified, owner: -1}, nil
 	}
-	id := found.id
-	source, err := p.isSource(id)
+	source, err := p.isSource(found.id)
 	if err != nil {
 		return verdict{}, err
 	}
 	if source {
-		return verdict{reason: ReasonSource, id: id, owner: -1}, nil
+		return verdict{reason: ReasonSource, owner: -1}, nil
 	}
 	if p.mayBeUnverified(found.links) {
-		return verdict{reason: ReasonUnverified, id: id, owner: -1}, nil
+		return verdict{reason: ReasonUnverified, owner: -1}, nil
 	}
-	if owner, twice := p.replaced[id]; twice {
-		return verdict{reason: ReasonDuplicate, id: id, owner: owner}, nil
+	if owner, twice := p.replaced[found.id]; twice {
+		return verdict{reason: ReasonDuplicate, owner: owner}, nil
 	}
-	return verdict{id: id, owner: -1}, nil
+	return verdict{id: found.id, owner: -1}, nil
 }
 
 // identity reads the identity of the file or folder at a path, and its
@@ -943,7 +996,10 @@ func (p *planner) identity(key, path string) identified {
 }
 
 // isSource reports whether the identity belongs to one of the listed paths,
-// loading their identities on first use.
+// loading their identities on first use. Once a listed path that may be any
+// existing file is found, no existing file can be replaced, so the rest are
+// not opened: a file whose identity matches none loaded is renamed as
+// ReasonUnverified rather than ReasonSource, which renames it all the same.
 func (p *planner) isSource(id fileID) (bool, error) {
 	if !p.loaded {
 		for _, path := range p.listed {
@@ -961,6 +1017,9 @@ func (p *planner) isSource(id fileID) (bool, error) {
 			default:
 				p.unreadable(path)
 			}
+			if p.unverified {
+				break
+			}
 		}
 		p.loaded = true
 	}
@@ -974,9 +1033,6 @@ func (p *planner) isSource(id fileID) (bool, error) {
 // file has its name in that folder; otherwise, such as for a drive, share,
 // or link that can no longer be reached, the file may be any existing file.
 func (p *planner) unreadable(path string) {
-	if p.unverified {
-		return
-	}
 	info, err := p.files.Lstat(path)
 	if err != nil || !p.file(path, info.Mode()) {
 		p.unverified = true

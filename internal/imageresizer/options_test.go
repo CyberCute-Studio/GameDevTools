@@ -68,6 +68,8 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 		{name: "relative folder", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join("Resized", "out") }, wantErr: "absolute"},
 		{name: "folder with null character", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "\x00" }, wantErr: "not valid text"},
 		{name: "folder with replacement character", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "�" }, wantErr: "not valid text"},
+		{name: "folder ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + " " }, wantErr: "ends in a space or a period"},
+		{name: "folder ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "." }, wantErr: "ends in a space or a period"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

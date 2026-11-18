@@ -123,6 +123,8 @@ func validateOutputFolder(folder string) error {
 		return errors.New(ui.OutputFolderRequired)
 	case errors.Is(err, output.ErrFolderNotAbsolute):
 		return errors.New(ui.OutputFolderNotAbsolute)
+	case errors.Is(err, output.ErrFolderName):
+		return errors.New(ui.OutputFolderNameInvalid)
 	default:
 		return errors.New(ui.OutputFolderInvalid)
 	}

@@ -397,6 +397,37 @@ func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
 	})
 }
 
+// TestPrepareNeverReplacesAFileThroughItsShortName pins AC-R10 for 8.3
+// names: a natural destination that is only the short name of an existing
+// file with another long name, such as PHOTOG~1.png for photograph.png,
+// does not name that file, though Windows opens it through the short name,
+// so a confirmed Overwrite renames the result rather than replace a file the
+// job was never asked to replace. Rename and Skip treat it as any existing
+// file.
+func TestPrepareNeverReplacesAFileThroughItsShortName(t *testing.T) {
+	for _, policy := range policies {
+		out := t.TempDir()
+		existing := filepath.Join(out, "photograph.png")
+		writeFile(t, existing, "unlisted original")
+		short, err := shortName(existing)
+		if err != nil || strings.EqualFold(filepath.Base(short), filepath.Base(existing)) {
+			t.Skipf("the volume gives %s no short name (%q, %v)", existing, short, err)
+		}
+		alias := strings.TrimSuffix(filepath.Base(short), filepath.Ext(short))
+		want := map[Collision]expect{
+			CollisionRename:    {alias + "_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {alias + ".png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {alias + "_2.png", ActionCreate, ReasonExists},
+		}
+		plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), alias+".png"))))
+		assertItems(t, plan, []expect{want[policy]})
+		materialize(t, plan, "result")
+		if readFile(t, existing) != "unlisted original" {
+			t.Fatalf("%s replaced %s through its short name %s", policy, existing, alias+".png")
+		}
+	}
+}
+
 // TestPrepareRenamesWhenIdentityIsUnreadable: Overwrite replaces only a
 // file it can prove is not a source. When the destination's identity cannot
 // be read, the result is renamed instead, and the destination is read once
@@ -638,6 +669,36 @@ func TestPrepareReadsEachIdentityOnce(t *testing.T) {
 	assertItems(t, plan, []expect{{"x.png", ActionReplace, ReasonNone}})
 	if reads[PathKey(in)] != 1 || reads[PathKey(filepath.Join(out, "x.png"))] != 1 || reads[PathKey(out)] != 1 {
 		t.Fatalf("identity reads = %v, want one of each path", reads)
+	}
+}
+
+// TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced: a listed file
+// that cannot be located may be any existing file, so a confirmed Overwrite
+// renames whatever it finds, and the identities of the listed files after it
+// are not read: they could only change why a result is renamed.
+func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(out, "x.png"), "earlier")
+	request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "gone", "x.png")))
+	for _, name := range []string{"a.png", "b.png", "c.png"} {
+		path := filepath.Join(in, name)
+		writeFile(t, path, "listed")
+		request.Protected = append(request.Protected, path)
+	}
+	reads := 0
+	files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
+		if strings.EqualFold(filepath.Dir(path), in) {
+			reads++
+		}
+		return identify(path)
+	}}
+	plan, err := prepare(context.Background(), request, files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+	if reads != 0 {
+		t.Fatalf("read %d identities of listed files after one that cannot be located, want none", reads)
 	}
 }
 

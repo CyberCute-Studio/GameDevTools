@@ -157,7 +157,7 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-func TestOutputFormatAndExtension(t *testing.T) {
+func TestEncodedFormatAndExtension(t *testing.T) {
 	tests := []struct {
 		option  Format
 		content decode.Format
@@ -172,9 +172,9 @@ func TestOutputFormatAndExtension(t *testing.T) {
 		{FormatJPEG, decode.FormatJPEG, decode.FormatJPEG, ".jpg"},
 	}
 	for _, test := range tests {
-		got := OutputFormat(test.option, test.content)
+		got := EncodedFormat(test.option, test.content)
 		if got != test.want {
-			t.Errorf("OutputFormat(%q, %v) = %v, want %v", test.option, test.content, got, test.want)
+			t.Errorf("EncodedFormat(%q, %v) = %v, want %v", test.option, test.content, got, test.want)
 		}
 		if ext := Extension(got); ext != test.ext {
 			t.Errorf("Extension(%v) = %q, want %q", got, ext, test.ext)
@@ -192,6 +192,30 @@ func TestPathKey(t *testing.T) {
 	if PathKey(`C:\In\a.png`) == PathKey(`C:\In\b.png`) {
 		t.Fatal("two files share a key")
 	}
+	// Go holds a name with an unpaired surrogate, which NTFS accepts, in
+	// WTF-8. Two such names differ in bytes that are not valid UTF-8, which
+	// keep their keys apart while the letters around them still fold.
+	high, low := "\xed\xa0\x80", "\xed\xb0\x80"
+	if PathKey(`C:\In\`+high+".png") == PathKey(`C:\In\`+low+".png") {
+		t.Fatal("names that differ in an unpaired surrogate share a key")
+	}
+	if PathKey(`C:\In\`+high+".png") == PathKey(`C:\In\`+strings.Repeat("\uFFFD", 3)+".png") {
+		t.Fatal("an unpaired surrogate shares a key with replacement characters")
+	}
+	if PathKey(`C:\In\x`+high+".png") != PathKey(`c:\in\X`+high+".PNG") {
+		t.Fatal("letter case does not fold around an unpaired surrogate")
+	}
+}
+
+// TestPrepareKeepsApartNamesWithDifferentSurrogates: two sources whose names
+// differ only in unpaired surrogates produce two destinations, so a Skip job
+// saves both rather than deferring one to the other.
+func TestPrepareKeepsApartNamesWithDifferentSurrogates(t *testing.T) {
+	high, low := "\xed\xa0\x80", "\xed\xb0\x80"
+	plan := mustPrepare(t, jobRequest(t.TempDir(), CollisionSkip,
+		png(filepath.Join(t.TempDir(), high+".png")), png(filepath.Join(t.TempDir(), low+".png"))))
+	assertItems(t, plan, []expect{{high + ".png", ActionCreate, ReasonNone}, {low + ".png", ActionCreate, ReasonNone}})
+	materialize(t, plan, "result")
 }
 
 // TestPrepareNamesDestinationsAfterSources pins RSZ-022 and RSZ-023: each
@@ -284,6 +308,11 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		// The persisted options refuse the replacement character a lossy
 		// conversion leaves, and so does the planner.
 		{name: "replacement character in folder", mutate: func(r *Request) { r.Folder += string(utf8.RuneError) }, want: ErrFolderText},
+		// Windows would create and check the folder without the trailing
+		// characters while its destinations would lie in one with them.
+		{name: "folder ending in a space", mutate: func(r *Request) { r.Folder += " " }, want: ErrFolderName},
+		{name: "folder ending in a period", mutate: func(r *Request) { r.Folder += "." }, want: ErrFolderName},
+		{name: "folder ending in periods and a separator", mutate: func(r *Request) { r.Folder += `..\` }, want: ErrFolderName},
 		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
 		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
 		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
@@ -1099,7 +1128,9 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 	}
 
 	// Once the output folder itself cannot be reached, the search stops at
-	// the first name it cannot check rather than trying every other.
+	// the first name it cannot check rather than trying every other, and
+	// the item fails with the folder's failure, which is what stopped it,
+	// not the failure of the name it passed over (UX-010).
 	t.Run("folder gone", func(t *testing.T) {
 		gone := false
 		calls := 0
@@ -1114,7 +1145,7 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 			},
 			stat: func(path string) (fs.FileInfo, error) {
 				if gone {
-					return nil, &fs.PathError{Op: "stat", Path: path, Err: fs.ErrPermission}
+					return nil, &fs.PathError{Op: "stat", Path: path, Err: windows.ERROR_PATH_NOT_FOUND}
 				}
 				return os.Stat(path)
 			},
@@ -1124,8 +1155,10 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 			t.Fatalf("prepare: %v", err)
 		}
 		assertItems(t, plan, []expect{{"taken.png", ActionFail, ReasonExists}})
-		if !errors.Is(plan.Items[0].Err, fs.ErrPermission) || calls != 2 {
-			t.Fatalf("item error = %v after %d checks, want the permission failure after 2", plan.Items[0].Err, calls)
+		failure := assertKind(t, plan.Items[0].Err, KindDestination)
+		if !errors.Is(failure, windows.ERROR_PATH_NOT_FOUND) || errors.Is(failure, fs.ErrPermission) ||
+			failure.Op != "open output folder" || calls != 2 {
+			t.Fatalf("item error = %v after %d checks, want the folder's failure after 2", failure, calls)
 		}
 	})
 }
@@ -1470,7 +1503,7 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 		written := map[string]bool{}
 		for index, item := range plan.Items {
 			source := sources[index]
-			natural := stem(source.Path) + Extension(OutputFormat(request.Format, source.Format))
+			natural := stem(source.Path) + Extension(EncodedFormat(request.Format, source.Format))
 			name := filepath.Base(item.Destination)
 			if filepath.Dir(item.Destination) != out {
 				t.Fatalf("%s: item %d destination %s is outside the output folder", label, index, item.Destination)

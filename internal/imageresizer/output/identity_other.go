@@ -5,6 +5,7 @@ package output
 import (
 	"errors"
 	"io/fs"
+	"path/filepath"
 )
 
 // fileID is empty outside Windows, where the production application does
@@ -30,4 +31,10 @@ func fileMissing(err error) bool {
 // an entry is never replaced.
 func storedFile(string) (bool, error) {
 	return false, nil
+}
+
+// entryName returns the path's last element outside Windows, which has no
+// second names such as 8.3 short names.
+func entryName(path string) (string, error) {
+	return filepath.Base(path), nil
 }
