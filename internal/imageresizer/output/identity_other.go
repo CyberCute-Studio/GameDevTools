@@ -16,3 +16,9 @@ var errIdentityUnsupported = errors.New("file identity is available on Windows o
 func identify(string) (fileID, error) {
 	return fileID{}, errIdentityUnsupported
 }
+
+// storedFile reports no irregular entry as a file outside Windows, so such
+// an entry is never replaced.
+func storedFile(string) (bool, error) {
+	return false, nil
+}

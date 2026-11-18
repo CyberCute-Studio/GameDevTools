@@ -4,6 +4,7 @@ package output
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"io/fs"
 	"os"
@@ -13,8 +14,6 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
-
-	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 )
 
 func mustIdentify(t *testing.T, path string) fileID {
@@ -27,16 +26,63 @@ func mustIdentify(t *testing.T, path string) fileID {
 }
 
 // junction links path to the target folder with a directory junction, which
-// needs no privilege, or skips the test when the volume cannot hold one.
-func junction(t *testing.T, path, target string) {
+// needs no privilege. It reports false when the volume cannot hold one.
+func junction(t *testing.T, path, target string) bool {
 	t.Helper()
 	output, err := exec.Command("cmd", "/c", "mklink", "/J", path, target).CombinedOutput()
 	if err != nil {
-		t.Skipf("create junction: %v: %s", err, output)
+		t.Logf("create junction: %v: %s", err, output)
+		return false
 	}
 	// Remove the junction itself before the temporary folders, so their
 	// cleanup never walks into the target through it.
 	t.Cleanup(func() { os.Remove(path) })
+	return true
+}
+
+// mustJunction is junction for a test that needs one, which it skips when
+// the volume cannot hold one.
+func mustJunction(t *testing.T, path, target string) {
+	t.Helper()
+	if !junction(t, path, target) {
+		t.Skip("the volume cannot hold a junction")
+	}
+}
+
+// fsctlSetReparsePoint is FSCTL_SET_REPARSE_POINT.
+const fsctlSetReparsePoint = 0x000900A4
+
+// dataReparsePoint gives the file at path a reparse point that is no link,
+// with a tag no filter handles, the way a sync client marks the files it
+// keeps. Since Go 1.23 os.Lstat reports such a file as irregular. Files the
+// user owns accept such a reparse point without any privilege.
+func dataReparsePoint(t *testing.T, path string) {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatalf("encode %s: %v", path, err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer windows.CloseHandle(handle)
+	// REPARSE_GUID_DATA_BUFFER: tag, data length, reserved, GUID, data.
+	const data = "test"
+	buffer := make([]byte, 24+len(data))
+	binary.LittleEndian.PutUint32(buffer[0:], 0x00000099) // a third-party tag, no name surrogate
+	binary.LittleEndian.PutUint16(buffer[4:], uint16(len(data)))
+	copy(buffer[8:24], "GameDevToolsTest")
+	copy(buffer[24:], data)
+	var returned uint32
+	if err := windows.DeviceIoControl(handle, fsctlSetReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil); err != nil {
+		t.Skipf("set a reparse point on %s: %v", path, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode().Type() != fs.ModeIrregular {
+		t.Skipf("os.Lstat reports the reparse point as %v (%v), not as irregular", info, err)
+	}
 }
 
 func TestIdentifyRecognizesEveryPathToAFile(t *testing.T) {
@@ -51,9 +97,11 @@ func TestIdentifyRecognizesEveryPathToAFile(t *testing.T) {
 		t.Fatalf("hard-link: %v", err)
 	}
 	aliases = append(aliases, link)
-	linked := filepath.Join(t.TempDir(), "junction")
-	junction(t, linked, folder)
-	aliases = append(aliases, filepath.Join(linked, "Original.png"))
+	// A volume that cannot hold a junction leaves that alias out; the other
+	// checks still run.
+	if linked := filepath.Join(t.TempDir(), "junction"); junction(t, linked, folder) {
+		aliases = append(aliases, filepath.Join(linked, "Original.png"))
+	}
 	if short, err := shortName(path); err == nil && !strings.EqualFold(short, path) {
 		aliases = append(aliases, short)
 	}
@@ -124,6 +172,71 @@ func TestExtendedPath(t *testing.T) {
 	}
 }
 
+// TestStoredFile: only a file whose reparse point is no link counts as a
+// stored file; a junction, a folder, and a plain file do not.
+func TestStoredFile(t *testing.T) {
+	folder := t.TempDir()
+	plain := filepath.Join(folder, "plain.png")
+	writeFile(t, plain, "pixels")
+	if stored, err := storedFile(plain); err != nil || stored {
+		t.Fatalf("storedFile(plain file) = %v, %v", stored, err)
+	}
+	if stored, err := storedFile(folder); err != nil || stored {
+		t.Fatalf("storedFile(folder) = %v, %v", stored, err)
+	}
+	if linked := filepath.Join(t.TempDir(), "junction"); junction(t, linked, folder) {
+		if stored, err := storedFile(linked); err != nil || stored {
+			t.Fatalf("storedFile(junction) = %v, %v", stored, err)
+		}
+	}
+	if _, err := storedFile(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("storedFile(missing) = %v, want a not-exist error", err)
+	}
+	marked := filepath.Join(folder, "marked.png")
+	writeFile(t, marked, "pixels")
+	dataReparsePoint(t, marked)
+	if stored, err := storedFile(marked); err != nil || !stored {
+		t.Fatalf("storedFile(file with a data reparse point) = %v, %v", stored, err)
+	}
+}
+
+// TestPrepareClassifiesReparsePointsAtDestinations: a junction with a
+// destination's name is never replaced, while a file with a reparse point
+// that is no link is a file: a confirmed Overwrite considers replacing it,
+// and renames here only because the file cannot be opened to read its
+// identity, as no filter handles the test's reparse tag.
+func TestPrepareClassifiesReparsePointsAtDestinations(t *testing.T) {
+	t.Run("junction", func(t *testing.T) {
+		out := t.TempDir()
+		mustJunction(t, filepath.Join(out, "x.png"), t.TempDir())
+		want := map[Collision]expect{
+			CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
+		}
+		for _, policy := range policies {
+			plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+			assertItems(t, plan, []expect{want[policy]})
+		}
+	})
+
+	t.Run("data reparse point", func(t *testing.T) {
+		out := t.TempDir()
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "earlier")
+		dataReparsePoint(t, destination)
+		want := map[Collision]expect{
+			CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {"x_2.png", ActionCreate, ReasonUnverified},
+		}
+		for _, policy := range policies {
+			plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+			assertItems(t, plan, []expect{want[policy]})
+		}
+	})
+}
+
 // TestPrepareComparesPathsCaseInsensitively: Windows paths differing only in
 // letter case name one file, so they collide and are protected alike.
 func TestPrepareComparesPathsCaseInsensitively(t *testing.T) {
@@ -135,7 +248,7 @@ func TestPrepareComparesPathsCaseInsensitively(t *testing.T) {
 	for _, policy := range policies {
 		// The output folder is the source folder spelled in upper case.
 		plan := mustPrepare(t, jobRequest(strings.ToUpper(folder), policy, png(source)))
-		if policy == imageresizer.CollisionSkip {
+		if policy == CollisionSkip {
 			assertItems(t, plan, []expect{{"Hero.png", ActionSkip, ReasonSource}})
 		} else {
 			assertItems(t, plan, []expect{{"Hero_2.png", ActionCreate, ReasonSource}})
@@ -143,24 +256,26 @@ func TestPrepareComparesPathsCaseInsensitively(t *testing.T) {
 
 		plan = mustPrepare(t, jobRequest(existing, policy, png(filepath.Join(t.TempDir(), "sky.png"))))
 		switch policy {
-		case imageresizer.CollisionRename:
+		case CollisionRename:
 			assertItems(t, plan, []expect{{"sky_2.png", ActionCreate, ReasonExists}})
-		case imageresizer.CollisionSkip:
+		case CollisionSkip:
 			assertItems(t, plan, []expect{{"sky.png", ActionSkip, ReasonExists}})
-		case imageresizer.CollisionOverwrite:
+		case CollisionOverwrite:
 			assertItems(t, plan, []expect{{"sky.png", ActionReplace, ReasonNone}})
 		}
 	}
 }
 
 // TestPrepareRecognizesSourcesUnderOtherNames pins RSZ-026 for aliases a
-// path comparison cannot see: a destination that is a hard link to a source,
-// or that reaches a source through a junction, is that source.
+// path comparison cannot see: under Overwrite, a destination that is a hard
+// link to a source, or that reaches a source through a junction, is that
+// source and is never replaced. Rename and Skip, which never replace, treat
+// it as any existing file.
 func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
-	want := map[imageresizer.CollisionPolicy]expect{
-		imageresizer.CollisionRename:    {"x_2.png", ActionCreate, ReasonSource},
-		imageresizer.CollisionSkip:      {"x.png", ActionSkip, ReasonSource},
-		imageresizer.CollisionOverwrite: {"x_2.png", ActionCreate, ReasonSource},
+	want := map[Collision]expect{
+		CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+		CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+		CollisionOverwrite: {"x_2.png", ActionCreate, ReasonSource},
 	}
 
 	t.Run("hard link", func(t *testing.T) {
@@ -189,13 +304,56 @@ func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
 			source := filepath.Join(in, "x.png")
 			writeFile(t, source, "source x")
 			out := filepath.Join(t.TempDir(), "out")
-			junction(t, out, in)
+			mustJunction(t, out, in)
 			plan := mustPrepare(t, jobRequest(out, policy, png(source)))
 			assertItems(t, plan, []expect{want[policy]})
 			materialize(t, plan, "result")
 			if readFile(t, source) != "source x" {
 				t.Fatalf("%s: the source reached through a junction was overwritten", policy)
 			}
+		}
+	})
+
+	// A listed file the job does not process is protected by identity too.
+	t.Run("protected hard link", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		unprocessed := filepath.Join(in, "too-large.png")
+		writeFile(t, unprocessed, "too large to resize")
+		if err := os.Link(unprocessed, filepath.Join(out, "x.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "x.png")))
+		request.Protected = []string{unprocessed}
+		plan := mustPrepare(t, request)
+		assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonSource}})
+		materialize(t, plan, "result")
+		if readFile(t, unprocessed) != "too large to resize" {
+			t.Fatal("the hard-linked protected file was overwritten")
+		}
+	})
+
+	// Overwrite replaces an existing file under a numbered name only when
+	// it is no source either.
+	t.Run("numbered hard link", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		source := filepath.Join(in, "other.png")
+		writeFile(t, source, "source other")
+		if err := os.Link(source, filepath.Join(out, "x_2.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		plan := mustPrepare(t, jobRequest(out, CollisionOverwrite,
+			png(filepath.Join(t.TempDir(), "x.png")),
+			png(filepath.Join(t.TempDir(), "x.png")),
+			png(source),
+		))
+		assertItems(t, plan, []expect{
+			{"x.png", ActionCreate, ReasonNone},
+			{"x_3.png", ActionCreate, ReasonDuplicate},
+			{"other.png", ActionCreate, ReasonNone},
+		})
+		materialize(t, plan, "result")
+		if readFile(t, source) != "source other" {
+			t.Fatal("the hard-linked source under a numbered name was overwritten")
 		}
 	})
 }
@@ -217,10 +375,10 @@ func TestPrepareRenamesWhenIdentityIsUnreadable(t *testing.T) {
 			}
 			return identify(path)
 		}}
-		want := map[imageresizer.CollisionPolicy]expect{
-			imageresizer.CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
-			imageresizer.CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
-			imageresizer.CollisionOverwrite: {"x_2.png", ActionCreate, ReasonUnverified},
+		want := map[Collision]expect{
+			CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {"x_2.png", ActionCreate, ReasonUnverified},
 		}
 		for _, policy := range policies {
 			plan, err := prepare(context.Background(), jobRequest(out, policy, png(source)), files)
@@ -239,7 +397,7 @@ func TestPrepareReportsDeniedFolderCreation(t *testing.T) {
 	parent := t.TempDir()
 	setDACL(t, parent, "D:P(D;;0x4;;;WD)(A;OICI;FA;;;WD)") // deny FILE_ADD_SUBDIRECTORY
 	t.Cleanup(func() { setDACL(t, parent, "D:P(A;OICI;FA;;;WD)") })
-	_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, "Resized"), imageresizer.CollisionRename,
+	_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, "Resized"), CollisionRename,
 		png(filepath.Join(t.TempDir(), "x.png"))))
 	assertKind(t, err, KindFolder)
 	if !errors.Is(err, fs.ErrPermission) {
@@ -279,7 +437,7 @@ func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
 		}
 	}
 	for _, folder := range folders {
-		_, err := Prepare(context.Background(), jobRequest(folder, imageresizer.CollisionRename, source))
+		_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, source))
 		assertKind(t, err, KindFolder)
 	}
 }

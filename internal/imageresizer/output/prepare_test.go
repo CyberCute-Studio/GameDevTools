@@ -1,3 +1,10 @@
+//go:build windows
+
+// The planner's rules are Windows rules: paths compare case-insensitively
+// and Overwrite replaces only files whose identity it can read, which it can
+// only on Windows. prepare_other_test.go pins what the package does
+// elsewhere.
+
 package output
 
 import (
@@ -13,25 +20,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 )
 
-var policies = []imageresizer.CollisionPolicy{
-	imageresizer.CollisionRename,
-	imageresizer.CollisionSkip,
-	imageresizer.CollisionOverwrite,
-}
+var policies = []Collision{CollisionRename, CollisionSkip, CollisionOverwrite}
 
-// jobRequest builds a request for the folder and policy with the default
-// Keep Source Format, confirming Overwrite jobs.
-func jobRequest(folder string, policy imageresizer.CollisionPolicy, sources ...Source) Request {
-	options := imageresizer.DefaultOptions(folder)
-	options.Collision = policy
+// jobRequest builds a request for the folder and policy with Keep Source
+// Format, confirming Overwrite jobs.
+func jobRequest(folder string, policy Collision, sources ...Source) Request {
 	return Request{
 		Sources:          sources,
-		Options:          options,
-		ConfirmOverwrite: policy == imageresizer.CollisionOverwrite,
+		Folder:           folder,
+		Format:           FormatKeepSource,
+		Collision:        policy,
+		ConfirmOverwrite: policy == CollisionOverwrite,
 	}
 }
 
@@ -55,6 +57,12 @@ func mustPrepare(t *testing.T, request Request) Plan {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
+	checkPlanShape(t, plan, request)
+	return plan
+}
+
+func checkPlanShape(t *testing.T, plan Plan, request Request) {
+	t.Helper()
 	if len(plan.Items) != len(request.Sources) {
 		t.Fatalf("plan has %d items for %d sources", len(plan.Items), len(request.Sources))
 	}
@@ -63,7 +71,6 @@ func mustPrepare(t *testing.T, request Request) Plan {
 			t.Fatalf("item %d source = %q, want %q", index, item.Source, request.Sources[index].Path)
 		}
 	}
-	return plan
 }
 
 func assertKind(t *testing.T, err error, want Kind) *Error {
@@ -149,17 +156,17 @@ func readFile(t *testing.T, path string) string {
 
 func TestOutputFormatAndExtension(t *testing.T) {
 	tests := []struct {
-		option  imageresizer.OutputFormat
+		option  Format
 		content decode.Format
 		want    decode.Format
 		ext     string
 	}{
-		{imageresizer.FormatKeepSource, decode.FormatPNG, decode.FormatPNG, ".png"},
-		{imageresizer.FormatKeepSource, decode.FormatJPEG, decode.FormatJPEG, ".jpg"},
-		{imageresizer.FormatPNG, decode.FormatJPEG, decode.FormatPNG, ".png"},
-		{imageresizer.FormatPNG, decode.FormatPNG, decode.FormatPNG, ".png"},
-		{imageresizer.FormatJPEG, decode.FormatPNG, decode.FormatJPEG, ".jpg"},
-		{imageresizer.FormatJPEG, decode.FormatJPEG, decode.FormatJPEG, ".jpg"},
+		{FormatKeepSource, decode.FormatPNG, decode.FormatPNG, ".png"},
+		{FormatKeepSource, decode.FormatJPEG, decode.FormatJPEG, ".jpg"},
+		{FormatPNG, decode.FormatJPEG, decode.FormatPNG, ".png"},
+		{FormatPNG, decode.FormatPNG, decode.FormatPNG, ".png"},
+		{FormatJPEG, decode.FormatPNG, decode.FormatJPEG, ".jpg"},
+		{FormatJPEG, decode.FormatJPEG, decode.FormatJPEG, ".jpg"},
 	}
 	for _, test := range tests {
 		got := OutputFormat(test.option, test.content)
@@ -172,6 +179,15 @@ func TestOutputFormatAndExtension(t *testing.T) {
 	}
 	if ext := Extension(decode.FormatUnknown); ext != "" {
 		t.Errorf("Extension(unknown) = %q, want none", ext)
+	}
+}
+
+func TestPathKey(t *testing.T) {
+	if PathKey(`C:\In\photo.PNG`) != PathKey(`c:\in\.\PHOTO.png`) {
+		t.Fatal("paths differing in letter case and a . element have different keys")
+	}
+	if PathKey(`C:\In\a.png`) == PathKey(`C:\In\b.png`) {
+		t.Fatal("two files share a key")
 	}
 }
 
@@ -188,22 +204,22 @@ func TestPrepareNamesDestinationsAfterSources(t *testing.T) {
 		jpeg(filepath.Join(in, "mislabeled.png")),
 	}
 	tests := []struct {
-		format  imageresizer.OutputFormat
+		format  Format
 		names   []string
 		formats []decode.Format
 	}{
 		{
-			format:  imageresizer.FormatKeepSource,
+			format:  FormatKeepSource,
 			names:   []string{"hero.png", "Sky.jpg", "map.tiles.jpg", "mislabeled.jpg"},
 			formats: []decode.Format{decode.FormatPNG, decode.FormatJPEG, decode.FormatJPEG, decode.FormatJPEG},
 		},
 		{
-			format:  imageresizer.FormatPNG,
+			format:  FormatPNG,
 			names:   []string{"hero.png", "Sky.png", "map.tiles.png", "mislabeled.png"},
 			formats: []decode.Format{decode.FormatPNG, decode.FormatPNG, decode.FormatPNG, decode.FormatPNG},
 		},
 		{
-			format:  imageresizer.FormatJPEG,
+			format:  FormatJPEG,
 			names:   []string{"hero.jpg", "Sky.jpg", "map.tiles.jpg", "mislabeled.jpg"},
 			formats: []decode.Format{decode.FormatJPEG, decode.FormatJPEG, decode.FormatJPEG, decode.FormatJPEG},
 		},
@@ -211,8 +227,8 @@ func TestPrepareNamesDestinationsAfterSources(t *testing.T) {
 	for _, test := range tests {
 		t.Run(string(test.format), func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out")
-			request := jobRequest(out, imageresizer.CollisionRename, sources...)
-			request.Options.Format = test.format
+			request := jobRequest(out, CollisionRename, sources...)
+			request.Format = test.format
 			plan := mustPrepare(t, request)
 			if plan.Folder != out {
 				t.Fatalf("Folder = %q, want %q", plan.Folder, out)
@@ -238,7 +254,7 @@ func TestPrepareNamesDestinationsAfterSources(t *testing.T) {
 // including missing parents, is created before planning.
 func TestPrepareCreatesTheOutputFolder(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "a", "b", "Resized")
-	plan := mustPrepare(t, jobRequest(out+string(filepath.Separator), imageresizer.CollisionRename,
+	plan := mustPrepare(t, jobRequest(out+string(filepath.Separator), CollisionRename,
 		png(filepath.Join(t.TempDir(), "x.png"))))
 	if plan.Folder != out {
 		t.Fatalf("Folder = %q, want the cleaned %q", plan.Folder, out)
@@ -259,11 +275,13 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		mutate func(*Request)
 		want   error
 	}{
-		{name: "relative folder", mutate: func(r *Request) { r.Options.OutputFolder = "Resized" }},
-		{name: "empty folder", mutate: func(r *Request) { r.Options.OutputFolder = "" }},
-		{name: "unknown policy", mutate: func(r *Request) { r.Options.Collision = "delete" }},
-		{name: "unknown format", mutate: func(r *Request) { r.Options.Format = "gif" }},
-		{name: "quality", mutate: func(r *Request) { r.Options.JPEGQuality = 0 }},
+		{name: "relative folder", mutate: func(r *Request) { r.Folder = "Resized" }},
+		{name: "empty folder", mutate: func(r *Request) { r.Folder = "" }},
+		{name: "NUL in folder", mutate: func(r *Request) { r.Folder += "\x00" }},
+		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
+		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
+		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
+		{name: "empty format", mutate: func(r *Request) { r.Format = "" }},
 		{name: "no sources", mutate: func(r *Request) { r.Sources = nil }, want: ErrNoSources},
 		{name: "relative source", mutate: func(r *Request) { r.Sources = append(r.Sources, png("hero.png")) }},
 		{name: "empty source", mutate: func(r *Request) { r.Sources = append(r.Sources, png("")) }},
@@ -272,11 +290,14 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		{name: "unknown source format", mutate: func(r *Request) {
 			r.Sources = append(r.Sources, Source{Path: filepath.Join(in, "a.png"), Format: decode.FormatUnknown})
 		}},
+		{name: "relative protected path", mutate: func(r *Request) { r.Protected = []string{"hero.gif"} }},
+		{name: "NUL in protected path", mutate: func(r *Request) { r.Protected = []string{valid.Path + "\x00"} }},
+		{name: "root protected path", mutate: func(r *Request) { r.Protected = []string{root} }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out")
-			request := jobRequest(out, imageresizer.CollisionRename, valid)
+			request := jobRequest(out, CollisionRename, valid)
 			test.mutate(&request)
 			plan, err := Prepare(context.Background(), request)
 			assertKind(t, err, KindValidation)
@@ -299,7 +320,7 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 func TestPrepareRequiresOverwriteConfirmation(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	source := png(filepath.Join(t.TempDir(), "hero.png"))
-	request := jobRequest(out, imageresizer.CollisionOverwrite, source)
+	request := jobRequest(out, CollisionOverwrite, source)
 	request.ConfirmOverwrite = false
 	_, err := Prepare(context.Background(), request)
 	assertKind(t, err, KindConfirmation)
@@ -314,7 +335,7 @@ func TestPrepareRequiresOverwriteConfirmation(t *testing.T) {
 	assertItems(t, mustPrepare(t, request), []expect{{"hero.png", ActionCreate, ReasonNone}})
 
 	// The confirmation means nothing to the other policies.
-	for _, policy := range []imageresizer.CollisionPolicy{imageresizer.CollisionRename, imageresizer.CollisionSkip} {
+	for _, policy := range []Collision{CollisionRename, CollisionSkip} {
 		for _, confirmed := range []bool{false, true} {
 			request := jobRequest(out, policy, source)
 			request.ConfirmOverwrite = confirmed
@@ -326,10 +347,11 @@ func TestPrepareRequiresOverwriteConfirmation(t *testing.T) {
 // faultyFiles wraps the real filesystem with injectable failures.
 type faultyFiles struct {
 	osFiles
-	mkdirAll func(path string) error
-	stat     func(path string) (fs.FileInfo, error)
-	lstat    func(path string) (fs.FileInfo, error)
-	identity func(path string) (fileID, error)
+	mkdirAll   func(path string) error
+	stat       func(path string) (fs.FileInfo, error)
+	lstat      func(path string) (fs.FileInfo, error)
+	identity   func(path string) (fileID, error)
+	storedFile func(path string) (bool, error)
 }
 
 func (f faultyFiles) MkdirAll(path string) error {
@@ -360,6 +382,13 @@ func (f faultyFiles) Identity(path string) (fileID, error) {
 	return f.osFiles.Identity(path)
 }
 
+func (f faultyFiles) StoredFile(path string) (bool, error) {
+	if f.storedFile != nil {
+		return f.storedFile(path)
+	}
+	return f.osFiles.StoredFile(path)
+}
+
 // fakeInfo describes a file that exists only in a test.
 type fakeInfo struct {
 	name string
@@ -376,11 +405,16 @@ func (f fakeInfo) Sys() any           { return nil }
 func TestPrepareReportsUnusableFolders(t *testing.T) {
 	source := png(filepath.Join(t.TempDir(), "hero.png"))
 
+	// A file standing where the folder, or a folder holding it, should be
+	// is reported as ErrNotFolder, as the sentinel documents.
 	t.Run("blocked by a file", func(t *testing.T) {
 		blocker := filepath.Join(t.TempDir(), "not-a-folder")
 		writeFile(t, blocker, "file")
-		_, err := Prepare(context.Background(), jobRequest(blocker, imageresizer.CollisionRename, source))
+		_, err := Prepare(context.Background(), jobRequest(blocker, CollisionRename, source))
 		assertKind(t, err, KindFolder)
+		if !errors.Is(err, ErrNotFolder) {
+			t.Fatalf("error = %v, want ErrNotFolder", err)
+		}
 		if readFile(t, blocker) != "file" {
 			t.Fatal("the blocking file was changed")
 		}
@@ -389,18 +423,24 @@ func TestPrepareReportsUnusableFolders(t *testing.T) {
 	t.Run("blocked parent", func(t *testing.T) {
 		blocker := filepath.Join(t.TempDir(), "not-a-folder")
 		writeFile(t, blocker, "file")
-		_, err := Prepare(context.Background(), jobRequest(filepath.Join(blocker, "out"), imageresizer.CollisionRename, source))
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(blocker, "out"), CollisionRename, source))
 		assertKind(t, err, KindFolder)
+		if !errors.Is(err, ErrNotFolder) {
+			t.Fatalf("error = %v, want ErrNotFolder", err)
+		}
 	})
 
 	t.Run("permission", func(t *testing.T) {
 		files := faultyFiles{mkdirAll: func(path string) error {
 			return &fs.PathError{Op: "mkdir", Path: path, Err: fs.ErrPermission}
 		}}
-		_, err := prepare(context.Background(), jobRequest(filepath.Join(t.TempDir(), "out"), imageresizer.CollisionRename, source), files)
+		_, err := prepare(context.Background(), jobRequest(filepath.Join(t.TempDir(), "out"), CollisionRename, source), files)
 		assertKind(t, err, KindFolder)
 		if !errors.Is(err, fs.ErrPermission) {
 			t.Fatalf("error = %v, want a permission failure", err)
+		}
+		if errors.Is(err, ErrNotFolder) {
+			t.Fatalf("a permission failure is reported as ErrNotFolder: %v", err)
 		}
 	})
 
@@ -409,7 +449,7 @@ func TestPrepareReportsUnusableFolders(t *testing.T) {
 			mkdirAll: func(string) error { return nil },
 			stat:     func(path string) (fs.FileInfo, error) { return fakeInfo{name: filepath.Base(path)}, nil },
 		}
-		_, err := prepare(context.Background(), jobRequest(filepath.Join(t.TempDir(), "out"), imageresizer.CollisionRename, source), files)
+		_, err := prepare(context.Background(), jobRequest(filepath.Join(t.TempDir(), "out"), CollisionRename, source), files)
 		assertKind(t, err, KindFolder)
 		if !errors.Is(err, ErrNotFolder) {
 			t.Fatalf("error = %v, want ErrNotFolder", err)
@@ -420,7 +460,7 @@ func TestPrepareReportsUnusableFolders(t *testing.T) {
 		files := faultyFiles{stat: func(path string) (fs.FileInfo, error) {
 			return nil, &fs.PathError{Op: "stat", Path: path, Err: fs.ErrPermission}
 		}}
-		_, err := prepare(context.Background(), jobRequest(t.TempDir(), imageresizer.CollisionRename, source), files)
+		_, err := prepare(context.Background(), jobRequest(t.TempDir(), CollisionRename, source), files)
 		assertKind(t, err, KindFolder)
 	})
 }
@@ -435,18 +475,18 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 		png(filepath.Join(t.TempDir(), "x.png")),
 		jpeg(filepath.Join(t.TempDir(), "X.PNG")),
 	}
-	want := map[imageresizer.CollisionPolicy][]expect{
-		imageresizer.CollisionRename: {
+	want := map[Collision][]expect{
+		CollisionRename: {
 			{"x.png", ActionCreate, ReasonNone},
 			{"x_2.png", ActionCreate, ReasonDuplicate},
 			{"X.jpg", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionSkip: {
+		CollisionSkip: {
 			{"x.png", ActionCreate, ReasonNone},
 			{"x.png", ActionSkip, ReasonDuplicate},
 			{"X.jpg", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionOverwrite: {
+		CollisionOverwrite: {
 			{"x.png", ActionCreate, ReasonNone},
 			{"x_2.png", ActionCreate, ReasonDuplicate},
 			{"X.jpg", ActionCreate, ReasonNone},
@@ -458,12 +498,15 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 			request := jobRequest(out, policy, sources...)
 			plan := mustPrepare(t, request)
 			assertItems(t, plan, want[policy])
+			if plan.Items[1].DuplicateOf != 0 {
+				t.Fatalf("item 1 DuplicateOf = %d, want 0", plan.Items[1].DuplicateOf)
+			}
 
 			// With PNG output, the third source's name differs from the
 			// others only in letter case.
-			request.Options.Format = imageresizer.FormatPNG
+			request.Format = FormatPNG
 			plan = mustPrepare(t, request)
-			if policy == imageresizer.CollisionSkip {
+			if policy == CollisionSkip {
 				assertItems(t, plan, []expect{
 					{"x.png", ActionCreate, ReasonNone},
 					{"x.png", ActionSkip, ReasonDuplicate},
@@ -480,6 +523,55 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 	}
 }
 
+// TestPlanSuccessor: a Skip job skips a duplicate only because an earlier
+// item writes the name, so when that item does not write it, the plan names
+// the duplicate that may write it instead, in job order (RSZ-024).
+func TestPlanSuccessor(t *testing.T) {
+	out := t.TempDir()
+	writeFile(t, filepath.Join(out, "z.png"), "earlier")
+	sources := []Source{
+		png(filepath.Join(t.TempDir(), "x.png")),
+		png(filepath.Join(t.TempDir(), "x.png")),
+		png(filepath.Join(t.TempDir(), "y.png")),
+		png(filepath.Join(t.TempDir(), "X.png")),
+		png(filepath.Join(t.TempDir(), "Y.png")),
+		png(filepath.Join(t.TempDir(), "z.png")),
+	}
+	plan := mustPrepare(t, jobRequest(out, CollisionSkip, sources...))
+	assertItems(t, plan, []expect{
+		{"x.png", ActionCreate, ReasonNone},
+		{"x.png", ActionSkip, ReasonDuplicate},
+		{"y.png", ActionCreate, ReasonNone},
+		{"X.png", ActionSkip, ReasonDuplicate},
+		{"Y.png", ActionSkip, ReasonDuplicate},
+		{"z.png", ActionSkip, ReasonExists},
+	})
+	for index, owner := range map[int]int{1: 0, 3: 0, 4: 2} {
+		if got := plan.Items[index].DuplicateOf; got != owner {
+			t.Errorf("item %d DuplicateOf = %d, want %d", index, got, owner)
+		}
+	}
+	successors := map[int]int{0: 1, 1: 3, 2: 4}
+	for index := -1; index <= len(plan.Items); index++ {
+		got, ok := plan.Successor(index)
+		want, wantOK := successors[index]
+		if got != want || ok != wantOK {
+			t.Errorf("Successor(%d) = %d, %v, want %d, %v", index, got, ok, want, wantOK)
+		}
+	}
+
+	// Rename and Overwrite give every duplicate a name of its own, so no
+	// item waits on another.
+	for _, policy := range []Collision{CollisionRename, CollisionOverwrite} {
+		plan := mustPrepare(t, jobRequest(t.TempDir(), policy, sources...))
+		for index := range plan.Items {
+			if next, ok := plan.Successor(index); ok {
+				t.Errorf("%s: Successor(%d) = %d, want none", policy, index, next)
+			}
+		}
+	}
+}
+
 // TestPrepareExistingDestinations pins RSZ-025 and AC-R09/AC-R10: an
 // existing destination is renamed around, skipped, or — only under a
 // confirmed Overwrite and only when it is a file — replaced.
@@ -490,18 +582,18 @@ func TestPrepareExistingDestinations(t *testing.T) {
 		png(filepath.Join(in, "folder.png")),
 		png(filepath.Join(in, "new.png")),
 	}
-	want := map[imageresizer.CollisionPolicy][]expect{
-		imageresizer.CollisionRename: {
+	want := map[Collision][]expect{
+		CollisionRename: {
 			{"x_2.png", ActionCreate, ReasonExists},
 			{"folder_2.png", ActionCreate, ReasonExists},
 			{"new.png", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionSkip: {
+		CollisionSkip: {
 			{"x.png", ActionSkip, ReasonExists},
 			{"folder.png", ActionSkip, ReasonExists},
 			{"new.png", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionOverwrite: {
+		CollisionOverwrite: {
 			{"x.png", ActionReplace, ReasonNone},
 			{"folder_2.png", ActionCreate, ReasonExists},
 			{"new.png", ActionCreate, ReasonNone},
@@ -516,7 +608,7 @@ func TestPrepareExistingDestinations(t *testing.T) {
 			}
 			plan := mustPrepare(t, jobRequest(out, policy, sources...))
 			assertItems(t, plan, want[policy])
-			if got := plan.Items[0].Renamed(); got != (policy == imageresizer.CollisionRename) {
+			if got := plan.Items[0].Renamed(); got != (policy == CollisionRename) {
 				t.Fatalf("Renamed() = %v under %s", got, policy)
 			}
 			if readFile(t, filepath.Join(out, "x.png")) != "earlier" {
@@ -526,22 +618,113 @@ func TestPrepareExistingDestinations(t *testing.T) {
 	}
 }
 
+// TestPrepareTreatsStoredFilesAsFiles: since Go 1.23, os.Lstat reports a
+// file with a reparse point other than a symbolic link, such as every file
+// OneDrive keeps in sync, as irregular. Such a file is still a file that a
+// confirmed Overwrite replaces; an irregular entry that is a link, a
+// folder, or cannot be inspected is not.
+func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
+	irregular := func(mode fs.FileMode) func(string) (fs.FileInfo, error) {
+		return func(path string) (fs.FileInfo, error) {
+			info, err := os.Lstat(path)
+			if err != nil {
+				return nil, err
+			}
+			return fakeInfo{name: info.Name(), mode: mode}, nil
+		}
+	}
+	tests := []struct {
+		name   string
+		mode   fs.FileMode
+		stored func(string) (bool, error)
+		want   map[Collision]expect
+	}{
+		{
+			name:   "placeholder",
+			mode:   fs.ModeIrregular,
+			stored: func(string) (bool, error) { return true, nil },
+			want: map[Collision]expect{
+				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+				CollisionOverwrite: {"x.png", ActionReplace, ReasonNone},
+			},
+		},
+		{
+			name:   "link",
+			mode:   fs.ModeIrregular,
+			stored: func(string) (bool, error) { return false, nil },
+			want: map[Collision]expect{
+				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+				CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
+			},
+		},
+		{
+			name: "uninspectable",
+			mode: fs.ModeIrregular,
+			stored: func(path string) (bool, error) {
+				return false, &fs.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+			},
+			want: map[Collision]expect{
+				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+				CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
+			},
+		},
+		{
+			name: "irregular folder",
+			mode: fs.ModeIrregular | fs.ModeDir,
+			stored: func(string) (bool, error) {
+				return true, errors.New("a folder must not be inspected as a stored file")
+			},
+			want: map[Collision]expect{
+				CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+				CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+				CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			out := t.TempDir()
+			destination := filepath.Join(out, "x.png")
+			writeFile(t, destination, "earlier")
+			files := faultyFiles{
+				lstat: func(path string) (fs.FileInfo, error) {
+					if strings.EqualFold(path, destination) {
+						return irregular(test.mode)(path)
+					}
+					return os.Lstat(path)
+				},
+				storedFile: test.stored,
+			}
+			for _, policy := range policies {
+				plan, err := prepare(context.Background(), jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))), files)
+				if err != nil {
+					t.Fatalf("%s: prepare: %v", policy, err)
+				}
+				assertItems(t, plan, []expect{test.want[policy]})
+			}
+		})
+	}
+}
+
 // TestPrepareNeverTargetsSources pins RSZ-026 and AC-R07 with the output
 // folder holding the sources themselves: no policy plans onto a source.
 // Rename and Overwrite rename the result, and Skip skips it.
 func TestPrepareNeverTargetsSources(t *testing.T) {
-	want := map[imageresizer.CollisionPolicy][]expect{
-		imageresizer.CollisionRename: {
+	want := map[Collision][]expect{
+		CollisionRename: {
 			{"a_2.png", ActionCreate, ReasonSource},
 			{"b_2.jpg", ActionCreate, ReasonSource},
 			{"c.jpg", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionSkip: {
+		CollisionSkip: {
 			{"a.png", ActionSkip, ReasonSource},
 			{"b.jpg", ActionSkip, ReasonSource},
 			{"c.jpg", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionOverwrite: {
+		CollisionOverwrite: {
 			{"a_2.png", ActionCreate, ReasonSource},
 			{"b_2.jpg", ActionCreate, ReasonSource},
 			{"c.jpg", ActionCreate, ReasonNone},
@@ -566,6 +749,66 @@ func TestPrepareNeverTargetsSources(t *testing.T) {
 					t.Fatalf("source %s was overwritten: %q", source.Path, got)
 				}
 			}
+
+			// A re-run of an Overwrite job replaces its own earlier results
+			// and still never a source.
+			if policy == CollisionOverwrite {
+				again := mustPrepare(t, jobRequest(folder, policy, sources...))
+				assertItems(t, again, []expect{
+					{"a_2.png", ActionReplace, ReasonSource},
+					{"b_2.jpg", ActionReplace, ReasonSource},
+					{"c.jpg", ActionReplace, ReasonNone},
+				})
+			}
+		})
+	}
+}
+
+// TestPrepareProtectsListedSourcesItDoesNotProcess pins RSZ-026 and NFR-020
+// for files listed as sources that the job does not resize, such as one too
+// large to process: no policy plans a result onto one, by its natural or a
+// numbered name, whether or not it still exists.
+func TestPrepareProtectsListedSourcesItDoesNotProcess(t *testing.T) {
+	want := map[Collision][]expect{
+		CollisionRename: {
+			{"hero_3.png", ActionCreate, ReasonSource},
+			{"gone_2.png", ActionCreate, ReasonSource},
+			{"new.png", ActionCreate, ReasonNone},
+		},
+		CollisionSkip: {
+			{"hero.png", ActionSkip, ReasonSource},
+			{"gone.png", ActionSkip, ReasonSource},
+			{"new.png", ActionCreate, ReasonNone},
+		},
+		CollisionOverwrite: {
+			{"hero_3.png", ActionCreate, ReasonSource},
+			{"gone_2.png", ActionCreate, ReasonSource},
+			{"new.png", ActionCreate, ReasonNone},
+		},
+	}
+	for _, policy := range policies {
+		t.Run(string(policy), func(t *testing.T) {
+			out := t.TempDir()
+			protected := []string{
+				filepath.Join(out, "HERO.png"),
+				filepath.Join(out, "hero_2.png"),
+				filepath.Join(out, "gone.png"),
+			}
+			writeFile(t, protected[0], "too large to resize")
+			writeFile(t, protected[1], "corrupt")
+			in := t.TempDir()
+			request := jobRequest(out, policy,
+				png(filepath.Join(in, "hero.png")),
+				png(filepath.Join(in, "gone.png")),
+				png(filepath.Join(in, "new.png")),
+			)
+			request.Protected = protected
+			plan := mustPrepare(t, request)
+			assertItems(t, plan, want[policy])
+			materialize(t, plan, "run")
+			if readFile(t, protected[0]) != "too large to resize" || readFile(t, protected[1]) != "corrupt" {
+				t.Fatal("a listed source the job does not process was overwritten")
+			}
 		})
 	}
 }
@@ -576,7 +819,7 @@ func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 	folder := t.TempDir()
 	for _, policy := range policies {
 		plan := mustPrepare(t, jobRequest(folder, policy, png(filepath.Join(folder, "gone.png"))))
-		if policy == imageresizer.CollisionSkip {
+		if policy == CollisionSkip {
 			assertItems(t, plan, []expect{{"gone.png", ActionSkip, ReasonSource}})
 			continue
 		}
@@ -588,7 +831,7 @@ func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 // is free keeps it, even when an earlier source's numbered name would have
 // taken it.
 func TestPrepareKeepsNaturalNamesAheadOfNumberedOnes(t *testing.T) {
-	plan := mustPrepare(t, jobRequest(t.TempDir(), imageresizer.CollisionRename,
+	plan := mustPrepare(t, jobRequest(t.TempDir(), CollisionRename,
 		png(filepath.Join(t.TempDir(), "x.png")),
 		png(filepath.Join(t.TempDir(), "x.png")),
 		png(filepath.Join(t.TempDir(), "x_2.png")),
@@ -601,58 +844,70 @@ func TestPrepareKeepsNaturalNamesAheadOfNumberedOnes(t *testing.T) {
 }
 
 // TestPrepareNumberedNamesAvoidSourcesAndClaims: a numbered name is never
-// a source, another item's destination, or an existing file.
+// a source or another item's destination. Rename passes over an existing
+// file too; a confirmed Overwrite replaces it, as it would under the
+// result's natural name.
 func TestPrepareNumberedNamesAvoidSourcesAndClaims(t *testing.T) {
-	out := t.TempDir()
-	resident := filepath.Join(out, "x_2.png")
-	writeFile(t, resident, "a source inside the output folder")
-	writeFile(t, filepath.Join(out, "x_3.png"), "an earlier result")
-	for _, policy := range []imageresizer.CollisionPolicy{imageresizer.CollisionRename, imageresizer.CollisionOverwrite} {
+	want := map[Collision][]expect{
+		CollisionRename: {
+			{"x.png", ActionCreate, ReasonNone},
+			{"x_4.png", ActionCreate, ReasonDuplicate},
+			{"x_2_2.png", ActionCreate, ReasonSource},
+		},
+		CollisionOverwrite: {
+			{"x.png", ActionCreate, ReasonNone},
+			{"x_3.png", ActionReplace, ReasonDuplicate},
+			{"x_2_2.png", ActionCreate, ReasonSource},
+		},
+	}
+	for _, policy := range []Collision{CollisionRename, CollisionOverwrite} {
+		out := t.TempDir()
+		resident := filepath.Join(out, "x_2.png")
+		writeFile(t, resident, "a source inside the output folder")
+		writeFile(t, filepath.Join(out, "x_3.png"), "an earlier result")
 		plan := mustPrepare(t, jobRequest(out, policy,
 			png(filepath.Join(t.TempDir(), "x.png")),
 			png(filepath.Join(t.TempDir(), "x.png")),
 			png(resident),
 		))
-		assertItems(t, plan, []expect{
-			{"x.png", ActionCreate, ReasonNone},
-			{"x_4.png", ActionCreate, ReasonDuplicate},
-			{"x_2_2.png", ActionCreate, ReasonSource},
-		})
+		assertItems(t, plan, want[policy])
+		if !plan.Items[1].Renamed() {
+			t.Fatalf("%s: a duplicate under a numbered name does not report Renamed", policy)
+		}
 	}
 }
 
 // TestPrepareRepeatedRuns pins RSZ-049: a re-run plans against the results
-// the earlier run left, never assuming them.
+// the earlier run left, never assuming them. Rename adds new numbered
+// results, Skip skips, and Overwrite replaces exactly the files the earlier
+// run wrote, so re-running it leaves no extra files behind.
 func TestPrepareRepeatedRuns(t *testing.T) {
 	sources := []Source{
 		png(filepath.Join(t.TempDir(), "x.png")),
 		png(filepath.Join(t.TempDir(), "x.png")),
 		png(filepath.Join(t.TempDir(), "y.png")),
 	}
-	want := map[imageresizer.CollisionPolicy][]expect{
-		imageresizer.CollisionRename: {
+	want := map[Collision][]expect{
+		CollisionRename: {
 			{"x_3.png", ActionCreate, ReasonExists},
 			{"x_4.png", ActionCreate, ReasonExists},
 			{"y_2.png", ActionCreate, ReasonExists},
 		},
-		imageresizer.CollisionSkip: {
+		CollisionSkip: {
 			{"x.png", ActionSkip, ReasonExists},
 			{"x.png", ActionSkip, ReasonExists},
 			{"y.png", ActionSkip, ReasonExists},
 		},
-		// The second source cannot replace the first source's result, so it
-		// takes a new numbered name rather than replacing the numbered file
-		// the earlier run wrote.
-		imageresizer.CollisionOverwrite: {
+		CollisionOverwrite: {
 			{"x.png", ActionReplace, ReasonNone},
-			{"x_3.png", ActionCreate, ReasonDuplicate},
+			{"x_2.png", ActionReplace, ReasonDuplicate},
 			{"y.png", ActionReplace, ReasonNone},
 		},
 	}
 	for _, policy := range policies {
 		t.Run(string(policy), func(t *testing.T) {
 			out := t.TempDir()
-			first := mustPrepare(t, jobRequest(out, imageresizer.CollisionRename, sources...))
+			first := mustPrepare(t, jobRequest(out, CollisionRename, sources...))
 			assertItems(t, first, []expect{
 				{"x.png", ActionCreate, ReasonNone},
 				{"x_2.png", ActionCreate, ReasonDuplicate},
@@ -675,21 +930,60 @@ func TestPrepareRepeatedRuns(t *testing.T) {
 					t.Fatalf("earlier result %s = %q, want it untouched", item.Destination, got)
 				}
 			}
+			if policy != CollisionOverwrite {
+				return
+			}
+			third := mustPrepare(t, jobRequest(out, policy, sources...))
+			assertItems(t, third, want[policy])
+			entries, err := os.ReadDir(out)
+			if err != nil {
+				t.Fatalf("list output folder: %v", err)
+			}
+			if len(entries) != len(sources) {
+				t.Fatalf("output folder holds %d files after re-runs, want %d", len(entries), len(sources))
+			}
 		})
 	}
 }
 
+// TestPrepareSkipsIdentityUnlessOverwriting: Rename and Skip never replace
+// a file, so they plan without reading any file identity.
+func TestPrepareSkipsIdentityUnlessOverwriting(t *testing.T) {
+	out := t.TempDir()
+	writeFile(t, filepath.Join(out, "x.png"), "earlier")
+	writeFile(t, filepath.Join(out, "x_2.png"), "earlier")
+	in := t.TempDir()
+	sources := []Source{png(filepath.Join(in, "x.png")), png(filepath.Join(in, "y.png"))}
+	for _, source := range sources {
+		writeFile(t, source.Path, "source")
+	}
+	for _, policy := range policies {
+		calls := 0
+		files := faultyFiles{identity: func(path string) (fileID, error) {
+			calls++
+			return identify(path)
+		}}
+		if _, err := prepare(context.Background(), jobRequest(out, policy, sources...), files); err != nil {
+			t.Fatalf("%s: prepare: %v", policy, err)
+		}
+		if overwrite := policy == CollisionOverwrite; overwrite != (calls > 0) {
+			t.Fatalf("%s read %d identities", policy, calls)
+		}
+	}
+}
+
 // TestPrepareFailsOneDestinationWithoutStoppingOthers pins RSZ-044: a
-// destination that cannot be checked fails only its own item.
+// destination that cannot be checked fails only its own item. A numbered
+// name that cannot be checked is passed over, since another one serves.
 func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 	out := t.TempDir()
 	writeFile(t, filepath.Join(out, "taken.png"), "earlier")
 	denied := map[string]bool{
-		imageresizer.PathKey(filepath.Join(out, "bad.png")):     true,
-		imageresizer.PathKey(filepath.Join(out, "taken_2.png")): true,
+		PathKey(filepath.Join(out, "bad.png")):     true,
+		PathKey(filepath.Join(out, "taken_2.png")): true,
 	}
 	files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
-		if denied[imageresizer.PathKey(path)] {
+		if denied[PathKey(path)] {
 			return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrPermission}
 		}
 		return os.Lstat(path)
@@ -700,20 +994,20 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 		png(filepath.Join(t.TempDir(), "taken.png")),
 		png(filepath.Join(t.TempDir(), "after.png")),
 	}
-	want := map[imageresizer.CollisionPolicy][]expect{
-		imageresizer.CollisionRename: {
+	want := map[Collision][]expect{
+		CollisionRename: {
 			{"good.png", ActionCreate, ReasonNone},
 			{"bad.png", ActionFail, ReasonNone},
-			{"taken.png", ActionFail, ReasonExists},
+			{"taken_3.png", ActionCreate, ReasonExists},
 			{"after.png", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionSkip: {
+		CollisionSkip: {
 			{"good.png", ActionCreate, ReasonNone},
 			{"bad.png", ActionFail, ReasonNone},
 			{"taken.png", ActionSkip, ReasonExists},
 			{"after.png", ActionCreate, ReasonNone},
 		},
-		imageresizer.CollisionOverwrite: {
+		CollisionOverwrite: {
 			{"good.png", ActionCreate, ReasonNone},
 			{"bad.png", ActionFail, ReasonNone},
 			{"taken.png", ActionReplace, ReasonNone},
@@ -738,6 +1032,37 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 			}
 		})
 	}
+
+	// Once the output folder itself cannot be reached, the search stops at
+	// the first name it cannot check rather than trying every other.
+	t.Run("folder gone", func(t *testing.T) {
+		gone := false
+		calls := 0
+		files := faultyFiles{
+			lstat: func(path string) (fs.FileInfo, error) {
+				calls++
+				if denied[PathKey(path)] {
+					gone = true
+					return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrPermission}
+				}
+				return os.Lstat(path)
+			},
+			stat: func(path string) (fs.FileInfo, error) {
+				if gone {
+					return nil, &fs.PathError{Op: "stat", Path: path, Err: fs.ErrPermission}
+				}
+				return os.Stat(path)
+			},
+		}
+		plan, err := prepare(context.Background(), jobRequest(out, CollisionRename, sources[2]), files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		assertItems(t, plan, []expect{{"taken.png", ActionFail, ReasonExists}})
+		if !errors.Is(plan.Items[0].Err, fs.ErrPermission) || calls != 2 {
+			t.Fatalf("item error = %v after %d checks, want the permission failure after 2", plan.Items[0].Err, calls)
+		}
+	})
 }
 
 func TestTooLong(t *testing.T) {
@@ -760,13 +1085,14 @@ func TestTooLong(t *testing.T) {
 }
 
 // TestPrepareRejectsNamesTooLongForWindows: a name Windows would refuse,
-// natural or numbered, fails its item with an explanation.
+// natural or numbered, fails its item with an explanation that names it,
+// while the item's Destination stays its natural destination.
 func TestPrepareRejectsNamesTooLongForWindows(t *testing.T) {
 	out := t.TempDir()
 	fits := strings.Repeat("a", 251)        // 255 with .png
 	tooLongName := strings.Repeat("b", 252) // 256 with .png
 	writeFile(t, filepath.Join(out, fits+".png"), "earlier")
-	plan := mustPrepare(t, jobRequest(out, imageresizer.CollisionRename,
+	plan := mustPrepare(t, jobRequest(out, CollisionRename,
 		png(filepath.Join(t.TempDir(), fits+".png")),
 		png(filepath.Join(t.TempDir(), tooLongName+".png")),
 		jpeg(filepath.Join(t.TempDir(), tooLongName[:251]+".jpeg")),
@@ -776,16 +1102,18 @@ func TestPrepareRejectsNamesTooLongForWindows(t *testing.T) {
 		{tooLongName + ".png", ActionFail, ReasonNone},
 		{tooLongName[:251] + ".jpg", ActionCreate, ReasonNone},
 	})
-	for _, item := range plan.Items[:2] {
+	for index, name := range []string{fits + "_2.png", tooLongName + ".png"} {
+		item := plan.Items[index]
 		assertKind(t, item.Err, KindDestination)
-		if !errors.Is(item.Err, ErrNameTooLong) {
-			t.Fatalf("item error = %v, want ErrNameTooLong", item.Err)
+		if !errors.Is(item.Err, ErrNameTooLong) || !strings.Contains(item.Err.Error(), name) {
+			t.Fatalf("item %d error = %v, want ErrNameTooLong naming %s", index, item.Err, name)
 		}
 	}
 }
 
 // TestPrepareBoundsTheRenameSearch: a folder where every name is taken
-// fails the item instead of searching forever.
+// fails the item instead of searching forever, and a later item with the
+// same name fails without searching again.
 func TestPrepareBoundsTheRenameSearch(t *testing.T) {
 	out := t.TempDir()
 	calls := 0
@@ -793,17 +1121,54 @@ func TestPrepareBoundsTheRenameSearch(t *testing.T) {
 		calls++
 		return fakeInfo{name: filepath.Base(path)}, nil
 	}}
-	plan, err := prepare(context.Background(),
-		jobRequest(out, imageresizer.CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))), files)
+	plan, err := prepare(context.Background(), jobRequest(out, CollisionRename,
+		png(filepath.Join(t.TempDir(), "x.png")), png(filepath.Join(t.TempDir(), "X.png"))), files)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	assertItems(t, plan, []expect{{"x.png", ActionFail, ReasonExists}})
-	if !errors.Is(plan.Items[0].Err, ErrNoUnusedName) {
-		t.Fatalf("item error = %v, want ErrNoUnusedName", plan.Items[0].Err)
+	assertItems(t, plan, []expect{{"x.png", ActionFail, ReasonExists}, {"X.png", ActionFail, ReasonExists}})
+	for _, item := range plan.Items {
+		if !errors.Is(item.Err, ErrNoUnusedName) {
+			t.Fatalf("item error = %v, want ErrNoUnusedName", item.Err)
+		}
 	}
 	if calls != maxSuffix {
 		t.Fatalf("checked %d names, want %d", calls, maxSuffix)
+	}
+}
+
+// TestPrepareRenameSearchIsLinear: many sources with one name each take the
+// next numbered name without walking past every name already given out, so
+// planning a large job of same-named files stays fast.
+func TestPrepareRenameSearchIsLinear(t *testing.T) {
+	const count = 2000
+	in := t.TempDir()
+	sources := make([]Source, count)
+	for index := range sources {
+		sources[index] = png(filepath.Join(in, fmt.Sprint(index), "icon.png"))
+	}
+	files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
+		return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrNotExist}
+	}}
+	request := jobRequest(t.TempDir(), CollisionRename, sources...)
+	var plan Plan
+	allocations := testing.AllocsPerRun(1, func() {
+		var err error
+		if plan, err = prepare(context.Background(), request, files); err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+	})
+	for index, item := range plan.Items {
+		want := "icon.png"
+		if index > 0 {
+			want = fmt.Sprintf("icon_%d.png", index+1)
+		}
+		if filepath.Base(item.Destination) != want || item.Action != ActionCreate {
+			t.Fatalf("item %d = %v %s, want create %s", index, item.Action, item.Destination, want)
+		}
+	}
+	if allocations > 100*count {
+		t.Fatalf("planning %d same-named sources made %.0f allocations, want at most %d", count, allocations, 100*count)
 	}
 }
 
@@ -814,7 +1179,7 @@ func TestPrepareObservesCancellation(t *testing.T) {
 		out := filepath.Join(t.TempDir(), "out")
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		_, err := Prepare(ctx, jobRequest(out, imageresizer.CollisionRename, sources...))
+		_, err := Prepare(ctx, jobRequest(out, CollisionRename, sources...))
 		assertKind(t, err, KindCanceled)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v, want context.Canceled", err)
@@ -831,7 +1196,7 @@ func TestPrepareObservesCancellation(t *testing.T) {
 			cancel()
 			return os.Lstat(path)
 		}}
-		_, err := prepare(ctx, jobRequest(t.TempDir(), imageresizer.CollisionRename, sources...), files)
+		_, err := prepare(ctx, jobRequest(t.TempDir(), CollisionRename, sources...), files)
 		assertKind(t, err, KindCanceled)
 	})
 
@@ -846,7 +1211,7 @@ func TestPrepareObservesCancellation(t *testing.T) {
 			}
 			return fakeInfo{name: filepath.Base(path)}, nil
 		}}
-		_, err := prepare(ctx, jobRequest(t.TempDir(), imageresizer.CollisionRename, sources[0]), files)
+		_, err := prepare(ctx, jobRequest(t.TempDir(), CollisionRename, sources[0]), files)
 		assertKind(t, err, KindCanceled)
 		if calls != 5 {
 			t.Fatalf("checked %d names after cancellation at 5", calls)
@@ -855,15 +1220,15 @@ func TestPrepareObservesCancellation(t *testing.T) {
 }
 
 // TestPrepareNeverOverwritesASource generates many random jobs — sources
-// spread over two input folders and the output folder itself, earlier
-// results, folders, and hard links to sources occupying destinations — and
-// checks the plan of each against the collision rules, then writes every
-// planned result and checks that no source changed (RSZ-024 to RSZ-026,
-// NFR-020).
+// spread over two input folders and the output folder itself, listed files
+// the job does not process, earlier results, folders, and hard links to
+// sources occupying destinations — and checks the plan of each against the
+// collision rules, then writes every planned result and checks that no
+// listed file changed (RSZ-024 to RSZ-026, NFR-020).
 func TestPrepareNeverOverwritesASource(t *testing.T) {
 	stems := []string{"a", "A", "b", "a_2", "B_2", "a_3"}
 	extensions := []string{".png", ".PNG", ".jpg", ".jpeg"}
-	formats := []imageresizer.OutputFormat{imageresizer.FormatKeepSource, imageresizer.FormatPNG, imageresizer.FormatJPEG}
+	formats := []Format{FormatKeepSource, FormatPNG, FormatJPEG}
 	numbered := regexp.MustCompile(`^(.*)_([0-9]+)(\.png|\.jpg)$`)
 	random := rand.New(rand.NewSource(5))
 	for scenario := 0; scenario < 120; scenario++ {
@@ -871,20 +1236,28 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 		folders := []string{filepath.Join(base, "in1"), filepath.Join(base, "in2"), filepath.Join(base, "out")}
 		out := folders[2]
 		var sources []Source
+		var protected []string
+		var listed []string
 		seen := map[string]bool{}
-		for count := 1 + random.Intn(6); len(sources) < count; {
+		sourceCount, protectedCount := 1+random.Intn(6), random.Intn(3)
+		for len(sources) < sourceCount || len(protected) < protectedCount {
 			name := stems[random.Intn(len(stems))] + extensions[random.Intn(len(extensions))]
 			path := filepath.Join(folders[random.Intn(len(folders))], name)
-			if seen[imageresizer.PathKey(path)] {
+			if seen[PathKey(path)] {
 				continue
 			}
-			seen[imageresizer.PathKey(path)] = true
+			seen[PathKey(path)] = true
+			writeFile(t, path, "listed "+path)
+			listed = append(listed, path)
+			if len(sources) == sourceCount {
+				protected = append(protected, path)
+				continue
+			}
 			format := decode.FormatPNG
 			if random.Intn(2) == 0 {
 				format = decode.FormatJPEG
 			}
 			sources = append(sources, Source{Path: path, Format: format})
-			writeFile(t, path, "source "+path)
 		}
 		if err := os.MkdirAll(out, 0o755); err != nil {
 			t.Fatalf("create output folder: %v", err)
@@ -903,7 +1276,7 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 					t.Fatalf("create folder %s: %v", path, err)
 				}
 			case 2:
-				target := sources[random.Intn(len(sources))].Path
+				target := listed[random.Intn(len(listed))]
 				if err := os.Link(target, path); err != nil {
 					t.Fatalf("hard-link %s to %s: %v", path, target, err)
 				}
@@ -911,8 +1284,9 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 		}
 		policy := policies[random.Intn(len(policies))]
 		request := jobRequest(out, policy, sources...)
-		request.Options.Format = formats[random.Intn(len(formats))]
-		label := fmt.Sprintf("scenario %d (%s, %s)", scenario, policy, request.Options.Format)
+		request.Protected = protected
+		request.Format = formats[random.Intn(len(formats))]
+		label := fmt.Sprintf("scenario %d (%s, %s)", scenario, policy, request.Format)
 
 		existed := map[string]fs.FileInfo{}
 		entries, err := os.ReadDir(out)
@@ -926,37 +1300,40 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 			}
 			existed[strings.ToUpper(entry.Name())] = info
 		}
-		sourceInfos := make([]fs.FileInfo, len(sources))
-		sourceKeys := map[string]bool{}
-		for index, source := range sources {
-			info, err := os.Stat(source.Path)
+		listedInfos := make([]fs.FileInfo, len(listed))
+		listedKeys := map[string]bool{}
+		for index, path := range listed {
+			info, err := os.Stat(path)
 			if err != nil {
-				t.Fatalf("%s: inspect source: %v", label, err)
+				t.Fatalf("%s: inspect listed file: %v", label, err)
 			}
-			sourceInfos[index] = info
-			sourceKeys[imageresizer.PathKey(source.Path)] = true
+			listedInfos[index] = info
+			listedKeys[PathKey(path)] = true
 		}
 
 		plan := mustPrepare(t, request)
 		written := map[string]bool{}
 		for index, item := range plan.Items {
 			source := sources[index]
-			natural := stem(source.Path) + Extension(OutputFormat(request.Options.Format, source.Format))
+			natural := stem(source.Path) + Extension(OutputFormat(request.Format, source.Format))
 			name := filepath.Base(item.Destination)
 			if filepath.Dir(item.Destination) != out {
 				t.Fatalf("%s: item %d destination %s is outside the output folder", label, index, item.Destination)
+			}
+			if item.Reason == ReasonDuplicate && (item.DuplicateOf < 0 || item.DuplicateOf >= index) {
+				t.Fatalf("%s: item %d is a duplicate of item %d", label, index, item.DuplicateOf)
 			}
 			switch item.Action {
 			case ActionFail:
 				t.Fatalf("%s: item %d failed: %v", label, index, item.Err)
 			case ActionSkip:
-				if policy != imageresizer.CollisionSkip || item.Reason == ReasonNone || name != natural {
+				if policy != CollisionSkip || item.Reason == ReasonNone || name != natural {
 					t.Fatalf("%s: item %d skipped %s for %v", label, index, name, item.Reason)
 				}
 				continue
 			case ActionReplace:
 				info, ok := existed[strings.ToUpper(name)]
-				if policy != imageresizer.CollisionOverwrite || !ok || !info.Mode().IsRegular() || name != natural {
+				if policy != CollisionOverwrite || !ok || !info.Mode().IsRegular() {
 					t.Fatalf("%s: item %d replaces %s, which it must not", label, index, name)
 				}
 			case ActionCreate:
@@ -972,26 +1349,26 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 				match[1]+match[3] != natural || match[2] == "0" || match[2] == "1" || strings.HasPrefix(match[2], "0") {
 				t.Fatalf("%s: renamed item %d writes %s, not a numbered %s", label, index, name, natural)
 			}
-			key := imageresizer.PathKey(item.Destination)
-			if sourceKeys[key] {
-				t.Fatalf("%s: item %d writes the source path %s", label, index, item.Destination)
+			key := PathKey(item.Destination)
+			if listedKeys[key] {
+				t.Fatalf("%s: item %d writes the listed path %s", label, index, item.Destination)
 			}
 			if written[key] {
 				t.Fatalf("%s: two items write %s", label, item.Destination)
 			}
 			written[key] = true
 			if info, ok := existed[strings.ToUpper(name)]; ok {
-				for _, sourceInfo := range sourceInfos {
-					if os.SameFile(info, sourceInfo) {
-						t.Fatalf("%s: item %d replaces %s, an alias of a source", label, index, name)
+				for _, listedInfo := range listedInfos {
+					if os.SameFile(info, listedInfo) {
+						t.Fatalf("%s: item %d replaces %s, an alias of a listed file", label, index, name)
 					}
 				}
 			}
 		}
 		materialize(t, plan, "result")
-		for _, source := range sources {
-			if got := readFile(t, source.Path); got != "source "+source.Path {
-				t.Fatalf("%s: source %s was overwritten with %q", label, source.Path, got)
+		for _, path := range listed {
+			if got := readFile(t, path); got != "listed "+path {
+				t.Fatalf("%s: listed file %s was overwritten with %q", label, path, got)
 			}
 		}
 	}

@@ -7,26 +7,30 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 var ErrPersistence = errors.New("resize settings persistence failed")
 
-type OutputFormat string
+// OutputFormat and CollisionPolicy are defined by the output planner, which
+// interprets them, so the planner needs nothing from this package and the
+// view can start jobs that plan their outputs.
+type OutputFormat = output.Format
 
 const (
-	FormatKeepSource OutputFormat = "keep-source"
-	FormatPNG        OutputFormat = "png"
-	FormatJPEG       OutputFormat = "jpeg"
+	FormatKeepSource = output.FormatKeepSource
+	FormatPNG        = output.FormatPNG
+	FormatJPEG       = output.FormatJPEG
 )
 
-type CollisionPolicy string
+type CollisionPolicy = output.Collision
 
 const (
-	CollisionRename    CollisionPolicy = "rename"
-	CollisionSkip      CollisionPolicy = "skip"
-	CollisionOverwrite CollisionPolicy = "overwrite"
+	CollisionRename    = output.CollisionRename
+	CollisionSkip      = output.CollisionSkip
+	CollisionOverwrite = output.CollisionOverwrite
 )
 
 const (

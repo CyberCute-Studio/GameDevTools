@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -26,19 +27,17 @@ type fileID struct {
 // for an 8.3 name below MAX_PATH.
 const longPathLimit = 248
 
+// shareAll lets every other open of a file proceed while planning holds a
+// handle to it.
+const shareAll = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
+
 // identify opens the path without requesting any access to its contents,
 // so neither its permissions nor another process's sharing mode prevent
 // reading its identity, and follows links to the file they resolve to.
 func identify(path string) (fileID, error) {
-	name, err := windows.UTF16PtrFromString(extendedPath(path))
+	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS)
 	if err != nil {
-		return fileID{}, &fs.PathError{Op: "open", Path: path, Err: err}
-	}
-	handle, err := windows.CreateFile(name, 0,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		return fileID{}, &fs.PathError{Op: "open", Path: path, Err: err}
+		return fileID{}, err
 	}
 	defer windows.CloseHandle(handle)
 	var information windows.ByHandleFileInformation
@@ -49,6 +48,51 @@ func identify(path string) (fileID, error) {
 		volume: information.VolumeSerialNumber,
 		index:  uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow),
 	}, nil
+}
+
+// reparseTagNameSurrogate is the reparse tag bit that marks a link to
+// another named file or folder: a symbolic link, a junction, or a WSL
+// symbolic link.
+const reparseTagNameSurrogate = 0x20000000
+
+// fileAttributeTagInfo is FILE_ATTRIBUTE_TAG_INFO.
+type fileAttributeTagInfo struct {
+	FileAttributes uint32
+	ReparseTag     uint32
+}
+
+// storedFile reports whether the path names a file, not a folder, whose
+// reparse point is no link but only says how its data is stored, such as a
+// placeholder OneDrive keeps in sync. It inspects the entry itself rather
+// than what its reparse point leads to, and requests no access to its
+// contents, so it never makes OneDrive download a file.
+func storedFile(path string) (bool, error) {
+	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT)
+	if err != nil {
+		return false, err
+	}
+	defer windows.CloseHandle(handle)
+	var information fileAttributeTagInfo
+	if err := windows.GetFileInformationByHandleEx(handle, windows.FileAttributeTagInfo,
+		(*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information))); err != nil {
+		return false, &fs.PathError{Op: "read reparse tag", Path: path, Err: err}
+	}
+	return information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 &&
+		information.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 &&
+		information.ReparseTag&reparseTagNameSurrogate == 0, nil
+}
+
+// open opens the path without requesting access to its contents.
+func open(path string, flags uint32) (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(extendedPath(path))
+	if err != nil {
+		return 0, &fs.PathError{Op: "open", Path: path, Err: err}
+	}
+	handle, err := windows.CreateFile(name, 0, shareAll, nil, windows.OPEN_EXISTING, flags, 0)
+	if err != nil {
+		return 0, &fs.PathError{Op: "open", Path: path, Err: err}
+	}
+	return handle, nil
 }
 
 // extendedPath adds the extended-length prefix to a long absolute path, as

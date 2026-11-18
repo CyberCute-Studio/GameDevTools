@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -296,7 +297,7 @@ func (v *Inventory) Remove(indices []int) []uint64 {
 	kept := v.items[:0]
 	for index, item := range v.items {
 		if _, drop := removing[index]; drop {
-			delete(v.byKey, PathKey(item.Path))
+			delete(v.byKey, output.PathKey(item.Path))
 			removed = append(removed, item.ID)
 			if item.Status == StatusChecking {
 				v.checking--
@@ -381,7 +382,7 @@ func (v *Inventory) addFile(path string, summary *AddSummary) {
 // claim allocates the ID of the item that will list the path, or counts the
 // path as a duplicate of the item already listing the same full path.
 func (v *Inventory) claim(path string, summary *AddSummary) (uint64, bool) {
-	key := PathKey(path)
+	key := output.PathKey(path)
 	if existing, exists := v.byKey[key]; exists {
 		summary.Duplicates++
 		summary.DuplicateOf = append(summary.DuplicateOf, existing)
@@ -397,12 +398,4 @@ func (v *Inventory) claim(path string, summary *AddSummary) (uint64, bool) {
 func (v *Inventory) allocateID() uint64 {
 	v.nextID++
 	return v.nextID
-}
-
-// PathKey normalizes a full path for comparison. Windows paths compare
-// case-insensitively, so "photo.PNG" and "PHOTO.png" name the same source.
-// The inventory deduplicates sources by it, and output planning compares
-// destinations with sources and with each other by it.
-func PathKey(path string) string {
-	return strings.ToUpper(filepath.Clean(path))
 }
