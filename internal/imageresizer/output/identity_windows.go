@@ -5,8 +5,8 @@ package output
 import (
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,7 +17,11 @@ import (
 // one file — a different letter case, a hard link, a junction or symbolic
 // link, a short 8.3 name, or a share path — reports the same identity. On
 // ReFS the 64-bit index may be shared by two distinct files, which can only
-// make planning treat a file as a source when it is not.
+// make planning treat a file as a source when it is not. FILE_ID_INFO's
+// 128-bit identifier would tell such files apart, but it is not documented
+// for every file system and redirector a path can lead through, and reading
+// it for some paths to a file but not others would let two paths to one
+// file compare unequal, the one mistake that could replace a source.
 type fileID struct {
 	volume uint32
 	index  uint64
@@ -32,44 +36,27 @@ const longPathLimit = 248
 // handle to it.
 const shareAll = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 
-// identify opens the path without requesting any access to its contents,
-// so another process's sharing mode does not prevent reading its identity,
-// and follows links to the file they resolve to. A file whose permissions
-// deny the user even reading its attributes cannot be identified.
-func identify(path string) (fileID, error) {
-	information, err := inspect(path)
-	if err != nil {
-		return fileID{}, err
-	}
-	return fileID{
-		volume: information.VolumeSerialNumber,
-		index:  uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow),
-	}, nil
-}
-
-// links returns the number of names of the file the path resolves to: its
-// hard links.
-func links(path string) (uint32, error) {
-	information, err := inspect(path)
-	if err != nil {
-		return 0, err
-	}
-	return information.NumberOfLinks, nil
-}
-
-// inspect reads the file information of the file the path resolves to,
-// without requesting access to its contents.
-func inspect(path string) (windows.ByHandleFileInformation, error) {
-	var information windows.ByHandleFileInformation
+// identify returns the identity of the file the path resolves to and its
+// number of names: its hard links. It opens the path without requesting any
+// access to its contents, so another process's sharing mode does not
+// prevent reading them, and follows links to the file they resolve to. A
+// file whose permissions deny the user even reading its attributes cannot
+// be identified.
+func identify(path string) (fileID, uint32, error) {
 	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS)
 	if err != nil {
-		return information, err
+		return fileID{}, 0, err
 	}
 	defer windows.CloseHandle(handle)
+	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return information, &fs.PathError{Op: "read file identity", Path: path, Err: err}
+		return fileID{}, 0, &fs.PathError{Op: "read file identity", Path: path, Err: err}
 	}
-	return information, nil
+	id := fileID{
+		volume: information.VolumeSerialNumber,
+		index:  uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow),
+	}
+	return id, information.NumberOfLinks, nil
 }
 
 // fileMissing reports whether a file could not be opened because no entry
@@ -125,19 +112,31 @@ func open(path string, flags uint32) (windows.Handle, error) {
 	return handle, nil
 }
 
-// extendedPath adds the extended-length prefix to a long absolute path, as
-// the os package does, so identities are read for the same paths os.Lstat
-// can inspect.
+// extendedPath gives a long absolute path the extended-length prefix the
+// way the os package does, so identities are read for the files os.Lstat
+// and the decoder reach. Like os, it resolves the path with GetFullPathName
+// before adding the prefix, which drops trailing spaces and dots from the
+// last name and resolves forward slashes, ".", and ".." as Windows does for
+// a short path, and it leaves alone a path already marked extended with any
+// separators. The planner passes only absolute paths.
 func extendedPath(path string) string {
-	if len(path) < longPathLimit || strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\\.\`) {
+	if len(path) >= 4 && (path[:4] == `\??\` ||
+		os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) && path[2] == '?' && os.IsPathSeparator(path[3])) {
 		return path
 	}
-	clean := filepath.Clean(path)
-	if strings.HasPrefix(clean, `\\`) {
-		return `\\?\UNC\` + clean[2:]
+	if len(path) < longPathLimit || !filepath.IsAbs(path) {
+		return path
 	}
-	if filepath.IsAbs(clean) {
-		return `\\?\` + clean
+	full, err := windows.FullPath(path)
+	if err != nil {
+		return path
 	}
-	return path
+	if os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) {
+		if path[2] == '.' && os.IsPathSeparator(path[3]) {
+			// A device path would change its meaning with the prefix.
+			return full
+		}
+		return `\\?\UNC\` + full[2:]
+	}
+	return `\\?\` + full
 }

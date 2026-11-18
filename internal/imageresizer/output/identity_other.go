@@ -16,13 +16,8 @@ var errIdentityUnsupported = errors.New("file identity is available on Windows o
 // identify always fails outside Windows, so planning there never proves an
 // existing file is not a source and an Overwrite job renames instead of
 // replacing.
-func identify(string) (fileID, error) {
-	return fileID{}, errIdentityUnsupported
-}
-
-// links always fails outside Windows, like identify.
-func links(string) (uint32, error) {
-	return 0, errIdentityUnsupported
+func identify(string) (fileID, uint32, error) {
+	return fileID{}, 0, errIdentityUnsupported
 }
 
 // fileMissing reports whether a file could not be opened because it does

@@ -21,6 +21,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 )
 
@@ -354,8 +356,7 @@ type faultyFiles struct {
 	mkdirAll   func(path string) error
 	stat       func(path string) (fs.FileInfo, error)
 	lstat      func(path string) (fs.FileInfo, error)
-	identity   func(path string) (fileID, error)
-	links      func(path string) (uint32, error)
+	identity   func(path string) (fileID, uint32, error)
 	storedFile func(path string) (bool, error)
 }
 
@@ -380,18 +381,11 @@ func (f faultyFiles) Lstat(path string) (fs.FileInfo, error) {
 	return f.osFiles.Lstat(path)
 }
 
-func (f faultyFiles) Identity(path string) (fileID, error) {
+func (f faultyFiles) Identity(path string) (fileID, uint32, error) {
 	if f.identity != nil {
 		return f.identity(path)
 	}
 	return f.osFiles.Identity(path)
-}
-
-func (f faultyFiles) Links(path string) (uint32, error) {
-	if f.links != nil {
-		return f.links(path)
-	}
-	return f.osFiles.Links(path)
 }
 
 func (f faultyFiles) StoredFile(path string) (bool, error) {
@@ -711,21 +705,34 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 			out := t.TempDir()
 			destination := filepath.Join(out, "x.png")
 			writeFile(t, destination, "earlier")
-			files := faultyFiles{
-				lstat: func(path string) (fs.FileInfo, error) {
-					if strings.EqualFold(path, destination) {
-						return irregular(test.mode)(path)
-					}
-					return os.Lstat(path)
-				},
-				storedFile: test.stored,
-			}
 			for _, policy := range policies {
+				inspections := 0
+				files := faultyFiles{
+					lstat: func(path string) (fs.FileInfo, error) {
+						if strings.EqualFold(path, destination) {
+							return irregular(test.mode)(path)
+						}
+						return os.Lstat(path)
+					},
+					storedFile: func(path string) (bool, error) {
+						inspections++
+						return test.stored(path)
+					},
+				}
 				plan, err := prepare(context.Background(), jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))), files)
 				if err != nil {
 					t.Fatalf("%s: prepare: %v", policy, err)
 				}
 				assertItems(t, plan, []expect{test.want[policy]})
+				// Only Overwrite replaces, so only it asks how an irregular
+				// file is stored, and never for a folder.
+				want := 0
+				if policy == CollisionOverwrite && !test.mode.IsDir() {
+					want = 1
+				}
+				if inspections != want {
+					t.Fatalf("%s inspected the reparse point %d times, want %d", policy, inspections, want)
+				}
 			}
 		})
 	}
@@ -1017,7 +1024,7 @@ func TestPrepareSkipsIdentityUnlessOverwriting(t *testing.T) {
 	}
 	for _, policy := range policies {
 		calls := 0
-		files := faultyFiles{identity: func(path string) (fileID, error) {
+		files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
 			calls++
 			return identify(path)
 		}}
@@ -1123,6 +1130,41 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 	})
 }
 
+// TestPrepareFailsDestinationsWhenTheFolderGoes: a name is free only when it
+// is missing from a folder that exists. When the output folder goes after
+// Prepare has opened it, as when its drive is removed, no destination is
+// planned as free; each item that needs a name fails with the reason.
+func TestPrepareFailsDestinationsWhenTheFolderGoes(t *testing.T) {
+	for _, policy := range policies {
+		t.Run(string(policy), func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "out")
+			files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
+				if err := os.Remove(out); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("remove the output folder: %v", err)
+				}
+				return os.Lstat(path)
+			}}
+			// The first source lies in the output folder, so its result
+			// needs a numbered name.
+			plan, err := prepare(context.Background(), jobRequest(out, policy,
+				png(filepath.Join(out, "x.png")), png(filepath.Join(t.TempDir(), "y.png"))), files)
+			if err != nil {
+				t.Fatalf("prepare: %v", err)
+			}
+			want := []expect{{"x.png", ActionFail, ReasonSource}, {"y.png", ActionFail, ReasonNone}}
+			if policy == CollisionSkip {
+				want[0] = expect{"x.png", ActionSkip, ReasonSource}
+			}
+			assertItems(t, plan, want)
+			for index, item := range plan.Items {
+				if item.Action == ActionFail && !errors.Is(item.Err, fs.ErrNotExist) {
+					t.Fatalf("item %d error = %v, want the missing folder", index, item.Err)
+				}
+			}
+		})
+	}
+}
+
 // TestPrepareSearchesPastUncheckableNames: a search passing over names it
 // cannot check, in a folder that stays reachable, checks the folder at the
 // first, second, fourth, and so on such name rather than at every one, and
@@ -1174,10 +1216,25 @@ func TestTooLong(t *testing.T) {
 		{strings.Repeat("é", 256), true},
 		{strings.Repeat("😀", 127) + "a", false}, // two code units each
 		{strings.Repeat("😀", 128), true},
+		// Go holds an unpaired surrogate, which an NTFS name may contain, in
+		// three bytes of WTF-8; Windows stores it as one code unit.
+		{strings.Repeat("a", 252) + strings.Repeat("\xed\xa0\x80", 3), false},
+		{strings.Repeat("a", 253) + strings.Repeat("\xed\xa0\x80", 3), true},
+		{strings.Repeat("é", 254) + "\xff", false}, // a stray byte arrives as U+FFFD
+		{strings.Repeat("é", 255) + "\xff", true},
+		{strings.Repeat("�", 255), false},
 	}
 	for _, test := range tests {
 		if got := tooLong(test.name); got != test.want {
 			t.Errorf("tooLong(%d bytes) = %v, want %v", len(test.name), got, test.want)
+		}
+		// Each case agrees with the name Windows would receive.
+		encoded, err := windows.UTF16FromString(test.name)
+		if err != nil {
+			t.Fatalf("encode %q: %v", test.name, err)
+		}
+		if units := len(encoded) - 1; (units > maxNameLength) != test.want {
+			t.Errorf("a %d-byte name is %d code units, so want %v is wrong", len(test.name), units, test.want)
 		}
 	}
 }
@@ -1246,7 +1303,7 @@ func TestPrepareRenameSearchIsLinear(t *testing.T) {
 		sources[index] = png(filepath.Join(in, fmt.Sprint(index), "icon.png"))
 	}
 	files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
-		return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrNotExist}
+		return nil, &fs.PathError{Op: "lstat", Path: path, Err: windows.ERROR_FILE_NOT_FOUND}
 	}}
 	request := jobRequest(t.TempDir(), CollisionRename, sources...)
 	var plan Plan

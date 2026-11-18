@@ -18,7 +18,7 @@ import (
 
 func mustIdentify(t *testing.T, path string) fileID {
 	t.Helper()
-	id, err := identify(path)
+	id, _, err := identify(path)
 	if err != nil {
 		t.Fatalf("identify %s: %v", path, err)
 	}
@@ -116,10 +116,10 @@ func TestIdentifyRecognizesEveryPathToAFile(t *testing.T) {
 	if mustIdentify(t, other) == want {
 		t.Fatal("two distinct files report the same identity")
 	}
-	if _, err := identify(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
+	if _, _, err := identify(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("identify(missing) = %v, want a not-exist error", err)
 	}
-	if _, err := identify(filepath.Join(folder, "missing", "x.png")); !errors.Is(err, fs.ErrNotExist) {
+	if _, _, err := identify(filepath.Join(folder, "missing", "x.png")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("identify(missing folder) = %v, want a not-exist error", err)
 	}
 }
@@ -155,6 +155,38 @@ func TestIdentifyReadsLongPaths(t *testing.T) {
 	}
 }
 
+// TestIdentifyResolvesLongPathsAsTheOSPackageDoes: a long path reaches the
+// file os.Lstat and the decoder reach, even when Windows drops a trailing
+// space or dot from its last name or the path is marked extended with
+// forward slashes. A source listed that way is therefore still recognized
+// by its identity, and a confirmed Overwrite never replaces it.
+func TestIdentifyResolvesLongPathsAsTheOSPackageDoes(t *testing.T) {
+	folder := t.TempDir()
+	for len(folder) < 300 {
+		folder = filepath.Join(folder, strings.Repeat("d", 40))
+	}
+	path := filepath.Join(folder, "deep.png")
+	writeFile(t, path, "pixels")
+	want := mustIdentify(t, path)
+	for _, alias := range []string{path + " ", path + ".", `//?/` + filepath.ToSlash(path)} {
+		if _, err := os.Lstat(alias); err != nil {
+			t.Fatalf("os.Lstat(%q): %v", alias, err)
+		}
+		if got := mustIdentify(t, alias); got != want {
+			t.Errorf("identify(%q) = %+v, want %+v", alias, got, want)
+		}
+	}
+
+	// The listed path's key differs from the natural destination's, so only
+	// the identity shows that deep.png is the source.
+	plan := mustPrepare(t, jobRequest(folder, CollisionOverwrite, png(path+" ")))
+	assertItems(t, plan, []expect{{"deep_2.png", ActionCreate, ReasonSource}})
+	materialize(t, plan, "result")
+	if readFile(t, path) != "pixels" {
+		t.Fatal("the source listed with a trailing space was overwritten")
+	}
+}
+
 func TestExtendedPath(t *testing.T) {
 	long := `C:\` + strings.Repeat(`folder\`, 40) + "x.png"
 	share := `\\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"
@@ -163,7 +195,14 @@ func TestExtendedPath(t *testing.T) {
 		{long, `\\?\` + long},
 		{share, `\\?\UNC\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"},
 		{`\\?\` + long, `\\?\` + long},
+		{`\??\` + long, `\??\` + long},
+		{`//?/` + filepath.ToSlash(long), `//?/` + filepath.ToSlash(long)},
+		{filepath.ToSlash(long), `\\?\` + long},
 		{strings.Replace(long, `\x.png`, `\.\x.png`, 1), `\\?\` + long},
+		// GetFullPathName drops trailing spaces and dots from the last name,
+		// as Windows does for every path it is not told to take verbatim.
+		{long + " ", `\\?\` + long},
+		{long + ". .", `\\?\` + long},
 	}
 	for _, test := range tests {
 		if got := extendedPath(test.path); got != test.want {
@@ -378,10 +417,10 @@ func TestPrepareRenamesWhenIdentityIsUnreadable(t *testing.T) {
 	}
 	for _, policy := range policies {
 		reads := 0
-		files := faultyFiles{identity: func(path string) (fileID, error) {
+		files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
 			if strings.EqualFold(path, destination) {
 				reads++
-				return fileID{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+				return fileID{}, 0, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
 			}
 			return identify(path)
 		}}
@@ -404,7 +443,7 @@ func deny(t *testing.T, path string) {
 	writeFile(t, path, "inaccessible original")
 	setDACL(t, path, "D:P")
 	t.Cleanup(func() { setDACL(t, path, "D:P(A;;FA;;;WD)") })
-	if _, err := identify(path); err == nil {
+	if _, _, err := identify(path); err == nil {
 		t.Fatalf("the identity of %s can be read despite its empty DACL", path)
 	}
 }
@@ -498,9 +537,9 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 			return &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_BAD_NETPATH}
 		}
 		files := faultyFiles{
-			identity: func(path string) (fileID, error) {
+			identity: func(path string) (fileID, uint32, error) {
 				if strings.EqualFold(path, protected) {
-					return fileID{}, unreachable(path)
+					return fileID{}, 0, unreachable(path)
 				}
 				return identify(path)
 			},
@@ -518,9 +557,9 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 		protected := filepath.Join(t.TempDir(), "link.png")
 		writeFile(t, protected, "stands in for a link")
 		files := faultyFiles{
-			identity: func(path string) (fileID, error) {
+			identity: func(path string) (fileID, uint32, error) {
 				if strings.EqualFold(path, protected) {
-					return fileID{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+					return fileID{}, 0, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
 				}
 				return identify(path)
 			},
@@ -534,10 +573,72 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
 	})
 
+	// A file whose reparse point only says how its data is stored, such as
+	// one OneDrive keeps in sync, has its name in its folder like any other
+	// file. No filter handles the test's reparse tag, so its identity cannot
+	// be read, while its reparse point can.
+	storedOriginal := func(t *testing.T, path string) {
+		t.Helper()
+		writeFile(t, path, "synced original")
+		dataReparsePoint(t, path)
+		if _, _, err := identify(path); err == nil {
+			t.Skipf("the identity of %s can be read", path)
+		}
+	}
+
+	t.Run("inaccessible stored file in another folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "synced.png")
+		storedOriginal(t, protected)
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	t.Run("inaccessible stored file in the output folder", func(t *testing.T) {
+		out := outputFolder(t)
+		protected := filepath.Join(out, "synced.png")
+		storedOriginal(t, protected)
+		assertItems(t, plan(t, out, osFiles{}, protected), renamed)
+	})
+
 	t.Run("file missing from its folder", func(t *testing.T) {
 		protected := filepath.Join(t.TempDir(), "gone.png")
 		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
 	})
+}
+
+// TestPrepareReadsEachIdentityOnce: a confirmed Overwrite job reads each
+// path's identity once. A destination is opened once for both its identity
+// and its number of names, and the folder holding several listed files
+// whose identities cannot be read is read once for all of them.
+func TestPrepareReadsEachIdentityOnce(t *testing.T) {
+	in := t.TempDir()
+	var protected []string
+	denied := map[string]bool{}
+	for _, name := range []string{"a.png", "b.png", "c.png"} {
+		path := filepath.Join(in, name)
+		writeFile(t, path, "inaccessible original")
+		protected = append(protected, path)
+		denied[PathKey(path)] = true
+	}
+	out := t.TempDir()
+	writeFile(t, filepath.Join(out, "x.png"), "earlier")
+	reads := map[string]int{}
+	files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
+		reads[PathKey(path)]++
+		if denied[PathKey(path)] {
+			return fileID{}, 0, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+		}
+		return identify(path)
+	}}
+	request := jobRequest(out, CollisionOverwrite, png(filepath.Join(t.TempDir(), "x.png")))
+	request.Protected = protected
+	plan, err := prepare(context.Background(), request, files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	assertItems(t, plan, []expect{{"x.png", ActionReplace, ReasonNone}})
+	if reads[PathKey(in)] != 1 || reads[PathKey(filepath.Join(out, "x.png"))] != 1 || reads[PathKey(out)] != 1 {
+		t.Fatalf("identity reads = %v, want one of each path", reads)
+	}
 }
 
 // TestPrepareReportsDeniedFolderCreation pins RSZ-030 with a real access

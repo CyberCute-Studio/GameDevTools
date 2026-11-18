@@ -207,8 +207,11 @@ var (
 
 // ValidateFolder checks an output folder path the way the persisted options
 // and Prepare both require: it is not empty, is valid text, and is absolute.
-// A U+FFFD replacement character marks a path a lossy text conversion
-// changed, which may name another folder than the one chosen.
+// A path that is not valid UTF-8, as Go holds a Windows name with an
+// unpaired surrogate, cannot be kept in the settings file, whose JSON
+// replaces such bytes with U+FFFD, and a U+FFFD replacement character marks
+// a path such a lossy conversion changed; either may name another folder
+// than the one chosen.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -563,10 +566,9 @@ type fileSystem interface {
 	Stat(path string) (fs.FileInfo, error)
 	Lstat(path string) (fs.FileInfo, error)
 	// Identity returns the identity of the file the path resolves to,
-	// following links, so two paths to one file report the same identity.
-	Identity(path string) (fileID, error)
-	// Links returns the number of names of the file the path resolves to.
-	Links(path string) (uint32, error)
+	// following links, so two paths to one file report the same identity,
+	// and the file's number of names.
+	Identity(path string) (fileID, uint32, error)
 	// StoredFile reports whether an entry Lstat reports as irregular is a
 	// file whose reparse point only says how its data is stored, rather
 	// than a link or a folder.
@@ -575,31 +577,18 @@ type fileSystem interface {
 
 type osFiles struct{}
 
-func (osFiles) MkdirAll(path string) error             { return os.MkdirAll(path, 0o755) }
-func (osFiles) Stat(path string) (fs.FileInfo, error)  { return os.Stat(path) }
-func (osFiles) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
-func (osFiles) Identity(path string) (fileID, error)   { return identify(path) }
-func (osFiles) Links(path string) (uint32, error)      { return links(path) }
-func (osFiles) StoredFile(path string) (bool, error)   { return storedFile(path) }
+func (osFiles) MkdirAll(path string) error                   { return os.MkdirAll(path, 0o755) }
+func (osFiles) Stat(path string) (fs.FileInfo, error)        { return os.Stat(path) }
+func (osFiles) Lstat(path string) (fs.FileInfo, error)       { return os.Lstat(path) }
+func (osFiles) Identity(path string) (fileID, uint32, error) { return identify(path) }
+func (osFiles) StoredFile(path string) (bool, error)         { return storedFile(path) }
 
-// entry is what exists at a candidate destination.
-type entry uint8
-
-const (
-	// entryAbsent means nothing exists at the path.
-	entryAbsent entry = iota
-	// entryFile means a file exists at the path: a regular file, or one
-	// whose reparse point only says how its data is stored.
-	entryFile
-	// entryOther means a folder, link, or other entry exists at the path,
-	// which a result never replaces.
-	entryOther
-)
-
-// probe is the cached result of inspecting one destination path.
+// probe is the cached result of inspecting one destination path: whether an
+// entry has its name, and that entry's type.
 type probe struct {
-	entry entry
-	err   error
+	exists bool
+	mode   fs.FileMode
+	err    error
 }
 
 // verdict is whether an Overwrite job may replace one existing file.
@@ -614,10 +603,12 @@ type verdict struct {
 	owner int
 }
 
-// identified is the cached identity of one existing destination.
+// identified is the cached identity of one path and the number of names of
+// the file it resolves to.
 type identified struct {
-	id  fileID
-	err error
+	id    fileID
+	links uint32
+	err   error
 }
 
 type planner struct {
@@ -627,38 +618,34 @@ type planner struct {
 	format    Format
 	collision Collision
 	sources   []Source
-	// protected holds the request's protected paths.
-	protected []string
-	// sourceKeys holds the path key of every source and protected path, so
-	// no destination is ever planned onto one, whether or not it still
-	// exists.
+	// listed holds the path of every source and protected path.
+	listed []string
+	// sourceKeys holds the path key of every listed path, so no destination
+	// is ever planned onto one, whether or not it still exists.
 	sourceKeys map[string]struct{}
 	// claimed maps the path key of every destination already planned for
 	// creation or replacement to the index of its item.
 	claimed map[string]int
 	// probes caches destination inspections by path key.
 	probes map[string]probe
-	// identities caches the identities of existing destinations by path
-	// key, so items with one natural destination read it once.
+	// identities caches identities by path key: those of existing
+	// destinations, so items with one natural destination read it once, and
+	// those of the output folder and the folders holding unreadable listed
+	// files, so each folder is read once.
 	identities map[string]identified
-	// sourceIDs holds the file identities of the sources and protected
-	// paths, loaded the first time an Overwrite job must compare an existing
-	// file with them.
+	// sourceIDs holds the file identities of the listed paths, loaded the
+	// first time an Overwrite job must compare an existing file with them.
 	sourceIDs map[fileID]struct{}
 	loaded    bool
-	// unverified reports that some source or protected path may exist but
-	// its identity, and where it lies, could not be read, so no existing
-	// file can be proven not to be it.
+	// unverified reports that some listed path may exist but its identity,
+	// and where it lies, could not be read, so no existing file can be
+	// proven not to be it.
 	unverified bool
-	// unverifiedFolders holds the identities of the folders holding a
-	// source or protected path that is a plain file whose own identity
-	// could not be read. Such a file has a name in that folder, so only an
-	// existing file that may have a name there too can be it.
+	// unverifiedFolders holds the identities of the folders holding a listed
+	// file that is no link but whose own identity could not be read. Such a
+	// file has a name in that folder, so only an existing file that may have
+	// a name there too can be it.
 	unverifiedFolders map[fileID]struct{}
-	// output caches the output folder's identity, read the first time an
-	// existing file must be compared with an unverified listed file.
-	output     identified
-	outputRead bool
 	// replaced maps the identity of every file planned for replacement to
 	// the index of its item, so two items never replace one file through
 	// two names.
@@ -677,11 +664,13 @@ type planner struct {
 }
 
 func newPlanner(ctx context.Context, request Request, folder string, files fileSystem) *planner {
-	sourceKeys := make(map[string]struct{}, len(request.Sources)+len(request.Protected))
+	listed := make([]string, 0, len(request.Sources)+len(request.Protected))
 	for _, source := range request.Sources {
-		sourceKeys[PathKey(source.Path)] = struct{}{}
+		listed = append(listed, source.Path)
 	}
-	for _, path := range request.Protected {
+	listed = append(listed, request.Protected...)
+	sourceKeys := make(map[string]struct{}, len(listed))
+	for _, path := range listed {
 		sourceKeys[PathKey(path)] = struct{}{}
 	}
 	return &planner{
@@ -691,7 +680,7 @@ func newPlanner(ctx context.Context, request Request, folder string, files fileS
 		format:            request.Format,
 		collision:         request.Collision,
 		sources:           request.Sources,
-		protected:         request.Protected,
+		listed:            listed,
 		sourceKeys:        sourceKeys,
 		claimed:           make(map[string]int, len(request.Sources)),
 		probes:            make(map[string]probe, len(request.Sources)),
@@ -774,13 +763,14 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 	case found.err != nil:
 		p.fail(item, "check destination", found.err)
 		return true, nil
-	case found.entry == entryAbsent:
+	case !found.exists:
 		p.claimed[key] = index
 		item.Action = ActionCreate
 		return true, nil
-	case found.entry == entryOther, p.collision != CollisionOverwrite:
+	case p.collision != CollisionOverwrite, !p.file(item.Destination, found.mode):
 		// Rename and Skip never replace a file, so whether an existing file
-		// is a source under another name changes nothing they do.
+		// is a source under another name changes nothing they do, and no
+		// policy replaces a folder or a link.
 		item.Reason = ReasonExists
 		return false, nil
 	}
@@ -855,7 +845,7 @@ func (p *planner) resolve(index int, item *Item) error {
 			}
 			continue
 		}
-		if found.entry == entryAbsent {
+		if !found.exists {
 			p.next[pattern] = suffix + 1
 			p.claimed[key] = index
 			item.Destination = candidate
@@ -878,7 +868,9 @@ func (p *planner) fail(item *Item, op string, err error) {
 }
 
 // probe inspects a destination path without following a final link, so a
-// link is reported as an entry of its own rather than as its target.
+// link is reported as an entry of its own rather than as its target. Only a
+// name missing from the output folder is free: a path whose folder cannot be
+// found, such as on a drive or share that has gone, cannot be checked.
 func (p *planner) probe(key, path string) probe {
 	if cached, ok := p.probes[key]; ok {
 		return cached
@@ -886,37 +878,42 @@ func (p *planner) probe(key, path string) probe {
 	var found probe
 	info, err := p.files.Lstat(path)
 	switch {
-	case err == nil && info.Mode().IsRegular():
-		found.entry = entryFile
-	case err == nil && info.Mode().Type() == fs.ModeIrregular:
-		// Since Go 1.23, os.Lstat reports a Windows file with a reparse
-		// point other than a symbolic link as irregular, and that includes
-		// every file OneDrive keeps in sync. A reparse point that only says
-		// how the data is stored leaves a file like any other; a link, a
-		// junction, or one that cannot be read is never replaced.
-		found.entry = entryOther
-		if stored, err := p.files.StoredFile(path); err == nil && stored {
-			found.entry = entryFile
-		}
 	case err == nil:
-		found.entry = entryOther
-	case errors.Is(err, fs.ErrNotExist):
-		found.entry = entryAbsent
-	default:
+		found = probe{exists: true, mode: info.Mode()}
+	case !fileMissing(err):
 		found.err = err
 	}
 	p.probes[key] = found
 	return found
 }
 
+// file reports whether the entry at path, of the given type, is a file: a
+// regular file, or one Lstat reports as irregular whose reparse point only
+// says how its data is stored. Since Go 1.23, os.Lstat reports a Windows file
+// with a reparse point other than a symbolic link as irregular, and that
+// includes every file OneDrive keeps in sync; such a file has its data and
+// its name where it stands, like any other. A folder, a link, a junction,
+// and an irregular entry whose reparse point cannot be read are not files.
+func (p *planner) file(path string, mode fs.FileMode) bool {
+	switch mode.Type() {
+	case 0:
+		return true
+	case fs.ModeIrregular:
+		stored, err := p.files.StoredFile(path)
+		return err == nil && stored
+	}
+	return false
+}
+
 // replaceable decides whether an Overwrite job may replace the existing file
 // at a natural destination: only when its identity proves it is none of the
 // sources and no earlier item replaces it. Only a context error is returned.
 func (p *planner) replaceable(key, path string) (verdict, error) {
-	id, err := p.identity(key, path)
-	if err != nil {
+	found := p.identity(key, path)
+	if found.err != nil {
 		return verdict{reason: ReasonUnverified, owner: -1}, nil
 	}
+	id := found.id
 	source, err := p.isSource(id)
 	if err != nil {
 		return verdict{}, err
@@ -924,7 +921,7 @@ func (p *planner) replaceable(key, path string) (verdict, error) {
 	if source {
 		return verdict{reason: ReasonSource, id: id, owner: -1}, nil
 	}
-	if p.mayBeUnverified(path) {
+	if p.mayBeUnverified(found.links) {
 		return verdict{reason: ReasonUnverified, id: id, owner: -1}, nil
 	}
 	if owner, twice := p.replaced[id]; twice {
@@ -933,31 +930,27 @@ func (p *planner) replaceable(key, path string) (verdict, error) {
 	return verdict{id: id, owner: -1}, nil
 }
 
-// identity reads the identity of the existing file at a destination once
-// per path key.
-func (p *planner) identity(key, path string) (fileID, error) {
+// identity reads the identity of the file or folder at a path, and its
+// number of names, once per path key.
+func (p *planner) identity(key, path string) identified {
 	if cached, ok := p.identities[key]; ok {
-		return cached.id, cached.err
+		return cached
 	}
-	id, err := p.files.Identity(path)
-	p.identities[key] = identified{id: id, err: err}
-	return id, err
+	var found identified
+	found.id, found.links, found.err = p.files.Identity(path)
+	p.identities[key] = found
+	return found
 }
 
-// isSource reports whether the identity belongs to one of the sources or
-// protected paths, loading their identities on first use.
+// isSource reports whether the identity belongs to one of the listed paths,
+// loading their identities on first use.
 func (p *planner) isSource(id fileID) (bool, error) {
 	if !p.loaded {
-		paths := make([]string, 0, len(p.sources)+len(p.protected))
-		for _, source := range p.sources {
-			paths = append(paths, source.Path)
-		}
-		paths = append(paths, p.protected...)
-		for _, path := range paths {
+		for _, path := range p.listed {
 			if err := p.ctx.Err(); err != nil {
 				return false, kindError(KindCanceled, "plan outputs", err)
 			}
-			sourceID, err := p.files.Identity(path)
+			sourceID, _, err := p.files.Identity(path)
 			switch {
 			case err == nil:
 				p.sourceIDs[sourceID] = struct{}{}
@@ -975,53 +968,49 @@ func (p *planner) isSource(id fileID) (bool, error) {
 	return source, nil
 }
 
-// unreadable records a source or protected path that may exist but whose
-// identity could not be read, such as a file the user may not open. When
-// the path names a plain file, one that is no link, in a folder whose
-// identity can be read, the file has its name in that folder; otherwise,
-// such as for a drive, share, or link that can no longer be reached, the
-// file may be any existing file.
+// unreadable records a listed path that may exist but whose identity could
+// not be read, such as a file the user may not open. When the path names a
+// file, one that is no link, in a folder whose identity can be read, the
+// file has its name in that folder; otherwise, such as for a drive, share,
+// or link that can no longer be reached, the file may be any existing file.
 func (p *planner) unreadable(path string) {
 	if p.unverified {
 		return
 	}
 	info, err := p.files.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil || !p.file(path, info.Mode()) {
 		p.unverified = true
 		return
 	}
-	folder, err := p.files.Identity(filepath.Dir(path))
-	if err != nil {
+	folder := filepath.Dir(path)
+	found := p.identity(PathKey(folder), folder)
+	if found.err != nil {
 		p.unverified = true
 		return
 	}
-	p.unverifiedFolders[folder] = struct{}{}
+	p.unverifiedFolders[found.id] = struct{}{}
 }
 
-// mayBeUnverified reports whether the existing file at path, whose identity
-// matches no source, may still be a source or protected path whose own
-// identity could not be read. A file with a single name has it in the
-// output folder, so it can be such a file only when one lies in the output
-// folder too; a file with more names may be any of them.
-func (p *planner) mayBeUnverified(path string) bool {
+// mayBeUnverified reports whether an existing file with the given number of
+// names, whose identity matches no listed path, may still be a listed file
+// whose own identity could not be read. A file with a single name has it in
+// the output folder, so it can be such a file only when one lies in the
+// output folder too; a file with more names may be any of them.
+func (p *planner) mayBeUnverified(links uint32) bool {
 	if p.unverified {
 		return true
 	}
 	if len(p.unverifiedFolders) == 0 {
 		return false
 	}
-	if links, err := p.files.Links(path); err != nil || links != 1 {
+	output := p.identity(PathKey(p.folder), p.folder)
+	if output.err != nil {
 		return true
 	}
-	if !p.outputRead {
-		p.output.id, p.output.err = p.files.Identity(p.folder)
-		p.outputRead = true
-	}
-	if p.output.err != nil {
+	if _, held := p.unverifiedFolders[output.id]; held {
 		return true
 	}
-	_, held := p.unverifiedFolders[p.output.id]
-	return held
+	return links != 1
 }
 
 // stem is the source's base file name without its extension.
@@ -1031,18 +1020,27 @@ func stem(path string) string {
 }
 
 // tooLong reports whether a file name exceeds maxNameLength UTF-16 code
-// units.
+// units. Go holds a Windows name with an unpaired surrogate, which NTFS
+// accepts, in WTF-8: the surrogate takes three bytes that are not valid
+// UTF-8 but is one code unit, as is any other byte that is not valid UTF-8,
+// which Windows receives as U+FFFD.
 func tooLong(name string) bool {
 	if len(name) <= maxNameLength {
-		// UTF-8 never takes fewer bytes than UTF-16 code units.
+		// Neither UTF-8 nor WTF-8 takes fewer bytes than UTF-16 code units.
 		return false
 	}
 	units := 0
-	for _, character := range name {
+	for rest := name; rest != ""; {
+		character, size := utf8.DecodeRuneInString(rest)
+		if character == utf8.RuneError && size == 1 && len(rest) >= 3 &&
+			rest[0] == 0xED && rest[1]&0xE0 == 0xA0 && rest[2]&0xC0 == 0x80 {
+			size = 3
+		}
 		units += utf16.RuneLen(character)
 		if units > maxNameLength {
 			return true
 		}
+		rest = rest[size:]
 	}
 	return false
 }
