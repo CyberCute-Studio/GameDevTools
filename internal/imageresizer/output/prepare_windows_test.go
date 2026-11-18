@@ -359,35 +359,185 @@ func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
 }
 
 // TestPrepareRenamesWhenIdentityIsUnreadable: Overwrite replaces only a
-// file it can prove is not a source. When the identity of the destination
-// or of a source cannot be read, the result is renamed instead; the other
-// policies never replace and are unaffected.
+// file it can prove is not a source. When the destination's identity cannot
+// be read, the result is renamed instead, and the destination is read once
+// however many items it is the natural destination of; the other policies
+// never replace and are unaffected.
 func TestPrepareRenamesWhenIdentityIsUnreadable(t *testing.T) {
-	in, out := t.TempDir(), t.TempDir()
-	source := filepath.Join(in, "x.png")
-	writeFile(t, source, "source")
+	out := t.TempDir()
 	destination := filepath.Join(out, "x.png")
 	writeFile(t, destination, "earlier")
-	for _, unreadable := range []string{source, destination} {
+	sources := []Source{png(filepath.Join(t.TempDir(), "x.png")), png(filepath.Join(t.TempDir(), "x.png"))}
+	want := map[Collision][]expect{
+		CollisionRename: {{"x_2.png", ActionCreate, ReasonExists}, {"x_3.png", ActionCreate, ReasonExists}},
+		CollisionSkip:   {{"x.png", ActionSkip, ReasonExists}, {"x.png", ActionSkip, ReasonExists}},
+		CollisionOverwrite: {
+			{"x_2.png", ActionCreate, ReasonUnverified},
+			{"x_3.png", ActionCreate, ReasonUnverified},
+		},
+	}
+	for _, policy := range policies {
+		reads := 0
 		files := faultyFiles{identity: func(path string) (fileID, error) {
-			if strings.EqualFold(path, unreadable) {
+			if strings.EqualFold(path, destination) {
+				reads++
 				return fileID{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
 			}
 			return identify(path)
 		}}
-		want := map[Collision]expect{
-			CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
-			CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
-			CollisionOverwrite: {"x_2.png", ActionCreate, ReasonUnverified},
+		plan, err := prepare(context.Background(), jobRequest(out, policy, sources...), files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
 		}
-		for _, policy := range policies {
-			plan, err := prepare(context.Background(), jobRequest(out, policy, png(source)), files)
-			if err != nil {
-				t.Fatalf("prepare: %v", err)
-			}
-			assertItems(t, plan, []expect{want[policy]})
+		assertItems(t, plan, want[policy])
+		if wantReads := map[bool]int{true: 1}[policy == CollisionOverwrite]; reads != wantReads {
+			t.Fatalf("%s read the destination's identity %d times, want %d", policy, reads, wantReads)
 		}
 	}
+}
+
+// deny gives the file a protected, empty DACL, as an original copied from
+// another account can carry, so the user may not even read its attributes
+// and its identity cannot be read. Its folder still lists it.
+func deny(t *testing.T, path string) {
+	t.Helper()
+	writeFile(t, path, "inaccessible original")
+	setDACL(t, path, "D:P")
+	t.Cleanup(func() { setDACL(t, path, "D:P(A;;FA;;;WD)") })
+	if _, err := identify(path); err == nil {
+		t.Fatalf("the identity of %s can be read despite its empty DACL", path)
+	}
+}
+
+// missingDrive returns the root of a drive letter no volume is mounted at,
+// or false when every letter is in use.
+func missingDrive(t *testing.T) (string, bool) {
+	t.Helper()
+	drives, err := windows.GetLogicalDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	for letter := 'Z'; letter >= 'D'; letter-- {
+		if drives&(1<<(letter-'A')) == 0 {
+			return string(letter) + `:\`, true
+		}
+	}
+	return "", false
+}
+
+// TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe pins RSZ-026 and
+// AC-R10 for listed files whose identity cannot be read. Such a file, when
+// it is a plain file in a folder that can be read, has its name in that
+// folder, so a confirmed Overwrite still replaces an existing file with a
+// single name elsewhere; it renames only a file that may be the listed one:
+// one in the same folder, or one with more names. A listed file that cannot
+// be located — its folder, drive, or share cannot be reached, as a removed
+// SUBST drive or link leaves while the file remains under another path — may
+// be any file, so it is never taken for a missing one and nothing is
+// replaced; only a file missing from a folder that exists is gone.
+func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
+	plan := func(t *testing.T, out string, files fileSystem, protected string) Plan {
+		t.Helper()
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(t.TempDir(), "x.png")))
+		request.Protected = []string{protected}
+		plan, err := prepare(context.Background(), request, files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		materialize(t, plan, "result")
+		return plan
+	}
+	outputFolder := func(t *testing.T) string {
+		out := t.TempDir()
+		writeFile(t, filepath.Join(out, "x.png"), "earlier")
+		return out
+	}
+	replaced := []expect{{"x.png", ActionReplace, ReasonNone}}
+	renamed := []expect{{"x_2.png", ActionCreate, ReasonUnverified}}
+
+	t.Run("inaccessible file in another folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "denied.png")
+		deny(t, protected)
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	t.Run("inaccessible file in the output folder", func(t *testing.T) {
+		out := outputFolder(t)
+		protected := filepath.Join(out, "denied.png")
+		deny(t, protected)
+		assertItems(t, plan(t, out, osFiles{}, protected), renamed)
+	})
+
+	t.Run("inaccessible file and a destination with two names", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "denied.png")
+		deny(t, protected)
+		out := outputFolder(t)
+		if err := os.Link(filepath.Join(out, "x.png"), filepath.Join(t.TempDir(), "elsewhere.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		assertItems(t, plan(t, out, osFiles{}, protected), renamed)
+	})
+
+	t.Run("folder that cannot be found", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "gone", "x.png")
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
+	t.Run("drive that cannot be found", func(t *testing.T) {
+		root, ok := missingDrive(t)
+		if !ok {
+			t.Skip("every drive letter is in use")
+		}
+		protected := filepath.Join(root, "Pictures", "x.png")
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
+	t.Run("share that cannot be found", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "share", "x.png")
+		unreachable := func(path string) error {
+			return &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_BAD_NETPATH}
+		}
+		files := faultyFiles{
+			identity: func(path string) (fileID, error) {
+				if strings.EqualFold(path, protected) {
+					return fileID{}, unreachable(path)
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return nil, unreachable(path)
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	t.Run("inaccessible link", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "link.png")
+		writeFile(t, protected, "stands in for a link")
+		files := faultyFiles{
+			identity: func(path string) (fileID, error) {
+				if strings.EqualFold(path, protected) {
+					return fileID{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return fakeInfo{name: filepath.Base(path), mode: fs.ModeSymlink}, nil
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	t.Run("file missing from its folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "gone.png")
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
 }
 
 // TestPrepareReportsDeniedFolderCreation pins RSZ-030 with a real access
@@ -426,15 +576,8 @@ func setDACL(t *testing.T, path, sddl string) {
 func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
 	source := png(filepath.Join(t.TempDir(), "x.png"))
 	folders := []string{filepath.Join(t.TempDir(), `bad<name>`)}
-	drives, err := windows.GetLogicalDrives()
-	if err != nil {
-		t.Fatalf("list drives: %v", err)
-	}
-	for letter := 'Z'; letter >= 'D'; letter-- {
-		if drives&(1<<(letter-'A')) == 0 {
-			folders = append(folders, string(letter)+`:\GameDevTools\Resized`)
-			break
-		}
+	if root, ok := missingDrive(t); ok {
+		folders = append(folders, filepath.Join(root, "GameDevTools", "Resized"))
 	}
 	for _, folder := range folders {
 		_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, source))

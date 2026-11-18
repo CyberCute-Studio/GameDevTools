@@ -3,7 +3,6 @@ package imageresizer
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -60,14 +59,10 @@ func DefaultOptions(outputFolder string) ResizeOptions {
 }
 
 func (o ResizeOptions) Validate() error {
-	switch o.Format {
-	case FormatKeepSource, FormatPNG, FormatJPEG:
-	default:
+	if !o.Format.Valid() {
 		return errors.New(ui.ResizeFormatInvalid)
 	}
-	switch o.Collision {
-	case CollisionRename, CollisionSkip, CollisionOverwrite:
-	default:
+	if !o.Collision.Valid() {
 		return errors.New(ui.CollisionInvalid)
 	}
 	if o.JPEGQuality < MinJPEGQuality || o.JPEGQuality > MaxJPEGQuality {
@@ -118,17 +113,19 @@ func ParseBackground(input string) (string, error) {
 	return "#" + strings.ToUpper(value[1:]), nil
 }
 
+// validateOutputFolder applies the output planner's folder rules, so a
+// folder the options accept is one a job can plan into.
 func validateOutputFolder(folder string) error {
-	if folder == "" {
+	switch err := output.ValidateFolder(folder); {
+	case err == nil:
+		return nil
+	case errors.Is(err, output.ErrFolderEmpty):
 		return errors.New(ui.OutputFolderRequired)
-	}
-	if strings.ContainsRune(folder, 0) || strings.ContainsRune(folder, '�') {
+	case errors.Is(err, output.ErrFolderNotAbsolute):
+		return errors.New(ui.OutputFolderNotAbsolute)
+	default:
 		return errors.New(ui.OutputFolderInvalid)
 	}
-	if !filepath.IsAbs(folder) {
-		return errors.New(ui.OutputFolderNotAbsolute)
-	}
-	return nil
 }
 
 type OptionsManager struct {

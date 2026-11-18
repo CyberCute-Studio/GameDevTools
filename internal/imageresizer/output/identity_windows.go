@@ -3,6 +3,7 @@
 package output
 
 import (
+	"errors"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -32,22 +33,51 @@ const longPathLimit = 248
 const shareAll = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 
 // identify opens the path without requesting any access to its contents,
-// so neither its permissions nor another process's sharing mode prevent
-// reading its identity, and follows links to the file they resolve to.
+// so another process's sharing mode does not prevent reading its identity,
+// and follows links to the file they resolve to. A file whose permissions
+// deny the user even reading its attributes cannot be identified.
 func identify(path string) (fileID, error) {
-	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS)
+	information, err := inspect(path)
 	if err != nil {
 		return fileID{}, err
-	}
-	defer windows.CloseHandle(handle)
-	var information windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return fileID{}, &fs.PathError{Op: "read file identity", Path: path, Err: err}
 	}
 	return fileID{
 		volume: information.VolumeSerialNumber,
 		index:  uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow),
 	}, nil
+}
+
+// links returns the number of names of the file the path resolves to: its
+// hard links.
+func links(path string) (uint32, error) {
+	information, err := inspect(path)
+	if err != nil {
+		return 0, err
+	}
+	return information.NumberOfLinks, nil
+}
+
+// inspect reads the file information of the file the path resolves to,
+// without requesting access to its contents.
+func inspect(path string) (windows.ByHandleFileInformation, error) {
+	var information windows.ByHandleFileInformation
+	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS)
+	if err != nil {
+		return information, err
+	}
+	defer windows.CloseHandle(handle)
+	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
+		return information, &fs.PathError{Op: "read file identity", Path: path, Err: err}
+	}
+	return information, nil
+}
+
+// fileMissing reports whether a file could not be opened because no entry
+// has its name in its folder. A path whose folder cannot be found is not
+// missing: a drive, share, or link it leads through may be gone while the
+// file remains, reachable by another path.
+func fileMissing(err error) bool {
+	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND)
 }
 
 // reparseTagNameSurrogate is the reparse tag bit that marks a link to

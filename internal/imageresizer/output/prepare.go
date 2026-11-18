@@ -13,10 +13,12 @@
 // replaces an existing destination file only when the request carries the
 // user's explicit confirmation for the job. Two sources of the same job that
 // would produce the same destination never replace one another: the first in
-// request order keeps the name, and a later one is renamed, or skipped under
-// Skip. Under Overwrite, a renamed result replaces an existing file with its
-// numbered name, such as an earlier run's result, as readily as a result
-// with its natural name, so re-running a job leaves the same files behind.
+// request order keeps the name, and a later one is renamed, or under Skip
+// deferred, written only when the first ends without writing it. Overwrite
+// replaces only a result's natural destination. A result it renames takes
+// the first unused numbered name, as under Rename, because a file with a
+// numbered name may be an original the job was never asked to replace
+// rather than an earlier result (RSZ-049).
 //
 // No plan ever writes over a source (RSZ-026, NFR-020). Destinations are
 // compared by path, case-insensitively, with every source of the job and
@@ -26,10 +28,10 @@
 // source is recognized as that source. A destination that is a source is
 // never replaced, even under Overwrite: Rename and Overwrite rename the
 // result instead, and Skip skips it. Overwrite replaces an existing file
-// only when it can prove the file is none of the sources; when the identity
-// of the file or of a source cannot be read, the result is renamed rather
-// than risk a source. Rename and Skip never replace anything, so they do not
-// read identities.
+// only when it can prove the file is none of the sources; when the file's
+// identity cannot be read, or a listed file's cannot and the file may be
+// that one, the result is renamed rather than risk a source. Rename and Skip
+// never replace anything, so they do not read identities.
 //
 // Prepare validates the request, creates the output folder when it does not
 // exist (RSZ-030), and inspects the destinations as the filesystem stands
@@ -62,6 +64,7 @@ import (
 	"strings"
 	"syscall"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 )
@@ -102,6 +105,24 @@ const (
 	// the user's explicit confirmation for the job.
 	CollisionOverwrite Collision = "overwrite"
 )
+
+// Valid reports whether the format is one of the output format options.
+func (f Format) Valid() bool {
+	switch f {
+	case FormatKeepSource, FormatPNG, FormatJPEG:
+		return true
+	}
+	return false
+}
+
+// Valid reports whether the policy is one of the collision policies.
+func (c Collision) Valid() bool {
+	switch c {
+	case CollisionRename, CollisionSkip, CollisionOverwrite:
+		return true
+	}
+	return false
+}
 
 // Kind classifies a planning failure so callers can present the right
 // recovery path per UX-010.
@@ -176,7 +197,29 @@ var (
 	// ErrNoUnusedName is the cause of the KindDestination error attached to
 	// an item for which the Rename search found no unused name.
 	ErrNoUnusedName = fmt.Errorf("no unused output file name was found after %d attempts", maxSuffix-1)
+
+	// ErrFolderEmpty, ErrFolderText, and ErrFolderNotAbsolute are the causes
+	// ValidateFolder reports.
+	ErrFolderEmpty       = errors.New("the output folder is empty")
+	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
+	ErrFolderNotAbsolute = errors.New("the path is not absolute")
 )
+
+// ValidateFolder checks an output folder path the way the persisted options
+// and Prepare both require: it is not empty, is valid text, and is absolute.
+// A U+FFFD replacement character marks a path a lossy text conversion
+// changed, which may name another folder than the one chosen.
+func ValidateFolder(folder string) error {
+	switch {
+	case folder == "":
+		return ErrFolderEmpty
+	case strings.ContainsRune(folder, 0), strings.ContainsRune(folder, utf8.RuneError):
+		return ErrFolderText
+	case !filepath.IsAbs(folder):
+		return ErrFolderNotAbsolute
+	}
+	return nil
+}
 
 // PathKey normalizes a full path for comparison. Windows paths compare
 // case-insensitively, so "photo.PNG" and "PHOTO.png" name the same file.
@@ -229,10 +272,10 @@ const (
 	// when the plan was made. The writer must not replace a file that
 	// appears there afterwards.
 	ActionCreate Action = iota
-	// ActionReplace replaces the existing file at Destination, which the
-	// plan proved is none of the sources. Only a confirmed Overwrite job
-	// replaces: the natural destination, or for a renamed item a file with
-	// its numbered name.
+	// ActionReplace replaces the existing file at Destination, the item's
+	// natural destination, which the plan proved is none of the sources.
+	// Only a confirmed Overwrite job replaces, and never a file with a
+	// numbered name.
 	ActionReplace
 	// ActionSkip leaves Destination untouched and marks the item Skipped.
 	// Only a Skip job skips.
@@ -241,6 +284,12 @@ const (
 	// natural destination; Err names the file name or check that failed,
 	// which for a renamed item may be a numbered name.
 	ActionFail
+	// ActionDefer leaves Destination, the item's natural destination, to the
+	// earlier item at DuplicateOf, which plans to create it. Only a Skip job
+	// defers. The item ends Skipped once the file is written; when the item
+	// it defers to ends without writing it, Plan.Successor names the deferred
+	// item that creates it instead.
+	ActionDefer
 )
 
 func (a Action) String() string {
@@ -253,13 +302,15 @@ func (a Action) String() string {
 		return "skip"
 	case ActionFail:
 		return "fail"
+	case ActionDefer:
+		return "defer"
 	}
 	return fmt.Sprintf("Action(%d)", int(a))
 }
 
 // Reason explains why an item did not get its natural destination: why it
-// was renamed (ActionCreate or ActionReplace under a numbered name) or
-// skipped (ActionSkip).
+// was renamed (ActionCreate under a numbered name), skipped (ActionSkip), or
+// deferred (ActionDefer).
 type Reason uint8
 
 const (
@@ -277,8 +328,10 @@ const (
 	// identity, which is never overwritten (RSZ-026).
 	ReasonSource
 	// ReasonUnverified means an Overwrite job could not prove that the file
-	// at the natural destination is not one of its sources, so the result
-	// was renamed instead of replacing it.
+	// at the natural destination is not one of its sources or protected
+	// paths, because the file's identity could not be read, or the identity
+	// of a listed file it may be, so the result was renamed instead of
+	// replacing it.
 	ReasonUnverified
 )
 
@@ -307,23 +360,23 @@ type Item struct {
 	Format decode.Format
 	Action Action
 	// Destination is the file the item creates or replaces, or, for a
-	// skipped or failed item, the natural destination it left alone.
+	// skipped, deferred, or failed item, the natural destination it left
+	// alone.
 	Destination string
 	Reason      Reason
-	// DuplicateOf, when Reason is ReasonDuplicate, is the index in
-	// Plan.Items of the earlier item that writes this item's natural
-	// destination or replaces the same file. It means nothing for other
-	// reasons. A Skip job skips such an item only because that item writes
-	// the name; see Plan.Successor for when it does not.
+	// DuplicateOf is -1 unless Reason is ReasonDuplicate, when it is the
+	// index in Plan.Items of the earlier item that writes this item's
+	// natural destination or replaces the same file. A Skip job defers such
+	// an item to that one.
 	DuplicateOf int
 	// Err is the *Error of an ActionFail item, with KindDestination.
 	Err error
 }
 
-// Renamed reports whether the item writes a file under a numbered name
+// Renamed reports whether the item creates a file under a numbered name
 // because its natural destination was unavailable.
 func (i Item) Renamed() bool {
-	return (i.Action == ActionCreate || i.Action == ActionReplace) && i.Reason != ReasonNone
+	return i.Action == ActionCreate && i.Reason != ReasonNone
 }
 
 // Plan is a job's planned destinations. Items holds one entry per request
@@ -333,31 +386,46 @@ type Plan struct {
 	// did not exist.
 	Folder string
 	Items  []Item
+	// successors maps each item's index to the index of the next item
+	// deferred to the same name, or -1.
+	successors []int
 }
 
-// Successor returns the index of the item that may write the destination
-// the item at index was to create but did not: the next item a Skip job
-// skipped only because the same name was planned for an earlier item. The
-// job asks for it when an ActionCreate item ends without writing its file,
-// writes the successor's result at that destination as ActionCreate,
-// without replacing anything, and asks again should the successor fail
-// too, so a Skip job still saves one result per name whenever one can be
-// saved (RSZ-024). It reports false when no item waits on the name.
+// Successor returns the index of the item that creates the destination the
+// item at index was to create but did not: the next item deferred to the
+// same earlier item (ActionDefer). The job asks for it when an ActionCreate
+// item ends without writing its file, creates the successor's result at
+// that destination as ActionCreate, without replacing anything, and asks
+// again should the successor end without writing it too. Once the file is
+// written, every item still deferred to the name ends Skipped, so a Skip job
+// saves one result per name whenever one can be saved (RSZ-024). It reports
+// false when no item waits on the name.
 func (p Plan) Successor(index int) (int, bool) {
-	if index < 0 || index >= len(p.Items) {
+	if index < 0 || index >= len(p.successors) || p.successors[index] < 0 {
 		return 0, false
 	}
-	owner := index
-	if p.Items[index].Reason == ReasonDuplicate {
-		owner = p.Items[index].DuplicateOf
-	}
-	for next := index + 1; next < len(p.Items); next++ {
-		item := p.Items[next]
-		if item.Action == ActionSkip && item.Reason == ReasonDuplicate && item.DuplicateOf == owner {
-			return next, true
+	return p.successors[index], true
+}
+
+// successors links every item to the next item deferred to the same name:
+// the item a deferred item defers to links to the first, and each deferred
+// item to the one after it.
+func successors(items []Item) []int {
+	links := make([]int, len(items))
+	last := make(map[int]int)
+	for index, item := range items {
+		links[index] = -1
+		if item.Action != ActionDefer {
+			continue
 		}
+		previous, chained := last[item.DuplicateOf]
+		if !chained {
+			previous = item.DuplicateOf
+		}
+		links[previous] = index
+		last[item.DuplicateOf] = index
 	}
-	return 0, false
+	return links
 }
 
 // OutputFormat is the format a source is encoded in under the job's output
@@ -412,21 +480,17 @@ func prepare(ctx context.Context, request Request, files fileSystem) (Plan, erro
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{Folder: folder, Items: items}, nil
+	return Plan{Folder: folder, Items: items, successors: successors(items)}, nil
 }
 
 func validateRequest(request Request) error {
-	if err := validateFolder(request.Folder); err != nil {
+	if err := ValidateFolder(request.Folder); err != nil {
 		return kindError(KindValidation, "validate output folder", fmt.Errorf("%q: %w", request.Folder, err))
 	}
-	switch request.Format {
-	case FormatKeepSource, FormatPNG, FormatJPEG:
-	default:
+	if !request.Format.Valid() {
 		return kindError(KindValidation, "validate output format", fmt.Errorf("unknown output format %q", request.Format))
 	}
-	switch request.Collision {
-	case CollisionRename, CollisionSkip, CollisionOverwrite:
-	default:
+	if !request.Collision.Valid() {
 		return kindError(KindValidation, "validate collision policy", fmt.Errorf("unknown collision policy %q", request.Collision))
 	}
 	if len(request.Sources) == 0 {
@@ -443,18 +507,6 @@ func validateRequest(request Request) error {
 			return kindError(KindValidation, "validate protected paths",
 				fmt.Errorf("protected path %d (%q): %w", index+1, path, err))
 		}
-	}
-	return nil
-}
-
-func validateFolder(folder string) error {
-	switch {
-	case folder == "":
-		return errors.New("the output folder is empty")
-	case strings.ContainsRune(folder, 0):
-		return errors.New("the path contains a NUL character")
-	case !filepath.IsAbs(folder):
-		return errors.New("the path is not absolute")
 	}
 	return nil
 }
@@ -513,6 +565,8 @@ type fileSystem interface {
 	// Identity returns the identity of the file the path resolves to,
 	// following links, so two paths to one file report the same identity.
 	Identity(path string) (fileID, error)
+	// Links returns the number of names of the file the path resolves to.
+	Links(path string) (uint32, error)
 	// StoredFile reports whether an entry Lstat reports as irregular is a
 	// file whose reparse point only says how its data is stored, rather
 	// than a link or a folder.
@@ -525,6 +579,7 @@ func (osFiles) MkdirAll(path string) error             { return os.MkdirAll(path
 func (osFiles) Stat(path string) (fs.FileInfo, error)  { return os.Stat(path) }
 func (osFiles) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
 func (osFiles) Identity(path string) (fileID, error)   { return identify(path) }
+func (osFiles) Links(path string) (uint32, error)      { return links(path) }
 func (osFiles) StoredFile(path string) (bool, error)   { return storedFile(path) }
 
 // entry is what exists at a candidate destination.
@@ -555,8 +610,14 @@ type verdict struct {
 	// id is the file's identity, when it could be read.
 	id fileID
 	// owner is the index of the item that already replaces the file, for
-	// ReasonDuplicate.
+	// ReasonDuplicate, and otherwise -1.
 	owner int
+}
+
+// identified is the cached identity of one existing destination.
+type identified struct {
+	id  fileID
+	err error
 }
 
 type planner struct {
@@ -577,25 +638,42 @@ type planner struct {
 	claimed map[string]int
 	// probes caches destination inspections by path key.
 	probes map[string]probe
+	// identities caches the identities of existing destinations by path
+	// key, so items with one natural destination read it once.
+	identities map[string]identified
 	// sourceIDs holds the file identities of the sources and protected
 	// paths, loaded the first time an Overwrite job must compare an existing
 	// file with them.
 	sourceIDs map[fileID]struct{}
 	loaded    bool
-	// unverified reports that some source or protected path exists but its
-	// identity could not be read, so no existing file can be proven not to
-	// be it.
+	// unverified reports that some source or protected path may exist but
+	// its identity, and where it lies, could not be read, so no existing
+	// file can be proven not to be it.
 	unverified bool
+	// unverifiedFolders holds the identities of the folders holding a
+	// source or protected path that is a plain file whose own identity
+	// could not be read. Such a file has a name in that folder, so only an
+	// existing file that may have a name there too can be it.
+	unverifiedFolders map[fileID]struct{}
+	// output caches the output folder's identity, read the first time an
+	// existing file must be compared with an unverified listed file.
+	output     identified
+	outputRead bool
 	// replaced maps the identity of every file planned for replacement to
 	// the index of its item, so two items never replace one file through
 	// two names.
 	replaced map[fileID]int
 	// next maps a numbered-name pattern — the upper-case name prefix and
 	// extension — to the first suffix the Rename search has not passed over.
-	// Every lower suffix is a source, another item's destination, or an
-	// entry that cannot be used, and none of that changes while a plan is
-	// made, so the next item with the same pattern starts there.
+	// Every lower suffix is a source, another item's destination, an
+	// existing entry, or a name that cannot be checked, and none of that
+	// changes while a plan is made, so the next item with the same pattern
+	// starts there.
 	next map[string]int
+	// passed maps a numbered-name pattern to the first error of a name the
+	// search passed over because it could not be checked, so every item
+	// whose search for the pattern finds no name can say why.
+	passed map[string]error
 }
 
 func newPlanner(ctx context.Context, request Request, folder string, files fileSystem) *planner {
@@ -607,19 +685,22 @@ func newPlanner(ctx context.Context, request Request, folder string, files fileS
 		sourceKeys[PathKey(path)] = struct{}{}
 	}
 	return &planner{
-		ctx:        ctx,
-		files:      files,
-		folder:     folder,
-		format:     request.Format,
-		collision:  request.Collision,
-		sources:    request.Sources,
-		protected:  request.Protected,
-		sourceKeys: sourceKeys,
-		claimed:    make(map[string]int, len(request.Sources)),
-		probes:     make(map[string]probe, len(request.Sources)),
-		sourceIDs:  make(map[fileID]struct{}),
-		replaced:   make(map[fileID]int),
-		next:       make(map[string]int),
+		ctx:               ctx,
+		files:             files,
+		folder:            folder,
+		format:            request.Format,
+		collision:         request.Collision,
+		sources:           request.Sources,
+		protected:         request.Protected,
+		sourceKeys:        sourceKeys,
+		claimed:           make(map[string]int, len(request.Sources)),
+		probes:            make(map[string]probe, len(request.Sources)),
+		identities:        make(map[string]identified),
+		sourceIDs:         make(map[fileID]struct{}),
+		unverifiedFolders: make(map[fileID]struct{}),
+		replaced:          make(map[fileID]int),
+		next:              make(map[string]int),
+		passed:            make(map[string]error),
 	}
 }
 
@@ -640,6 +721,7 @@ func (p *planner) plan() ([]Item, error) {
 			Source:      source.Path,
 			Format:      format,
 			Destination: filepath.Join(p.folder, stem(source.Path)+Extension(format)),
+			DuplicateOf: -1,
 		}
 		resolved, err := p.natural(index, &item)
 		if err != nil {
@@ -658,6 +740,20 @@ func (p *planner) plan() ([]Item, error) {
 	return items, nil
 }
 
+// reserved reports why no result may be planned at the path key, whatever
+// exists there: ReasonSource for a source or protected path, or
+// ReasonDuplicate with the index of the item already planned there. It
+// reports ReasonNone and -1 for a key that is neither.
+func (p *planner) reserved(key string) (Reason, int) {
+	if _, source := p.sourceKeys[key]; source {
+		return ReasonSource, -1
+	}
+	if owner, taken := p.claimed[key]; taken {
+		return ReasonDuplicate, owner
+	}
+	return ReasonNone, -1
+}
+
 // natural tries to give the item its natural destination. It returns false
 // with the item's Reason set when the destination is unavailable and the
 // collision policy must resolve the item. A context error is returned; a
@@ -669,13 +765,8 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		return true, nil
 	}
 	key := PathKey(item.Destination)
-	if _, source := p.sourceKeys[key]; source {
-		item.Reason = ReasonSource
-		return false, nil
-	}
-	if owner, taken := p.claimed[key]; taken {
-		item.Reason = ReasonDuplicate
-		item.DuplicateOf = owner
+	if reason, owner := p.reserved(key); reason != ReasonNone {
+		item.Reason, item.DuplicateOf = reason, owner
 		return false, nil
 	}
 	found := p.probe(key, item.Destination)
@@ -693,34 +784,39 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		item.Reason = ReasonExists
 		return false, nil
 	}
-	decision, err := p.replaceable(item.Destination)
+	decision, err := p.replaceable(key, item.Destination)
 	if err != nil {
 		return false, err
 	}
 	if decision.reason != ReasonNone {
-		item.Reason = decision.reason
-		item.DuplicateOf = decision.owner
+		item.Reason, item.DuplicateOf = decision.reason, decision.owner
 		return false, nil
 	}
-	p.replace(key, decision.id, index)
+	p.replaced[decision.id] = index
+	p.claimed[key] = index
 	item.Action = ActionReplace
 	return true, nil
 }
 
 // resolve applies the collision policy to an item whose natural destination
-// is unavailable: Skip skips it, and Rename and Overwrite search for a
-// numbered name that is unused or, under Overwrite, an existing file that
-// may be replaced.
+// is unavailable: Skip skips it, or defers it to the earlier item that
+// plans to create the same name, and Rename and Overwrite search for the
+// first numbered name that is unused. Overwrite never replaces a file under
+// a numbered name: such a file may be an original the job was never asked
+// to replace, which the planner cannot tell from an earlier result.
 func (p *planner) resolve(index int, item *Item) error {
 	if p.collision == CollisionSkip {
 		item.Action = ActionSkip
+		if item.Reason == ReasonDuplicate {
+			item.Action = ActionDefer
+		}
 		return nil
 	}
 	base := filepath.Base(item.Destination)
 	extension := filepath.Ext(base)
 	prefix := strings.TrimSuffix(base, extension)
 	pattern := strings.ToUpper(prefix) + "\x00" + strings.ToUpper(extension)
-	var uncheckable error
+	unchecked := 0
 	for suffix := max(p.next[pattern], 2); suffix <= maxSuffix; suffix++ {
 		if err := p.ctx.Err(); err != nil {
 			return kindError(KindCanceled, "plan outputs", err)
@@ -734,49 +830,43 @@ func (p *planner) resolve(index int, item *Item) error {
 		}
 		candidate := filepath.Join(p.folder, name)
 		key := PathKey(candidate)
-		if _, source := p.sourceKeys[key]; source {
-			continue
-		}
-		if _, taken := p.claimed[key]; taken {
+		if reason, _ := p.reserved(key); reason != ReasonNone {
 			continue
 		}
 		found := p.probe(key, candidate)
-		switch {
-		case found.err != nil:
+		if found.err != nil {
 			// A numbered name only has to be usable, so a name that cannot
 			// be checked is passed over, unless the output folder itself
 			// can no longer be reached, which every later name would meet.
-			if _, err := p.files.Stat(p.folder); err != nil {
-				p.fail(item, "check destination", found.err)
-				return nil
+			// The folder is checked at the first, second, fourth, eighth,
+			// and so on name passed over, so a reachable folder costs a few
+			// checks per search rather than one per name, and one that
+			// becomes unreachable stops the search before it has passed over
+			// twice the names it had when the folder was last reached.
+			unchecked++
+			if unchecked&(unchecked-1) == 0 {
+				if _, err := p.files.Stat(p.folder); err != nil {
+					p.fail(item, "check destination", found.err)
+					return nil
+				}
 			}
-			if uncheckable == nil {
-				uncheckable = found.err
+			if _, noted := p.passed[pattern]; !noted {
+				p.passed[pattern] = found.err
 			}
-		case found.entry == entryAbsent:
+			continue
+		}
+		if found.entry == entryAbsent {
 			p.next[pattern] = suffix + 1
 			p.claimed[key] = index
 			item.Destination = candidate
 			item.Action = ActionCreate
 			return nil
-		case found.entry == entryFile && p.collision == CollisionOverwrite:
-			decision, err := p.replaceable(candidate)
-			if err != nil {
-				return err
-			}
-			if decision.reason == ReasonNone {
-				p.next[pattern] = suffix + 1
-				p.replace(key, decision.id, index)
-				item.Destination = candidate
-				item.Action = ActionReplace
-				return nil
-			}
 		}
 	}
 	p.next[pattern] = maxSuffix + 1
 	err := fmt.Errorf("%s: %w", base, ErrNoUnusedName)
-	if uncheckable != nil {
-		err = fmt.Errorf("%w; a name that could not be checked was passed over: %w", err, uncheckable)
+	if passed := p.passed[pattern]; passed != nil {
+		err = fmt.Errorf("%w; a name that could not be checked was passed over: %w", err, passed)
 	}
 	p.fail(item, "name output file", err)
 	return nil
@@ -785,12 +875,6 @@ func (p *planner) resolve(index int, item *Item) error {
 func (p *planner) fail(item *Item, op string, err error) {
 	item.Action = ActionFail
 	item.Err = kindError(KindDestination, op, err)
-}
-
-// replace records that the item at index replaces the file at key.
-func (p *planner) replace(key string, id fileID, index int) {
-	p.replaced[id] = index
-	p.claimed[key] = index
 }
 
 // probe inspects a destination path without following a final link, so a
@@ -826,26 +910,38 @@ func (p *planner) probe(key, path string) probe {
 }
 
 // replaceable decides whether an Overwrite job may replace the existing file
-// at path: only when its identity proves it is none of the sources and no
-// earlier item replaces it. Only a context error is returned.
-func (p *planner) replaceable(path string) (verdict, error) {
-	id, err := p.files.Identity(path)
+// at a natural destination: only when its identity proves it is none of the
+// sources and no earlier item replaces it. Only a context error is returned.
+func (p *planner) replaceable(key, path string) (verdict, error) {
+	id, err := p.identity(key, path)
 	if err != nil {
-		return verdict{reason: ReasonUnverified}, nil
+		return verdict{reason: ReasonUnverified, owner: -1}, nil
 	}
 	source, err := p.isSource(id)
 	if err != nil {
 		return verdict{}, err
 	}
-	switch owner, twice := p.replaced[id]; {
-	case source:
-		return verdict{reason: ReasonSource, id: id}, nil
-	case p.unverified:
-		return verdict{reason: ReasonUnverified, id: id}, nil
-	case twice:
+	if source {
+		return verdict{reason: ReasonSource, id: id, owner: -1}, nil
+	}
+	if p.mayBeUnverified(path) {
+		return verdict{reason: ReasonUnverified, id: id, owner: -1}, nil
+	}
+	if owner, twice := p.replaced[id]; twice {
 		return verdict{reason: ReasonDuplicate, id: id, owner: owner}, nil
 	}
-	return verdict{id: id}, nil
+	return verdict{id: id, owner: -1}, nil
+}
+
+// identity reads the identity of the existing file at a destination once
+// per path key.
+func (p *planner) identity(key, path string) (fileID, error) {
+	if cached, ok := p.identities[key]; ok {
+		return cached.id, cached.err
+	}
+	id, err := p.files.Identity(path)
+	p.identities[key] = identified{id: id, err: err}
+	return id, err
 }
 
 // isSource reports whether the identity belongs to one of the sources or
@@ -865,17 +961,67 @@ func (p *planner) isSource(id fileID) (bool, error) {
 			switch {
 			case err == nil:
 				p.sourceIDs[sourceID] = struct{}{}
-			case errors.Is(err, fs.ErrNotExist):
-				// A source that no longer exists cannot be overwritten; its
-				// path stays protected by its key.
+			case fileMissing(err):
+				// No file has the name in its folder any more, so none can
+				// be overwritten through it; the path stays protected by its
+				// key.
 			default:
-				p.unverified = true
+				p.unreadable(path)
 			}
 		}
 		p.loaded = true
 	}
 	_, source := p.sourceIDs[id]
 	return source, nil
+}
+
+// unreadable records a source or protected path that may exist but whose
+// identity could not be read, such as a file the user may not open. When
+// the path names a plain file, one that is no link, in a folder whose
+// identity can be read, the file has its name in that folder; otherwise,
+// such as for a drive, share, or link that can no longer be reached, the
+// file may be any existing file.
+func (p *planner) unreadable(path string) {
+	if p.unverified {
+		return
+	}
+	info, err := p.files.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		p.unverified = true
+		return
+	}
+	folder, err := p.files.Identity(filepath.Dir(path))
+	if err != nil {
+		p.unverified = true
+		return
+	}
+	p.unverifiedFolders[folder] = struct{}{}
+}
+
+// mayBeUnverified reports whether the existing file at path, whose identity
+// matches no source, may still be a source or protected path whose own
+// identity could not be read. A file with a single name has it in the
+// output folder, so it can be such a file only when one lies in the output
+// folder too; a file with more names may be any of them.
+func (p *planner) mayBeUnverified(path string) bool {
+	if p.unverified {
+		return true
+	}
+	if len(p.unverifiedFolders) == 0 {
+		return false
+	}
+	if links, err := p.files.Links(path); err != nil || links != 1 {
+		return true
+	}
+	if !p.outputRead {
+		p.output.id, p.output.err = p.files.Identity(p.folder)
+		p.outputRead = true
+	}
+	if p.output.err != nil {
+		return true
+	}
+	_, held := p.unverifiedFolders[p.output.id]
+	return held
 }
 
 // stem is the source's base file name without its extension.

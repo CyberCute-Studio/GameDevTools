@@ -2,7 +2,10 @@
 
 package output
 
-import "errors"
+import (
+	"errors"
+	"io/fs"
+)
 
 // fileID is empty outside Windows, where the production application does
 // not run.
@@ -15,6 +18,17 @@ var errIdentityUnsupported = errors.New("file identity is available on Windows o
 // replacing.
 func identify(string) (fileID, error) {
 	return fileID{}, errIdentityUnsupported
+}
+
+// links always fails outside Windows, like identify.
+func links(string) (uint32, error) {
+	return 0, errIdentityUnsupported
+}
+
+// fileMissing reports whether a file could not be opened because it does
+// not exist.
+func fileMissing(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // storedFile reports no irregular entry as a file outside Windows, so such

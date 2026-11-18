@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 )
@@ -275,9 +276,12 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		mutate func(*Request)
 		want   error
 	}{
-		{name: "relative folder", mutate: func(r *Request) { r.Folder = "Resized" }},
-		{name: "empty folder", mutate: func(r *Request) { r.Folder = "" }},
-		{name: "NUL in folder", mutate: func(r *Request) { r.Folder += "\x00" }},
+		{name: "relative folder", mutate: func(r *Request) { r.Folder = "Resized" }, want: ErrFolderNotAbsolute},
+		{name: "empty folder", mutate: func(r *Request) { r.Folder = "" }, want: ErrFolderEmpty},
+		{name: "NUL in folder", mutate: func(r *Request) { r.Folder += "\x00" }, want: ErrFolderText},
+		// The persisted options refuse the replacement character a lossy
+		// conversion leaves, and so does the planner.
+		{name: "replacement character in folder", mutate: func(r *Request) { r.Folder += string(utf8.RuneError) }, want: ErrFolderText},
 		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
 		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
 		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
@@ -351,6 +355,7 @@ type faultyFiles struct {
 	stat       func(path string) (fs.FileInfo, error)
 	lstat      func(path string) (fs.FileInfo, error)
 	identity   func(path string) (fileID, error)
+	links      func(path string) (uint32, error)
 	storedFile func(path string) (bool, error)
 }
 
@@ -380,6 +385,13 @@ func (f faultyFiles) Identity(path string) (fileID, error) {
 		return f.identity(path)
 	}
 	return f.osFiles.Identity(path)
+}
+
+func (f faultyFiles) Links(path string) (uint32, error) {
+	if f.links != nil {
+		return f.links(path)
+	}
+	return f.osFiles.Links(path)
 }
 
 func (f faultyFiles) StoredFile(path string) (bool, error) {
@@ -468,7 +480,8 @@ func TestPrepareReportsUnusableFolders(t *testing.T) {
 // TestPrepareSameNameFromDifferentFolders pins RSZ-024 and AC-R08: sources
 // that would produce the same destination never share it. The first keeps
 // the name; Rename and Overwrite number the others deterministically, and
-// Skip skips them. Names compare case-insensitively, as Windows paths do.
+// Skip defers them to it. Names compare case-insensitively, as Windows paths
+// do.
 func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 	sources := []Source{
 		png(filepath.Join(t.TempDir(), "x.png")),
@@ -483,7 +496,7 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 		},
 		CollisionSkip: {
 			{"x.png", ActionCreate, ReasonNone},
-			{"x.png", ActionSkip, ReasonDuplicate},
+			{"x.png", ActionDefer, ReasonDuplicate},
 			{"X.jpg", ActionCreate, ReasonNone},
 		},
 		CollisionOverwrite: {
@@ -498,8 +511,10 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 			request := jobRequest(out, policy, sources...)
 			plan := mustPrepare(t, request)
 			assertItems(t, plan, want[policy])
-			if plan.Items[1].DuplicateOf != 0 {
-				t.Fatalf("item 1 DuplicateOf = %d, want 0", plan.Items[1].DuplicateOf)
+			for index, owner := range []int{-1, 0, -1} {
+				if got := plan.Items[index].DuplicateOf; got != owner {
+					t.Fatalf("item %d DuplicateOf = %d, want %d", index, got, owner)
+				}
 			}
 
 			// With PNG output, the third source's name differs from the
@@ -509,8 +524,8 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 			if policy == CollisionSkip {
 				assertItems(t, plan, []expect{
 					{"x.png", ActionCreate, ReasonNone},
-					{"x.png", ActionSkip, ReasonDuplicate},
-					{"X.png", ActionSkip, ReasonDuplicate},
+					{"x.png", ActionDefer, ReasonDuplicate},
+					{"X.png", ActionDefer, ReasonDuplicate},
 				})
 				return
 			}
@@ -523,9 +538,11 @@ func TestPrepareSameNameFromDifferentFolders(t *testing.T) {
 	}
 }
 
-// TestPlanSuccessor: a Skip job skips a duplicate only because an earlier
-// item writes the name, so when that item does not write it, the plan names
-// the duplicate that may write it instead, in job order (RSZ-024).
+// TestPlanSuccessor: a Skip job defers a duplicate to the earlier item that
+// creates the name, rather than skipping it outright, so when that item
+// does not write it, the plan names the duplicate that creates it instead,
+// in job order (RSZ-024). An item skipped because the name exists waits on
+// nothing.
 func TestPlanSuccessor(t *testing.T) {
 	out := t.TempDir()
 	writeFile(t, filepath.Join(out, "z.png"), "earlier")
@@ -540,23 +557,28 @@ func TestPlanSuccessor(t *testing.T) {
 	plan := mustPrepare(t, jobRequest(out, CollisionSkip, sources...))
 	assertItems(t, plan, []expect{
 		{"x.png", ActionCreate, ReasonNone},
-		{"x.png", ActionSkip, ReasonDuplicate},
+		{"x.png", ActionDefer, ReasonDuplicate},
 		{"y.png", ActionCreate, ReasonNone},
-		{"X.png", ActionSkip, ReasonDuplicate},
-		{"Y.png", ActionSkip, ReasonDuplicate},
+		{"X.png", ActionDefer, ReasonDuplicate},
+		{"Y.png", ActionDefer, ReasonDuplicate},
 		{"z.png", ActionSkip, ReasonExists},
 	})
-	for index, owner := range map[int]int{1: 0, 3: 0, 4: 2} {
+	for index, owner := range []int{-1, 0, -1, 0, 2, -1} {
 		if got := plan.Items[index].DuplicateOf; got != owner {
 			t.Errorf("item %d DuplicateOf = %d, want %d", index, got, owner)
 		}
 	}
 	successors := map[int]int{0: 1, 1: 3, 2: 4}
+	// The links are made with the plan, so Successor answers in constant
+	// time without walking the items, however many fail.
+	linked := plan
+	linked.Items = nil
 	for index := -1; index <= len(plan.Items); index++ {
-		got, ok := plan.Successor(index)
 		want, wantOK := successors[index]
-		if got != want || ok != wantOK {
-			t.Errorf("Successor(%d) = %d, %v, want %d, %v", index, got, ok, want, wantOK)
+		for _, plan := range []Plan{plan, linked} {
+			if got, ok := plan.Successor(index); got != want || ok != wantOK {
+				t.Errorf("Successor(%d) = %d, %v, want %d, %v", index, got, ok, want, wantOK)
+			}
 		}
 	}
 
@@ -750,13 +772,15 @@ func TestPrepareNeverTargetsSources(t *testing.T) {
 				}
 			}
 
-			// A re-run of an Overwrite job replaces its own earlier results
-			// and still never a source.
+			// A re-run of an Overwrite job replaces the result with its
+			// natural name, and saves a renamed result under the next unused
+			// name: the planner cannot tell an earlier result from an
+			// original that has a numbered name.
 			if policy == CollisionOverwrite {
 				again := mustPrepare(t, jobRequest(folder, policy, sources...))
 				assertItems(t, again, []expect{
-					{"a_2.png", ActionReplace, ReasonSource},
-					{"b_2.jpg", ActionReplace, ReasonSource},
+					{"a_3.png", ActionCreate, ReasonSource},
+					{"b_3.jpg", ActionCreate, ReasonSource},
 					{"c.jpg", ActionReplace, ReasonNone},
 				})
 			}
@@ -844,21 +868,13 @@ func TestPrepareKeepsNaturalNamesAheadOfNumberedOnes(t *testing.T) {
 }
 
 // TestPrepareNumberedNamesAvoidSourcesAndClaims: a numbered name is never
-// a source or another item's destination. Rename passes over an existing
-// file too; a confirmed Overwrite replaces it, as it would under the
-// result's natural name.
+// a source or another item's destination, and Rename and Overwrite alike
+// pass over an existing file with a numbered name.
 func TestPrepareNumberedNamesAvoidSourcesAndClaims(t *testing.T) {
-	want := map[Collision][]expect{
-		CollisionRename: {
-			{"x.png", ActionCreate, ReasonNone},
-			{"x_4.png", ActionCreate, ReasonDuplicate},
-			{"x_2_2.png", ActionCreate, ReasonSource},
-		},
-		CollisionOverwrite: {
-			{"x.png", ActionCreate, ReasonNone},
-			{"x_3.png", ActionReplace, ReasonDuplicate},
-			{"x_2_2.png", ActionCreate, ReasonSource},
-		},
+	want := []expect{
+		{"x.png", ActionCreate, ReasonNone},
+		{"x_4.png", ActionCreate, ReasonDuplicate},
+		{"x_2_2.png", ActionCreate, ReasonSource},
 	}
 	for _, policy := range []Collision{CollisionRename, CollisionOverwrite} {
 		out := t.TempDir()
@@ -870,17 +886,59 @@ func TestPrepareNumberedNamesAvoidSourcesAndClaims(t *testing.T) {
 			png(filepath.Join(t.TempDir(), "x.png")),
 			png(resident),
 		))
-		assertItems(t, plan, want[policy])
+		assertItems(t, plan, want)
 		if !plan.Items[1].Renamed() {
 			t.Fatalf("%s: a duplicate under a numbered name does not report Renamed", policy)
 		}
 	}
 }
 
+// TestPrepareOverwriteNeverReplacesNumberedNames pins RSZ-020, RSZ-026, and
+// AC-R10 for renamed results: a confirmed Overwrite replaces only a
+// result's natural destination. A file with a numbered name, such as a
+// photo_2.png the job does not list beside the photo.png it resizes into
+// its own folder, may be the user's original, so a renamed result takes the
+// first unused name instead.
+func TestPrepareOverwriteNeverReplacesNumberedNames(t *testing.T) {
+	t.Run("source folder", func(t *testing.T) {
+		folder := t.TempDir()
+		source := filepath.Join(folder, "photo.png")
+		original := filepath.Join(folder, "photo_2.png")
+		writeFile(t, source, "listed original")
+		writeFile(t, original, "unlisted original")
+		plan := mustPrepare(t, jobRequest(folder, CollisionOverwrite, png(source)))
+		assertItems(t, plan, []expect{{"photo_3.png", ActionCreate, ReasonSource}})
+		materialize(t, plan, "result")
+		if readFile(t, source) != "listed original" || readFile(t, original) != "unlisted original" {
+			t.Fatal("an original was overwritten")
+		}
+	})
+
+	t.Run("duplicate", func(t *testing.T) {
+		out := t.TempDir()
+		original := filepath.Join(out, "x_2.png")
+		writeFile(t, filepath.Join(out, "x.png"), "earlier")
+		writeFile(t, original, "unlisted original")
+		plan := mustPrepare(t, jobRequest(out, CollisionOverwrite,
+			png(filepath.Join(t.TempDir(), "x.png")),
+			png(filepath.Join(t.TempDir(), "x.png")),
+		))
+		assertItems(t, plan, []expect{
+			{"x.png", ActionReplace, ReasonNone},
+			{"x_3.png", ActionCreate, ReasonDuplicate},
+		})
+		materialize(t, plan, "result")
+		if readFile(t, original) != "unlisted original" {
+			t.Fatal("a file with a numbered name was overwritten")
+		}
+	})
+}
+
 // TestPrepareRepeatedRuns pins RSZ-049: a re-run plans against the results
 // the earlier run left, never assuming them. Rename adds new numbered
-// results, Skip skips, and Overwrite replaces exactly the files the earlier
-// run wrote, so re-running it leaves no extra files behind.
+// results, Skip skips, and Overwrite replaces the results with natural names
+// and adds a new numbered result for a duplicate, since a file with a
+// numbered name may as well be an original as an earlier result.
 func TestPrepareRepeatedRuns(t *testing.T) {
 	sources := []Source{
 		png(filepath.Join(t.TempDir(), "x.png")),
@@ -900,7 +958,7 @@ func TestPrepareRepeatedRuns(t *testing.T) {
 		},
 		CollisionOverwrite: {
 			{"x.png", ActionReplace, ReasonNone},
-			{"x_2.png", ActionReplace, ReasonDuplicate},
+			{"x_3.png", ActionCreate, ReasonDuplicate},
 			{"y.png", ActionReplace, ReasonNone},
 		},
 	}
@@ -934,13 +992,13 @@ func TestPrepareRepeatedRuns(t *testing.T) {
 				return
 			}
 			third := mustPrepare(t, jobRequest(out, policy, sources...))
-			assertItems(t, third, want[policy])
-			entries, err := os.ReadDir(out)
-			if err != nil {
-				t.Fatalf("list output folder: %v", err)
-			}
-			if len(entries) != len(sources) {
-				t.Fatalf("output folder holds %d files after re-runs, want %d", len(entries), len(sources))
+			assertItems(t, third, []expect{
+				{"x.png", ActionReplace, ReasonNone},
+				{"x_4.png", ActionCreate, ReasonDuplicate},
+				{"y.png", ActionReplace, ReasonNone},
+			})
+			if got := readFile(t, first.Items[1].Destination); got != "first result 1" {
+				t.Fatalf("the first run's numbered result = %q, want it untouched", got)
 			}
 		})
 	}
@@ -1063,6 +1121,46 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 			t.Fatalf("item error = %v after %d checks, want the permission failure after 2", plan.Items[0].Err, calls)
 		}
 	})
+}
+
+// TestPrepareSearchesPastUncheckableNames: a search passing over names it
+// cannot check, in a folder that stays reachable, checks the folder at the
+// first, second, fourth, and so on such name rather than at every one, and
+// each item whose search for the name finds none says why (UX-010), not
+// only the first.
+func TestPrepareSearchesPastUncheckableNames(t *testing.T) {
+	out := t.TempDir()
+	natural := PathKey(filepath.Join(out, "x.png"))
+	lstats, stats := 0, 0
+	files := faultyFiles{
+		lstat: func(path string) (fs.FileInfo, error) {
+			lstats++
+			if PathKey(path) == natural {
+				return fakeInfo{name: filepath.Base(path)}, nil
+			}
+			return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrPermission}
+		},
+		stat: func(path string) (fs.FileInfo, error) {
+			stats++
+			return os.Stat(path)
+		},
+	}
+	plan, err := prepare(context.Background(), jobRequest(out, CollisionRename,
+		png(filepath.Join(t.TempDir(), "x.png")), png(filepath.Join(t.TempDir(), "X.png"))), files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	assertItems(t, plan, []expect{{"x.png", ActionFail, ReasonExists}, {"X.png", ActionFail, ReasonExists}})
+	for index, item := range plan.Items {
+		if !errors.Is(item.Err, ErrNoUnusedName) || !errors.Is(item.Err, fs.ErrPermission) {
+			t.Fatalf("item %d error = %v, want ErrNoUnusedName noting the name passed over", index, item.Err)
+		}
+	}
+	// One check of the folder when Prepare opens it, then one at each power
+	// of two up to the 9,998 names passed over: 1, 2, 4, ..., 8192.
+	if lstats != maxSuffix || stats != 1+14 {
+		t.Fatalf("checked %d names and the folder %d times, want %d and %d", lstats, stats, maxSuffix, 1+14)
+	}
 }
 
 func TestTooLong(t *testing.T) {
@@ -1320,20 +1418,30 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 			if filepath.Dir(item.Destination) != out {
 				t.Fatalf("%s: item %d destination %s is outside the output folder", label, index, item.Destination)
 			}
-			if item.Reason == ReasonDuplicate && (item.DuplicateOf < 0 || item.DuplicateOf >= index) {
-				t.Fatalf("%s: item %d is a duplicate of item %d", label, index, item.DuplicateOf)
+			if item.Reason == ReasonDuplicate && (item.DuplicateOf < 0 || item.DuplicateOf >= index) ||
+				item.Reason != ReasonDuplicate && item.DuplicateOf != -1 {
+				t.Fatalf("%s: item %d for %v is a duplicate of item %d", label, index, item.Reason, item.DuplicateOf)
 			}
 			switch item.Action {
 			case ActionFail:
 				t.Fatalf("%s: item %d failed: %v", label, index, item.Err)
 			case ActionSkip:
-				if policy != CollisionSkip || item.Reason == ReasonNone || name != natural {
+				if policy != CollisionSkip || item.Reason == ReasonNone || item.Reason == ReasonDuplicate || name != natural {
 					t.Fatalf("%s: item %d skipped %s for %v", label, index, name, item.Reason)
 				}
 				continue
+			case ActionDefer:
+				owner := plan.Items[item.DuplicateOf]
+				if policy != CollisionSkip || item.Reason != ReasonDuplicate || name != natural ||
+					owner.Action != ActionCreate || PathKey(owner.Destination) != PathKey(item.Destination) {
+					t.Fatalf("%s: item %d defers %s to item %d", label, index, name, item.DuplicateOf)
+				}
+				continue
 			case ActionReplace:
+				// Only a natural destination is ever replaced: a file with
+				// a numbered name may be an original nobody listed.
 				info, ok := existed[strings.ToUpper(name)]
-				if policy != CollisionOverwrite || !ok || !info.Mode().IsRegular() {
+				if policy != CollisionOverwrite || item.Reason != ReasonNone || !ok || !info.Mode().IsRegular() {
 					t.Fatalf("%s: item %d replaces %s, which it must not", label, index, name)
 				}
 			case ActionCreate:

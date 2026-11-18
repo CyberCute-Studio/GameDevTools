@@ -162,7 +162,7 @@ const (
 
 	ResizeCollisionRenameDescription    = "Rename (default): the new file is saved as name_2, name_3, and so on until an unused name is found. Existing files stay untouched."
 	ResizeCollisionSkipDescription      = "Skip: the item is marked Skipped and the existing file stays untouched, as does a source image with that name. When two images in the job would produce the same file name, only one is saved: the first, or the next if the first cannot be saved."
-	ResizeCollisionOverwriteDescription = "Overwrite: an existing file with the output's name is replaced, but only after you confirm when the job starts. Source images are never overwritten: when the existing item is a source image, another output of the same job, a folder or link, or a file that cannot be checked, the output is saved as name_2, name_3, and so on instead, replacing an existing file with that name."
+	ResizeCollisionOverwriteDescription = "Overwrite: an existing file with the output's name is replaced, but only after you confirm when the job starts. Source images are never overwritten: when the existing item is a source image, another output of the same job, a folder or link, or a file that cannot be confirmed not to be a source image, the output is saved as name_2, name_3, and so on, at the first unused name, so no other file is replaced."
 
 	ResizeFormatSelected     = "Resized images are saved as %s."
 	ResizeFormatKeepSelected = "Resized images keep their source format."
