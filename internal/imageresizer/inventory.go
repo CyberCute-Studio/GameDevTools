@@ -66,6 +66,9 @@ type SourceItem struct {
 	Detail    string
 	Info      decode.Info
 	Inspected bool
+	// key is the path key the item claimed in the inventory, which Remove
+	// releases.
+	key string
 }
 
 // RowText is the source-list row: the file name, the upright source
@@ -297,7 +300,7 @@ func (v *Inventory) Remove(indices []int) []uint64 {
 	kept := v.items[:0]
 	for index, item := range v.items {
 		if _, drop := removing[index]; drop {
-			delete(v.byKey, output.PathKey(item.Path))
+			delete(v.byKey, item.key)
 			removed = append(removed, item.ID)
 			if item.Status == StatusChecking {
 				v.checking--
@@ -343,7 +346,7 @@ func (v *Inventory) addFolder(folder string, summary *AddSummary) {
 // addInaccessible lists a path that cannot be enumerated or queried with its
 // error, so the failure is identified without blocking valid entries.
 func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummary) {
-	id, claimed := v.claim(path, summary)
+	id, key, claimed := v.claim(path, summary)
 	if !claimed {
 		return
 	}
@@ -353,6 +356,7 @@ func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummar
 		Path:   path,
 		Status: StatusInaccessible,
 		Detail: cause.Error(),
+		key:    key,
 	})
 	summary.Inaccessible++
 }
@@ -361,11 +365,11 @@ func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummar
 // queues its content check; the read-only open happens there, off the GUI
 // thread (RSZ-009, TECH-005).
 func (v *Inventory) addFile(path string, summary *AddSummary) {
-	id, claimed := v.claim(path, summary)
+	id, key, claimed := v.claim(path, summary)
 	if !claimed {
 		return
 	}
-	item := SourceItem{ID: id, Name: filepath.Base(path), Path: path, Status: StatusChecking}
+	item := SourceItem{ID: id, Name: filepath.Base(path), Path: path, Status: StatusChecking, key: key}
 	if !SupportedExtension(path) {
 		item.Status = StatusUnsupported
 		item.Detail = ui.SourceUnsupportedDetail
@@ -379,18 +383,19 @@ func (v *Inventory) addFile(path string, summary *AddSummary) {
 	v.items = append(v.items, item)
 }
 
-// claim allocates the ID of the item that will list the path, or counts the
-// path as a duplicate of the item already listing the same full path.
-func (v *Inventory) claim(path string, summary *AddSummary) (uint64, bool) {
+// claim allocates the ID of the item that will list the path and returns
+// the path key it claimed, or counts the path as a duplicate of the item
+// already listing the same full path.
+func (v *Inventory) claim(path string, summary *AddSummary) (uint64, string, bool) {
 	key := output.PathKey(path)
 	if existing, exists := v.byKey[key]; exists {
 		summary.Duplicates++
 		summary.DuplicateOf = append(summary.DuplicateOf, existing)
-		return 0, false
+		return 0, "", false
 	}
 	id := v.allocateID()
 	v.byKey[key] = id
-	return id, true
+	return id, key, true
 }
 
 // allocateID returns the next item identifier. Identifiers start at 1 so the

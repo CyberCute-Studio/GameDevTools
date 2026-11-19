@@ -148,6 +148,9 @@ type OptionsManager struct {
 	store    *OptionsStore
 	settings *settings.Settings
 	options  ResizeOptions
+	// replaced is the stored output folder that the default folder replaced
+	// when the options were loaded, because only earlier builds accepted it
+	// and jobs refuse it, or "" when no stored folder was replaced.
 	replaced string
 }
 
@@ -169,29 +172,22 @@ func (m *OptionsManager) Options() ResizeOptions {
 	return m.options
 }
 
-// ReplacedFolder returns the stored output folder that the default folder
-// replaced when the options were loaded, because only earlier builds
-// accepted it and jobs refuse it, or "" when no stored folder was replaced.
-// The application warns about it at startup, so the user learns why the
-// folder changed before the next save forgets the old one.
-func (m *OptionsManager) ReplacedFolder() string {
-	return m.replaced
-}
-
 // FolderWarning returns the one startup warning about the output folder, or
 // "" when there is none. defaultErr is why the default folder could not be
-// resolved, or nil. The warning names the stored folder ReplacedFolder
-// names, and says the default folder is selected in its place, or, when the
-// default folder could not be resolved, that it is unavailable too, so no
-// folder is selected; without a replaced folder it says the default folder
-// is unavailable when no folder is selected. The user is asked to choose a
-// folder once, whatever happened.
+// resolved, or nil when it was. When the options were loaded with a stored
+// folder that only earlier builds accepted, the warning names that folder,
+// so the user learns why the folder changed before the next save forgets
+// the old one, and says the default folder is selected in its place, or,
+// when the default folder could not be resolved, that it is unavailable too,
+// and why, so no folder is selected; without a replaced folder it says why
+// the default folder is unavailable when no folder is selected. The user is
+// asked to choose a folder once, whatever happened.
 func (m *OptionsManager) FolderWarning(defaultErr error) string {
 	switch {
 	case m.replaced != "" && m.options.OutputFolder != "":
 		return fmt.Sprintf(ui.ResizeFolderReplaced, m.replaced)
 	case m.replaced != "":
-		return fmt.Sprintf(ui.ResizeFolderRefused, m.replaced)
+		return fmt.Sprintf(ui.ResizeFolderRefused, m.replaced, defaultErr)
 	case defaultErr != nil && m.options.OutputFolder == "":
 		return fmt.Sprintf(ui.ResizeFolderUnavailable, defaultErr)
 	}

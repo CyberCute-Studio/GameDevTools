@@ -150,10 +150,11 @@ func decodeOptions(section json.RawMessage) (decodedOptions, error) {
 		// Builds before output planning accepted any absolute folder path
 		// in valid text, including one whose own name ends in a space or a
 		// period, one with a folder name in its path that ends in a period,
-		// and one that names only a volume or a server, which jobs now
-		// refuse. Such a folder gives way to the default folder on load,
-		// with a warning, rather than the whole settings file failing
-		// validation and every module losing its settings.
+		// one with a colon that names a file stream, and one that names only
+		// a volume or a server, which jobs now refuse. Such a folder gives
+		// way to the default folder on load, with a warning, rather than the
+		// whole settings file failing validation and every module losing its
+		// settings.
 		found.legacyFolder = true
 	default:
 		return decodedOptions{}, fmt.Errorf("validate stored resize options: %w", folderMessage(err))

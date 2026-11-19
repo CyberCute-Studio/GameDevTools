@@ -83,6 +83,7 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 		{name: "folder ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "." }, wantErr: nameErr},
 		{name: "parent ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+".", "Resized") }, wantErr: nameErr},
 		{name: "folder named as a device", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder, "NUL") }, wantErr: nameErr},
+		{name: "folder named as a stream", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "::$INDEX_ALLOCATION" }, wantErr: nameErr},
 		// Windows keeps a trailing space, or two periods, on a name a path
 		// leads through.
 		{name: "parent ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+" ", "Resized") }},

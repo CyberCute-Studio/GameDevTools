@@ -142,7 +142,7 @@ const (
 	// KindValidation means the request itself is invalid: an output folder
 	// ValidateFolder refuses, an unknown format or policy, no sources,
 	// a source that is not an absolute file path with a decoded PNG or JPEG
-	// format, or a protected path that is not an absolute file path.
+	// format, or a protected path that is not an absolute path.
 	KindValidation Kind = iota
 	// KindConfirmation means the Overwrite policy was selected without the
 	// job's explicit confirmation.
@@ -216,12 +216,13 @@ var (
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
 	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it")
-	ErrFolderName        = errors.New("Windows would change a name in the path, such as one that ends in a space or a period, or read one as a device name")
+	ErrFolderName        = errors.New("Windows would change a name in the path, such as one that ends in a space or a period, or read one as a device name, or as a file stream because it holds a colon")
 )
 
 // ValidateFolder checks an output folder path the way the persisted options
 // and Prepare both require: it is not empty, is valid text, is absolute,
-// names a folder, and Windows resolves it as written.
+// names a folder rather than a file stream, and Windows resolves it as
+// written.
 //
 // An absolute path that is only a volume name, such as \\?\C: or \\.\C:
 // without the root folder's separator, or a server without a share, such as
@@ -248,9 +249,18 @@ var (
 // own resolution of it rather than with a model of its rules, so a path
 // through a name Windows keeps there, such as "Photos " or "v2..", is
 // accepted, and Prepare creates any missing folder in it under the name the
-// path gives. An extended-length path, marked \\?\ or \??\, is
-// one Windows takes verbatim, so every name in it is kept and the rule does
-// not apply.
+// path gives. An extended-length path, marked \\?\ or \??\ with backslashes
+// only, is one Windows takes verbatim, so every name in it is kept and the
+// rule does not apply. Windows resolves the same prefix written with a
+// forward slash, such as //?/, like any other device path, so such a path is
+// compared with its resolution too.
+//
+// A colon after the volume name, which no Windows file or folder name may
+// hold, makes NTFS read the name as a stream of the file or folder before
+// it, in an extended-length path too: Resized::$INDEX_ALLOCATION opens the
+// folder Resized under another spelling, so its destinations would escape
+// the comparison with the sources' paths, and a folder such as x:y cannot
+// be created at all. Such a path is refused.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -264,16 +274,18 @@ func ValidateFolder(folder string) error {
 	if namesRoot(clean) {
 		return ErrFolderRoot
 	}
-	if !verbatim(clean) && !resolvesAsWritten(clean) {
+	if namesStream(clean) || (!verbatim(folder) && !resolvesAsWritten(clean)) {
 		return ErrFolderName
 	}
 	return nil
 }
 
-// verbatim reports whether a cleaned path is an extended-length path, which
-// Windows takes verbatim.
-func verbatim(clean string) bool {
-	return strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`)
+// verbatim reports whether a path, as written, is an extended-length path,
+// which Windows takes verbatim: one that starts with \\?\ or \??\ with
+// backslashes only. filepath.Clean writes //?/ as \\?\, so the path is
+// tested before it is cleaned.
+func verbatim(path string) bool {
+	return strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`)
 }
 
 // pathNames splits a path, or the part of one after its volume name, into
@@ -321,8 +333,8 @@ func shareRoot(volume string) bool {
 // PathKey normalizes a full path for comparison. On Windows the path is
 // resolved as Windows resolves it, so spellings of one name, such as
 // \\?\C:\In\photo.png, \??\C:\In\photo.png, \\.\C:\In\photo.png,
-// C:/In/photo.png, and C:\In\photo.png followed by a space, which Windows
-// drops, share a key; a name Windows takes verbatim,
+// C:/In/photo.png, and C:\In\photo.png or //?/C:/In/photo.png followed by a
+// space, which Windows drops, share a key; a name Windows takes verbatim,
 // such as \\?\C:\In\photo.png followed by a period, keeps its own. Windows
 // paths compare case-insensitively, so "photo.PNG" and "PHOTO.png" name the
 // same file. The source inventory deduplicates sources by it, and output
@@ -376,7 +388,11 @@ type Request struct {
 	// job's sources: those the job does not process, such as files that are
 	// unsupported, corrupt, too large, or inaccessible. They are protected
 	// exactly as Sources are, so no result is ever planned onto a listed
-	// original, whether or not the job resizes it (RSZ-026, NFR-020).
+	// original, whether or not the job resizes it (RSZ-026, NFR-020). A path
+	// is only compared, never named after, so any absolute path is accepted,
+	// including a folder or a drive root the source list holds as
+	// inaccessible; one whose identity cannot be read where it stands stops
+	// an Overwrite job from replacing any file it may be.
 	Protected []string
 	// Folder is the absolute path of the output folder.
 	Folder string
@@ -499,8 +515,9 @@ type Item struct {
 	DuplicateOf int
 	// Err is the *Error of an ActionFail item, with KindDestination.
 	Err error
-	// replaces is the identity and stamp of the file an ActionReplace item
-	// replaces, the one the plan proved is none of the sources.
+	// replaces is the identity, number of names, and stamp of the file an
+	// ActionReplace item replaces, the one the plan proved is none of the
+	// sources.
 	replaces identity
 }
 
@@ -512,8 +529,11 @@ func (i Item) Renamed() bool {
 
 // StillReplaceable reports whether the file at an ActionReplace item's
 // Destination is still the file the plan proved is none of the sources,
-// unchanged: the same file by its identity, with the size and the creation
-// and last-write times it had when the plan was made. A source moved or
+// unchanged: the same file by its identity, with the number of names, the
+// size, and the creation and last-write times it had when the plan was made.
+// A file that has gained a name since may have gained it at a listed path,
+// such as that of a source that no longer existed when the plan was made,
+// and replacing it would change that name's content too. A source moved or
 // linked to the destination's name after planning is another file. So is a
 // file that takes the planned file's place and merely repeats its identity,
 // as a FAT32 or exFAT volume gives a file the identity of the folder entry it
@@ -532,7 +552,7 @@ func (i Item) stillReplaceable(files fileSystem) bool {
 		return false
 	}
 	found, err := files.Identity(i.Destination)
-	return err == nil && found.id == i.replaces.id && found.stamp == i.replaces.stamp
+	return err == nil && found == i.replaces
 }
 
 // Plan is a job's planned destinations. Items holds one entry per request
@@ -659,7 +679,7 @@ func validateRequest(request Request) error {
 		}
 	}
 	for index, path := range request.Protected {
-		if err := validateFile(path); err != nil {
+		if err := validatePath(path); err != nil {
 			return kindError(KindValidation, "validate protected paths",
 				fmt.Errorf("protected path %d (%q): %w", index+1, path, err))
 		}
@@ -677,12 +697,23 @@ func validateSource(source Source) error {
 	return nil
 }
 
-func validateFile(path string) error {
+// validatePath checks that a listed path can be compared: that it is an
+// absolute path without a NUL character.
+func validatePath(path string) error {
 	if strings.ContainsRune(path, 0) {
 		return errors.New("the path contains a NUL character")
 	}
 	if !filepath.IsAbs(path) {
 		return errors.New("the path is not absolute")
+	}
+	return nil
+}
+
+// validateFile checks that a source's path can name its result: that it is
+// a path validatePath accepts whose last element is a name.
+func validateFile(path string) error {
+	if err := validatePath(path); err != nil {
+		return err
 	}
 	switch name := filepath.Base(path); name {
 	case ".", "..", string(filepath.Separator):
@@ -722,9 +753,12 @@ func openFolder(files fileSystem, folder string) error {
 // nearest of those paths that can be inspected is not a folder. The error
 // os.MkdirAll returns cannot tell, as the ENOTDIR it reports for a file in
 // the way is, on Windows, ERROR_PATH_NOT_FOUND, which a missing drive,
-// share, or folder reports too.
+// share, or folder reports too. The folders are inspected by the folder's
+// resolved path, as MkdirAll creates them, so a folder whose name Windows
+// keeps only in the middle of a path, such as "Photos ", is inspected under
+// that name rather than as the entry the name reaches once it ends a path.
 func fileInTheWay(files fileSystem, folder string) bool {
-	for path := folder; ; {
+	for path := resolvedPath(folder); ; {
 		if info, err := files.Stat(path); err == nil {
 			return !info.IsDir()
 		}
@@ -1194,7 +1228,7 @@ func (p *planner) ownFile(key, path string, mode fs.FileMode) Reason {
 	switch {
 	case err != nil:
 		return ReasonUnverified
-	case !listed.file || PathKey(listed.name) != PathKey(filepath.Base(path)):
+	case !listed.file || foldCase(listed.name) != foldCase(filepath.Base(path)):
 		return ReasonExists
 	}
 	return ReasonNone

@@ -184,7 +184,8 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	var legacyFolders []string
 	if volume := filepath.VolumeName(folder); volume != "" {
 		legacyFolders = append(legacyFolders, folder+".", folder+" ", filepath.Join(folder+".", "Resized"),
-			filepath.Join(folder, "NUL"), `\\server\share.`, `\\?\`+volume, `\\?\UNC\server`)
+			filepath.Join(folder, "NUL"), folder+"::$INDEX_ALLOCATION", filepath.Join(folder, "x:y"),
+			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`)
 	}
 	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")
@@ -214,8 +215,8 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if kept.Options() != options || kept.ReplacedFolder() != "" || kept.FolderWarning(nil) != "" {
-			t.Fatalf("a valid stored folder loads as %+v, replaced folder %q, warning %q", kept.Options(), kept.ReplacedFolder(), kept.FolderWarning(nil))
+		if kept.Options() != options || kept.FolderWarning(nil) != "" {
+			t.Fatalf("a valid stored folder loads as %+v, warning %q", kept.Options(), kept.FolderWarning(nil))
 		}
 		// Write the folder an earlier build would have saved.
 		data, err := os.ReadFile(path)
@@ -262,8 +263,8 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: %v", saved, err)
 		}
-		if manager.Options() != want || manager.ReplacedFolder() != saved {
-			t.Fatalf("%q: manager options = %+v, replaced folder %q", saved, manager.Options(), manager.ReplacedFolder())
+		if manager.Options() != want {
+			t.Fatalf("%q: manager options = %+v", saved, manager.Options())
 		}
 		if warning := manager.FolderWarning(nil); warning != fmt.Sprintf(ui.ResizeFolderReplaced, saved) {
 			t.Fatalf("%q: replaced folder warning = %q", saved, warning)
@@ -311,7 +312,9 @@ func TestFolderWarning(t *testing.T) {
 		{name: "valid stored folder", stored: folder, defaultFolder: folder, want: ""},
 		{name: "valid stored folder without a default", stored: folder, defaultErr: unavailable, want: ""},
 		{name: "replaced by the default", stored: folder + ".", defaultFolder: folder, want: fmt.Sprintf(ui.ResizeFolderReplaced, folder+".")},
-		{name: "refused without a default", stored: folder + ".", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".")},
+		// The warning says why the default folder is unavailable, as it does
+		// when no folder was stored.
+		{name: "refused without a default", stored: folder + ".", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".", unavailable)},
 		{name: "no stored folder", defaultFolder: folder, want: ""},
 		{name: "no stored folder and no default", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderUnavailable, unavailable)},
 	}
@@ -336,8 +339,12 @@ func TestFolderWarning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if warning := manager.FolderWarning(test.defaultErr); warning != test.want {
+			warning := manager.FolderWarning(test.defaultErr)
+			if warning != test.want {
 				t.Fatalf("FolderWarning = %q, want %q", warning, test.want)
+			}
+			if strings.Contains(warning, "%!") || (test.defaultErr != nil && warning != "" && !strings.Contains(warning, test.defaultErr.Error())) {
+				t.Fatalf("FolderWarning = %q, want one that says why the default folder is unavailable", warning)
 			}
 		})
 	}

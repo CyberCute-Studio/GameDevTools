@@ -256,9 +256,24 @@ func TestValidateFolder(t *testing.T) {
 		{`\\server\share\Art \Resized`, nil},
 		{`\\server\share.\Resized`, nil},
 		{`\\?\C:\Art.\Resized `, nil},
-		{`//?/C:/Art./Resized`, nil},
 		{`\??\C:\Art \Resized.`, nil},
 		{`\\?\UNC\server\share\Art.`, nil},
+		// Windows takes only \\?\ written with backslashes verbatim, and
+		// resolves //?/ like any other device path.
+		{`//?/C:/Art/Resized`, nil},
+		{`//?/C:/Art /Resized`, nil},
+		{`//?/C:/Art./Resized`, ErrFolderName},
+		{`\\?/C:\Art\Resized.`, ErrFolderName},
+		// NTFS reads a name with a colon as a stream of the file or folder
+		// before it, in an extended-length path too: the first two name the
+		// folders Resized and Art under other spellings, and the others
+		// cannot be created.
+		{`C:\Art\Resized::$INDEX_ALLOCATION`, ErrFolderName},
+		{`C:\Art:$I30:$INDEX_ALLOCATION\Resized`, ErrFolderName},
+		{`C:\Art\x:y`, ErrFolderName},
+		{`\\?\C:\Art\x:y`, ErrFolderName},
+		{`\\server\share\x:y`, ErrFolderName},
+		{`\\?\UNC\server\share\x:y`, ErrFolderName},
 	}
 	for _, test := range tests {
 		if err := ValidateFolder(test.folder); !errors.Is(err, test.want) || (err == nil) != (test.want == nil) {
@@ -276,13 +291,17 @@ func TestPathKey(t *testing.T) {
 	}
 	// Spellings Windows resolves to one name share a key; a name Windows
 	// takes verbatim keeps the trailing period it would otherwise drop.
+	// Windows takes only \\?\ written with backslashes verbatim, and resolves
+	// the prefix written with a forward slash like a device path.
 	for _, alias := range []string{`\\?\C:\In\photo.png`, `C:/In/photo.png`, `C:\In\photo.png `, `C:\In\photo.png.`, `//?/C:/In/photo.png`,
-		`\??\C:\In\photo.png`, `\\.\C:\In\photo.png`, `\\.\C:\In\photo.png.`, `//./C:/In/photo.png`} {
+		`\??\C:\In\photo.png`, `\\.\C:\In\photo.png`, `\\.\C:\In\photo.png.`, `//./C:/In/photo.png`,
+		`//?/C:/In/photo.png.`, `\\?/C:\In\photo.png .`, `/\?\C:\In\photo.png.`, `C:\In\sub\..\photo.png`, `C:\In\\photo.png`} {
 		if PathKey(alias) != PathKey(`C:\In\photo.png`) {
 			t.Errorf("PathKey(%q) = %q, want the key of C:\\In\\photo.png, %q", alias, PathKey(alias), PathKey(`C:\In\photo.png`))
 		}
 	}
-	for _, alias := range []string{`\\?\UNC\server\share\photo.png`, `\??\UNC\server\share\photo.png`, `\\.\UNC\server\share\photo.png`} {
+	for _, alias := range []string{`\\?\UNC\server\share\photo.png`, `\??\UNC\server\share\photo.png`, `\\.\UNC\server\share\photo.png`,
+		`//?/UNC/server/share/photo.png.`} {
 		if PathKey(alias) != PathKey(`\\server\share\photo.png`) {
 			t.Errorf("PathKey(%q) = %q, want the key of the share path, %q", alias, PathKey(alias), PathKey(`\\server\share\photo.png`))
 		}
@@ -469,7 +488,6 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		}},
 		{name: "relative protected path", mutate: func(r *Request) { r.Protected = []string{"hero.gif"} }},
 		{name: "NUL in protected path", mutate: func(r *Request) { r.Protected = []string{valid.Path + "\x00"} }},
-		{name: "root protected path", mutate: func(r *Request) { r.Protected = []string{root} }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1089,7 +1107,9 @@ func TestPrepareProtectsListedSourcesItDoesNotProcess(t *testing.T) {
 // disappeared still keeps its path; nothing is planned onto it, even when
 // the output folder spells the source's folder as an extended-length path,
 // in either spelling of the prefix, or as a device path, or the source is
-// listed with a trailing space Windows drops.
+// listed with a trailing space Windows drops, or through a //?/ prefix,
+// which Windows resolves, with a trailing period it drops. A protected path
+// spelled that way keeps its path too.
 func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 	folder := t.TempDir()
 	for _, spelling := range []struct{ folder, source string }{
@@ -1099,6 +1119,7 @@ func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 		{`\\.\` + folder, filepath.Join(folder, "gone.png")},
 		{folder, filepath.Join(`\\.\`+folder, "gone.png")},
 		{folder, filepath.Join(folder, "gone.png ")},
+		{folder, `//?/` + filepath.ToSlash(folder) + "/gone.png."},
 	} {
 		for _, policy := range policies {
 			plan := mustPrepare(t, jobRequest(spelling.folder, policy, png(spelling.source)))
@@ -1108,6 +1129,36 @@ func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 			}
 			assertItems(t, plan, []expect{{"gone_2.png", ActionCreate, ReasonSource}})
 		}
+	}
+	for _, protected := range []string{`//?/` + filepath.ToSlash(folder) + "/gone.png.", `\\?/` + folder + `\gone.png .`} {
+		request := jobRequest(folder, CollisionRename, png(filepath.Join(t.TempDir(), "gone.png")))
+		request.Protected = []string{protected}
+		assertItems(t, mustPrepare(t, request), []expect{{"gone_2.png", ActionCreate, ReasonSource}})
+	}
+}
+
+// TestPrepareAcceptsProtectedFoldersAndRoots: the source list holds a dropped
+// folder or drive root it cannot read as an inaccessible item, which the job
+// passes on as a protected path. Such a path is only compared, so it does not
+// fail the job. One whose identity can be read is no file a destination can
+// be, so a confirmed Overwrite still replaces; one that cannot be located,
+// such as a drive with no medium, may be any file, so the result is renamed.
+func TestPrepareAcceptsProtectedFoldersAndRoots(t *testing.T) {
+	in := t.TempDir()
+	root := filepath.VolumeName(in) + string(filepath.Separator)
+	overwrite := func(t *testing.T, protected string) Plan {
+		t.Helper()
+		out := t.TempDir()
+		writeFile(t, filepath.Join(out, "x.png"), "earlier")
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "x.png")))
+		request.Protected = []string{protected}
+		return mustPrepare(t, request)
+	}
+	for _, protected := range []string{root, in, filepath.Join(in, ".."), in + string(filepath.Separator) + "."} {
+		assertItems(t, overwrite(t, protected), []expect{{"x.png", ActionReplace, ReasonNone}})
+	}
+	if drive, ok := missingDrive(t); ok {
+		assertItems(t, overwrite(t, drive), []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
 	}
 }
 

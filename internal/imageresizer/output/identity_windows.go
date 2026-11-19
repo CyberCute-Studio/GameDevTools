@@ -142,24 +142,35 @@ func windowsPath(op, path string) (*uint16, error) {
 	return name, nil
 }
 
-// resolvedPath is the form of a path PathKey compares: cleaned, then
-// resolved and marked by extendedPath as every Windows call the planner
-// makes takes it, so spellings Windows resolves to one name — with or
-// without the extended-length prefix, as a \??\ or \\.\ device path, or with
-// trailing spaces and periods that Windows drops from the last name —
-// compare alike.
+// resolvedPath is the form of a path PathKey compares: resolved and marked
+// by extendedPath as every Windows call the planner makes takes it, then
+// cleaned, so spellings Windows resolves to one name — with or without the
+// extended-length prefix, as a \??\ or \\.\ device path, or with trailing
+// spaces and periods that Windows drops from the last name — compare alike.
+// The path is resolved before it is cleaned because filepath.Clean writes a
+// //?/ device path, which Windows resolves, as the \\?\ path it takes
+// verbatim.
 func resolvedPath(path string) string {
-	return extendedPath(filepath.Clean(path))
+	return filepath.Clean(extendedPath(path))
 }
 
-// resolvesAsWritten reports whether Windows resolves a cleaned absolute path
-// that is not extended-length to exactly that path, keeping every name in it
-// as written: GetFullPathName, which Windows applies to such a path before
-// it opens or creates anything, neither drops a trailing space or period
-// from a name nor reads a name as a device.
+// resolvesAsWritten reports whether Windows resolves a cleaned absolute path,
+// one that was not written as an extended-length path, to exactly that path,
+// keeping every name in it as written: GetFullPathName, which Windows
+// applies to such a path before it opens or creates anything, neither drops
+// a trailing space or period from a name nor reads a name as a device. A
+// //?/ path, which filepath.Clean writes as \\?\, resolves as Windows
+// resolves it too, as GetFullPathName resolves the \\?\ spelling alike.
 func resolvesAsWritten(clean string) bool {
 	full, err := windows.FullPath(clean)
 	return err == nil && full == clean
+}
+
+// namesStream reports whether a cleaned absolute path holds a colon after
+// its volume name, which NTFS reads as naming a stream of the file or folder
+// before it, whether or not the path is extended-length.
+func namesStream(clean string) bool {
+	return strings.ContainsRune(clean[len(filepath.VolumeName(clean)):], ':')
 }
 
 // mkdirAll creates a folder, and every missing folder that holds it, through
@@ -192,30 +203,32 @@ func mkdirAll(path string) error {
 // length names the file Windows itself opens for it. os.Lstat and the
 // decoder reach that same file, whether the os package passes the path on
 // as it is or resolves and marks it the same way, so identities are read
-// for the files they reach. A path already marked extended, with any
-// separators, is taken verbatim: \??\, the NT spelling of the prefix, which
-// Windows takes exactly as \\?\, is written \\?\, so both spellings of a
-// path share a key. A device path, \\.\ followed by a name, is resolved
-// like any other path, and once resolved it names what \\?\ followed by the
-// same name does, so it is marked the same way. The planner passes only
-// absolute paths.
+// for the files they reach. A path marked extended with backslashes only,
+// \\?\, is taken verbatim, as Windows takes it: \??\, the NT spelling of the
+// prefix, which Windows takes exactly as \\?\, is written \\?\, so both
+// spellings of a path share a key. The same prefix written with a forward
+// slash, such as //?/, is one Windows resolves like a device path, dropping
+// trailing spaces and periods, as os.Lstat, which passes it on as it is,
+// finds; GetFullPathName resolves it to the \\?\ path Windows opens. A
+// device path, \\.\ followed by a name, is resolved like any other path,
+// and once resolved it names what \\?\ followed by the same name does, so it
+// is marked the same way. The planner passes only absolute paths.
 func extendedPath(path string) string {
-	if len(path) >= 4 && path[:4] == `\??\` {
+	if strings.HasPrefix(path, `\??\`) {
 		return `\\?\` + path[4:]
 	}
-	if len(path) >= 4 && os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) && path[2] == '?' && os.IsPathSeparator(path[3]) {
-		return path
-	}
-	if !filepath.IsAbs(path) {
+	if strings.HasPrefix(path, `\\?\`) || !filepath.IsAbs(path) {
 		return path
 	}
 	full, err := windows.FullPath(path)
 	switch {
 	case err != nil:
 		return path
-	case len(full) >= 4 && os.IsPathSeparator(full[0]) && os.IsPathSeparator(full[1]) && full[2] == '.' && os.IsPathSeparator(full[3]):
+	case strings.HasPrefix(full, `\\?\`):
+		return full
+	case strings.HasPrefix(full, `\\.\`):
 		return `\\?\` + full[4:]
-	case len(full) >= 2 && os.IsPathSeparator(full[0]) && os.IsPathSeparator(full[1]):
+	case strings.HasPrefix(full, `\\`):
 		return `\\?\UNC\` + full[2:]
 	}
 	return `\\?\` + full

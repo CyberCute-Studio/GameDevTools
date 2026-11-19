@@ -35,6 +35,10 @@ func resolvedPath(path string) string {
 // path to exactly that path. Outside Windows every name is kept as written.
 func resolvesAsWritten(string) bool { return true }
 
+// namesStream reports whether a path names a file stream. Outside Windows a
+// colon is an ordinary character of a name.
+func namesStream(string) bool { return false }
+
 // mkdirAll creates a folder and every missing folder that holds it.
 func mkdirAll(path string) error { return os.MkdirAll(path, 0o755) }
 

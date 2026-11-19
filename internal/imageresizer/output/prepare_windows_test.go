@@ -172,7 +172,7 @@ func TestIdentifyResolvesPathsAsTheOSPackageDoes(t *testing.T) {
 	writeFile(t, path, "pixels")
 	for _, file := range []string{short, path} {
 		want := mustIdentify(t, file)
-		for _, alias := range []string{file + " ", file + ".", filepath.ToSlash(file), `//?/` + filepath.ToSlash(file)} {
+		for _, alias := range []string{file + " ", file + ".", filepath.ToSlash(file), `//?/` + filepath.ToSlash(file), `//?/` + filepath.ToSlash(file) + "."} {
 			if _, err := os.Lstat(alias); err != nil {
 				t.Fatalf("os.Lstat(%q): %v", alias, err)
 			}
@@ -216,7 +216,16 @@ func TestExtendedPath(t *testing.T) {
 		// \??\ is the NT spelling of \\?\, which Windows takes alike.
 		{`\??\` + long, `\\?\` + long},
 		{`\??\C:\x.png.`, `\\?\C:\x.png.`},
-		{`//?/` + filepath.ToSlash(long), `//?/` + filepath.ToSlash(long)},
+		{`\\?\C:\x.png.`, `\\?\C:\x.png.`},
+		// Windows takes only \\?\ written with backslashes verbatim; it
+		// resolves the prefix written with a forward slash like a device
+		// path, dropping trailing spaces and periods, and so does
+		// extendedPath, rather than marking it a UNC path.
+		{`//?/` + filepath.ToSlash(long), `\\?\` + long},
+		{`//?/C:/x.png.`, `\\?\C:\x.png`},
+		{`\\?/C:\in\..\x.png `, `\\?\C:\x.png`},
+		{`/\?\C:\x.png.`, `\\?\C:\x.png`},
+		{`//?/UNC/server/share/x.png.`, `\\?\UNC\server\share\x.png`},
 		{filepath.ToSlash(long), `\\?\` + long},
 		{strings.Replace(long, `\x.png`, `\.\x.png`, 1), `\\?\` + long},
 		// GetFullPathName drops trailing spaces and dots from the last name,
@@ -505,7 +514,8 @@ func TestPrepareComparesFileIndexesAcrossShares(t *testing.T) {
 // TestStillReplaceable pins NFR-020 after planning: the file a confirmed
 // Overwrite plans to replace stays replaceable while it is the same file,
 // unchanged, and stops being so once a source is moved or linked to its
-// name, even where the file that took its place reports the same identity,
+// name, or the file gains another name, which may be a listed path, even
+// where the file that took its place reports the same identity,
 // as on a FAT32 or exFAT volume, so the writer can refuse to replace a source
 // that took the file's place after the plan was made. A rewritten file is
 // not replaced either. Only ActionReplace items replace.
@@ -595,6 +605,19 @@ func TestStillReplaceable(t *testing.T) {
 		}
 		if plan.Items[0].StillReplaceable() {
 			t.Fatal("a destination that is gone is replaceable")
+		}
+	})
+
+	// A name the planned file gains after planning may be a listed path,
+	// such as that of a source that no longer existed when the plan was
+	// made, and adding a name changes neither its size nor its times.
+	t.Run("linked elsewhere", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		if err := os.Link(destination, filepath.Join(t.TempDir(), "x.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a planned file that gained a name since the plan is replaceable")
 		}
 	})
 }
@@ -923,6 +946,71 @@ func TestPrepareReportsDeniedFolderCreation(t *testing.T) {
 		if !errors.As(err, &pathErr) || pathErr.Path != filepath.Join(parent, "Resized") {
 			t.Fatalf("error = %v, want one naming %s", err, filepath.Join(parent, "Resized"))
 		}
+	}
+}
+
+// TestPrepareFindsFilesInTheWayUnderNamesWindowsKeeps pins the ErrNotFolder
+// rule for a folder path through a name Windows keeps only in the middle of
+// a path, such as "Photos ": the parents are inspected under the names the
+// path gives them, as they are created, not as the entry the name reaches
+// once it ends a path, which is "Photos". A file named "Photos" beside a
+// folder that cannot be created is no file in the way, and a file named
+// "Photos " is one, whatever stands at "Photos".
+func TestPrepareFindsFilesInTheWayUnderNamesWindowsKeeps(t *testing.T) {
+	source := png(filepath.Join(t.TempDir(), "x.png"))
+
+	t.Run("file at the shortened name", func(t *testing.T) {
+		parent := t.TempDir()
+		writeFile(t, filepath.Join(parent, "Photos"), "file")
+		setDACL(t, parent, "D:P(D;;0x4;;;WD)(A;OICI;FA;;;WD)") // deny FILE_ADD_SUBDIRECTORY
+		t.Cleanup(func() { setDACL(t, parent, "D:P(A;OICI;FA;;;WD)") })
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, "Photos ", "Resized"), CollisionRename, source))
+		assertKind(t, err, KindFolder)
+		if errors.Is(err, ErrNotFolder) || !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("error = %v, want a permission failure rather than a file in the way", err)
+		}
+	})
+
+	t.Run("file at the kept name", func(t *testing.T) {
+		parent := t.TempDir()
+		if err := os.Mkdir(filepath.Join(parent, "Photos"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		blocker := filepath.Join(parent, "Photos ")
+		removeVerbatim(t, blocker)
+		if err := os.WriteFile(`\\?\`+blocker, []byte("file"), 0o644); err != nil {
+			t.Fatalf("create %q: %v", blocker, err)
+		}
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(blocker, "Resized"), CollisionRename, source))
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, ErrNotFolder) {
+			t.Fatalf("error = %v, want ErrNotFolder", err)
+		}
+	})
+}
+
+// TestPrepareRefusesFolderStreams: a name with a colon names a stream to
+// NTFS, so Resized::$INDEX_ALLOCATION opens the folder Resized under another
+// spelling, through which a destination would escape the comparison with a
+// listed path in Resized that no longer exists, and x:y cannot be created.
+// Both are refused before anything is created.
+func TestPrepareRefusesFolderStreams(t *testing.T) {
+	parent := t.TempDir()
+	resized := filepath.Join(parent, "Resized")
+	if err := os.Mkdir(resized, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{resized + "::$INDEX_ALLOCATION", `\\?\` + resized + "::$INDEX_ALLOCATION", filepath.Join(parent, "x:y")} {
+		for _, policy := range policies {
+			_, err := Prepare(context.Background(), jobRequest(folder, policy, png(filepath.Join(resized, "gone.png"))))
+			assertKind(t, err, KindValidation)
+			if !errors.Is(err, ErrFolderName) {
+				t.Fatalf("%s: error = %v, want ErrFolderName", folder, err)
+			}
+		}
+	}
+	if entries, err := os.ReadDir(parent); err != nil || len(entries) != 1 {
+		t.Fatalf("the parent holds %v (%v) after refused requests", entries, err)
 	}
 }
 
