@@ -71,6 +71,7 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 		{name: "folder ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + " " }, wantErr: "ends in a space or a period"},
 		{name: "folder ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "." }, wantErr: "ends in a space or a period"},
 		{name: "parent ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+" ", "Resized") }, wantErr: "ends in a space or a period"},
+		{name: "volume without a folder", mutate: func(o *ResizeOptions) { o.OutputFolder = `\\?\` + filepath.VolumeName(folder) }, wantErr: "absolute"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

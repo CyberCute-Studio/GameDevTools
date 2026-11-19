@@ -423,6 +423,74 @@ func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
 	})
 }
 
+// TestStillReplaceable pins NFR-020 after planning: the file a confirmed
+// Overwrite plans to replace stays replaceable while it is the same file,
+// whatever it holds, and stops being so once a source is moved or linked to
+// its name, so the writer can refuse to replace a source that took the
+// file's place after the plan was made. Only ActionReplace items replace.
+func TestStillReplaceable(t *testing.T) {
+	prepareReplace := func(t *testing.T) (Plan, string, string) {
+		t.Helper()
+		in, out := t.TempDir(), t.TempDir()
+		source := filepath.Join(in, "x.png")
+		writeFile(t, source, "source x")
+		other := filepath.Join(in, "other.png")
+		writeFile(t, other, "source other")
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "earlier")
+		plan := mustPrepare(t, jobRequest(out, CollisionOverwrite, png(source), png(other)))
+		assertItems(t, plan, []expect{{"x.png", ActionReplace, ReasonNone}, {"other.png", ActionCreate, ReasonNone}})
+		if !plan.Items[0].StillReplaceable() {
+			t.Fatal("the planned file is not replaceable right after planning")
+		}
+		if plan.Items[1].StillReplaceable() {
+			t.Fatal("an ActionCreate item reports a file to replace")
+		}
+		return plan, other, destination
+	}
+
+	t.Run("rewritten", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		writeFile(t, destination, "rewritten by another program")
+		if !plan.Items[0].StillReplaceable() {
+			t.Fatal("the planned file is not replaceable after its content changed")
+		}
+	})
+
+	t.Run("source moved onto it", func(t *testing.T) {
+		plan, other, destination := prepareReplace(t)
+		if err := os.Rename(other, destination); err != nil {
+			t.Fatalf("move the source onto the destination: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a source moved onto the destination is replaceable")
+		}
+	})
+
+	t.Run("source linked to it", func(t *testing.T) {
+		plan, other, destination := prepareReplace(t)
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("remove the destination: %v", err)
+		}
+		if err := os.Link(other, destination); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a source linked to the destination's name is replaceable")
+		}
+	})
+
+	t.Run("gone", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("remove the destination: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a destination that is gone is replaceable")
+		}
+	})
+}
+
 // TestPrepareNeverReplacesAFileThroughItsShortName pins AC-R10 for 8.3
 // names: a natural destination that is only the short name of an existing
 // file with another long name, such as PHOTOG~1.png for photograph.png,

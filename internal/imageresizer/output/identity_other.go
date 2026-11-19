@@ -22,10 +22,18 @@ func identify(string) (fileID, uint32, error) {
 	return fileID{}, 0, errIdentityUnsupported
 }
 
-// fileMissing reports whether a file could not be opened because it does
-// not exist.
+// fileMissing reports whether a file could not be opened because no entry
+// has its name in its folder, as on Windows. The error alone cannot tell, as
+// a path whose folder is gone fails with the same ENOENT, so the path's
+// folder must still be one: a name in an output folder removed while a plan
+// is made is not free.
 func fileMissing(err error) bool {
-	return errors.Is(err, fs.ErrNotExist)
+	var pathErr *fs.PathError
+	if !errors.Is(err, fs.ErrNotExist) || !errors.As(err, &pathErr) {
+		return false
+	}
+	info, statErr := os.Stat(filepath.Dir(pathErr.Path))
+	return statErr == nil && info.IsDir()
 }
 
 // findEntry describes the entry at path outside Windows, which has no second

@@ -138,7 +138,7 @@ func TestOptionsStoreRejectsMalformedSections(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := decodeOptions(json.RawMessage(test.section))
+			_, _, _, err := decodeOptions(json.RawMessage(test.section))
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("decodeOptions() error = %v, want text containing %q", err, test.wantErr)
 			}
@@ -153,12 +153,12 @@ func TestOptionsStoreValidSection(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := json.RawMessage(`{"resize":{"version":1,"format":"jpeg","collision":"overwrite","jpegQuality":40,"background":"#102030","outputFolder":` + string(quoted) + `}}`)
-	stored, exists, err := decodeOptions(section)
+	stored, exists, legacyFolder, err := decodeOptions(section)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists {
-		t.Fatal("stored resize options were not detected")
+	if !exists || legacyFolder {
+		t.Fatalf("stored resize options detected = %v, legacy folder = %v", exists, legacyFolder)
 	}
 	if stored.Format != FormatJPEG || stored.Collision != CollisionOverwrite || stored.JPEGQuality != 40 || stored.Background != "#102030" || stored.OutputFolder != folder {
 		t.Fatalf("stored options = %+v", stored)
@@ -167,12 +167,19 @@ func TestOptionsStoreValidSection(t *testing.T) {
 
 // TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault: earlier builds
 // saved an output folder whose path has a name ending in a space or a
-// period, which output planning now refuses. Loading such a file keeps every
-// other setting, the preset library included, and only the folder falls
-// back to the default, rather than the whole file being reset as invalid.
+// period, or that names only a volume, which output planning now refuses.
+// Loading such a file keeps every other setting, the preset library
+// included, and only the folder falls back to the default, rather than the
+// whole file being reset as invalid; the options manager reports the folder
+// it replaced, so the application can say why the folder changed instead of
+// forgetting the user's folder in silence.
 func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	folder := testFolder(t)
-	for _, saved := range []string{folder + ".", filepath.Join(folder+" ", "Resized")} {
+	legacyFolders := []string{folder + ".", filepath.Join(folder+" ", "Resized")}
+	if volume := filepath.VolumeName(folder); volume != "" {
+		legacyFolders = append(legacyFolders, `\\?\`+volume)
+	}
+	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")
 		store := settings.NewStore(settings.Paths{ConfigFile: path})
 		preset.RegisterValidators(store)
@@ -195,6 +202,13 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		options := ResizeOptions{Format: FormatJPEG, Collision: CollisionSkip, JPEGQuality: 55, Background: "#102030", OutputFolder: folder}
 		if err := optionsStore.Save(&value, options); err != nil {
 			t.Fatal(err)
+		}
+		kept, err := NewOptionsManager(optionsStore, &value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kept.Options() != options || kept.ReplacedFolder() != "" {
+			t.Fatalf("a valid stored folder loads as %+v, replaced folder %q", kept.Options(), kept.ReplacedFolder())
 		}
 		// Write the folder an earlier build would have saved.
 		data, err := os.ReadFile(path)
@@ -236,6 +250,13 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		want.OutputFolder = defaultFolder
 		if restored != want {
 			t.Fatalf("%q: restored options = %+v, want %+v", saved, restored, want)
+		}
+		manager, err := NewOptionsManager(restartedOptions, &loaded.Settings)
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		if manager.Options() != want || manager.ReplacedFolder() != saved {
+			t.Fatalf("%q: manager options = %+v, replaced folder %q", saved, manager.Options(), manager.ReplacedFolder())
 		}
 		restartedRepository, err := preset.NewRepository(shell.ModuleImageResizer, restarted)
 		if err != nil {

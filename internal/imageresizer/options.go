@@ -122,12 +122,18 @@ func ParseBackground(input string) (string, error) {
 // validateOutputFolder applies the output planner's folder rules, so a
 // folder the options accept is one a job can plan into.
 func validateOutputFolder(folder string) error {
-	switch err := output.ValidateFolder(folder); {
+	return folderMessage(output.ValidateFolder(folder))
+}
+
+// folderMessage turns an output.ValidateFolder failure into the message the
+// view shows for it.
+func folderMessage(err error) error {
+	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, output.ErrFolderEmpty):
 		return errors.New(ui.OutputFolderRequired)
-	case errors.Is(err, output.ErrFolderNotAbsolute):
+	case errors.Is(err, output.ErrFolderNotAbsolute), errors.Is(err, output.ErrFolderRoot):
 		return errors.New(ui.OutputFolderNotAbsolute)
 	case errors.Is(err, output.ErrFolderName):
 		return errors.New(ui.OutputFolderNameInvalid)
@@ -140,6 +146,7 @@ type OptionsManager struct {
 	store    *OptionsStore
 	settings *settings.Settings
 	options  ResizeOptions
+	replaced string
 }
 
 func NewOptionsManager(store *OptionsStore, value *settings.Settings) (*OptionsManager, error) {
@@ -149,15 +156,24 @@ func NewOptionsManager(store *OptionsStore, value *settings.Settings) (*OptionsM
 	if value == nil {
 		return nil, errors.New("settings value is required")
 	}
-	options, err := store.Load(*value)
+	options, replaced, err := store.load(*value)
 	if err != nil {
 		return nil, err
 	}
-	return &OptionsManager{store: store, settings: value, options: options}, nil
+	return &OptionsManager{store: store, settings: value, options: options, replaced: replaced}, nil
 }
 
 func (m *OptionsManager) Options() ResizeOptions {
 	return m.options
+}
+
+// ReplacedFolder returns the stored output folder that the default folder
+// replaced when the options were loaded, because only earlier builds
+// accepted it and jobs refuse it, or "" when no stored folder was replaced.
+// The application warns about it at startup, so the user learns why the
+// folder changed before the next save forgets the old one.
+func (m *OptionsManager) ReplacedFolder() string {
+	return m.replaced
 }
 
 func (m *OptionsManager) SetFormat(format OutputFormat) error {

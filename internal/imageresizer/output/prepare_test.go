@@ -187,7 +187,9 @@ func TestEncodedFormatAndExtension(t *testing.T) {
 
 // TestValidateFolder: no folder name in an output folder's path may end in a
 // space or a period, which Windows removes, except in an extended-length
-// path, which Windows takes verbatim.
+// path, which Windows takes verbatim; and the path must name a folder, not
+// only a drive, volume, device, or server, where filepath.Join would put a
+// file name straight after the volume.
 func TestValidateFolder(t *testing.T) {
 	tests := []struct {
 		folder string
@@ -197,6 +199,19 @@ func TestValidateFolder(t *testing.T) {
 		{`C:\Art\...name`, nil},
 		{`\\server\share\Resized`, nil},
 		{`C:\`, nil},
+		{`\\server\share`, nil},
+		{`\\server\share\`, nil},
+		{`\\?\C:\`, nil},
+		{`\\.\C:\`, nil},
+		{`\\?\Volume{00000000-0000-0000-0000-000000000000}\`, nil},
+		{`\\?\C:`, ErrFolderRoot},
+		{`//?/C:`, ErrFolderRoot},
+		{`\\.\C:`, ErrFolderRoot},
+		{`\\?\Volume{00000000-0000-0000-0000-000000000000}`, ErrFolderRoot},
+		{`\\.\NUL`, ErrFolderRoot},
+		{`\\server`, ErrFolderRoot},
+		{`\\?\`, ErrFolderRoot},
+		{`C:`, ErrFolderNotAbsolute},
 		{`C:\Art.\Resized`, ErrFolderName},
 		{`C:\Art \Resized`, ErrFolderName},
 		{`C:/Art./Resized`, ErrFolderName},
@@ -366,6 +381,9 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		{name: "parent ending in a space", mutate: func(r *Request) {
 			r.Folder = filepath.Join(filepath.Dir(r.Folder), "sub ", "out")
 		}, want: ErrFolderName},
+		// A volume without its root folder's separator is no folder, and
+		// joining a file name to it gives \\?\C:x.png.
+		{name: "extended-length volume", mutate: func(r *Request) { r.Folder = `\\?\` + filepath.VolumeName(in) }, want: ErrFolderRoot},
 		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
 		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
 		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
@@ -736,10 +754,10 @@ func TestPrepareExistingDestinations(t *testing.T) {
 // TestPrepareTreatsStoredFilesAsFiles: since Go 1.23, os.Lstat reports a
 // file with a reparse point other than a symbolic link, such as every file
 // OneDrive keeps in sync, as irregular. Such a file is still a file that a
-// confirmed Overwrite replaces; an irregular entry that is a link, a
-// folder, or cannot be listed is not. One listing of the entry tells both
-// whether it is a file and whether its folder lists it under the
-// destination's own name.
+// confirmed Overwrite replaces; an irregular entry that is a link or a
+// folder is not, and one that cannot be listed, irregular or not, cannot be
+// proven to be one. One listing of the entry tells both whether it is a file
+// and whether its folder lists it under the destination's own name.
 func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 	irregular := func(mode fs.FileMode) func(string) (fs.FileInfo, error) {
 		return func(path string) (fs.FileInfo, error) {
@@ -759,6 +777,14 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 		CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
 		CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
 		CollisionOverwrite: {"x.png", ActionReplace, ReasonNone},
+	}
+	// An entry its folder cannot list cannot be proven to be the file with
+	// the destination's name, so Overwrite renames it as unverified rather
+	// than as a file that exists.
+	unverified := map[Collision]expect{
+		CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+		CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+		CollisionOverwrite: {"x_2.png", ActionCreate, ReasonUnverified},
 	}
 	tests := []struct {
 		name   string
@@ -796,7 +822,15 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 			listed: func(path string) (entry, error) {
 				return entry{}, &fs.PathError{Op: "find", Path: path, Err: fs.ErrPermission}
 			},
-			want: renamed,
+			want: unverified,
+		},
+		{
+			name: "unlistable regular file",
+			mode: 0,
+			listed: func(path string) (entry, error) {
+				return entry{}, &fs.PathError{Op: "find", Path: path, Err: fs.ErrPermission}
+			},
+			want: unverified,
 		},
 		{
 			name: "irregular folder",
@@ -1207,7 +1241,7 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 
 	// Once the output folder itself cannot be reached, the search stops at
 	// the first name it cannot check rather than trying every other, and
-	// the item fails with the folder's failure, which is what stopped it,
+	// the job fails with the folder's failure, which is what stopped it,
 	// not the failure of the name it passed over (UX-010).
 	t.Run("folder gone", func(t *testing.T) {
 		gone := false
@@ -1228,51 +1262,101 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 				return os.Stat(path)
 			},
 		}
-		plan, err := prepare(context.Background(), jobRequest(out, CollisionRename, sources[2]), files)
-		if err != nil {
-			t.Fatalf("prepare: %v", err)
-		}
-		assertItems(t, plan, []expect{{"taken.png", ActionFail, ReasonExists}})
-		failure := assertKind(t, plan.Items[0].Err, KindDestination)
+		_, err := prepare(context.Background(), jobRequest(out, CollisionRename, sources[2]), files)
+		failure := assertKind(t, err, KindFolder)
 		if !errors.Is(failure, windows.ERROR_PATH_NOT_FOUND) || errors.Is(failure, fs.ErrPermission) ||
 			failure.Op != "open output folder" || calls != 2 {
-			t.Fatalf("item error = %v after %d checks, want the folder's failure after 2", failure, calls)
+			t.Fatalf("error = %v after %d checks, want the folder's failure after 2", failure, calls)
 		}
 	})
 }
 
-// TestPrepareFailsDestinationsWhenTheFolderGoes: a name is free only when it
-// is missing from a folder that exists. When the output folder goes after
-// Prepare has opened it, as when its drive is removed, no destination is
-// planned as free; each item that needs a name fails with the reason.
-func TestPrepareFailsDestinationsWhenTheFolderGoes(t *testing.T) {
+// TestPrepareFailsWhenTheFolderGoes: a name is free only when it is missing
+// from a folder that exists. When the output folder goes after Prepare has
+// opened it, as when its drive is removed, no destination is planned as
+// free, and the job fails once with the folder's failure, as an unusable
+// folder does, rather than every item failing on its own (UX-010), whether
+// the first name that cannot be checked is a natural destination or a
+// numbered one.
+func TestPrepareFailsWhenTheFolderGoes(t *testing.T) {
 	for _, policy := range policies {
 		t.Run(string(policy), func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "out")
+			lstats := 0
 			files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
+				lstats++
 				if err := os.Remove(out); err != nil && !errors.Is(err, fs.ErrNotExist) {
 					t.Fatalf("remove the output folder: %v", err)
 				}
 				return os.Lstat(path)
 			}}
 			// The first source lies in the output folder, so its result
-			// needs a numbered name.
-			plan, err := prepare(context.Background(), jobRequest(out, policy,
-				png(filepath.Join(out, "x.png")), png(filepath.Join(t.TempDir(), "y.png"))), files)
-			if err != nil {
-				t.Fatalf("prepare: %v", err)
+			// needs a numbered name; the others need their natural names.
+			sources := []Source{png(filepath.Join(out, "x.png"))}
+			for index := 0; index < 50; index++ {
+				sources = append(sources, png(filepath.Join(t.TempDir(), fmt.Sprintf("y%d.png", index))))
 			}
-			want := []expect{{"x.png", ActionFail, ReasonSource}, {"y.png", ActionFail, ReasonNone}}
-			if policy == CollisionSkip {
-				want[0] = expect{"x.png", ActionSkip, ReasonSource}
+			_, err := prepare(context.Background(), jobRequest(out, policy, sources...), files)
+			failure := assertKind(t, err, KindFolder)
+			if !errors.Is(failure, fs.ErrNotExist) || failure.Op != "open output folder" {
+				t.Fatalf("error = %v, want the missing folder", failure)
 			}
-			assertItems(t, plan, want)
-			for index, item := range plan.Items {
-				if item.Action == ActionFail && !errors.Is(item.Err, fs.ErrNotExist) {
-					t.Fatalf("item %d error = %v, want the missing folder", index, item.Err)
-				}
+			if lstats != 1 {
+				t.Fatalf("checked %d destinations, want only the first", lstats)
 			}
 		})
+	}
+
+	// A Rename search that meets the folder gone fails the job the same way.
+	t.Run("numbered name", func(t *testing.T) {
+		out := filepath.Join(t.TempDir(), "out")
+		files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
+			if strings.EqualFold(filepath.Base(path), "x_2.png") {
+				if err := os.Remove(out); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("remove the output folder: %v", err)
+				}
+			}
+			return os.Lstat(path)
+		}}
+		_, err := prepare(context.Background(), jobRequest(out, CollisionRename, png(filepath.Join(out, "x.png"))), files)
+		if failure := assertKind(t, err, KindFolder); !errors.Is(failure, fs.ErrNotExist) {
+			t.Fatalf("error = %v, want the missing folder", failure)
+		}
+	})
+}
+
+// TestPrepareChecksTheFolderSparingly: destinations that cannot be checked
+// in a folder that stays reachable fail only their own items, and the
+// folder is checked at the first, second, fourth, and so on of them, not at
+// every one.
+func TestPrepareChecksTheFolderSparingly(t *testing.T) {
+	out := t.TempDir()
+	stats := 0
+	files := faultyFiles{
+		lstat: func(path string) (fs.FileInfo, error) {
+			return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrPermission}
+		},
+		stat: func(path string) (fs.FileInfo, error) {
+			stats++
+			return os.Stat(path)
+		},
+	}
+	var sources []Source
+	for index := 0; index < 100; index++ {
+		sources = append(sources, png(filepath.Join(t.TempDir(), fmt.Sprintf("x%d.png", index))))
+	}
+	plan, err := prepare(context.Background(), jobRequest(out, CollisionRename, sources...), files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	for index, item := range plan.Items {
+		if item.Action != ActionFail || !errors.Is(item.Err, fs.ErrPermission) {
+			t.Fatalf("item %d = %v (%v), want the permission failure", index, item.Action, item.Err)
+		}
+	}
+	// One check when Prepare opens the folder, then at 1, 2, 4, ..., 64.
+	if stats != 1+7 {
+		t.Fatalf("checked the folder %d times, want %d", stats, 1+7)
 	}
 }
 

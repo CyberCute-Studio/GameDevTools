@@ -173,6 +173,7 @@ const (
 	ResizeOptionsSaveFailed  = "The resize setting change remains in memory, but settings could not be saved: %v"
 	ResizeOperationFailed    = "Resize setting operation failed: %v"
 	ResizeFolderUnavailable  = "The default Pictures output folder is unavailable: %v. Choose an output folder before resizing."
+	ResizeFolderReplaced     = "The saved output folder for resized images, %s, can no longer be used: a folder name in its path ends in a space or a period, which Windows removes, or the path names a drive rather than a folder. The default output folder is selected instead; choose another folder with Browse."
 
 	SourceImagesLabel    = "&Source images"
 	SourceImagesHint     = "Drop PNG or JPEG files — or a folder of images — anywhere on this view, or choose files with Add Images. Each file's content is checked in the background, and sources are opened read-only and never modified."

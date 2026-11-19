@@ -93,6 +93,9 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
+	if replaced := resizerOptionsManager.ReplacedFolder(); replaced != "" {
+		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.ResizeFolderReplaced, replaced))
+	}
 	if resizerFolderErr != nil && resizerOptionsManager.Options().OutputFolder == "" {
 		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.ResizeFolderUnavailable, resizerFolderErr))
 	}

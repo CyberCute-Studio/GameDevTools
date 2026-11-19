@@ -40,13 +40,16 @@
 // when it runs, so re-running a job plans afresh rather than assuming
 // earlier results (RSZ-049). A file can still appear at a planned
 // destination after Prepare returns; the writer must finalize ActionCreate
-// items without replacing anything.
+// items without replacing anything. A source can likewise be moved or linked
+// to the name of a file planned for replacement, so the writer replaces an
+// ActionReplace item's file only while Item.StillReplaceable reports that it
+// is still the file the plan proved is none of the sources.
 //
 // Failures are reported as *Error values with a Kind. A failure that
 // concerns the whole job — an invalid request, a missing confirmation, or an
-// unusable output folder — is returned by Prepare; a failure that concerns
-// one destination is attached to that item, and the other items are planned
-// regardless (RSZ-044).
+// output folder that is unusable, or becomes so while the plan is made — is
+// returned by Prepare; a failure that concerns one destination is attached
+// to that item, and the other items are planned regardless (RSZ-044).
 //
 // Prepare touches the filesystem and never the GUI, so callers run it off
 // the GUI thread and deliver results through the shell dispatcher, per
@@ -132,7 +135,7 @@ type Kind uint8
 
 const (
 	// KindValidation means the request itself is invalid: an output folder
-	// that is not an absolute path, an unknown format or policy, no sources,
+	// ValidateFolder refuses, an unknown format or policy, no sources,
 	// a source that is not an absolute file path with a decoded PNG or JPEG
 	// format, or a protected path that is not an absolute file path.
 	KindValidation Kind = iota
@@ -202,17 +205,25 @@ var (
 	// an earlier one with the same name.
 	ErrNoUnusedName = fmt.Errorf("no unused output file name was found among the numbered names _2 to _%d", maxSuffix)
 
-	// ErrFolderEmpty, ErrFolderText, ErrFolderNotAbsolute, and ErrFolderName
-	// are the causes ValidateFolder reports.
+	// ErrFolderEmpty, ErrFolderText, ErrFolderNotAbsolute, ErrFolderRoot,
+	// and ErrFolderName are the causes ValidateFolder reports.
 	ErrFolderEmpty       = errors.New("the output folder is empty")
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
+	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it")
 	ErrFolderName        = errors.New("a folder name in the path ends in a space or a period, which Windows removes")
 )
 
 // ValidateFolder checks an output folder path the way the persisted options
-// and Prepare both require: it is not empty, is valid text, is absolute, and
-// no folder name in it ends in a space or a period.
+// and Prepare both require: it is not empty, is valid text, is absolute,
+// names a folder, and no folder name in it ends in a space or a period.
+//
+// An absolute path that is only a volume name, such as \\?\C: or \\.\C:
+// without the root folder's separator, or \\server without a share, names a
+// volume, device, or server rather than a folder: no folder can be created
+// or opened there, and filepath.Join puts a file name straight after it,
+// giving \\?\C:x.png, so its destinations would not lie in it. A share,
+// \\server\share, is its own root folder.
 //
 // A path that is not valid UTF-8, as Go holds a Windows name with an
 // unpaired surrogate, cannot be kept in the settings file, whose JSON
@@ -237,6 +248,9 @@ func ValidateFolder(folder string) error {
 		return ErrFolderNotAbsolute
 	}
 	clean := filepath.Clean(folder)
+	if volume := filepath.VolumeName(clean); len(volume) == len(clean) && !shareRoot(volume) {
+		return ErrFolderRoot
+	}
 	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) {
 		return nil
 	}
@@ -249,6 +263,18 @@ func ValidateFolder(folder string) error {
 		}
 	}
 	return nil
+}
+
+// shareRoot reports whether a volume name, as filepath.VolumeName gives it
+// for a cleaned path, names a share, \\server\share, which is a folder,
+// rather than a drive (C:), a server without a share (\\server), or the
+// first element of a device path (\\?\C:, \\.\NUL), which are not.
+func shareRoot(volume string) bool {
+	if len(volume) < 2 || !os.IsPathSeparator(volume[0]) || !os.IsPathSeparator(volume[1]) {
+		return false
+	}
+	server, share, found := strings.Cut(volume[2:], string(filepath.Separator))
+	return found && share != "" && server != "." && server != "?"
 }
 
 // PathKey normalizes a full path for comparison. Windows paths compare
@@ -329,7 +355,8 @@ const (
 	// ActionReplace replaces the existing file at Destination, the item's
 	// natural destination, which the plan proved is none of the sources.
 	// Only a confirmed Overwrite job replaces, and never a file with a
-	// numbered name.
+	// numbered name. The writer replaces the file only while
+	// Item.StillReplaceable reports it is still that file.
 	ActionReplace
 	// ActionSkip leaves Destination untouched and marks the item Skipped.
 	// Only a Skip job skips.
@@ -381,11 +408,11 @@ const (
 	// sources or protected paths, by path or, under Overwrite, by file
 	// identity, which is never overwritten (RSZ-026).
 	ReasonSource
-	// ReasonUnverified means an Overwrite job could not prove that the file
-	// at the natural destination is not one of its sources or protected
-	// paths, because the file's identity could not be read, or the identity
-	// of a listed file it may be, so the result was renamed instead of
-	// replacing it.
+	// ReasonUnverified means an Overwrite job could not prove that the entry
+	// at the natural destination is a file it may replace: its folder could
+	// not list it as a file under the destination's own name, or the file's
+	// identity could not be read, or the identity of a listed file it may
+	// be, so the result was renamed instead of replacing it.
 	ReasonUnverified
 )
 
@@ -425,12 +452,34 @@ type Item struct {
 	DuplicateOf int
 	// Err is the *Error of an ActionFail item, with KindDestination.
 	Err error
+	// replaces is the identity of the file an ActionReplace item replaces,
+	// the one the plan proved is none of the sources.
+	replaces fileID
 }
 
 // Renamed reports whether the item creates a file under a numbered name
 // because its natural destination was unavailable.
 func (i Item) Renamed() bool {
 	return i.Action == ActionCreate && i.Reason != ReasonNone
+}
+
+// StillReplaceable reports whether the file at an ActionReplace item's
+// Destination is still the file the plan proved is none of the sources: the
+// same file, by its identity, whatever it now holds. A source moved or
+// linked to the destination's name after planning is another file, so the
+// writer checks this immediately before it replaces the file, and replaces
+// nothing when it reports false. It reports false for every other action,
+// and when the file's identity cannot be read.
+func (i Item) StillReplaceable() bool {
+	return i.stillReplaceable(osFiles{})
+}
+
+func (i Item) stillReplaceable(files fileSystem) bool {
+	if i.Action != ActionReplace {
+		return false
+	}
+	id, _, err := files.Identity(i.Destination)
+	return err == nil && id == i.replaces
 }
 
 // Plan is a job's planned destinations. Items holds one entry per request
@@ -740,6 +789,10 @@ type planner struct {
 	// search passed over because it could not be checked, so every item
 	// whose search for the pattern finds no name can say why.
 	passed map[string]error
+	// unchecked counts the destination names that could not be checked, so
+	// folderLost checks the output folder at the first, second, fourth, and
+	// so on.
+	unchecked int
 }
 
 func newPlanner(ctx context.Context, request Request, folder string, files fileSystem) *planner {
@@ -824,8 +877,9 @@ func (p *planner) reserved(key string) (Reason, int) {
 
 // natural tries to give the item its natural destination. It returns false
 // with the item's Reason set when the destination is unavailable and the
-// collision policy must resolve the item. A context error is returned; a
-// destination failure is attached to the item.
+// collision policy must resolve the item. A context error, or an output
+// folder that can no longer be reached, is returned; a destination failure
+// is attached to the item.
 func (p *planner) natural(index int, item *Item) (bool, error) {
 	name := filepath.Base(item.Destination)
 	if tooLong(name) {
@@ -840,20 +894,23 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 	found := p.probe(key, item.Destination)
 	switch {
 	case found.err != nil:
+		if err := p.folderLost(); err != nil {
+			return false, err
+		}
 		p.fail(item, "check destination", found.err)
 		return true, nil
 	case !found.exists:
 		p.claimed[key] = index
 		item.Action = ActionCreate
 		return true, nil
-	case p.collision != CollisionOverwrite, !p.ownFile(item.Destination, found.mode):
+	case p.collision != CollisionOverwrite:
 		// Rename and Skip never replace a file, so whether an existing file
-		// is a source under another name changes nothing they do; no policy
-		// replaces a folder or a link; and a file the destination name only
-		// reaches, as an 8.3 short name reaches a file with another long
-		// name, is not the file with the output's name that Overwrite
-		// replaces.
+		// is a source under another name changes nothing they do.
 		item.Reason = ReasonExists
+		return false, nil
+	}
+	if reason := p.ownFile(item.Destination, found.mode); reason != ReasonNone {
+		item.Reason = reason
 		return false, nil
 	}
 	decision, err := p.replaceable(key, item.Destination)
@@ -867,6 +924,7 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 	p.replaced[decision.id] = index
 	p.claimed[key] = index
 	item.Action = ActionReplace
+	item.replaces = decision.id
 	return true, nil
 }
 
@@ -875,7 +933,9 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 // plans to create the same name, and Rename and Overwrite search for the
 // first numbered name that is unused. Overwrite never replaces a file under
 // a numbered name: such a file may be an original the job was never asked
-// to replace, which the planner cannot tell from an earlier result.
+// to replace, which the planner cannot tell from an earlier result. A
+// context error, or an output folder that can no longer be reached, is
+// returned; a destination failure is attached to the item.
 func (p *planner) resolve(index int, item *Item) error {
 	if p.collision == CollisionSkip {
 		item.Action = ActionSkip
@@ -891,7 +951,6 @@ func (p *planner) resolve(index int, item *Item) error {
 	// in bytes that are not valid UTF-8, whose numbered names never collide,
 	// keep their own searches.
 	pattern := foldCase(prefix) + "\x00" + foldCase(extension)
-	unchecked := 0
 	for suffix := max(p.next[pattern], 2); suffix <= maxSuffix; suffix++ {
 		if err := p.ctx.Err(); err != nil {
 			return kindError(KindCanceled, "plan outputs", err)
@@ -912,20 +971,9 @@ func (p *planner) resolve(index int, item *Item) error {
 		if found.err != nil {
 			// A numbered name only has to be usable, so a name that cannot
 			// be checked is passed over, unless the output folder itself
-			// can no longer be reached, which every later name would meet.
-			// The folder is checked at the first, second, fourth, eighth,
-			// and so on name passed over, so a reachable folder costs a few
-			// checks per search rather than one per name, and one that
-			// becomes unreachable stops the search before it has passed over
-			// twice the names it had when the folder was last reached.
-			unchecked++
-			if unchecked&(unchecked-1) == 0 {
-				if _, err := p.files.Stat(p.folder); err != nil {
-					// The folder is what stops the search, so its failure,
-					// not the name's, is the reason the item fails.
-					p.fail(item, "open output folder", err)
-					return nil
-				}
+			// can no longer be reached, which fails the job.
+			if err := p.folderLost(); err != nil {
+				return err
 			}
 			if _, noted := p.passed[pattern]; !noted {
 				p.passed[pattern] = found.err
@@ -954,6 +1002,28 @@ func (p *planner) fail(item *Item, op string, err error) {
 	item.Err = kindError(KindDestination, op, err)
 }
 
+// folderLost is called for each destination name that cannot be checked,
+// which may mean the output folder itself can no longer be reached, as when
+// its drive or share has gone since Prepare opened it. Every later name
+// would then fail too, so it returns the folder's failure as a KindFolder
+// error that fails the job once, as an unusable folder does, rather than
+// every remaining item failing on its own (UX-010). The folder is checked at
+// the first, second, fourth, eighth, and so on name of the job that cannot
+// be checked, so names that cannot be checked in a reachable folder cost a
+// few checks rather than one each, and a folder that becomes unreachable is
+// noticed before the job has met twice the names that could not be checked
+// when the folder was last reached.
+func (p *planner) folderLost() error {
+	p.unchecked++
+	if p.unchecked&(p.unchecked-1) != 0 {
+		return nil
+	}
+	if _, err := p.files.Stat(p.folder); err != nil {
+		return kindError(KindFolder, "open output folder", err)
+	}
+	return nil
+}
+
 // probe inspects a destination path without following a final link, so a
 // link is reported as an entry of its own rather than as its target. Only a
 // name missing from the output folder is free: a path whose folder cannot be
@@ -974,36 +1044,40 @@ func (p *planner) probe(key, path string) probe {
 	return found
 }
 
-// file reports whether the entry at path, of the given type, is a file: a
-// regular file, or one Lstat reports as irregular that its folder lists as a
-// file. Since Go 1.23, os.Lstat reports a Windows file with a reparse point
-// other than a symbolic link as irregular, and that includes every file
-// OneDrive keeps in sync; such a file has its data and its name where it
-// stands, like any other. A folder, a link, a junction, and an irregular
-// entry its folder cannot list are not files.
-func (p *planner) file(path string, mode fs.FileMode) bool {
-	switch mode.Type() {
-	case 0:
-		return true
-	case fs.ModeIrregular:
-		listed, err := p.files.Entry(path)
-		return err == nil && listed.file
+// listFile returns how its folder lists the existing entry at path, of the
+// given type, when that type may be a file's: a regular file, or an entry
+// Lstat reports as irregular. Since Go 1.23, os.Lstat reports a Windows file
+// with a reparse point other than a symbolic link as irregular, and that
+// includes every file OneDrive keeps in sync; such a file has its data and
+// its name where it stands, like any other, and only the listing tells it
+// from a junction or another link. An entry of any other type, such as a
+// folder or a symbolic link, is returned as no file without being listed.
+// This is the one place that decides which entries are files.
+func (p *planner) listFile(path string, mode fs.FileMode) (entry, error) {
+	if kind := mode.Type(); kind != 0 && kind != fs.ModeIrregular {
+		return entry{}, nil
 	}
-	return false
+	return p.files.Entry(path)
 }
 
-// ownFile reports whether the existing entry at path, of the given type, is
-// a file, as file decides, that its folder lists under the path's own name,
-// compared case-insensitively: the only entry Overwrite replaces. One
-// listing of the entry answers both. Windows also opens a file through its
-// 8.3 short name, so PHOTOG~1.png can reach photograph.png; such a path, or
-// one whose entry cannot be listed, does not name the entry.
-func (p *planner) ownFile(path string, mode fs.FileMode) bool {
-	if kind := mode.Type(); kind != 0 && kind != fs.ModeIrregular {
-		return false
+// ownFile decides whether the existing entry at a natural destination, of
+// the given type, is the only kind of entry Overwrite replaces: a file its
+// folder lists under the destination's own name, compared
+// case-insensitively. One listing answers both. It reports ReasonExists for
+// a folder, a link, or a junction, which no policy replaces, and for a file
+// the name only reaches, as Windows opens a file through its 8.3 short name,
+// so PHOTOG~1.png can reach photograph.png. It reports ReasonUnverified when
+// the folder cannot list the entry, which then cannot be proven to be
+// either, and ReasonNone for the destination's own file.
+func (p *planner) ownFile(path string, mode fs.FileMode) Reason {
+	listed, err := p.listFile(path, mode)
+	switch {
+	case err != nil:
+		return ReasonUnverified
+	case !listed.file || PathKey(listed.name) != PathKey(filepath.Base(path)):
+		return ReasonExists
 	}
-	listed, err := p.files.Entry(path)
-	return err == nil && listed.file && PathKey(listed.name) == PathKey(filepath.Base(path))
+	return ReasonNone
 }
 
 // replaceable decides whether an Overwrite job may replace the existing file
@@ -1081,9 +1155,18 @@ func (p *planner) isSource(id fileID) (bool, error) {
 // or link that can no longer be reached, the file may be any existing file.
 func (p *planner) unreadable(path string) {
 	info, err := p.files.Lstat(path)
-	if err != nil || !p.file(path, info.Mode()) {
+	if err != nil {
 		p.unverified = true
 		return
+	}
+	if info.Mode().Type() != 0 {
+		// A regular file is a file without listing it; any other entry is
+		// one only when its folder lists it as one.
+		listed, err := p.listFile(path, info.Mode())
+		if err != nil || !listed.file {
+			p.unverified = true
+			return
+		}
 	}
 	folder := filepath.Dir(path)
 	found := p.identity(PathKey(folder), folder)
