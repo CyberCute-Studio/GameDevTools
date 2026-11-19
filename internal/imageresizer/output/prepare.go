@@ -42,13 +42,13 @@
 // earlier results (RSZ-049). Every destination is a file in the output
 // folder as Windows resolves it: a name Windows would open as something
 // else, as Windows 10 opens NUL.png as the NUL device, is taken, like a
-// name an existing entry has, and the device is never opened. A file can
-// still appear at a planned destination after Prepare returns; the writer
-// must finalize ActionCreate items without replacing anything. A source can
-// likewise be moved or linked to the name of a file planned for replacement,
-// so the writer replaces an ActionReplace item's file only while
-// Item.StillReplaceable reports that it is still the file the plan proved is
-// none of the sources, unchanged.
+// name an existing entry has, with ReasonDevice, and the device is never
+// opened. A file can still appear at a planned destination after Prepare
+// returns; the writer must finalize ActionCreate items without replacing
+// anything. A source can likewise be moved or linked to the name of a file
+// planned for replacement, so the writer replaces an ActionReplace item's
+// file only while Item.StillReplaceable reports that it is still the file
+// the plan proved is none of the sources, unchanged.
 //
 // Failures are reported as *Error values with a Kind. A failure that
 // concerns the whole job — an invalid request, a missing confirmation, or an
@@ -71,6 +71,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf16"
@@ -198,7 +199,7 @@ var (
 	ErrNoSources = errors.New("the job has no sources to resize")
 	// ErrNotFolder is the cause of the KindFolder error returned when the
 	// output folder path, or a path that would have to hold it, names a
-	// file rather than a folder.
+	// file, or a link that leads to no folder, rather than a folder.
 	ErrNotFolder = errors.New("the output path is not a folder")
 	// ErrNameTooLong is the cause of the KindDestination error attached to
 	// an item whose output file name would exceed what Windows file systems
@@ -206,9 +207,11 @@ var (
 	ErrNameTooLong = fmt.Errorf("the output file name would be longer than %d characters", maxNameLength)
 	// ErrNameStream is the cause of the KindDestination error attached to an
 	// item whose source name holds a colon, as a path to a file's stream
-	// does, so its output file name would name a stream of another file in
-	// the output folder, which may be a listed original.
-	ErrNameStream = errors.New("the output file name would contain a colon, which Windows reads as naming a stream of another file")
+	// does, wherever the colon falls: its output file name would name a
+	// stream of another file in the output folder, which may be a listed
+	// original, or, when the colon follows the name's last period, the
+	// result would be named after the file that holds the stream.
+	ErrNameStream = errors.New("the source file name contains a colon, which Windows reads as naming a stream of a file, so no output file can be named after it")
 	// ErrNoUnusedName is the cause of the KindDestination error attached to
 	// an item for which the Rename search found no unused name: every
 	// numbered name it may take was already used, by this item's search or
@@ -504,9 +507,10 @@ const (
 	ActionFail
 	// ActionDefer leaves Destination, the item's natural destination, to the
 	// earlier item at DuplicateOf, which plans to create it. Only a Skip job
-	// defers. The item ends Skipped once the file is written; when the item
-	// it defers to ends without writing it, Plan.Successor names the deferred
-	// item that creates it instead.
+	// defers. The item ends Skipped once the file is written, or once a file
+	// another program wrote has taken the name; when the item it defers to
+	// fails without writing it, Plan.Successor names the deferred item that
+	// creates it instead.
 	ActionDefer
 )
 
@@ -535,8 +539,8 @@ const (
 	// ReasonNone means the item writes its natural destination: the source
 	// base name with the output format's extension.
 	ReasonNone Reason = iota
-	// ReasonExists means a file or folder already exists at the natural
-	// destination, or Windows opens its name as a device.
+	// ReasonExists means a file, folder, or link already exists at the
+	// natural destination.
 	ReasonExists
 	// ReasonDuplicate means an earlier source of the same job writes the
 	// natural destination, or replaces the same existing file.
@@ -552,6 +556,12 @@ const (
 	// be, or its file index is a listed file's under another volume serial
 	// number, so the result was renamed instead of replacing it.
 	ReasonUnverified
+	// ReasonDevice means Windows opens the natural destination's name as
+	// something other than a file in the output folder, as Windows 10 opens
+	// NUL.png as the NUL device, so no file can be saved under it, though
+	// nothing exists there. Rename and Overwrite rename the result, and Skip
+	// skips it. The device is never opened.
+	ReasonDevice
 )
 
 func (r Reason) String() string {
@@ -566,6 +576,8 @@ func (r Reason) String() string {
 		return "source"
 	case ReasonUnverified:
 		return "unverified"
+	case ReasonDevice:
+		return "device"
 	}
 	return fmt.Sprintf("Reason(%d)", int(r))
 }
@@ -652,12 +664,17 @@ type Plan struct {
 // Successor returns the index of the item that creates the destination the
 // item at index was to create but did not: the next item deferred to the
 // same earlier item (ActionDefer). The job asks for it when an ActionCreate
-// item ends without writing its file, creates the successor's result at
-// that destination as ActionCreate, without replacing anything, and asks
-// again should the successor end without writing it too. Once the file is
-// written, every item still deferred to the name ends Skipped, so a Skip job
-// saves one result per name whenever one can be saved (RSZ-024). It reports
-// false when no item waits on the name.
+// item fails without writing its file, as when its source cannot be decoded
+// or its result encoded, creates the successor's result at that destination
+// as ActionCreate, without replacing anything, and asks again should the
+// successor fail too. Once the file is written, every item still deferred to
+// the name ends Skipped, so a Skip job saves one result per name whenever
+// one can be saved (RSZ-024). When the create itself finds the name taken,
+// as when another program wrote a file there after the plan was made, the
+// destination now exists, and Skip leaves an existing destination untouched
+// (AC-R09): the item and every item deferred to the name end Skipped, and no
+// successor is asked for, so none is resized only to meet the same file. It
+// reports false when no item waits on the name.
 func (p Plan) Successor(index int) (int, bool) {
 	if index < 0 || index >= len(p.successors) || p.successors[index] < 0 {
 		return 0, false
@@ -833,12 +850,16 @@ func openFolder(files fileSystem, folder string) error {
 	return nil
 }
 
-// fileInTheWay reports whether a file, rather than a folder, stands at the
-// folder's path or at the path of a folder that would hold it: whether the
-// nearest of those paths that can be inspected is not a folder. The error
-// os.MkdirAll returns cannot tell, as the ENOTDIR it reports for a file in
-// the way is, on Windows, ERROR_PATH_NOT_FOUND, which a missing drive,
-// share, or folder reports too. The folders are inspected by the folder's
+// fileInTheWay reports whether a file, or a link that leads to no folder,
+// rather than a folder, stands at the folder's path or at the path of a
+// folder that would hold it: whether the nearest of those paths that holds
+// an entry is not a folder. The error os.MkdirAll returns cannot tell, as
+// the ENOTDIR it reports for a file in the way is, on Windows,
+// ERROR_PATH_NOT_FOUND, which a missing drive, share, or folder reports too.
+// An entry Stat cannot follow but Lstat finds is a link whose target cannot
+// be reached, such as a junction whose target was deleted, which MkdirAll
+// cannot replace with a folder, so it stands in the way, and the folder that
+// holds it says nothing about it. The folders are inspected by the folder's
 // resolved path, as MkdirAll creates them, so a folder whose name Windows
 // keeps only in the middle of a path, such as "Photos ", is inspected under
 // that name rather than as the entry the name reaches once it ends a path.
@@ -846,6 +867,9 @@ func fileInTheWay(files fileSystem, folder string) bool {
 	for path := resolvedPath(folder); ; {
 		if info, err := files.Stat(path); err == nil {
 			return !info.IsDir()
+		}
+		if _, err := files.Lstat(path); err == nil {
+			return true
 		}
 		parent := filepath.Dir(path)
 		if parent == path {
@@ -939,9 +963,11 @@ func (osFiles) Identity(path string) (identity, error) { return identify(path) }
 func (osFiles) Entry(path string) (entry, error)       { return findEntry(path) }
 
 // probe is the cached result of inspecting one destination path: whether an
-// entry has its name, and that entry's type.
+// entry has its name, and that entry's type, or whether Windows opens the
+// name as a device, which takes it though nothing exists there.
 type probe struct {
 	exists bool
+	device bool
 	mode   fs.FileMode
 	err    error
 }
@@ -1001,15 +1027,15 @@ type planner struct {
 	// those of the output folder and the folders holding unreadable listed
 	// files, so each folder is read once.
 	identities map[string]identified
-	// sourceIDs holds the file identities of the listed paths, loaded the
+	// sourceIDs maps the file identities of the listed paths, loaded the
 	// first time an Overwrite job must compare an existing file with them,
-	// and sourceFiles the same identities without their volume serial
-	// numbers. Like every comparison below that can only stop a
-	// replacement, sourceFiles ignores the serial, which differs for one
-	// file reached through two shares of a Samba server.
-	sourceIDs   map[fileID]struct{}
-	sourceFiles map[fileID]struct{}
-	loaded      bool
+	// from each identity without its volume serial number to the
+	// identities, with their serials, that the listed paths reported for
+	// it. Like every comparison below that can only stop a replacement, a
+	// match of the identity without its serial counts, as the serial
+	// differs for one file reached through two shares of a Samba server.
+	sourceIDs map[fileID][]fileID
+	loaded    bool
 	// unverified reports that some listed path may exist but its identity,
 	// and where it lies, could not be read, or are not read because the path
 	// leads through a device, so no existing file can be proven not to be
@@ -1078,8 +1104,7 @@ func newPlanner(ctx context.Context, request Request, folder string, files fileS
 		probes:            make(map[string]probe, len(request.Sources)),
 		listings:          make(map[string]listing),
 		identities:        make(map[string]identified),
-		sourceIDs:         make(map[fileID]struct{}),
-		sourceFiles:       make(map[fileID]struct{}),
+		sourceIDs:         make(map[fileID][]fileID),
 		unverifiedFolders: make(map[fileID]struct{}),
 		replaced:          make(map[fileID]int),
 		next:              make(map[string]int),
@@ -1148,11 +1173,15 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		p.fail(item, "name output file", fmt.Errorf("%s: %w", name, ErrNameTooLong))
 		return true, nil
 	}
-	if namesStream(item.Destination) {
-		// The output folder holds no colon, so the name does. Its path key
-		// is no listed path's, though writing it would add a stream to the
-		// file before the colon, and every numbered name would too.
-		p.fail(item, "name output file", fmt.Errorf("%s: %w", name, ErrNameStream))
+	// The source's own name is checked, not the destination's: stem drops a
+	// colon after the name's last period with the extension, so photo.png:alt
+	// would give photo.png. The output folder holds no colon, so a stream the
+	// path names is the source name's.
+	if source := filepath.Base(p.listed[index].resolved); namesStream(filepath.Join(p.folder, source)) {
+		// The destination's path key is no listed path's, though writing it
+		// would add a stream to the file before the colon, and every numbered
+		// name would too.
+		p.fail(item, "name output file", fmt.Errorf("%s: %w", source, ErrNameStream))
 		return true, nil
 	}
 	key := PathKey(item.Destination)
@@ -1172,6 +1201,9 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		p.claimed[key] = index
 		item.Action = ActionCreate
 		return true, nil
+	case found.device:
+		item.Reason = ReasonDevice
+		return false, nil
 	case p.collision != CollisionOverwrite:
 		// Rename and Skip never replace a file, so whether an existing file
 		// is a source under another name changes nothing they do.
@@ -1297,15 +1329,16 @@ func (p *planner) folderLost() error {
 // name missing from the output folder is free: a path whose folder cannot be
 // found, such as on a drive or share that has gone, cannot be checked. A
 // name Windows resolves to anything but a file in the output folder, as
-// Windows 10 resolves NUL.png to the NUL device, is taken, as os.Lstat would
-// report the device, but is not inspected, so planning never opens a device.
+// Windows 10 resolves NUL.png to the NUL device, is taken as a device, as
+// os.Lstat would report it, but is not inspected, so planning never opens a
+// device.
 func (p *planner) probe(key, path string) probe {
 	if cached, ok := p.probes[key]; ok {
 		return cached
 	}
 	var found probe
 	if key != foldCase(filepath.Join(p.resolved, filepath.Base(path))) {
-		found = probe{exists: true, mode: fs.ModeDevice}
+		found = probe{exists: true, device: true, mode: fs.ModeDevice}
 		p.probes[key] = found
 		return found
 	}
@@ -1429,10 +1462,11 @@ func (p *planner) listedAs(id fileID) (Reason, error) {
 		}
 		p.loaded = true
 	}
-	if _, source := p.sourceIDs[id]; source {
+	ids, source := p.sourceIDs[id.anyVolume()]
+	switch {
+	case slices.Contains(ids, id):
 		return ReasonSource, nil
-	}
-	if _, source := p.sourceFiles[id.anyVolume()]; source {
+	case source:
 		return ReasonUnverified, nil
 	}
 	return ReasonNone, nil
@@ -1461,8 +1495,10 @@ func (p *planner) load(listed listedPath) {
 			p.unreadable(listed)
 			return
 		}
-		p.sourceIDs[found.id] = struct{}{}
-		p.sourceFiles[found.id.anyVolume()] = struct{}{}
+		file := found.id.anyVolume()
+		if !slices.Contains(p.sourceIDs[file], found.id) {
+			p.sourceIDs[file] = append(p.sourceIDs[file], found.id)
+		}
 	}
 }
 

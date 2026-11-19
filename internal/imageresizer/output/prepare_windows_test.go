@@ -1067,24 +1067,36 @@ func denyFolder(t *testing.T, path string) {
 }
 
 // TestPrepareFailsStreamNames pins RSZ-026 for a source whose name holds a
-// colon, as a path to a file's stream does: its destination would be a
-// stream of another file in the output folder, which may be a listed
-// original, so the item fails rather than add a stream to that file.
+// colon, as a path to a file's stream does, wherever the colon falls: its
+// destination would be a stream of another file in the output folder, which
+// may be a listed original, or, when the colon follows the name's last
+// period, a result named after the file that holds the stream, so the item
+// fails rather than add a stream to that file or name a result after it.
 func TestPrepareFailsStreamNames(t *testing.T) {
-	for _, policy := range policies {
-		out := t.TempDir()
-		original := filepath.Join(out, "photo.png")
-		writeFile(t, original, "listed original")
-		request := jobRequest(out, policy, png(filepath.Join(t.TempDir(), "photo.png:thumb.png")))
-		request.Protected = []string{original}
-		plan := mustPrepare(t, request)
-		assertItems(t, plan, []expect{{"photo.png:thumb.png", ActionFail, ReasonNone}})
-		if err := plan.Items[0].Err; !errors.Is(err, ErrNameStream) || !strings.Contains(err.Error(), "photo.png:thumb.png") {
-			t.Fatalf("%s: error = %v, want ErrNameStream naming the name", policy, err)
-		}
-		materialize(t, plan, "result")
-		if _, err := os.Lstat(original + ":thumb.png"); err == nil {
-			t.Fatalf("%s added a stream to %s", policy, original)
+	tests := []struct{ source, destination string }{
+		{"photo.png:thumb.png", "photo.png:thumb.png"},
+		// The extension the destination drops holds the colon.
+		{"photo.png:alt", "photo.png"},
+	}
+	for _, test := range tests {
+		for _, policy := range policies {
+			out := t.TempDir()
+			original := filepath.Join(out, "photo.png")
+			writeFile(t, original, "listed original")
+			request := jobRequest(out, policy, png(filepath.Join(t.TempDir(), test.source)))
+			request.Protected = []string{original}
+			plan := mustPrepare(t, request)
+			assertItems(t, plan, []expect{{test.destination, ActionFail, ReasonNone}})
+			if err := plan.Items[0].Err; !errors.Is(err, ErrNameStream) || !strings.Contains(err.Error(), test.source) {
+				t.Fatalf("%s, %s: error = %v, want ErrNameStream naming the source", test.source, policy, err)
+			}
+			materialize(t, plan, "result")
+			if _, err := os.Lstat(original + ":thumb.png"); err == nil {
+				t.Fatalf("%s, %s added a stream to %s", test.source, policy, original)
+			}
+			if readFile(t, original) != "listed original" {
+				t.Fatalf("%s, %s changed %s", test.source, policy, original)
+			}
 		}
 	}
 }
@@ -1270,6 +1282,35 @@ func TestPrepareFindsFilesInTheWayUnderNamesWindowsKeeps(t *testing.T) {
 	})
 }
 
+// TestPrepareFindsLinksToNoFolderInTheWay pins the ErrNotFolder rule for a
+// link that leads to no folder, such as a junction whose target was deleted,
+// standing at the output folder's path or at a folder that would hold it.
+// Stat cannot follow it, so it cannot be inspected as a folder, but it stands
+// in the way all the same, and the folder that holds it says nothing about
+// it. Nothing is created at the link's former target.
+func TestPrepareFindsLinksToNoFolderInTheWay(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "link")
+	mustJunction(t, link, target)
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{link, filepath.Join(link, "Resized")} {
+		_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, ErrNotFolder) {
+			t.Errorf("%s: error = %v, want ErrNotFolder", folder, err)
+		}
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Lstat(%s) = %v, want the junction's target still missing", target, err)
+	}
+}
+
 // TestPrepareRefusesFolderStreams: a name with a colon names a stream to
 // NTFS, so Resized::$INDEX_ALLOCATION opens the folder Resized under another
 // spelling, through which a destination would escape the comparison with a
@@ -1414,15 +1455,16 @@ func TestPrepareCreatesFoldersUnderNamesWindowsKeeps(t *testing.T) {
 // TestPrepareTakesNamesWindowsOpensAsDevicesAsTaken: a destination name
 // Windows resolves to anything but a file in the output folder, as it
 // resolves NUL to the device, and Windows 10 NUL.png or COM1.jpg too, is
-// taken, as an existing entry's name is, without the planner opening the
-// device: Rename and Overwrite rename the result past it, and Skip skips it.
+// taken, without the planner opening the device: Rename and Overwrite rename
+// the result past it, and Skip skips it, each with ReasonDevice, so the item
+// says why rather than report an existing file where there is none.
 // Planners never produce a name without an extension, so the test plans a
 // NUL destination directly.
 func TestPrepareTakesNamesWindowsOpensAsDevicesAsTaken(t *testing.T) {
 	want := map[Collision]expect{
-		CollisionRename:    {"NUL_2", ActionCreate, ReasonExists},
-		CollisionSkip:      {"NUL", ActionSkip, ReasonExists},
-		CollisionOverwrite: {"NUL_2", ActionCreate, ReasonExists},
+		CollisionRename:    {"NUL_2", ActionCreate, ReasonDevice},
+		CollisionSkip:      {"NUL", ActionSkip, ReasonDevice},
+		CollisionOverwrite: {"NUL_2", ActionCreate, ReasonDevice},
 	}
 	for _, policy := range policies {
 		out := t.TempDir()
