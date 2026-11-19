@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -67,6 +68,42 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 		return "", false, callError("SHGetPathFromIDListW", err)
 	}
 	return windows.UTF16ToString(path), true, nil
+}
+
+// OpenFolder opens the given folder in File Explorer. It runs only on
+// explicit user request, such as the Image Resizer's Open Output Folder
+// action: the application never opens folders on its own after an operation
+// completes (RSZ-047). A path that is not a folder now — the folder was
+// deleted, or a file took its name — is refused rather than handed to the
+// shell, and the shell's explore verb, which only folders have, is used, so
+// a file is never opened or run in a folder's place.
+func OpenFolder(folder string) error {
+	info, err := os.Stat(folder)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a folder", folder)
+	}
+	// As for the folder picker, shell extensions the verb may load expect an
+	// initialized COM apartment.
+	initialized, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded)
+	if initialized == 0 {
+		defer procCoUninitialize.Call()
+	}
+	result, _, callErr := procShellExecuteW.Call(
+		0,
+		uintptr(unsafe.Pointer(utf16("explore"))),
+		uintptr(unsafe.Pointer(utf16(folder))),
+		0, 0, swShowNormal,
+	)
+	if result <= 32 {
+		if callErr == windows.ERROR_SUCCESS {
+			return fmt.Errorf("ShellExecuteW(explore) failed with code %d", result)
+		}
+		return fmt.Errorf("ShellExecuteW(explore) failed with code %d: %w", result, callErr)
+	}
+	return nil
 }
 
 // RevealInFolder opens File Explorer with the given file selected. It runs

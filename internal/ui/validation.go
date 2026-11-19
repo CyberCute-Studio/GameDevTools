@@ -16,6 +16,9 @@ const (
 	ErrorClipboard
 	ErrorShortcutRegistration
 	ErrorCapture
+	// ErrorUnexpected is a failure no step reported as one of the kinds
+	// above, such as a panic a resize job contained (NFR-021).
+	ErrorUnexpected
 )
 
 func (k ErrorKind) Label() string {
@@ -34,6 +37,8 @@ func (k ErrorKind) Label() string {
 		return "Shortcut registration error"
 	case ErrorCapture:
 		return "Capture error"
+	case ErrorUnexpected:
+		return "Unexpected error"
 	default:
 		return "Error"
 	}

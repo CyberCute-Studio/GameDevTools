@@ -3,6 +3,7 @@ package imageresizer
 import (
 	"errors"
 	"fmt"
+	"image/color"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -121,6 +122,21 @@ func ParseBackground(input string) (string, error) {
 		}
 	}
 	return "#" + strings.ToUpper(value[1:]), nil
+}
+
+// BackgroundColor converts a background in the #RRGGBB form ParseBackground
+// accepts into the opaque color a job flattens translucent pixels against
+// in JPEG results (RSZ-028).
+func BackgroundColor(background string) (color.RGBA, error) {
+	value, err := ParseBackground(background)
+	if err != nil {
+		return color.RGBA{}, err
+	}
+	rgb, err := strconv.ParseUint(value[1:], 16, 32)
+	if err != nil {
+		return color.RGBA{}, errors.New(ui.ResizeBackgroundInvalid)
+	}
+	return color.RGBA{R: uint8(rgb >> 16), G: uint8(rgb >> 8), B: uint8(rgb), A: 0xff}, nil
 }
 
 // defaultFolder is the default output folder (RSZ-021) under the Pictures

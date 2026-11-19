@@ -263,6 +263,14 @@ func postShellMessage(hwnd uintptr, message uint32) error {
 	return nil
 }
 
+// boolArgument is a Win32 BOOL argument.
+func boolArgument(value bool) uintptr {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func setWindowText(hwnd windows.Handle, value string) {
 	procSetWindowTextW.Call(uintptr(hwnd), uintptr(unsafe.Pointer(utf16(value))))
 }

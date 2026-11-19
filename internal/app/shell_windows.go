@@ -67,6 +67,17 @@ type nativeActionHandler interface {
 	NativeAction()
 }
 
+// nativeActionAvailability is implemented by module views whose primary
+// action is unavailable for a while, such as Start Resize while a resize job
+// runs. The shell disables the primary action button while the view reports
+// it unavailable, and re-reads the availability on every relayout, which
+// follows every module command, action, and dispatched task. A view that
+// makes the action unavailable from the button itself moves the keyboard
+// focus elsewhere, so it is not stranded on the disabled button.
+type nativeActionAvailability interface {
+	NativeActionAvailable() bool
+}
+
 // nativeDispatcherAware is implemented by module views that post background
 // results back to the GUI thread through the shell dispatcher.
 type nativeDispatcherAware interface {
@@ -336,13 +347,7 @@ func (s *nativeShell) updateView() {
 		showAction = swShow
 	}
 	procShowWindow.Call(uintptr(s.action), uintptr(showAction))
-	enabled := uintptr(0)
-	if native, exists := s.nativeViews[current.ID()]; exists && view.PrimaryAction() != "" {
-		if _, actionable := native.(nativeActionHandler); actionable {
-			enabled = 1
-		}
-	}
-	procEnableWindow.Call(uintptr(s.action), enabled)
+	s.refreshAction()
 	for id, button := range s.navButtons {
 		checked := uintptr(0)
 		if id == current.ID() {
@@ -354,6 +359,31 @@ func (s *nativeShell) updateView() {
 		native.NativeShow(id == current.ID())
 	}
 	s.updateDropAcceptance()
+}
+
+// refreshAction enables the primary action button only while the current
+// module has a native view that runs the action and, when it reports the
+// action's availability, reports it available.
+func (s *nativeShell) refreshAction() {
+	procEnableWindow.Call(uintptr(s.action), boolArgument(s.actionEnabled()))
+}
+
+func (s *nativeShell) actionEnabled() bool {
+	current := s.navigator.Current()
+	if current.View().PrimaryAction() == "" {
+		return false
+	}
+	native, exists := s.nativeViews[current.ID()]
+	if !exists {
+		return false
+	}
+	if _, actionable := native.(nativeActionHandler); !actionable {
+		return false
+	}
+	if availability, reports := native.(nativeActionAvailability); reports {
+		return availability.NativeActionAvailable()
+	}
+	return true
 }
 
 func (s *nativeShell) noteText() string {
@@ -527,6 +557,9 @@ func (s *nativeShell) layout() {
 		native.NativeLayout(plan.contentX, contentY(plan.moduleY), plan.contentWidth, s.scale, measureModuleText)
 	}
 	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
+	// Every module command, action, and dispatched task ends in a relayout,
+	// so the primary action's availability is re-read here.
+	s.refreshAction()
 }
 
 // waitForBackgroundWork lets in-flight module work, such as a capture still

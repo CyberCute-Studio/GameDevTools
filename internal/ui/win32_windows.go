@@ -101,6 +101,7 @@ var (
 	procShowWindow           = user32.NewProc("ShowWindow")
 	procEnableWindow         = user32.NewProc("EnableWindow")
 	procSetFocus             = user32.NewProc("SetFocus")
+	procGetFocus             = user32.NewProc("GetFocus")
 	procSetTimer             = user32.NewProc("SetTimer")
 	procKillTimer            = user32.NewProc("KillTimer")
 	procMessageBoxW          = user32.NewProc("MessageBoxW")

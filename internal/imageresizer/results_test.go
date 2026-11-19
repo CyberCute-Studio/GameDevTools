@@ -1,0 +1,341 @@
+package imageresizer
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"strings"
+	"testing"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/encode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/resize"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+)
+
+// TestInventoryJobInputsCarryEachItemsCheck pins that a job lists every
+// item in list order with its ID: a Ready item with its content check, an
+// item the list could not use with the list's own explanation as its error,
+// and one still being checked with neither.
+func TestInventoryJobInputsCarryEachItemsCheck(t *testing.T) {
+	directory := t.TempDir()
+	ready := writeSource(t, directory, "ready.png")
+	damaged := writeSource(t, directory, "damaged.png")
+	pending := writeSource(t, directory, "pending.png")
+	unsupported := writeSource(t, directory, "notes.txt")
+	inventory := NewInventory()
+	summary := inventory.Add([]string{ready, damaged, pending, unsupported})
+	info := decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3, DecodedBytes: 48}
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[0].ID, Info: info})
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[1].ID, Err: &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}})
+
+	if got := inventory.Ready(); got != 1 {
+		t.Fatalf("Ready() = %d, want 1", got)
+	}
+	inputs, ids := inventory.JobInputs()
+	if len(inputs) != 4 || len(ids) != 4 {
+		t.Fatalf("JobInputs() = %d inputs, %d ids, want 4 each", len(inputs), len(ids))
+	}
+	for index, item := range inventory.Items() {
+		if ids[index] != item.ID || inputs[index].Path != item.Path {
+			t.Fatalf("input %d = (%d, %q), want (%d, %q)", index, ids[index], inputs[index].Path, item.ID, item.Path)
+		}
+	}
+	if inputs[0].Err != nil || inputs[0].Info != info {
+		t.Fatalf("ready input = %+v", inputs[0])
+	}
+	var source *sourceError
+	if !errors.As(inputs[1].Err, &source) || source.status != StatusCorrupt || !strings.Contains(inputs[1].Err.Error(), "invalid checksum") {
+		t.Fatalf("damaged input error = %v", inputs[1].Err)
+	}
+	if inputs[2].Err != nil || inputs[2].Info.Format != decode.FormatUnknown {
+		t.Fatalf("checking input = %+v, want neither a check nor an error", inputs[2])
+	}
+	if !errors.As(inputs[3].Err, &source) || source.status != StatusUnsupported || inputs[3].Err.Error() != ui.SourceUnsupportedDetail {
+		t.Fatalf("unsupported input error = %v", inputs[3].Err)
+	}
+	if got := (&sourceError{}).Error(); got != ui.ResizeSourceUnavailableDetail {
+		t.Fatalf("error without a detail = %q", got)
+	}
+}
+
+// TestSourceItemShowsJobResults pins that a row shows the job's state for
+// its item in words (RSZ-043, UX-005) and the detail the item's result,
+// until ClearResults restores the content check.
+func TestSourceItemShowsJobResults(t *testing.T) {
+	directory := t.TempDir()
+	inventory := NewInventory()
+	summary := inventory.Add([]string{writeSource(t, directory, "photo.png"), writeSource(t, directory, "notes.txt")})
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[0].ID, Info: decode.Info{Format: decode.FormatPNG, Width: 40, Height: 30}})
+	photo, notes := inventory.Item(0), inventory.Item(1)
+
+	tests := []struct {
+		name   string
+		id     uint64
+		status job.Status
+		row    string
+		detail string
+	}{
+		{name: "pending", id: photo.ID, status: job.Status{State: job.StatePending}, row: "photo.png — 40 × 30 px — Pending", detail: "Pending: waiting to be resized."},
+		{name: "processing", id: photo.ID, status: job.Status{State: job.StateProcessing, Destination: `C:\Out\photo.png`}, row: "photo.png — 40 × 30 px — Processing…", detail: `Processing: being resized and saved to C:\Out\photo.png.`},
+		{name: "completed", id: photo.ID, status: job.Status{State: job.StateCompleted, Destination: `C:\Out\photo.png`}, row: "photo.png — 40 × 30 px — Completed", detail: `Completed: saved to C:\Out\photo.png.`},
+		{name: "renamed", id: photo.ID, status: job.Status{State: job.StateCompleted, Destination: `C:\Out\photo_2.png`, Reason: output.ReasonExists}, row: "photo.png — 40 × 30 px — Completed", detail: `Completed: saved to C:\Out\photo_2.png. A numbered name was used because a file with the image's own name already exists in the output folder.`},
+		{name: "skipped", id: photo.ID, status: job.Status{State: job.StateSkipped, Destination: `C:\Out\photo.png`, Reason: output.ReasonExists}, row: "photo.png — 40 × 30 px — Skipped", detail: `Skipped: C:\Out\photo.png was left untouched because a file with that name already exists.`},
+		{name: "skipped duplicate", id: photo.ID, status: job.Status{State: job.StateSkipped, Destination: `C:\Out\photo.png`, Reason: output.ReasonDuplicate}, row: "photo.png — 40 × 30 px — Skipped", detail: `Skipped: C:\Out\photo.png was left untouched because another image in this job saved that name.`},
+		{name: "cancelled", id: photo.ID, status: job.Status{State: job.StateCancelled}, row: "photo.png — 40 × 30 px — Cancelled", detail: ui.ResizeDetailCancelled},
+		{name: "failed source", id: notes.ID, status: job.Status{State: job.StateFailed, Err: &sourceError{status: StatusUnsupported, detail: ui.SourceUnsupportedDetail}}, row: "notes.txt — Failed", detail: "Failed: Unsupported format: " + ui.SourceUnsupportedDetail},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			index, ok := inventory.SetResult(test.id, test.status)
+			if !ok {
+				t.Fatal("SetResult did not find the item")
+			}
+			item := inventory.Item(index)
+			if got := item.RowText(); got != test.row {
+				t.Fatalf("RowText() = %q, want %q", got, test.row)
+			}
+			if got := item.DetailText(); got != test.detail {
+				t.Fatalf("DetailText() = %q, want %q", got, test.detail)
+			}
+		})
+	}
+	if _, ok := inventory.SetResult(1<<40, job.Status{}); ok {
+		t.Fatal("SetResult found an item for an unknown ID")
+	}
+	inventory.ClearResults()
+	if got := inventory.Item(0).RowText(); got != "photo.png — 40 × 30 px — Ready" {
+		t.Fatalf("row after ClearResults = %q", got)
+	}
+	if got := inventory.Item(1).DetailText(); got != "Unsupported format: "+ui.SourceUnsupportedDetail {
+		t.Fatalf("detail after ClearResults = %q", got)
+	}
+}
+
+// TestResultDetailNamesEveryReasonAndLeftoverFile pins the explanation of
+// every reason a result took a numbered name or was skipped, and that a file
+// a write could not remove is named whatever the item ended in.
+func TestResultDetailNamesEveryReasonAndLeftoverFile(t *testing.T) {
+	reasons := []output.Reason{output.ReasonExists, output.ReasonDuplicate, output.ReasonSource, output.ReasonUnverified, output.ReasonDevice, output.Reason(99)}
+	renamed := make(map[string]bool)
+	skipped := make(map[string]bool)
+	for _, reason := range reasons {
+		renamed[resultDetail(job.Status{State: job.StateCompleted, Destination: "x_2.png", Reason: reason})] = true
+		skipped[resultDetail(job.Status{State: job.StateSkipped, Destination: "x.png", Reason: reason})] = true
+	}
+	if len(renamed) != len(reasons) || len(skipped) != len(reasons) {
+		t.Fatalf("reasons share explanations: %d renamed, %d skipped, want %d each", len(renamed), len(skipped), len(reasons))
+	}
+	leftover := &output.Error{Kind: output.KindWrite, Op: "remove temporary file", Err: fmt.Errorf("%w: %s", output.ErrLeftBehind, `C:\Out\.gamedevtools-1.tmp`)}
+	for _, state := range []job.State{job.StateCompleted, job.StateSkipped, job.StateCancelled} {
+		detail := resultDetail(job.Status{State: state, Destination: "x.png", Err: leftover})
+		if !strings.Contains(detail, "A file could not be removed afterwards") || !strings.Contains(detail, ".gamedevtools-1.tmp") {
+			t.Fatalf("%v detail = %q, want the file left behind named", state, detail)
+		}
+	}
+	if got := resultDetail(job.Status{State: job.State(42)}); got != ui.ResizeDetailPending {
+		t.Fatalf("unknown state detail = %q", got)
+	}
+	if got := stateLabel(job.State(42)); got != ui.ResizeStatePending {
+		t.Fatalf("unknown state label = %q", got)
+	}
+	if got := resultDetail(job.Status{State: job.StateFailed}); !strings.HasPrefix(got, "Failed: Unexpected error: ") {
+		t.Fatalf("failed detail without an error = %q", got)
+	}
+}
+
+// TestErrorKindClassifiesFailures pins that each kind of failure keeps its
+// own category (UX-010), judged by the error that ended the item.
+func TestErrorKindClassifiesFailures(t *testing.T) {
+	leftover := &output.Error{Kind: output.KindWrite, Op: "remove temporary file", Err: output.ErrLeftBehind}
+	tests := []struct {
+		name string
+		err  error
+		want ui.ErrorKind
+	}{
+		{name: "unsupported source", err: &sourceError{status: StatusUnsupported}, want: ui.ErrorUnsupportedFormat},
+		{name: "damaged source", err: &sourceError{status: StatusCorrupt}, want: ui.ErrorReadDecode},
+		{name: "unreadable source", err: &sourceError{status: StatusInaccessible}, want: ui.ErrorReadDecode},
+		{name: "unchecked", err: job.ErrUnchecked, want: ui.ErrorReadDecode},
+		{name: "decode unsupported", err: &decode.Error{Kind: decode.KindUnsupported, Err: decode.ErrUnrecognized}, want: ui.ErrorUnsupportedFormat},
+		{name: "decode read", err: &decode.Error{Kind: decode.KindRead, Err: fs.ErrNotExist}, want: ui.ErrorReadDecode},
+		{name: "decode corrupt", err: &decode.Error{Kind: decode.KindCorrupt, Err: errors.New("bad")}, want: ui.ErrorReadDecode},
+		{name: "resize invalid", err: &resize.Error{Kind: resize.KindInvalid, Err: resize.ErrTargetArea}, want: ui.ErrorValidation},
+		{name: "resize too large", err: &resize.Error{Kind: resize.KindTooLarge, Err: resize.ErrSourceDimension}, want: ui.ErrorReadDecode},
+		{name: "resize failed", err: &resize.Error{Kind: resize.KindFailed, Err: resize.ErrUnexpected}, want: ui.ErrorUnexpected},
+		{name: "encode quality", err: &encode.Error{Kind: encode.KindInvalid, Err: encode.ErrQuality}, want: ui.ErrorValidation},
+		{name: "encode too large", err: &encode.Error{Kind: encode.KindInvalid, Err: encode.ErrTooLargeForJPEG}, want: ui.ErrorWriteEncode},
+		{name: "encode write", err: &encode.Error{Kind: encode.KindWrite, Err: errors.New("disk")}, want: ui.ErrorWriteEncode},
+		{name: "output write", err: &output.Error{Kind: output.KindWrite, Err: output.ErrDiskFull}, want: ui.ErrorWriteEncode},
+		{name: "output changed", err: &output.Error{Kind: output.KindChanged, Err: output.ErrDestinationChanged}, want: ui.ErrorWriteEncode},
+		{name: "output destination", err: &output.Error{Kind: output.KindDestination, Err: output.ErrNameTooLong}, want: ui.ErrorWriteEncode},
+		{name: "output folder", err: &output.Error{Kind: output.KindFolder, Err: output.ErrNotFolder}, want: ui.ErrorWriteEncode},
+		{name: "output validation", err: &output.Error{Kind: output.KindValidation, Err: output.ErrNoSources}, want: ui.ErrorValidation},
+		{name: "output confirmation", err: &output.Error{Kind: output.KindConfirmation, Err: output.ErrOverwriteUnconfirmed}, want: ui.ErrorValidation},
+		{name: "contained panic", err: fmt.Errorf("%w: %w", job.ErrUnexpected, &decode.Error{Kind: decode.KindCorrupt}), want: ui.ErrorUnexpected},
+		{name: "untyped", err: errors.New("boom"), want: ui.ErrorUnexpected},
+		{name: "joined with an earlier leftover", err: errors.Join(&decode.Error{Kind: decode.KindRead, Err: fs.ErrPermission}, leftover), want: ui.ErrorReadDecode},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := errorKind(test.err); got != test.want {
+				t.Fatalf("errorKind(%v) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+// TestRecoveryHintOnlyForOutputFailures pins that the recovery hints name
+// the output failure that ended the item, and never blame the output folder
+// for a source that cannot be read.
+func TestRecoveryHintOnlyForOutputFailures(t *testing.T) {
+	permission := &output.Error{Kind: output.KindWrite, Op: "create temporary file", Err: fs.ErrPermission}
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "disk full", err: &output.Error{Kind: output.KindWrite, Err: fmt.Errorf("%w: %w", output.ErrDiskFull, errors.New("os"))}, want: ui.ResizeHintDiskFull},
+		{name: "permission", err: permission, want: ui.ResizeHintPermission},
+		{name: "read-only", err: &output.Error{Kind: output.KindWrite, Err: output.ErrReadOnly}, want: ""},
+		{name: "left behind", err: &output.Error{Kind: output.KindWrite, Err: output.ErrLeftBehind}, want: ""},
+		{name: "changed", err: &output.Error{Kind: output.KindChanged, Err: output.ErrDestinationChanged}, want: ui.ResizeHintChanged},
+		{name: "folder lost", err: &output.Error{Kind: output.KindFolder, Err: fs.ErrNotExist}, want: ui.ResizeHintFolder},
+		{name: "source permission", err: &decode.Error{Kind: decode.KindRead, Err: fs.ErrPermission}, want: ""},
+		{name: "source failure joined with a leftover", err: errors.Join(&decode.Error{Kind: decode.KindRead, Err: fs.ErrPermission}, permission), want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := recoveryHint(test.err); got != test.want {
+				t.Fatalf("recoveryHint() = %q, want %q", got, test.want)
+			}
+		})
+	}
+	if got := failureText(permission); got != "Write/encode error: create temporary file: permission denied"+ui.ResizeHintPermission {
+		t.Fatalf("failureText() = %q", got)
+	}
+}
+
+// TestJobFailureMessagePresentsEachCause pins the category and recovery of
+// a job that failed before any item was processed (UX-010).
+func TestJobFailureMessagePresentsEachCause(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		prefix string
+		text   string
+	}{
+		{name: "preset", err: &resize.Error{Kind: resize.KindInvalid, Err: resize.ErrTargetArea}, prefix: "Validation error: The selected preset cannot be used", text: "100 megapixels"},
+		{name: "jpeg", err: &encode.Error{Kind: encode.KindInvalid, Err: encode.ErrQuality}, prefix: "Validation error: The JPEG options cannot be used", text: "between 1 and 100"},
+		{name: "folder", err: &output.Error{Kind: output.KindFolder, Op: "create output folder", Err: output.ErrNotFolder}, prefix: "Write/encode error: The output folder could not be created or used", text: "Choose another folder with Browse"},
+		{name: "no sources", err: &output.Error{Kind: output.KindValidation, Op: "validate request", Err: output.ErrNoSources}, prefix: "Validation error: " + ui.ResizeJobNoImages},
+		{name: "confirmation", err: &output.Error{Kind: output.KindConfirmation, Op: "validate request", Err: output.ErrOverwriteUnconfirmed}, prefix: "Validation error: The resize job could not start", text: "only after the job is confirmed"},
+		{name: "unexpected", err: errors.New("boom"), prefix: "Unexpected error: The resize job could not start: boom"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := jobFailureMessage(test.err)
+			if !strings.HasPrefix(got, test.prefix) || !strings.Contains(got, test.text) {
+				t.Fatalf("jobFailureMessage() = %q, want prefix %q containing %q", got, test.prefix, test.text)
+			}
+		})
+	}
+}
+
+// TestSummaryNoticeCountsEveryOutcome pins the completion summary (RSZ-046):
+// every outcome's count, whether the user cancelled, items that left a file
+// behind, and a severity that never relies on color alone.
+func TestSummaryNoticeCountsEveryOutcome(t *testing.T) {
+	leftover := &output.Error{Kind: output.KindWrite, Err: output.ErrLeftBehind}
+	tests := []struct {
+		name      string
+		summary   job.Summary
+		cancelled bool
+		kind      ui.NoticeKind
+		text      string
+	}{
+		{name: "all completed", summary: job.Summary{Progress: job.Progress{Total: 2, Completed: 2}}, kind: ui.NoticeSuccess, text: "Success: Resize finished: 2 completed, 0 skipped, 0 failed, 0 cancelled, of 2 image(s)."},
+		{name: "skipped only", summary: job.Summary{Progress: job.Progress{Total: 2, Completed: 1, Skipped: 1}}, kind: ui.NoticeSuccess, text: "1 skipped"},
+		{name: "some failed", summary: job.Summary{Progress: job.Progress{Total: 3, Completed: 2, Failed: 1}}, kind: ui.NoticeWarning, text: "1 failed"},
+		{name: "all failed", summary: job.Summary{Progress: job.Progress{Total: 2, Failed: 2}}, kind: ui.NoticeError, text: "2 failed"},
+		{name: "cancelled", summary: job.Summary{Progress: job.Progress{Total: 3, Completed: 1, Cancelled: 2}}, cancelled: true, kind: ui.NoticeWarning, text: "Warning: Resize cancelled: 1 completed, 0 skipped, 0 failed, 2 cancelled, of 3 image(s). Completed files were kept"},
+		{name: "left behind", summary: job.Summary{Items: []job.Status{{State: job.StateCompleted, Err: leftover}, {State: job.StateCompleted}}, Progress: job.Progress{Total: 2, Completed: 2}}, kind: ui.NoticeWarning, text: "1 image(s) left a file that could not be removed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			notice := summaryNotice(test.summary, test.cancelled)
+			if notice.Kind != test.kind || !strings.Contains(notice.Text(), test.text) {
+				t.Fatalf("summaryNotice() = %v %q, want %v containing %q", notice.Kind, notice.Text(), test.kind, test.text)
+			}
+		})
+	}
+}
+
+// TestProgressMessageNamesTheCurrentFile pins the progress (RSZ-042): the
+// done and total counts and the file being processed where practical.
+func TestProgressMessageNamesTheCurrentFile(t *testing.T) {
+	progress := job.Progress{Total: 10, Pending: 5, Processing: 2, Completed: 2, Skipped: 0, Failed: 1}
+	if got := progressMessage(progress, "", 0, false); got != "Resizing: 3 of 10 image(s) done — 2 completed, 0 skipped, 1 failed." {
+		t.Fatalf("progress without a current file = %q", got)
+	}
+	if got := progressMessage(progress, "b.png", 0, false); !strings.HasSuffix(got, " Processing b.png.") {
+		t.Fatalf("progress with one file = %q", got)
+	}
+	if got := progressMessage(progress, "b.png", 1, false); !strings.HasSuffix(got, " Processing b.png and 1 more.") {
+		t.Fatalf("progress with two files = %q", got)
+	}
+	if got := progressMessage(progress, "b.png", 1, true); !strings.HasPrefix(got, "Cancelling:") || !strings.Contains(got, "3 of 10 image(s) done") {
+		t.Fatalf("progress while cancelling = %q", got)
+	}
+}
+
+// TestJobMailboxCoalescesEventsAndEndsLast pins the hand-off of a job's
+// events: one drain task per batch, only each item's latest event, in the
+// order those arrived, and the outcome after the events that preceded it.
+func TestJobMailboxCoalescesEventsAndEndsLast(t *testing.T) {
+	var mailbox jobMailbox
+	event := func(index int, state job.State, done int) job.Event {
+		return job.Event{Index: index, Status: job.Status{State: state}, Progress: job.Progress{Total: 3, Completed: done}}
+	}
+	if !mailbox.put(event(0, job.StateProcessing, 0)) {
+		t.Fatal("the first event did not ask for a drain task")
+	}
+	if mailbox.put(event(1, job.StateProcessing, 0)) || mailbox.put(event(0, job.StateCompleted, 1)) {
+		t.Fatal("an event asked for a second drain task while one was outstanding")
+	}
+	events, finish := mailbox.take()
+	if finish != nil || len(events) != 2 {
+		t.Fatalf("take() = %d events, finish %v; want 2 events and no finish", len(events), finish)
+	}
+	if events[0].Index != 1 || events[1].Index != 0 || events[1].Status.State != job.StateCompleted || events[1].Progress.Completed != 1 {
+		t.Fatalf("take() = %+v, want item 1's event, then item 0's latest", events)
+	}
+	if !mailbox.put(event(2, job.StateFailed, 1)) {
+		t.Fatal("an event after a drain did not ask for a new drain task")
+	}
+	if mailbox.end(jobFinish{summary: job.Summary{Folder: "out"}}) {
+		t.Fatal("the outcome asked for a second drain task while one was outstanding")
+	}
+	events, finish = mailbox.take()
+	if len(events) != 1 || events[0].Index != 2 || finish == nil || finish.summary.Folder != "out" {
+		t.Fatalf("take() = %+v, %+v; want item 2's event and the outcome", events, finish)
+	}
+	if events, finish = mailbox.take(); len(events) != 0 || finish != nil {
+		t.Fatalf("an empty mailbox returned %+v, %+v", events, finish)
+	}
+	if !mailbox.end(jobFinish{err: errors.New("failed")}) {
+		t.Fatal("an outcome with nothing outstanding did not ask for a drain task")
+	}
+}
+
+func TestBackgroundColor(t *testing.T) {
+	got, err := BackgroundColor(" #12abEF ")
+	if err != nil || got.R != 0x12 || got.G != 0xab || got.B != 0xef || got.A != 0xff {
+		t.Fatalf("BackgroundColor() = %+v, %v", got, err)
+	}
+	if _, err := BackgroundColor("#12345"); err == nil || err.Error() != ui.ResizeBackgroundInvalid {
+		t.Fatalf("BackgroundColor(invalid) error = %v", err)
+	}
+}

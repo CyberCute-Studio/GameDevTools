@@ -553,3 +553,74 @@ func TestShellWindowProcScrollsFocusedListIntoView(t *testing.T) {
 		t.Fatal("list focus did not scroll the control into view")
 	}
 }
+
+var procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
+
+type actionTestView struct{}
+
+func (actionTestView) Title() string         { return "Action" }
+func (actionTestView) Description() string   { return "Action view" }
+func (actionTestView) PrimaryAction() string { return "Act" }
+
+type actionTestModule struct{}
+
+func (actionTestModule) ID() core.ModuleID       { return core.ModuleScreenshot }
+func (actionTestModule) NavigationLabel() string { return "Action" }
+func (actionTestModule) View() core.View         { return actionTestView{} }
+
+// availabilityView runs the primary action and reports whether it is
+// available, as the Image Resizer does for Start Resize while a job runs.
+type availabilityView struct {
+	recordingNativeView
+	available bool
+	actions   int
+}
+
+func (v *availabilityView) NativeAction()               { v.actions++ }
+func (v *availabilityView) NativeActionAvailable() bool { return v.available }
+
+// TestShellDisablesAnUnavailablePrimaryAction pins that the shell disables
+// the primary action button while the module view reports the action
+// unavailable, re-reading it on every relayout, such as the one that follows
+// the action itself, and enables it again once it is available.
+func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
+	native := &availabilityView{available: true}
+	shell := newCommandTestShell(t, native)
+	navigator := core.NewNavigator()
+	if err := navigator.Register(actionTestModule{}); err != nil {
+		t.Fatal(err)
+	}
+	shell.navigator = navigator
+	action, err := ui.NewButton(shell.hwnd, "Act", ui.ButtonOptions{ID: actionCommand})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell.action = action.Handle()
+	isEnabled := func() bool {
+		result, _, _ := procIsWindowEnabled.Call(uintptr(shell.action))
+		return result != 0
+	}
+
+	shell.layout()
+	if !isEnabled() {
+		t.Fatal("an available primary action was disabled")
+	}
+	native.available = false
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), nil)
+	if native.actions != 1 || isEnabled() {
+		t.Fatalf("after the action: %d actions, enabled = %v; want 1 and disabled", native.actions, isEnabled())
+	}
+	native.available = true
+	shell.layout()
+	if !isEnabled() {
+		t.Fatal("the primary action stayed disabled once it was available again")
+	}
+
+	// A view that does not run the action leaves it disabled whatever it
+	// reports.
+	shell.nativeViews[core.ModuleScreenshot] = &recordingNativeView{}
+	shell.layout()
+	if isEnabled() {
+		t.Fatal("a primary action no view runs was enabled")
+	}
+}

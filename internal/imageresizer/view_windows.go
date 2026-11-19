@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -68,6 +70,31 @@ type NativeView struct {
 	// raised in the meantime.
 	sourceNotice uint64
 
+	// run runs a resize job, confirm asks for an Overwrite job's
+	// confirmation, and openFolder opens the output folder on request; tests
+	// substitute them.
+	run        jobRunner
+	confirm    func(windows.Handle, string, string) bool
+	openFolder func(string) error
+	// active is the running job, or nil while none runs.
+	active *activeJob
+	// jobEvents carries the running job's events and outcome to the GUI
+	// thread.
+	jobEvents jobMailbox
+	// jobDone is closed once the latest job's goroutine has returned, or is
+	// nil before any job started.
+	jobDone chan struct{}
+	// outputFolder is the folder Open Output Folder opens: the latest job's,
+	// once it saved a result, or empty.
+	outputFolder string
+	// closed is set once the view is destroyed, so a refused post of a job's
+	// events is not retried.
+	closed atomic.Bool
+
+	jobStatus    *ui.StatusArea
+	cancelButton *ui.Button
+	openButton   *ui.Button
+
 	sourceLabel     *ui.Label
 	sourceHint      *ui.Label
 	list            *ui.ListBox
@@ -113,11 +140,14 @@ type checkTally struct {
 
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
 	view := &NativeView{
-		options:   options,
-		presets:   preset.NewNativeManager(manager),
-		inventory: NewInventory(),
-		browse:    ui.BrowseForFolder,
-		pickFiles: ui.PickImageFiles,
+		options:    options,
+		presets:    preset.NewNativeManager(manager),
+		inventory:  NewInventory(),
+		browse:     ui.BrowseForFolder,
+		pickFiles:  ui.PickImageFiles,
+		run:        job.Run,
+		confirm:    ui.Confirm,
+		openFolder: ui.OpenFolder,
 	}
 	view.inspector = NewInspector(decode.Inspect, view.deliverInspection)
 	return view
@@ -134,6 +164,11 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	n.parent = parent
 	base := int32(optionsCommandBase)
 	sources := int32(sourcesCommandBase)
+	// The job section comes first, directly below the shell's Start Resize
+	// button, in layout and in tab order.
+	if err := n.createJobControls(parent); err != nil {
+		return err
+	}
 	var err error
 	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
 		return err
@@ -224,6 +259,9 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
+	n.jobStatus.SetFont(font)
+	n.cancelButton.SetFont(font)
+	n.openButton.SetFont(font)
 	n.sourceLabel.SetFont(font)
 	n.sourceHint.SetFont(font)
 	n.list.SetFont(font)
@@ -254,6 +292,9 @@ func (n *NativeView) NativeFont(font windows.Handle) {
 }
 
 func (n *NativeView) NativeShow(visible bool) {
+	n.jobStatus.Label.Show(visible)
+	n.cancelButton.Show(visible)
+	n.openButton.Show(visible)
 	n.sourceLabel.Show(visible)
 	n.sourceHint.Show(visible)
 	n.list.Show(visible)
@@ -285,11 +326,12 @@ func (n *NativeView) NativeShow(visible bool) {
 
 func (n *NativeView) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
 	own, _, _, _ := n.optionsSectionHeight(width, scale, measure)
-	return n.sourcesSectionHeight(width, scale, measure) + scale(16) + n.presets.NativeHeight(width, scale, measure) + scale(16) + own
+	return n.jobSectionHeight(width, scale, measure) + scale(16) + n.sourcesSectionHeight(width, scale, measure) + scale(16) + n.presets.NativeHeight(width, scale, measure) + scale(16) + own
 }
 
 func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) {
 	_, qualityMetrics, backgroundMetrics, statusHeight := n.optionsSectionHeight(width, scale, measure)
+	y = n.layoutJobSection(x, y, width, scale, measure) + scale(16)
 	y = n.layoutSourcesSection(x, y, width, scale, measure) + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 	y += n.presets.NativeHeight(width, scale, measure) + scale(16)
@@ -426,9 +468,12 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		}
 		return true
 	}
+	if n.jobCommand(id, notification) {
+		return true
+	}
 	switch id - sourcesCommandBase {
 	case addImagesCommand:
-		if notification != 0 {
+		if notification != 0 || n.refuseWhileRunning() {
 			return true
 		}
 		paths, chosen, err := n.pickFiles(n.parent, ui.ImagePickerTitle)
@@ -442,13 +487,13 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		n.addSources(paths)
 		return true
 	case removeSelectedCommand:
-		if notification != 0 {
+		if notification != 0 || n.refuseWhileRunning() {
 			return true
 		}
 		n.removeSelectedSources()
 		return true
 	case clearListCommand:
-		if notification != 0 {
+		if notification != 0 || n.refuseWhileRunning() {
 			return true
 		}
 		n.inventory.Clear()
@@ -520,17 +565,35 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 }
 
 // NativeDestroy abandons the queued and in-flight content checks, so the
-// worker stops at its next read instead of decoding for a closing window.
-// The view deliberately has no NativeShutdown: a content check only reads
-// its source, so nothing is lost when the process exits around one, and
-// waiting for the worker could hold the process — and its single-instance
-// lock — for as long as an open or read on a slow network share or an
-// online-only file blocks. Any result a worker still finishes fails to post
-// harmlessly against the destroyed window, and the post is not retried.
+// worker stops at its next read instead of decoding for a closing window,
+// and cancels a running job, whose items in flight stop at their next safe
+// point and keep every completed result (RSZ-045). Content checks are not
+// waited for: a check only reads its source, so nothing is lost when the
+// process exits around one, and waiting for the worker could hold the
+// process — and its single-instance lock — for as long as an open or read
+// on a slow network share or an online-only file blocks. NativeShutdown
+// waits, within a bound, for the job. Any result a worker or the job still
+// finishes fails to post harmlessly against the destroyed window, and the
+// post is not retried.
 func (n *NativeView) NativeDestroy() {
+	n.closed.Store(true)
+	if n.active != nil {
+		n.active.cancel()
+	}
 	n.inspector.Close()
 	n.status.Destroy()
+	n.jobStatus.Destroy()
 	n.presets.NativeDestroy()
+}
+
+// refuseWhileRunning explains, while a job runs, that the source list cannot
+// change, as its rows are the job's items, and reports whether it did.
+func (n *NativeView) refuseWhileRunning() bool {
+	if n.active == nil {
+		return false
+	}
+	n.showSourceNotice(ui.Notice{Kind: ui.NoticeWarning, Message: ui.ImagesBusy})
+	return true
 }
 
 func (n *NativeView) selectCollision(notification uint16, policy CollisionPolicy) {
@@ -638,6 +701,9 @@ func (n *NativeView) refreshModeDescription() {
 // while the Image Resizer module is active (RSZ-002, RSZ-008). The shell
 // enables drag-and-drop only while the active module accepts it.
 func (n *NativeView) NativeDropFiles(paths []string) {
+	if n.refuseWhileRunning() {
+		return
+	}
 	n.addSources(paths)
 }
 
@@ -869,8 +935,12 @@ func (n *NativeView) refreshSourceSelection() {
 		n.path.SetText(item.Path)
 		n.pathDetail.SetText(item.DetailText())
 	}
-	n.removeButton.Enable(len(selection) > 0)
-	n.clearButton.Enable(n.inventory.Len() > 0)
+	// The source list cannot change while a job runs, as its rows are the
+	// job's items.
+	idle := n.active == nil
+	n.addButton.Enable(idle)
+	n.removeButton.Enable(idle && len(selection) > 0)
+	n.clearButton.Enable(idle && n.inventory.Len() > 0)
 }
 
 func (n *NativeView) presentResult(err error, success string) {
