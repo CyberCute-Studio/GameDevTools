@@ -96,6 +96,7 @@ func TestDecodeAppliesEveryEXIFOrientation(t *testing.T) {
 		{OrientationTransverse, [4]color.RGBA{white, green, blue, red}},
 		{OrientationRotate270, [4]color.RGBA{green, white, red, blue}},
 	}
+	var planes uint64
 	for index, tc := range cases {
 		order := binary.ByteOrder(binary.BigEndian)
 		if index%2 == 1 {
@@ -117,6 +118,13 @@ func TestDecodeAppliesEveryEXIFOrientation(t *testing.T) {
 		}
 		if width, height := info.StoredSize(); width != storedWidth || height != storedHeight {
 			t.Fatalf("orientation %d: StoredSize = %d × %d", tc.orientation, width, height)
+		}
+		// A reoriented color JPEG also needs its 4-byte upright copy, which
+		// Decode makes while the decoded planes are still held.
+		if index == 0 {
+			planes = info.DecodedBytes
+		} else if want := planes + 4*storedWidth*storedHeight; info.DecodedBytes != want {
+			t.Fatalf("orientation %d: DecodedBytes = %d, want %d", tc.orientation, info.DecodedBytes, want)
 		}
 
 		decoded, err := Decode(context.Background(), path)

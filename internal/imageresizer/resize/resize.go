@@ -42,8 +42,9 @@
 // source's area. The weight tables grow with the source's dimensions, which
 // MaxSourceDimension bounds, and the filter streams the source a row at a
 // time, keeping no more working rows than a fixed budget holds, so the
-// working memory — weight tables and rows together — stays under 128 MiB in
-// the worst case and is a few megabytes for typical sources. Resize reads
+// working memory — weight tables and rows together — stays under
+// MaxWorkingBytes, 128 MiB, in the worst case and is a few megabytes for
+// typical sources. Resize reads
 // the source but never retains or modifies it, and callers run it off the
 // GUI thread (TECH-005); a context cancels it between source rows, and
 // before it allocates the output. A panic during a resize, such as one a
@@ -67,6 +68,12 @@ import (
 // 65,535-pixel limit of JPEG and any practical PNG; the decoder's memory
 // bound already limits the source's area.
 const MaxSourceDimension = 1 << 20
+
+// MaxWorkingBytes bounds the working memory Resize needs beyond the output
+// image: the weight tables of both axes, the scratch that builds them, and
+// the working rows, whatever the source's shape and the target. A batch adds
+// it to each item's memory need (NFR-014).
+const MaxWorkingBytes = 128 << 20
 
 // A scaled axis and its crop offset reach 2^34 pixels, which only a 64-bit
 // int holds, so the package fails to compile where int is narrower rather

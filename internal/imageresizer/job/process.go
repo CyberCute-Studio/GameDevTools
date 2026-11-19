@@ -7,6 +7,14 @@
 // through a temporary file (RSZ-027, NFR-023). The source is opened
 // read-only and never modified (NFR-020).
 //
+// Run runs a whole job: it checks the request (RSZ-040), plans every
+// destination with output.Prepare, processes the items a few at a time
+// within a memory budget (RSZ-050, TECH-006, NFR-014), keeps one item's
+// failure from stopping the others (RSZ-044, NFR-021), stops starting items
+// once cancelled (RSZ-045), reports each item's state as it changes
+// (RSZ-042, RSZ-043), and returns every item's outcome with the counts of
+// each (RSZ-046).
+//
 // Functions are safe to call from any goroutine and never touch the GUI;
 // callers run them off the GUI thread and deliver results through the shell
 // dispatcher, per TECH-005.

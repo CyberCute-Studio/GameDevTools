@@ -79,19 +79,23 @@ func TestInspectPNGReportsDimensionsAndAlpha(t *testing.T) {
 	opaquePalette := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.NRGBA{A: 0xff}, color.NRGBA{R: 0xff, A: 0xff}})
 	clearPalette := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.NRGBA{A: 0xff}, color.NRGBA{}})
 
+	// bytes is the decoded image at the decoder's pixel size for the color
+	// type png.Encode writes: 4 bytes for 8-bit truecolor, with or without
+	// alpha, 8 at 16 bits per channel, and 1 for gray and for a palette.
 	cases := []struct {
 		name   string
 		img    image.Image
 		width  int
 		height int
 		alpha  bool
+		bytes  uint64
 	}{
-		{"opaque truecolor", opaque, 7, 3, false},
-		{"truecolor with alpha", translucent, 5, 9, true},
-		{"16-bit with alpha", deep, 4, 2, true},
-		{"grayscale", gray, 3, 3, false},
-		{"opaque palette", opaquePalette, 2, 2, false},
-		{"palette with transparency", clearPalette, 2, 2, true},
+		{"opaque truecolor", opaque, 7, 3, false, 7 * 3 * 4},
+		{"truecolor with alpha", translucent, 5, 9, true, 5 * 9 * 4},
+		{"16-bit with alpha", deep, 4, 2, true, 4 * 2 * 8},
+		{"grayscale", gray, 3, 3, false, 3 * 3},
+		{"opaque palette", opaquePalette, 2, 2, false, 2 * 2},
+		{"palette with transparency", clearPalette, 2, 2, true, 2 * 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,9 +104,13 @@ func TestInspectPNGReportsDimensionsAndAlpha(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := Info{Format: FormatPNG, Width: tc.width, Height: tc.height, Orientation: OrientationNormal, HasAlpha: tc.alpha}
+			want := Info{Format: FormatPNG, Width: tc.width, Height: tc.height, Orientation: OrientationNormal, HasAlpha: tc.alpha, DecodedBytes: tc.bytes}
 			if info != want {
 				t.Fatalf("Inspect = %+v, want %+v", info, want)
+			}
+			decoded, err := Decode(context.Background(), path)
+			if err != nil || decoded.Info != want {
+				t.Fatalf("Decode = %+v, %v, want %+v", decoded, err, want)
 			}
 		})
 	}
@@ -147,7 +155,12 @@ func TestDecodeJPEGFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := Info{Format: FormatJPEG, Width: 150, Height: 103, Orientation: OrientationNormal}
+			// The decoded planes alone take a byte per sample; the layout's
+			// exact estimate is pinned by the limit tests.
+			if info.DecodedBytes < 150*103 || info.DecodedBytes > MaxDecodedBytes {
+				t.Fatalf("Inspect reports %d decoded bytes", info.DecodedBytes)
+			}
+			want := Info{Format: FormatJPEG, Width: 150, Height: 103, Orientation: OrientationNormal, DecodedBytes: info.DecodedBytes}
 			if info != want {
 				t.Fatalf("Inspect = %+v, want %+v", info, want)
 			}

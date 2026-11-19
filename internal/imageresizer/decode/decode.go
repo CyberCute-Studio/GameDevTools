@@ -171,6 +171,15 @@ type Info struct {
 	// a PNG with an alpha channel, a transparency chunk, or a palette with
 	// translucent entries. JPEG sources never have alpha.
 	HasAlpha bool
+	// DecodedBytes is the pixel memory decoding the source needs, as the
+	// MaxDecodedBytes limit counts it from the declared header: the decoded
+	// image with the decoder's working buffers and, for a reoriented JPEG,
+	// the upright copy Decode makes, so it never exceeds MaxDecodedBytes. A
+	// JPEG's conversion to RGB that a segment after its first scan requests
+	// is counted only when it could breach the limit, which is when the
+	// limit settles whether the decoder makes it. A batch sizes how many
+	// sources it decodes at once by it (NFR-014).
+	DecodedBytes uint64
 }
 
 // StoredSize returns the dimensions as stored in the file, before the
@@ -393,11 +402,12 @@ func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Imag
 		return Info{}, nil, &Error{Kind: KindCorrupt, Format: format, Err: fmt.Errorf("decoded %d × %d pixels, but the header declares %d × %d", bounds.Dx(), bounds.Dy(), config.Width, config.Height)}
 	}
 	info = Info{
-		Format:      format,
-		Width:       width,
-		Height:      height,
-		Orientation: scanned.orientation,
-		HasAlpha:    format == FormatPNG && modelHasAlpha(decoded.ColorModel()),
+		Format:       format,
+		Width:        width,
+		Height:       height,
+		Orientation:  scanned.orientation,
+		HasAlpha:     format == FormatPNG && modelHasAlpha(decoded.ColorModel()),
+		DecodedBytes: need + upright,
 	}
 	if keep {
 		pixels = orient(decoded, scanned.orientation)

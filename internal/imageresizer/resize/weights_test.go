@@ -205,10 +205,11 @@ func (v virtual) At(x, y int) color.Color {
 // MaxSourceDimension reduced to a sliver, to the widest output row, or to
 // the tallest output column, read with four channels, and the
 // horizontal-first order with its working rows just within their budget —
-// which the package documentation promises stays under 128 MiB. Each resize
-// is cancelled once it has filtered a few source rows, so the measurement
-// covers the filtering as well as the setup, and between two reads two
-// source rows apart nothing proportional to a row may be allocated.
+// which the package documentation promises stays under MaxWorkingBytes.
+// Each resize is cancelled once it has filtered a few source rows, so the
+// measurement covers the filtering as well as the setup, and between two
+// reads two source rows apart nothing proportional to a row may be
+// allocated.
 func TestWorkingMemoryStaysBounded(t *testing.T) {
 	huge := image.Rect(0, 0, MaxSourceDimension, MaxSourceDimension)
 	// Boxed once, so reading them allocates nothing.
@@ -249,8 +250,8 @@ func TestWorkingMemoryStaysBounded(t *testing.T) {
 		output := uint64(tc.target.Width * tc.target.Height * tc.bytesPerPixel)
 		working := after.TotalAlloc - before.TotalAlloc - output
 		t.Logf("%s: %.1f MiB of working memory", tc.name, float64(working)/(1<<20))
-		if working >= 128<<20 {
-			t.Errorf("%s: %.1f MiB of working memory, want under 128 MiB", tc.name, float64(working)/(1<<20))
+		if working >= MaxWorkingBytes {
+			t.Errorf("%s: %.1f MiB of working memory, want under %d MiB", tc.name, float64(working)/(1<<20), MaxWorkingBytes>>20)
 		}
 		// Only the error the cancellation returns is allocated after the mark.
 		if filtering := after.TotalAlloc - p.marked; filtering >= 1<<10 {
