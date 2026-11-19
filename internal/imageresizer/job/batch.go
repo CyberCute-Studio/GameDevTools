@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"runtime/metrics"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -21,20 +22,29 @@ import (
 // the processors do.
 const maxWorkers = 4
 
-// memoryBudget bounds the pixel memory the items in flight may need at once,
-// by each item's estimate (NFR-014). An item whose estimate alone exceeds it
+// memoryBudget bounds the memory the items in flight may need at once, by
+// each item's estimate (NFR-014). An item whose estimate alone exceeds it
 // starts only when no other item is in flight. A source is decoded only
-// within its estimate, and the memory items drop is collected before their
-// share of the budget is handed on once they held collectThreshold, as Run
-// describes, so by the estimates the budget bounds the memory items hold,
-// garbage included, rather than only the memory they keep reachable, but for
-// less than collectThreshold that small items may leave to the collector.
+// within its estimate and resized only while the whole item fits its share,
+// and the memory items drop is collected before their share of the budget
+// is handed on once they allocated collectThreshold, as Run describes, so by
+// the estimates the budget bounds the memory items hold, garbage included,
+// rather than only the memory they keep reachable, but for less than
+// collectThreshold that small items may leave to the collector.
 const memoryBudget = 1 << 30
 
-// collectThreshold is the memory an item must have held, or the items that
-// ended since the last collection must have held together, for the worker
-// that ends one to collect garbage before it reports the item done.
+// collectThreshold is the memory the heap must have allocated while an item
+// was processed, or while the items that ended since the last collection
+// were, together, for the worker that ends one to collect garbage before it
+// reports the item done.
 const collectThreshold = 64 << 20
+
+// bufferBytes is what an item may allocate beyond the pixel memory itemBytes
+// counts from the estimates: the PNG decoder's row buffers, up to the 16 MiB
+// its estimate leaves out, as decode.MaxDecodedBytes describes, and the
+// encoder's compressor state and rows and the write buffer, a few MiB at the
+// largest target.
+const bufferBytes = 20 << 20
 
 // maxReplans bounds how often one item is planned again because another
 // program took its destination after planning, so a folder where names keep
@@ -164,7 +174,8 @@ type Status struct {
 	// Reason is why the item did not get its natural destination, as
 	// output.Reason describes: why a Completed item was saved under a
 	// numbered name, or why an item was Skipped. It is output.ReasonNone
-	// otherwise.
+	// otherwise, and in every other state, even for an item whose
+	// Destination is a numbered name.
 	Reason output.Reason
 	// Err is a Failed item's error: the failing step's own typed error, as
 	// Process returns it, the plan's error for an item it could not name,
@@ -238,9 +249,9 @@ type Summary struct {
 	Progress Progress
 }
 
-// processFunc processes one item, decoding its source within the allowance
-// of pixel memory the job set aside for it.
-type processFunc func(ctx context.Context, item output.Item, settings Settings, allowance uint64) (string, error)
+// processFunc processes one item within the memory the job set aside for
+// it, as processWithin does.
+type processFunc func(ctx context.Context, item output.Item, settings Settings, share reservation) (string, error)
 
 // config is how a job runs; tests substitute its parts.
 type config struct {
@@ -248,18 +259,37 @@ type config struct {
 	budget  uint64
 	prepare func(context.Context, output.Request) (output.Plan, error)
 	process processFunc
-	// collect collects garbage, from the worker goroutines.
-	collect func()
+	// collect collects garbage, and allocated reports the bytes allocated on
+	// the heap so far, both from the worker goroutines.
+	collect   func()
+	allocated func() uint64
 }
 
 func defaultConfig() config {
 	return config{
-		workers: defaultWorkers(),
-		budget:  memoryBudget,
-		prepare: output.Prepare,
-		process: processWithin,
-		collect: runtime.GC,
+		workers:   defaultWorkers(),
+		budget:    memoryBudget,
+		prepare:   output.Prepare,
+		process:   processWithin,
+		collect:   runtime.GC,
+		allocated: heapAllocated,
 	}
+}
+
+// heapAllocsMetric is the runtime's running total of bytes allocated on the
+// heap.
+const heapAllocsMetric = "/gc/heap/allocs:bytes"
+
+// heapAllocated returns the bytes allocated on the heap since the process
+// started, as decode.Inspect measures them, or 0 if the runtime does not
+// report them.
+func heapAllocated() uint64 {
+	sample := []metrics.Sample{{Name: heapAllocsMetric}}
+	metrics.Read(sample)
+	if sample[0].Value.Kind() != metrics.KindUint64 {
+		return 0
+	}
+	return sample[0].Value.Uint64()
 }
 
 // defaultWorkers leaves one processor to the GUI thread and the rest of the
@@ -291,44 +321,51 @@ func defaultWorkers() int {
 // policy. The rest are processed in order by Process, a few at a time: at
 // most one fewer than the processors the program may use, at most four, and
 // only while the memory the items in flight need by their estimates — the
-// decoded source, as its Input.Info reports it, the resized image, and the
+// decoded source, as its Input.Info reports it, the resized image, the
 // filter's working memory, as resize.WorkingBytes bounds it for the
-// source's dimensions — stays within a budget of 1 GiB (RSZ-050, NFR-014);
-// an item that needs more starts only when it would run alone. So the job
-// never decodes every source at once. A source that changed since it was
-// checked is decoded as it now is (RSZ-049), so one that has gone, or whose
-// content is damaged now, fails then; one that now needs more memory than
-// its estimate is not decoded beside the others, as decode.DecodeWithin
-// describes, but is reported Pending again and started over once it can
-// run alone with the decoder's own limit set aside. A JPEG's conversion to
-// RGB that a segment after its first scan requests is counted as
-// decode.Info.DecodedBytes counts it. Once an item that held 64 MiB or more
-// of the budget ends, or the items that ended since the last collection
-// held that much together, its worker collects garbage before the item's
+// source's dimensions, and 20 MiB for the decoder's and the encoder's
+// buffers — stays within a budget of 1 GiB (RSZ-050, NFR-014); an item that
+// needs more starts only when it would run alone. So the job never decodes
+// every source at once. A source that changed since it was checked is
+// decoded as it now is (RSZ-049), so one that has gone, or whose content is
+// damaged now, fails then; one that now needs more memory than its estimate
+// — to decode it, as decode.DecodeWithin describes, or, rewritten to another
+// format or shape, for its resized image and the filter, which the item
+// checks once its source is decoded — is not resized beside the others, but
+// is reported Pending again and started over once it can run alone with the
+// most any source needs set aside. A JPEG's conversion to RGB that a segment
+// after its first scan requests is counted as decode.Info.DecodedBytes
+// counts it. Once the heap allocated 64 MiB or more while an item was
+// processed, or while the items that ended since the last collection were,
+// together — counting what other items allocated meanwhile too, so it errs
+// toward collecting — the item's worker collects garbage before the item's
 // share of the budget goes to another, so the memory finished items drop
-// does not pile up beside the memory the next ones take.
+// does not pile up beside the memory the next ones take, while an item that
+// failed before its source was decoded, such as one whose name was taken,
+// adds next to nothing toward a collection.
 //
 // One item's failure never stops the others (RSZ-044): each failure is
 // attached to its item as the failing step's own typed error, and a panic
 // that escapes Process is contained as that item's ErrUnexpected failure
 // (NFR-021). An output folder that has gone does stop them: once an item
-// fails to write and its output folder can no longer be reached, or is no
-// longer a folder, as output.CheckFolder finds, the items still waiting end
-// Failed with that folder's error rather than each after its source is
-// decoded and resized (UX-010). Under Skip, two sources with one destination
-// are planned so that only the first writes it (output.ActionDefer): when
-// that item fails, the next one is processed in its place, as
+// fails to write, or is to be planned again, and its output folder can no
+// longer be reached, or is no longer a folder, as output.CheckFolder finds,
+// the items still waiting end Failed with that folder's error rather than
+// each after its source is decoded and resized (UX-010), and the folder is
+// not created again. Under Skip, two sources with one destination are
+// planned so that only the first writes it (output.ActionDefer): when that
+// item fails, the next one is processed in its place, as
 // output.Plan.Successor describes, and once the file is written the rest end
 // Skipped, as they do when another program wrote a file at the name after
 // planning (AC-R09). Under Rename and Overwrite, an item planned to create a
 // name another program took after planning (output.ErrDestinationTaken) is
 // planned again and saved under the first unused numbered name instead,
 // never replacing that file: Overwrite replaces only the files that existed
-// when the job was planned (RSZ-025, AC-R10). It keeps the reason the plan
-// gave it for not having its natural destination; one that had it reports
-// the new plan's reason, output.ReasonExists while the file that took the
-// name is there. An item planned to replace a file that changed since
-// planning replaces nothing and ends Failed with
+// when the job was planned (RSZ-025, AC-R10). Once saved, it reports the
+// reason the plan gave it for not having its natural destination; one that
+// had it reports the new plan's reason, output.ReasonExists while the file
+// that took the name is there. An item planned to replace a file that
+// changed since planning replaces nothing and ends Failed with
 // output.ErrDestinationChanged, as output.Write describes: the confirmation
 // was given for that file as it was, and the error is what says where the
 // file is when Write had moved it aside.
@@ -403,7 +440,9 @@ type finished struct {
 }
 
 // batch is one running job. Only the goroutine that runs it touches its
-// fields, except uncollected; worker goroutines report through done.
+// fields, but for what worker goroutines read and never change once execute
+// starts — request, cfg, ctx, and plan.Folder — and uncollected, which they
+// add to; they report through done.
 type batch struct {
 	request Request
 	observe func(Event)
@@ -415,35 +454,40 @@ type batch struct {
 	planned []int
 	inputs  []int
 	plan    output.Plan
-	// folder is the plan's output folder, which workers check.
-	folder string
 
 	statuses []Status
 	progress Progress
 
 	// queue holds the plan indices of the items waiting to start, in order.
 	queue []int
-	// The rest are kept by plan index. held is the memory an item in flight
-	// holds of the budget; worstCase marks an item whose source turned out
-	// to need more memory than its estimate, which is now given the most any
-	// source needs; replans counts how often an item was planned again; and
-	// leftovers are the errors of its earlier attempts that name a file left
-	// behind.
-	held      []uint64
-	worstCase []bool
-	replans   []int
-	leftovers []error
-	// lost is the output folder's error once a worker found it gone.
+	// records holds what the job keeps of each item, by plan index.
+	records []record
+	// lost is the output folder's error once the job found it gone.
 	lost error
 	// inflight and reserved are the items being processed and the memory
 	// they hold.
 	inflight int
 	reserved uint64
-	// uncollected is the memory the items that ended since the last
-	// collection held, which the workers add to.
+	// uncollected is the memory the heap allocated while the items that
+	// ended since the last collection were processed, which the workers add
+	// to.
 	uncollected atomic.Uint64
 	done        chan finished
 	workers     sync.WaitGroup
+}
+
+// record is what the job keeps of one plan item across its attempts.
+type record struct {
+	// held is the memory the item holds of the budget while it is in flight.
+	held uint64
+	// worstCase marks an item whose source turned out to need more memory
+	// than its estimate, which is now given the most any source needs.
+	worstCase bool
+	// replans counts how often the item was planned again.
+	replans int
+	// leftovers are the errors of its earlier attempts that name a file left
+	// behind.
+	leftovers error
 }
 
 func newBatch(request Request, observe func(Event), cfg config) *batch {
@@ -464,10 +508,7 @@ func newBatch(request Request, observe func(Event), cfg config) *batch {
 			b.inputs = append(b.inputs, index)
 		}
 	}
-	b.held = make([]uint64, len(b.inputs))
-	b.worstCase = make([]bool, len(b.inputs))
-	b.replans = make([]int, len(b.inputs))
-	b.leftovers = make([]error, len(b.inputs))
+	b.records = make([]record, len(b.inputs))
 	return b
 }
 
@@ -531,7 +572,7 @@ func (b *batch) cancelAll() {
 // execute ends the items the plan settles, then processes the rest until
 // none is waiting or in flight.
 func (b *batch) execute(ctx context.Context, plan output.Plan) {
-	b.ctx, b.plan, b.folder = ctx, plan, plan.Folder
+	b.ctx, b.plan = ctx, plan
 	for index, input := range b.request.Inputs {
 		p := b.planned[index]
 		if p < 0 {
@@ -592,7 +633,7 @@ func (b *batch) start() {
 		b.queue = b.queue[1:]
 		b.inflight++
 		b.reserved += cost
-		b.held[p] = cost
+		b.records[p].held = cost
 		b.run(p)
 	}
 }
@@ -601,34 +642,38 @@ func (b *batch) start() {
 // own, within the memory it holds.
 func (b *batch) run(p int) {
 	item := b.plan.Items[p]
-	b.set(b.inputs[p], Status{State: StateProcessing, Destination: item.Destination, Reason: item.Reason})
+	b.set(b.inputs[p], Status{State: StateProcessing, Destination: item.Destination})
 	b.workers.Add(1)
-	go b.work(p, item, b.allowance(p), b.held[p])
+	go b.work(p, item, reservation{allowance: b.allowance(p), held: b.records[p].held})
 }
 
 // release frees the worker and the memory the item at p held.
 func (b *batch) release(p int) {
 	b.inflight--
-	b.reserved -= b.held[p]
-	b.held[p] = 0
+	b.reserved -= b.records[p].held
+	b.records[p].held = 0
 }
 
-// work processes one item on its own goroutine, decoding its source within
-// allowance. done has room for every item in flight, so the send never
-// blocks. An item that failed to write may have lost its output folder,
-// which the worker checks, off the coordinating goroutine. Before it reports
-// an item that held collectThreshold or more of the budget, or one that
-// brings what the items ended since the last collection held to that much,
-// it collects garbage, so the memory they dropped is free before their share
-// of the budget goes to another item.
-func (b *batch) work(p int, item output.Item, allowance, held uint64) {
+// work processes one item on its own goroutine, within the memory the job
+// set aside for it. done has room for every item in flight, so the send
+// never blocks. An item that failed to write may have lost its output
+// folder, which the worker checks, off the coordinating goroutine. Before it
+// reports the item, it collects garbage when the heap allocated
+// collectThreshold or more while the item was processed, or while it and the
+// items ended since the last collection were, together, so the memory they
+// dropped is free before their share of the budget goes to another item. The
+// heap's count includes what other items allocated meanwhile, so it errs
+// toward collecting, while an item that fails before its source is decoded,
+// as one whose name was taken, adds next to nothing of its own.
+func (b *batch) work(p int, item output.Item, share reservation) {
 	defer b.workers.Done()
-	path, err := b.process(item, allowance)
+	before := b.cfg.allocated()
+	path, err := b.process(item, share)
 	result := finished{plan: p, path: path, err: err}
 	if path == "" && writeFailed(err) {
-		result.lost = output.CheckFolder(b.folder)
+		result.lost = output.CheckFolder(b.plan.Folder)
 	}
-	if held >= collectThreshold || b.uncollected.Add(held) >= collectThreshold {
+	if grown := b.cfg.allocated() - before; grown >= collectThreshold || b.uncollected.Add(grown) >= collectThreshold {
 		b.uncollected.Store(0)
 		b.cfg.collect()
 	}
@@ -639,7 +684,7 @@ func (b *batch) work(p int, item output.Item, allowance, held uint64) {
 // failure: a panic on a worker goroutine would end the whole program, not
 // one item (NFR-021). The steps contain their own panics; this guard is for
 // whatever escapes them.
-func (b *batch) process(item output.Item, allowance uint64) (path string, err error) {
+func (b *batch) process(item output.Item, share reservation) (path string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			path, err = "", fmt.Errorf("%w: %v", ErrUnexpected, recovered)
@@ -648,19 +693,32 @@ func (b *batch) process(item output.Item, allowance uint64) (path string, err er
 			}
 		}
 	}()
-	return b.cfg.process(b.ctx, item, b.request.Settings, allowance)
+	return b.cfg.process(b.ctx, item, b.request.Settings, share)
 }
 
 // writeFailed reports whether err is output's failure to write a result,
 // which an output folder that has gone fails with.
 func writeFailed(err error) bool {
+	return hasKind(err, output.KindWrite)
+}
+
+// hasKind reports whether err is an *output.Error of the given kind.
+func hasKind(err error, kind output.Kind) bool {
 	var outputErr *output.Error
-	return errors.As(err, &outputErr) && outputErr.Kind == output.KindWrite
+	return errors.As(err, &outputErr) && outputErr.Kind == kind
+}
+
+// outgrown reports whether err says the item's source, as it now is, needs
+// more memory than the job set aside for it: to decode it
+// (decode.ErrOverAllowance), or for the whole item once decoded
+// (errOutgrown).
+func outgrown(err error) bool {
+	return errors.Is(err, decode.ErrOverAllowance) || errors.Is(err, errOutgrown)
 }
 
 // settle takes one processed item's result: it starts the item over when it
-// may still save its result — within the decoder's own limit when its
-// source needed more memory than its estimate, or under a new name when
+// may still save its result — with the most any source needs set aside when
+// its source needed more memory than its estimate, or under a new name when
 // another program took its destination — and ends it otherwise.
 func (b *batch) settle(result finished) {
 	p := result.plan
@@ -668,13 +726,12 @@ func (b *batch) settle(result finished) {
 		b.lost = result.lost
 	}
 	switch {
-	case !b.worstCase[p] && errors.Is(result.err, decode.ErrOverAllowance):
+	case !b.records[p].worstCase && outgrown(result.err):
 		// Its source changed since it was checked. It waits until it can run
 		// alone, as cost now gives it the most any source needs.
 		b.release(p)
-		b.worstCase[p] = true
-		item := b.plan.Items[p]
-		b.set(b.inputs[p], Status{State: StatePending, Destination: item.Destination, Reason: item.Reason})
+		b.records[p].worstCase = true
+		b.set(b.inputs[p], Status{State: StatePending, Destination: b.plan.Items[p].Destination})
 		b.enqueue(p)
 		return
 	case b.ctx.Err() == nil && b.retryable(result):
@@ -693,7 +750,7 @@ func (b *batch) settle(result finished) {
 // left untouched and the item ends Skipped instead, as outcome reports.
 func (b *batch) retryable(result finished) bool {
 	return result.path == "" && errors.Is(result.err, output.ErrDestinationTaken) &&
-		b.request.Collision != output.CollisionSkip && b.lost == nil && b.replans[result.plan] < maxReplans
+		b.request.Collision != output.CollisionSkip && b.lost == nil && b.records[result.plan].replans < maxReplans
 }
 
 // rename plans the item again whose destination another program took after
@@ -706,13 +763,17 @@ func (b *batch) retryable(result finished) bool {
 // gave it, as Run describes, and the error of the attempt is kept when it
 // names a file left behind. It reports whether the item started again; when
 // it did not, result carries the error the item ends with: planning it again
-// failed, or the new plan names no file for it.
+// failed, or the new plan names no file for it. An output folder that can no
+// longer be reached, as replan finds, is lost for the whole job.
 func (b *batch) rename(result *finished) bool {
 	p := result.plan
-	b.leftovers[p] = join(b.leftovers[p], leftBehind(result.err))
-	b.replans[p]++
+	b.records[p].leftovers = join(b.records[p].leftovers, leftBehind(result.err))
+	b.records[p].replans++
 	item, err := b.replan(p)
 	if err != nil {
+		if hasKind(err, output.KindFolder) && b.lost == nil {
+			b.lost = err
+		}
 		result.err = err
 		return false
 	}
@@ -734,8 +795,13 @@ func (b *batch) rename(result *finished) bool {
 // replaced, so planning reads no file identities, and it runs on the
 // coordinating goroutine, which keeps the destinations it avoids current.
 // Another item's destination reads to that plan as a listed path, which is
-// why the item keeps its own plan's reason.
+// why the item keeps its own plan's reason. The output folder is checked
+// first, as output.CheckFolder checks it, since Prepare would create a
+// folder that has gone since the item's name was found taken.
 func (b *batch) replan(p int) (output.Item, error) {
+	if err := output.CheckFolder(b.plan.Folder); err != nil {
+		return output.Item{}, err
+	}
 	index := b.inputs[p]
 	input := b.request.Inputs[index]
 	request := output.Request{
@@ -767,27 +833,36 @@ func (b *batch) replan(p int) (output.Item, error) {
 // there is none, or once the source turned out to need more.
 func (b *batch) allowance(p int) uint64 {
 	decoded := b.request.Inputs[b.inputs[p]].Info.DecodedBytes
-	if b.worstCase[p] || decoded == 0 || decoded > decode.MaxDecodedBytes {
+	if b.records[p].worstCase || decoded == 0 || decoded > decode.MaxDecodedBytes {
 		return decode.MaxDecodedBytes
 	}
 	return decoded
 }
 
-// cost is the memory an item may need while it is processed: its decoded
-// source, within its allowance; the resized image; and the filter's working
-// memory, as resize.WorkingBytes bounds it for the source's checked
-// dimensions. A source that turned out to need more than its estimate may
+// cost is the memory the item at p may need while it is processed, as
+// itemBytes counts it for its source as its content check found it, within
+// its allowance. A source that turned out to need more than its estimate may
 // differ from its check in every way, so it is given the most any source
-// needs: the decoder's limit, the resized image at 8 bytes a pixel, and
-// resize.MaxWorkingBytes. The encoder works in the resized image's memory or
-// streams from it.
+// needs: the decoder's limit, the resized image at 8 bytes a pixel,
+// resize.MaxWorkingBytes, and bufferBytes, which processWithin's check of
+// the decoded source never finds exceeded.
 func (b *batch) cost(p int) uint64 {
 	info := b.request.Inputs[b.inputs[p]].Info
 	target := b.request.Settings.Target
-	if b.worstCase[p] {
-		return decode.MaxDecodedBytes + resultBytes(decode.FormatPNG, target) + resize.MaxWorkingBytes
+	if b.records[p].worstCase {
+		return decode.MaxDecodedBytes + resultBytes(decode.FormatPNG, target) + resize.MaxWorkingBytes + bufferBytes
 	}
-	return b.allowance(p) + resultBytes(info.Format, target) + resize.WorkingBytes(info.Width, info.Height, target)
+	return itemBytes(info, b.allowance(p), target)
+}
+
+// itemBytes is the memory an item may need while it is processed, for a
+// source of the content info describes whose decoding needs decoded bytes:
+// the decoded source; the resized image; the filter's working memory, as
+// resize.WorkingBytes bounds it for the source's dimensions; and bufferBytes
+// for the decoder's and the encoder's buffers. The encoder works in the
+// resized image's memory or streams from it.
+func itemBytes(info decode.Info, decoded uint64, target resize.Target) uint64 {
+	return decoded + resultBytes(info.Format, target) + resize.WorkingBytes(info.Width, info.Height, target) + bufferBytes
 }
 
 // resultBytes bounds the resized image's memory. Every fitting mode gives at
@@ -811,7 +886,7 @@ func resultBytes(format decode.Format, target resize.Target) uint64 {
 func (b *batch) outcome(result finished) Status {
 	p := result.plan
 	item := b.plan.Items[p]
-	earlier := b.leftovers[p]
+	earlier := b.records[p].leftovers
 	switch {
 	case result.err == nil || result.path != "":
 		destination := result.path
@@ -820,21 +895,18 @@ func (b *batch) outcome(result finished) Status {
 		}
 		return Status{State: StateCompleted, Destination: destination, Reason: item.Reason, Err: join(result.err, earlier)}
 	case canceled(b.ctx, result.err) || (b.ctx.Err() != nil && b.retryable(result)):
-		return Status{State: StateCancelled, Destination: item.Destination, Reason: item.Reason, Err: join(leftBehind(result.err), earlier)}
+		return Status{State: StateCancelled, Destination: item.Destination, Err: join(leftBehind(result.err), earlier)}
 	case b.request.Collision == output.CollisionSkip && errors.Is(result.err, output.ErrDestinationTaken):
 		return Status{State: StateSkipped, Destination: item.Destination, Reason: output.ReasonExists, Err: join(leftBehind(result.err), earlier)}
 	}
-	return Status{State: StateFailed, Destination: item.Destination, Reason: item.Reason, Err: join(result.err, earlier)}
+	return Status{State: StateFailed, Destination: item.Destination, Err: join(result.err, earlier)}
 }
 
-// leftBehind returns a failed write's error when it names a file left
-// behind, and nil otherwise. output.Write joins its failure to remove a
-// temporary file to the error that ended the write, by errors.Join, and
-// joins nothing else, and Process returns its error as it is, so the
-// failure of an item that saved nothing names a file left behind exactly
-// when it is such a join.
+// leftBehind returns a failed write's error when it names a temporary file
+// left behind, which output.Write marks with output.ErrLeftBehind and joins
+// to the error that ended the write, and nil otherwise.
 func leftBehind(err error) error {
-	if _, joined := err.(interface{ Unwrap() []error }); joined {
+	if errors.Is(err, output.ErrLeftBehind) {
 		return err
 	}
 	return nil
@@ -906,16 +978,14 @@ func (b *batch) enqueue(p int) {
 }
 
 // endQueued ends every waiting item in the given state, with its own
-// destination and reason: Cancelled once the job is cancelled, with the
-// items deferred to them, or Failed with the folder's error once the output
-// folder is lost, when the item deferred to one is promoted and then ended
-// in its turn.
+// destination: Cancelled once the job is cancelled, with the items deferred
+// to them, or Failed with the folder's error once the output folder is lost,
+// when the item deferred to one is promoted and then ended in its turn.
 func (b *batch) endQueued(status Status) {
 	for len(b.queue) > 0 {
 		p := b.queue[0]
 		b.queue = b.queue[1:]
-		item := b.plan.Items[p]
-		status.Destination, status.Reason = item.Destination, item.Reason
+		status.Destination = b.plan.Items[p].Destination
 		b.end(p, status)
 	}
 }

@@ -1133,15 +1133,16 @@ func TestWriteKeepsTheReplacedFileWhenTheNameIsTakenAfterAFailure(t *testing.T) 
 }
 
 // TestWithFailure: a failure that follows none is Write's *Error as it is,
-// and one that follows another is joined to it, so both are found.
+// and one that follows another is joined to it, so both are found; a
+// temporary file that could not be removed is marked ErrLeftBehind.
 func TestWithFailure(t *testing.T) {
-	removal := kindError(KindWrite, "remove temporary file", windows.ERROR_ACCESS_DENIED)
+	removal := notRemoved(windows.ERROR_ACCESS_DENIED)
 	var writeErr *Error
-	if err := withFailure(nil, removal); !errors.As(err, &writeErr) || err != error(removal) {
-		t.Fatalf("withFailure(nil, removal) = %#v, want the *Error itself", err)
+	if err := withFailure(nil, removal); !errors.As(err, &writeErr) || err != error(removal) || writeErr.Kind != KindWrite || !errors.Is(err, ErrLeftBehind) {
+		t.Fatalf("withFailure(nil, removal) = %#v, want the *Error itself, marked ErrLeftBehind", err)
 	}
 	broken := errors.New("encoder broke")
-	if err := withFailure(broken, removal); !errors.Is(err, broken) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+	if err := withFailure(broken, removal); !errors.Is(err, broken) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) || !errors.Is(err, ErrLeftBehind) {
 		t.Fatalf("withFailure(broken, removal) = %v, want both", err)
 	}
 }

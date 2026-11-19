@@ -23,9 +23,12 @@ package job
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"io"
+	"math"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/encode"
@@ -77,14 +80,32 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // output.Write, a destination returned alongside an error means the result
 // was saved but a file the error names was left behind.
 func Process(ctx context.Context, item output.Item, settings Settings) (string, error) {
-	return processWithin(ctx, item, settings, decode.MaxDecodedBytes)
+	return processWithin(ctx, item, settings, reservation{allowance: decode.MaxDecodedBytes, held: math.MaxUint64})
 }
 
-// processWithin is Process decoding the source within the allowance of pixel
-// memory the job set aside for it, as decode.DecodeWithin describes: a
-// source that needs more fails with decode.ErrOverAllowance before its pixels
-// are allocated.
-func processWithin(ctx context.Context, item output.Item, settings Settings, allowance uint64) (string, error) {
+// reservation is the memory a job set aside for one item: allowance for
+// decoding its source, as decode.DecodeWithin takes it, within held for the
+// whole item, as itemBytes counts it.
+type reservation struct {
+	allowance uint64
+	held      uint64
+}
+
+// errOutgrown is the cause of the failure of an item whose source, rewritten
+// since its content check to another format or shape, decodes within its
+// allowance but would then need more than the job set aside for the whole
+// item, since the check's format and dimensions sized its resized image and
+// the filter's working memory. The job starts such an item over, as it does
+// one whose decoding needs more (decode.ErrOverAllowance).
+var errOutgrown = errors.New("the source, as it now is, needs more memory than was set aside for it")
+
+// processWithin is Process within the memory the job set aside for the item:
+// the source is decoded within the reservation's allowance, as
+// decode.DecodeWithin describes, so a source that needs more fails with
+// decode.ErrOverAllowance before its pixels are allocated, and one that then
+// needs more than the reservation holds in all, by itemBytes for the source
+// as it was decoded, fails with errOutgrown before it is resized.
+func processWithin(ctx context.Context, item output.Item, settings Settings, share reservation) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", &output.Error{Kind: output.KindCanceled, Op: "process item", Err: err}
 	}
@@ -98,7 +119,7 @@ func processWithin(ctx context.Context, item output.Item, settings Settings, all
 	if err := options.Validate(); err != nil {
 		return "", err
 	}
-	resized, err := resizeSource(ctx, item.Source, settings.Target, allowance)
+	resized, err := resizeSource(ctx, item.Source, settings.Target, share)
 	if err != nil {
 		return "", err
 	}
@@ -107,12 +128,16 @@ func processWithin(ctx context.Context, item output.Item, settings Settings, all
 	})
 }
 
-// resizeSource decodes the source within the allowance and resizes it. The
-// decoded source is no longer reachable once it returns.
-func resizeSource(ctx context.Context, path string, target resize.Target, allowance uint64) (image.Image, error) {
-	source, err := decode.DecodeWithin(ctx, path, allowance)
+// resizeSource decodes the source within the reservation and resizes it, as
+// processWithin describes. The decoded source is no longer reachable once it
+// returns.
+func resizeSource(ctx context.Context, path string, target resize.Target, share reservation) (image.Image, error) {
+	source, err := decode.DecodeWithin(ctx, path, share.allowance)
 	if err != nil {
 		return nil, err
+	}
+	if need := itemBytes(source.Info, source.DecodedBytes, target); need > share.held {
+		return nil, fmt.Errorf("%w: the %d × %d %v source needs %d bytes, %d were set aside", errOutgrown, source.Width, source.Height, source.Format, need, share.held)
 	}
 	return resize.Resize(ctx, source.Pixels, target)
 }

@@ -69,6 +69,10 @@ var (
 	// the KindWrite error Write returns when the output drive is full, or the
 	// user's storage quota on it is used up.
 	ErrDiskFull = errors.New("the output drive is full")
+	// ErrLeftBehind is wrapped, together with the operating system's error,
+	// by the KindWrite error Write adds when it cannot remove its temporary
+	// file, which is then left in the output folder.
+	ErrLeftBehind = errors.New("the temporary file could not be removed")
 )
 
 // Write saves one item's result at its destination (RSZ-027, NFR-023).
@@ -139,10 +143,11 @@ var (
 // error encode returns for a reason other than a failed write to the file,
 // such as an encoder's own failure, is returned as it is. A temporary file
 // that cannot be removed after a failure adds its own KindWrite error,
-// joined to the first by errors.Join, so errors.Is and errors.As find each.
-// When the result has its name but a file could not be removed afterwards,
-// Write returns the destination with a KindWrite error that names the file
-// left behind.
+// wrapping ErrLeftBehind, joined to the first by errors.Join, so errors.Is
+// and errors.As find each. When the result has its name but a file could
+// not be removed afterwards, Write returns the destination with a KindWrite
+// error that names the file left behind, wrapping ErrLeftBehind when it is
+// the temporary file.
 func Write(ctx context.Context, item Item, encode func(io.Writer) error) (string, error) {
 	return write(ctx, item, encode, writeSteps{})
 }
@@ -191,7 +196,7 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 			return
 		}
 		if discardErr := temp.discard(); discardErr != nil {
-			err = withFailure(err, kindError(KindWrite, "remove temporary file", discardErr))
+			err = withFailure(err, notRemoved(discardErr))
 		}
 	}()
 	var file io.Writer = temp
@@ -227,7 +232,7 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 		return "", err
 	}
 	if finishErr := temp.finish(); finishErr != nil {
-		err = withFailure(err, kindError(KindWrite, "remove temporary file", finishErr))
+		err = withFailure(err, notRemoved(finishErr))
 	}
 	return item.Destination, err
 }
@@ -284,6 +289,12 @@ func (i Item) checkSaves() error {
 		return kindError(KindValidation, "write result", fmt.Errorf("the destination %q is not an absolute path", i.Destination))
 	}
 	return nil
+}
+
+// notRemoved is the KindWrite error for a temporary file that could not be
+// removed, marked ErrLeftBehind.
+func notRemoved(err error) *Error {
+	return kindError(KindWrite, "remove temporary file", fmt.Errorf("%w: %w", ErrLeftBehind, err))
 }
 
 // withFailure adds a failure that followed err: the failure alone when there

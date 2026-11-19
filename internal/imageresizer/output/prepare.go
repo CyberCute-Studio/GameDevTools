@@ -169,7 +169,8 @@ const (
 	// file left behind failed, which the error names. The error wraps the
 	// operating system's error, so errors.Is reports a permission failure as
 	// fs.ErrPermission and a full drive or used-up quota as ErrDiskFull
-	// (RSZ-030).
+	// (RSZ-030), and a temporary file that could not be removed as
+	// ErrLeftBehind.
 	KindWrite
 	// KindChanged means the item's destination changed after the plan was
 	// made, so Write saved nothing rather than replace something the plan
