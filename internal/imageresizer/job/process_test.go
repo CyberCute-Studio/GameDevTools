@@ -319,5 +319,12 @@ func TestProcessRejectsItemsThatSaveNothing(t *testing.T) {
 			t.Fatalf("%v: error = %v, want ErrNotWritten", action, err)
 		}
 	}
+	// An item no plan gives, without a destination, is refused before its
+	// source is read: a missing source would otherwise fail first.
+	_, err := Process(context.Background(), output.Item{Source: item.Source}, settings(8, 8, preset.ResizeFit, white))
+	var outputErr *output.Error
+	if !errors.As(err, &outputErr) || outputErr.Kind != output.KindValidation {
+		t.Fatalf("zero item: error = %v, want a validation failure", err)
+	}
 	assertEmpty(t, out)
 }

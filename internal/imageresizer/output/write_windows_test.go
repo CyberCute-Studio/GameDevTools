@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -52,6 +53,19 @@ func temporaryFiles(t *testing.T, folder string) []string {
 	var found []string
 	for _, name := range names(t, folder) {
 		if strings.HasPrefix(name, tempPrefix) && strings.HasSuffix(name, tempSuffix) {
+			found = append(found, filepath.Join(folder, name))
+		}
+	}
+	return found
+}
+
+// asideFiles lists the files an ActionReplace item moved aside and left in a
+// folder.
+func asideFiles(t *testing.T, folder string) []string {
+	t.Helper()
+	var found []string
+	for _, name := range names(t, folder) {
+		if strings.HasPrefix(name, asidePrefix) {
 			found = append(found, filepath.Join(folder, name))
 		}
 	}
@@ -298,6 +312,27 @@ func TestWriteRejectsItemsThatSaveNothing(t *testing.T) {
 	assertNames(t, out)
 }
 
+// TestWriteRejectsItemsWithoutADestination: an item no plan gives, such as
+// the zero Item, whose action is ActionCreate but whose destination is no
+// absolute path, is refused before any file is created, rather than written
+// to a temporary file in the working folder.
+func TestWriteRejectsItemsWithoutADestination(t *testing.T) {
+	working := t.TempDir()
+	t.Chdir(working)
+	for _, item := range []Item{{}, {Action: ActionCreate, Destination: "photo.png"}, {Action: ActionReplace, Destination: `out\photo.png`}} {
+		encoded := false
+		_, err := Write(context.Background(), item, func(w io.Writer) error {
+			encoded = true
+			return text("result")(w)
+		})
+		assertKind(t, err, KindValidation)
+		if encoded || item.CheckWrite() == nil {
+			t.Fatalf("%q: the item was encoded, or CheckWrite accepts it", item.Destination)
+		}
+		assertNames(t, working)
+	}
+}
+
 // TestWriteReportsAFolderThatIsGone: an output folder removed after planning
 // fails the item as a write failure that errors.Is reports as not existing.
 func TestWriteReportsAFolderThatIsGone(t *testing.T) {
@@ -319,6 +354,12 @@ func TestWriteReportsAFolderThatIsGone(t *testing.T) {
 func TestWriteKeepsNamesWindowsWouldShorten(t *testing.T) {
 	parent := t.TempDir()
 	out := `\\?\` + filepath.Join(parent, "Photos ")
+	// The test's own cleanup cannot remove a name Windows shortens, so this
+	// one, registered after it, runs first, whether or not the test passes.
+	t.Cleanup(func() {
+		os.Remove(`\\?\` + filepath.Join(parent, "Photos ", "photo.png"))
+		os.Remove(out)
+	})
 	item := planOne(t, out, CollisionRename, filepath.Join(t.TempDir(), "photo.png"), ActionCreate)
 	if _, err := Write(context.Background(), item, text("result")); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -327,9 +368,6 @@ func TestWriteKeepsNamesWindowsWouldShorten(t *testing.T) {
 	if readFile(t, `\\?\`+filepath.Join(parent, "Photos ", "photo.png")) != "result" {
 		t.Fatal("the result is not in the folder named with the space")
 	}
-	// The test's cleanup cannot remove a name Windows shortens.
-	os.Remove(`\\?\` + filepath.Join(parent, "Photos ", "photo.png"))
-	os.Remove(out)
 }
 
 // TestWriteHandlesLongPaths: a destination longer than the 260 characters of
@@ -434,6 +472,14 @@ func TestWriteNeverReplacesAChangedDestination(t *testing.T) {
 		},
 		"rewritten at the same size": func(t *testing.T, setup replaceSetup) string {
 			writeFile(t, setup.destination, "olx")
+			// A program that rewrites the file after the plan was made stamps
+			// a later write time, but here the rewrite can fall within the
+			// tick of the system clock that stamped the plan's, so the
+			// later time is given as the later rewrite would give it.
+			later := time.Now().Add(time.Second)
+			if err := os.Chtimes(setup.destination, later, later); err != nil {
+				t.Fatal(err)
+			}
 			return "olx"
 		},
 		"name gained": func(t *testing.T, setup replaceSetup) string {
@@ -469,7 +515,7 @@ func TestWriteNeverReplacesAChangedDestination(t *testing.T) {
 			} else if info.Mode().IsRegular() && readFile(t, setup.destination) != want {
 				t.Fatal("the changed destination was replaced")
 			}
-			if temps := temporaryFiles(t, setup.out); len(temps) != 0 {
+			if temps := append(temporaryFiles(t, setup.out), asideFiles(t, setup.out)...); len(temps) != 0 {
 				t.Fatalf("temporary files were left: %q", temps)
 			}
 		})
@@ -515,22 +561,109 @@ func openWithoutSharingDelete(t *testing.T, path string) windows.Handle {
 	return handle
 }
 
-// TestWriteFailsForAFileInUse: a file another program holds open without
-// allowing deletion cannot be replaced; the item fails with the sharing
-// violation and the file keeps its content.
-func TestWriteFailsForAFileInUse(t *testing.T) {
-	setup := newReplaceSetup(t)
-	handle := openWithoutSharingDelete(t, setup.destination)
-	defer windows.CloseHandle(handle)
-	_, err := Write(context.Background(), setup.item, text("new"))
-	assertKind(t, err, KindWrite)
-	if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
-		t.Fatalf("error = %v, want a sharing violation", err)
+// openForWriting opens a file for writing while allowing every other program
+// to read, write, and delete it, as a program that keeps a file open and
+// saves into it may.
+func openForWriting(path string) (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
 	}
-	if readFile(t, setup.destination) != "old" {
-		t.Fatal("the file in use was replaced")
+	return windows.CreateFile(name, windows.GENERIC_WRITE, shareAll, nil, windows.OPEN_EXISTING, 0, 0)
+}
+
+// TestWriteFailsForAFileInUse: a file another program holds open without
+// allowing deletion, or holds open for writing even while it allows
+// deletion, cannot be replaced; the item fails with the sharing violation
+// and the file keeps its content.
+func TestWriteFailsForAFileInUse(t *testing.T) {
+	opens := map[string]func(t *testing.T, path string) windows.Handle{
+		"without sharing delete": openWithoutSharingDelete,
+		"for writing": func(t *testing.T, path string) windows.Handle {
+			handle, err := openForWriting(path)
+			if err != nil {
+				t.Fatalf("open %s: %v", path, err)
+			}
+			return handle
+		},
+	}
+	for name, open := range opens {
+		t.Run(name, func(t *testing.T) {
+			setup := newReplaceSetup(t)
+			handle := open(t, setup.destination)
+			defer windows.CloseHandle(handle)
+			_, err := Write(context.Background(), setup.item, text("new"))
+			assertKind(t, err, KindWrite)
+			if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+				t.Fatalf("error = %v, want a sharing violation", err)
+			}
+			if readFile(t, setup.destination) != "old" {
+				t.Fatal("the file in use was replaced")
+			}
+			assertNames(t, setup.out, "photo.png")
+		})
+	}
+}
+
+// TestWriteHoldsTheContentItChecked: once Write has checked the file it
+// replaces, no other program can open it for writing until the file is
+// gone, so the content Write deletes is the content it checked, and a
+// program's newer content is never deleted along with it.
+func TestWriteHoldsTheContentItChecked(t *testing.T) {
+	setup := newReplaceSetup(t)
+	steps := writeSteps{pinned: func() {
+		handle, err := openForWriting(setup.destination)
+		if err == nil {
+			windows.WriteFile(handle, []byte("newer"), nil, nil)
+			windows.CloseHandle(handle)
+			t.Fatal("another program opened the held file for writing")
+		}
+		if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+			t.Fatalf("opening the held file for writing failed with %v, want a sharing violation", err)
+		}
+	}}
+	if _, err := write(context.Background(), setup.item, text("new"), steps); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if readFile(t, setup.destination) != "new" {
+		t.Fatal("the result does not have the destination's name")
 	}
 	assertNames(t, setup.out, "photo.png")
+}
+
+// TestCheckHeldTellsFailuresFromChanges: a held file whose folder entry
+// cannot be listed, as when listing is denied or a network share fails, is a
+// write failure carrying the system's error, not a destination that changed;
+// a folder that no longer lists the held file changed.
+func TestCheckHeldTellsFailuresFromChanges(t *testing.T) {
+	setup := newReplaceSetup(t)
+	held, err := hold(setup.destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(held)
+	check := func(entry func(string) (entry, error)) error {
+		return checkHeld(&heldFile{fileSystem: faultyFiles{entry: entry}, handle: held}, setup.item)
+	}
+	if err := check(nil); err != nil {
+		t.Fatalf("the unchanged file fails its check: %v", err)
+	}
+	for _, errno := range []windows.Errno{windows.ERROR_ACCESS_DENIED, windows.ERROR_NETNAME_DELETED} {
+		err := check(func(path string) (entry, error) {
+			return entry{}, &fs.PathError{Op: "find", Path: path, Err: errno}
+		})
+		assertKind(t, err, KindWrite)
+		if !errors.Is(err, errno) || errors.Is(err, ErrDestinationChanged) {
+			t.Fatalf("%v: error = %v, want the write failure alone", errno, err)
+		}
+	}
+	err = check(func(path string) (entry, error) {
+		return entry{}, &fs.PathError{Op: "find", Path: path, Err: windows.ERROR_PATH_NOT_FOUND}
+	})
+	assertKind(t, err, KindChanged)
+	if !errors.Is(err, ErrDestinationChanged) {
+		t.Fatalf("error = %v, want ErrDestinationChanged", err)
+	}
 }
 
 // TestWriteHoldsTheFileItReplaces proves the replacement removes only the
@@ -541,7 +674,7 @@ func TestWriteFailsForAFileInUse(t *testing.T) {
 func TestWriteHoldsTheFileItReplaces(t *testing.T) {
 	setup := newReplaceSetup(t)
 	attempt := func(stage string) {
-		for _, temp := range temporaryFiles(t, setup.out) {
+		for _, temp := range append(temporaryFiles(t, setup.out), asideFiles(t, setup.out)...) {
 			if err := os.Remove(temp); err == nil {
 				t.Fatalf("%s: the temporary file %s was deleted", stage, temp)
 			}
@@ -567,8 +700,9 @@ func TestWriteHoldsTheFileItReplaces(t *testing.T) {
 			}
 		},
 		movedAside: func() {
-			if temps := temporaryFiles(t, setup.out); len(temps) != 2 {
-				t.Fatalf("temporary files once moved aside: %q, want the result's and the held file", temps)
+			temps, aside := temporaryFiles(t, setup.out), asideFiles(t, setup.out)
+			if len(temps) != 1 || len(aside) != 1 || filepath.Ext(aside[0]) != ".png" {
+				t.Fatalf("files once moved aside: %q and %q, want the result's and the held file, as a .png", temps, aside)
 			}
 			attempt("moved aside")
 		},
@@ -605,9 +739,10 @@ func TestWriteGivesTheNameBackWhenTheResultCannotTakeIt(t *testing.T) {
 
 // TestWriteKeepsTheReplacedFileWhenTheNameIsTaken: when another program
 // takes the destination's name in the instant it is free — writing a file
-// there, or moving a source there — the result never replaces that file, and
-// the file the result was to replace is kept under its temporary name, which
-// the error names.
+// there, or moving a source there — the destination changed: the result
+// never replaces that file, its temporary file is removed, and the file the
+// result was to replace is kept under its .gamedevtools-replaced- name, which
+// no temporary file has and the error names.
 func TestWriteKeepsTheReplacedFileWhenTheNameIsTaken(t *testing.T) {
 	for _, taker := range []string{"new file", "source"} {
 		setup := newReplaceSetup(t)
@@ -623,17 +758,34 @@ func TestWriteKeepsTheReplacedFileWhenTheNameIsTaken(t *testing.T) {
 			writeFile(t, setup.destination, want)
 		}}
 		path, err := write(context.Background(), setup.item, text("new"), steps)
-		writeErr := assertKind(t, err, KindWrite)
-		if path != "" || writeErr.Op != "restore existing file" {
-			t.Fatalf("%s: Write = %q, %v", taker, path, err)
+		assertKind(t, err, KindChanged)
+		if path != "" || !errors.Is(err, ErrDestinationChanged) {
+			t.Fatalf("%s: Write = %q, %v, want ErrDestinationChanged", taker, path, err)
 		}
 		if readFile(t, setup.destination) != want {
 			t.Fatalf("%s: the file that took the name was replaced", taker)
 		}
-		temps := temporaryFiles(t, setup.out)
-		if len(temps) != 1 || readFile(t, temps[0]) != "old" || !strings.Contains(err.Error(), temps[0]) {
-			t.Fatalf("%s: temporary files = %q after %v, want the replaced file alone, named in the error", taker, temps, err)
+		aside := asideFiles(t, setup.out)
+		if len(aside) != 1 || readFile(t, aside[0]) != "old" || !strings.Contains(err.Error(), aside[0]) {
+			t.Fatalf("%s: files moved aside = %q after %v, want the replaced file alone, named in the error", taker, aside, err)
 		}
+		if temps := temporaryFiles(t, setup.out); len(temps) != 0 {
+			t.Fatalf("%s: temporary files were left: %q", taker, temps)
+		}
+	}
+}
+
+// TestWithFailure: a failure that follows none is Write's *Error as it is,
+// and one that follows another is joined to it, so both are found.
+func TestWithFailure(t *testing.T) {
+	removal := kindError(KindWrite, "remove temporary file", windows.ERROR_ACCESS_DENIED)
+	var writeErr *Error
+	if err := withFailure(nil, removal); !errors.As(err, &writeErr) || err != error(removal) {
+		t.Fatalf("withFailure(nil, removal) = %#v, want the *Error itself", err)
+	}
+	broken := errors.New("encoder broke")
+	if err := withFailure(broken, removal); !errors.Is(err, broken) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("withFailure(broken, removal) = %v, want both", err)
 	}
 }
 

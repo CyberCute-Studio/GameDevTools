@@ -12,14 +12,23 @@ import (
 )
 
 // tempPrefix and tempSuffix frame the names of the temporary files Write
-// creates in the output folder: the result while it is being written, and the
-// file an ActionReplace item replaces while the result takes its name. A file
-// with such a name that a process killed mid-write left behind is safe to
-// delete. The Screenshot output names its temporary files alike.
+// writes results to in the output folder. Such a file that a process killed
+// mid-write left behind holds at most a result, which re-running the job
+// writes again, so it is safe to delete. The Screenshot output names its
+// temporary files alike.
 const (
 	tempPrefix = ".gamedevtools-"
 	tempSuffix = ".tmp"
 )
+
+// asidePrefix starts the name an ActionReplace item's existing file has
+// while the result takes its place, followed by random digits and the
+// destination's own extension. It is no temporary file's name: a process
+// killed between the two renames leaves the user's file under it, and so
+// does a failure that cannot give the file its name back, so the file can be
+// told from the results' temporary files, opened as the picture it is, and
+// renamed back.
+const asidePrefix = ".gamedevtools-replaced-"
 
 // tempAttempts bounds the search for an unused temporary name, so a folder
 // that keeps reporting every name as taken cannot keep Write searching
@@ -46,7 +55,10 @@ var (
 	// returns for an ActionReplace item whose destination no longer holds
 	// the file the plan proved is none of the sources, unchanged: it was
 	// rewritten, moved, deleted and then the name taken, or replaced by
-	// another file, a folder, or a link. Nothing is replaced.
+	// another file, a folder, or a link. Nothing is replaced. It is the cause
+	// too when another program takes the name in the instant Write has moved
+	// that file aside; the file then keeps the .gamedevtools-replaced- name
+	// the error gives.
 	ErrDestinationChanged = errors.New("the file at the destination changed after the job was planned, so it was not replaced")
 	// ErrReadOnly is the cause of the KindWrite error Write returns for an
 	// ActionReplace item whose existing file is read-only, which it never
@@ -71,40 +83,47 @@ var (
 //
 // An ActionReplace item replaces only the file the plan proved is none of the
 // sources, unchanged (RSZ-026, NFR-020). Write opens the file at the
-// destination so that no other program can move, rename, replace, or delete
-// it while Write holds it, checks through that handle that it is still the
-// planned file as Item.StillReplaceable does, moves it aside under a
-// temporary name by that same handle, renames the result to the destination
-// without replacing anything, and deletes the file it moved aside, again by
-// that handle. Whatever happens at the destination's name meanwhile, the
-// only file Write removes is the one it checked. An atomic rename over the
-// destination could not offer that: it replaces whatever has the name at
-// that instant, and the check could only precede it. So, for the instant
-// between the two renames, the destination's name is free; it never names a
-// partial file. When the result cannot take the name, the moved file is given
-// its name back. A file the plan cleared but that is gone by the time Write
-// runs is not needed: the result is created in its place, again without
-// replacing anything. A read-only file is never replaced (ErrReadOnly), and a
-// file another program holds open without allowing deletion cannot be.
+// destination so that no other program can write, move, rename, replace, or
+// delete it while Write holds it, makes Item.StillReplaceable's check with
+// the identity read through that handle, moves the file aside under a name
+// that starts with .gamedevtools-replaced- by that same handle, renames the
+// result to the destination without replacing anything, and deletes the file
+// it moved aside, again by that handle. Whatever happens at the
+// destination's name meanwhile, the only file Write removes is the one it
+// checked, as it was when checked. An atomic rename over the destination
+// could not offer that: it replaces whatever has the name at that instant,
+// and the check could only precede it. So, for the instant between the two
+// renames, the destination's name is free; it never names a partial file.
+// When the result cannot take the name, the moved file is given its name
+// back, and when another program took the name meanwhile, the moved file
+// keeps the name the error gives. A file the plan cleared but that is gone by
+// the time Write runs is not needed: the result is created in its place,
+// again without replacing anything. A read-only file is never replaced
+// (ErrReadOnly), and a file another program holds open for writing, or
+// without allowing deletion, cannot be.
 //
 // A failed or cancelled write removes its temporary file and leaves the
 // destination as it was. A process killed while writing can leave a
 // temporary file named .gamedevtools-*.tmp in the output folder, never a
-// partial file at a destination; for an ActionReplace item killed between
-// its renames, the temporary file may be the replaced file itself.
+// partial file at a destination. One killed between an ActionReplace item's
+// renames leaves the file it was replacing under its .gamedevtools-replaced-
+// name, which ends in the destination's extension, beside the complete
+// result's temporary file.
 //
 // The context cancels the write at encode's next write to the file and once
 // more before the result is renamed (RSZ-045); from then on Write finishes.
 //
-// Failures are *Error values: KindValidation for an item that saves no file
-// (ErrNotWritten); KindCanceled; KindChanged for a destination that changed
-// after planning; and KindWrite for a failure to create, write, flush,
-// rename, or remove a file, wrapping the operating system's error, with
-// ErrDiskFull when the drive is full. An error encode returns for a reason
-// other than a failed write to the file, such as an encoder's own failure,
-// is returned as it is. When the result has its name but a temporary file
-// could not be removed afterwards, Write returns the destination with a
-// KindWrite error that names the file left behind.
+// Failures are *Error values: KindValidation for an item Item.CheckWrite
+// refuses, or a nil encode function (ErrNotWritten); KindCanceled; KindChanged for a destination that changed after
+// planning; and KindWrite for a failure to create, write, flush, rename, or
+// remove a file, or to check the existing one, wrapping the operating
+// system's error, with ErrDiskFull when the drive is full. An error encode
+// returns for a reason other than a failed write to the file, such as an
+// encoder's own failure, is returned as it is. A temporary file that cannot
+// be removed after a failure adds its own KindWrite error, joined to the
+// first by errors.Join, so errors.Is and errors.As find each. When the result
+// has its name but a file could not be removed afterwards, Write returns the
+// destination with a KindWrite error that names the file left behind.
 func Write(ctx context.Context, item Item, encode func(io.Writer) error) (string, error) {
 	return write(ctx, item, encode, writeSteps{})
 }
@@ -129,8 +148,8 @@ type writeSteps struct {
 }
 
 func write(ctx context.Context, item Item, encode func(io.Writer) error, steps writeSteps) (path string, err error) {
-	if !item.Writes() {
-		return "", kindError(KindValidation, "write result", fmt.Errorf("%w: its action is %v", ErrNotWritten, item.Action))
+	if err := item.CheckWrite(); err != nil {
+		return "", err
 	}
 	if encode == nil {
 		return "", kindError(KindValidation, "write result", fmt.Errorf("%w: no encoder was given", ErrNotWritten))
@@ -150,7 +169,7 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 			return
 		}
 		if discardErr := temp.discard(); discardErr != nil {
-			err = errors.Join(err, kindError(KindWrite, "remove temporary file", discardErr))
+			err = withFailure(err, kindError(KindWrite, "remove temporary file", discardErr))
 		}
 	}()
 	var file io.Writer = temp
@@ -187,9 +206,34 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 		return "", err
 	}
 	if finishErr := temp.finish(); finishErr != nil {
-		err = errors.Join(err, kindError(KindWrite, "remove temporary file", finishErr))
+		err = withFailure(err, kindError(KindWrite, "remove temporary file", finishErr))
 	}
 	return item.Destination, err
+}
+
+// CheckWrite returns the KindValidation error Write returns for an item it
+// cannot save, or nil. An item whose action is neither ActionCreate nor
+// ActionReplace, as Writes reports, saves no file (ErrNotWritten), and no
+// plan gives an item a Destination that is not an absolute path, as the zero
+// Item has. A job checks an item this way before doing the work for it.
+func (i Item) CheckWrite() error {
+	if !i.Writes() {
+		return kindError(KindValidation, "write result", fmt.Errorf("%w: its action is %v", ErrNotWritten, i.Action))
+	}
+	if !filepath.IsAbs(i.Destination) {
+		return kindError(KindValidation, "write result", fmt.Errorf("the destination %q is not an absolute path", i.Destination))
+	}
+	return nil
+}
+
+// withFailure adds a failure that followed err: the failure alone when there
+// was none, so that Write's own error is an *Error, and the two joined
+// otherwise.
+func withFailure(err error, failure *Error) error {
+	if err == nil {
+		return failure
+	}
+	return errors.Join(err, failure)
 }
 
 // create gives the complete result the destination's name without replacing
@@ -228,6 +272,30 @@ func writeFailure(op string, err error) *Error {
 // tempName returns a random temporary file name.
 func tempName() string {
 	return fmt.Sprintf("%s%016x%s", tempPrefix, rand.Uint64(), tempSuffix)
+}
+
+// asideName returns a random name for the existing file at an ActionReplace
+// item's destination while the result takes its place.
+func asideName(destination string) string {
+	return fmt.Sprintf("%s%016x%s", asidePrefix, rand.Uint64(), filepath.Ext(destination))
+}
+
+// unusedName calls try with a path in the folder for each name that name
+// returns, for as long as try fails because an entry already has the name,
+// and returns the path try succeeded with; any other failure is returned as
+// it is.
+func unusedName(folder string, name func() string, try func(path string) error) (string, error) {
+	for range tempAttempts {
+		path := filepath.Join(folder, name())
+		err := try(path)
+		if err == nil {
+			return path, nil
+		}
+		if !nameTaken(err) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("no unused temporary file name was found in %s after %d attempts", folder, tempAttempts)
 }
 
 // resultWriter passes encoded output to the temporary file, remembering the

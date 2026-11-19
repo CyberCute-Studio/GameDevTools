@@ -32,22 +32,23 @@ const maxWrite = 1 << 30
 // extended-length path as the planner inspects it, never opening an existing
 // file.
 func createTemp(folder string) (*tempFile, error) {
-	for range tempAttempts {
-		path := filepath.Join(folder, tempName())
+	var handle windows.Handle
+	path, err := unusedName(folder, tempName, func(path string) error {
 		name, err := windowsPath("create", path)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		handle, err := windows.CreateFile(name, windows.GENERIC_WRITE|windows.DELETE, windows.FILE_SHARE_READ,
+		handle, err = windows.CreateFile(name, windows.GENERIC_WRITE|windows.DELETE, windows.FILE_SHARE_READ,
 			nil, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
-		if err == nil {
-			return &tempFile{handle: handle, path: path}, nil
+		if err != nil {
+			return &fs.PathError{Op: "create", Path: path, Err: err}
 		}
-		if !nameTaken(err) {
-			return nil, &fs.PathError{Op: "create", Path: path, Err: err}
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("no unused temporary file name was found in %s after %d attempts", folder, tempAttempts)
+	return &tempFile{handle: handle, path: path}, nil
 }
 
 func (t *tempFile) Write(p []byte) (int, error) {
@@ -129,13 +130,13 @@ func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 	}
 	// Closing the handle once the file is marked for deletion deletes it.
 	defer windows.CloseHandle(held)
-	if err := checkHeld(held, item); err != nil {
+	if err := checkHeld(&heldFile{fileSystem: osFiles{}, handle: held}, item); err != nil {
 		return false, err
 	}
 	if steps.pinned != nil {
 		steps.pinned()
 	}
-	aside, err := moveAside(held, filepath.Dir(destination))
+	aside, err := moveAside(held, destination)
 	if err != nil {
 		return false, writeFailure("move existing file aside", err)
 	}
@@ -144,6 +145,13 @@ func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 	}
 	if err := claim(temp, destination, steps); err != nil {
 		if restoreErr := renameHandle(held, destination); restoreErr != nil {
+			if nameTaken(err) {
+				// Another program took the name while it was free: the
+				// destination changed, and the file stays where it was moved.
+				return false, kindError(KindChanged, "save result",
+					fmt.Errorf("%s: %w: another file took the name, so the existing file the result was to replace remains as %s (%v)",
+						destination, ErrDestinationChanged, aside, restoreErr))
+			}
 			return false, kindError(KindWrite, "restore existing file",
 				fmt.Errorf("the result could not take the name %s (%w), and the existing file it was to replace remains as %s: %w",
 					destination, err, aside, restoreErr))
@@ -160,17 +168,20 @@ func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 }
 
 // hold opens the file at the destination for deletion while denying every
-// other program delete access, so that, until the handle is closed, no
-// program can move, rename, delete, or replace it, nor give its name to
-// another file. It opens a link or a folder at the destination as itself,
-// which checkHeld then refuses.
+// other program write and delete access, so that, until the handle is
+// closed, no program can change the file's content, move, rename, delete, or
+// replace it, nor give its name to another file, and what checkHeld finds
+// still holds when Write deletes the file. A program that already has the
+// file open for writing, or without allowing deletion, makes it fail with a
+// sharing violation. It opens a link or a folder at the destination as
+// itself, which checkHeld then refuses.
 func hold(destination string) (windows.Handle, error) {
 	name, err := windowsPath("open", destination)
 	if err != nil {
 		return 0, err
 	}
 	handle, err := windows.CreateFile(name, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING,
+		windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING,
 		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
 		return 0, &fs.PathError{Op: "open", Path: destination, Err: err}
@@ -178,42 +189,56 @@ func hold(destination string) (windows.Handle, error) {
 	return handle, nil
 }
 
+// heldFile is the filesystem as checkHeld inspects it: the folder lists the
+// entry at the destination as planning lists it, through the fileSystem, and
+// the identity is read through the handle that holds the file, so the file
+// checked is the one Write moves aside and deletes. It keeps the attributes
+// read with the identity.
+type heldFile struct {
+	fileSystem
+	handle     windows.Handle
+	attributes uint32
+}
+
+func (h *heldFile) Identity(path string) (identity, error) {
+	found, attributes, err := identifyHandle(h.handle, path)
+	h.attributes = attributes
+	return found, err
+}
+
 // checkHeld checks that the held file is the one the plan proved is none of
-// the sources, unchanged, exactly as Item.StillReplaceable does, and that it
-// is not read-only. The handle keeps the file at the destination's name
-// while the checks run, so their answer still holds when it is replaced.
-func checkHeld(held windows.Handle, item Item) error {
-	found, attributes, err := identifyHandle(held, item.Destination)
-	if err != nil {
+// the sources, unchanged, with Item.StillReplaceable's own check, and that it
+// is not read-only. The handle keeps the file at the destination's name, with
+// its content, while the checks run, so their answer still holds when it is
+// replaced. A failure to list the entry or read its identity is a KindWrite
+// error, except that a folder no longer listing the held file, which keeps
+// its name, means the folder itself was moved or replaced.
+func checkHeld(files *heldFile, item Item) error {
+	switch err := item.verifyReplaceable(files); {
+	case errors.Is(err, ErrDestinationChanged):
+		return kindError(KindChanged, "check existing file", fmt.Errorf("%s: %w", item.Destination, err))
+	case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_PATH_NOT_FOUND):
 		return kindError(KindChanged, "check existing file", fmt.Errorf("%w: %w", ErrDestinationChanged, err))
+	case err != nil:
+		return writeFailure("check existing file", err)
 	}
-	listed, err := findEntry(item.Destination)
-	if err != nil {
-		return kindError(KindChanged, "check existing file", fmt.Errorf("%w: %w", ErrDestinationChanged, err))
-	}
-	if !ownEntry(listed, item.Destination) || found != item.replaces {
-		return kindError(KindChanged, "check existing file", fmt.Errorf("%s: %w", item.Destination, ErrDestinationChanged))
-	}
-	if attributes&windows.FILE_ATTRIBUTE_READONLY != 0 {
+	if files.attributes&windows.FILE_ATTRIBUTE_READONLY != 0 {
 		return kindError(KindWrite, "replace existing file", fmt.Errorf("%s: %w", item.Destination, ErrReadOnly))
 	}
 	return nil
 }
 
-// moveAside renames the held file to a new temporary name in the folder,
-// without replacing anything there, and returns that name.
-func moveAside(held windows.Handle, folder string) (string, error) {
-	for range tempAttempts {
-		aside := filepath.Join(folder, tempName())
-		err := renameHandle(held, aside)
-		if err == nil {
-			return aside, nil
+// moveAside renames the held file to a new name in the destination's folder,
+// one that starts with asidePrefix, without replacing anything there, and
+// returns that name.
+func moveAside(held windows.Handle, destination string) (string, error) {
+	name := func() string { return asideName(destination) }
+	return unusedName(filepath.Dir(destination), name, func(aside string) error {
+		if err := renameHandle(held, aside); err != nil {
+			return &fs.PathError{Op: "rename", Path: aside, Err: err}
 		}
-		if !nameTaken(err) {
-			return "", &fs.PathError{Op: "rename", Path: aside, Err: err}
-		}
-	}
-	return "", fmt.Errorf("no unused temporary file name was found in %s after %d attempts", folder, tempAttempts)
+		return nil
+	})
 }
 
 // fileRenameInformation is FILE_RENAME_INFORMATION, followed in its buffer by

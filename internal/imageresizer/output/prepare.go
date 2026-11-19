@@ -164,8 +164,8 @@ const (
 	// result, finished.
 	KindCanceled
 	// KindWrite means Write could not save a result: creating, writing,
-	// flushing, or renaming its temporary file failed, or replacing the
-	// existing file did. The error wraps the operating system's error, so
+	// flushing, or renaming its temporary file failed, or checking or
+	// replacing the existing file did. The error wraps the operating system's error, so
 	// errors.Is reports a permission failure as fs.ErrPermission and a full
 	// drive as ErrDiskFull (RSZ-030).
 	KindWrite
@@ -652,25 +652,40 @@ func (i Item) Renamed() bool {
 // exFAT volume gives a file the identity of the folder entry it takes, or a
 // server that reports one identity for every file gives any file; only its
 // stamp tells it apart. A file rewritten since the plan is not replaced
-// either, as nothing tells it from such a file. Write makes this check itself
-// while it holds the file so that nothing else can move, replace, or delete
-// it, immediately before it replaces the file, and replaces nothing when the
-// check fails. It reports false for every other action, and when the entry
-// cannot be listed or the file's identity cannot be read.
+// either, as nothing tells it from such a file. Write makes this same check,
+// reading the identity through the handle it holds the file with so that
+// nothing else can change, move, replace, or delete it, immediately before it
+// replaces the file, and replaces nothing when the check fails. It reports
+// false for every other action, and when the entry cannot be listed or the
+// file's identity cannot be read.
 func (i Item) StillReplaceable() bool {
 	return i.stillReplaceable(osFiles{})
 }
 
 func (i Item) stillReplaceable(files fileSystem) bool {
-	if i.Action != ActionReplace {
-		return false
-	}
+	return i.Action == ActionReplace && i.verifyReplaceable(files) == nil
+}
+
+// verifyReplaceable is the check StillReplaceable makes for an ActionReplace
+// item, which Write makes too: nil when the entry at the destination is still
+// the planned file, unchanged, ErrDestinationChanged when it is not, and the
+// failure when its entry cannot be listed or its identity cannot be read.
+func (i Item) verifyReplaceable(files fileSystem) error {
 	listed, err := files.Entry(i.Destination)
-	if err != nil || !ownEntry(listed, i.Destination) {
-		return false
+	if err != nil {
+		return err
+	}
+	if !ownEntry(listed, i.Destination) {
+		return ErrDestinationChanged
 	}
 	found, err := files.Identity(i.Destination)
-	return err == nil && found == i.replaces
+	if err != nil {
+		return err
+	}
+	if found != i.replaces {
+		return ErrDestinationChanged
+	}
+	return nil
 }
 
 // Writes reports whether the item saves a file: whether its action is

@@ -156,20 +156,13 @@ func Encode(w io.Writer, img image.Image, options Options) (err error) {
 	if err := options.Validate(); err != nil {
 		return err
 	}
-	if img == nil || img.Bounds().Empty() {
-		return &Error{Kind: KindInvalid, Format: options.Format, Err: ErrEmptyImage}
-	}
-	bounds := img.Bounds()
-	if options.Format == decode.FormatJPEG && (bounds.Dx() > MaxJPEGDimension || bounds.Dy() > MaxJPEGDimension) {
-		return &Error{Kind: KindInvalid, Format: options.Format, Err: ErrTooLargeForJPEG}
-	}
 	tracked := &trackedWriter{w: w}
-	// The image is read through its own methods and slices, which a
-	// malformed image makes panic, and a defect in the conversion or the
-	// encoder would panic too. Either is this result's failure, contained
-	// here as the decoder and the resizer contain theirs (NFR-021). A failure
-	// of w that the encoder met first is still reported as the write failure
-	// it is.
+	// The image is read through its own methods and slices, its Bounds
+	// included, which a malformed image makes panic, and a defect in the
+	// conversion or the encoder would panic too. Either is this result's
+	// failure, contained here as the decoder and the resizer contain theirs
+	// (NFR-021). A failure of w that the encoder met first is still reported
+	// as the write failure it is.
 	defer func() {
 		recovered := recover()
 		switch {
@@ -181,14 +174,25 @@ func Encode(w io.Writer, img image.Image, options Options) (err error) {
 				cause = fmt.Errorf("%w: %w", ErrUnexpected, panicErr)
 			}
 			err = &Error{Kind: KindFailed, Format: options.Format, Err: cause}
-		case err != nil:
-			err = &Error{Kind: KindFailed, Format: options.Format, Err: err}
 		}
 	}()
-	if options.Format == decode.FormatPNG {
-		return png.Encode(tracked, img)
+	if img == nil || img.Bounds().Empty() {
+		return &Error{Kind: KindInvalid, Format: options.Format, Err: ErrEmptyImage}
 	}
-	return jpeg.Encode(tracked, jpegPixels(img, options.Background), &jpeg.Options{Quality: options.Quality})
+	bounds := img.Bounds()
+	if options.Format == decode.FormatJPEG && (bounds.Dx() > MaxJPEGDimension || bounds.Dy() > MaxJPEGDimension) {
+		return &Error{Kind: KindInvalid, Format: options.Format, Err: ErrTooLargeForJPEG}
+	}
+	var encodeErr error
+	if options.Format == decode.FormatPNG {
+		encodeErr = png.Encode(tracked, img)
+	} else {
+		encodeErr = jpeg.Encode(tracked, jpegPixels(img, options.Background), &jpeg.Options{Quality: options.Quality})
+	}
+	if encodeErr != nil {
+		return &Error{Kind: KindFailed, Format: options.Format, Err: encodeErr}
+	}
+	return nil
 }
 
 // trackedWriter remembers the first failure of the writer it wraps, so a

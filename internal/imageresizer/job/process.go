@@ -14,7 +14,6 @@ package job
 
 import (
 	"context"
-	"fmt"
 	"image"
 	"image/color"
 	"io"
@@ -42,14 +41,14 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 }
 
 // Process resizes one item of a plan and saves its result, returning the
-// destination it saved. Only an item that saves a file can be processed: an
-// ActionCreate or ActionReplace item, as output.Item.Writes reports. A
+// destination it saved. Only an item output.Write can save can be processed:
+// an ActionCreate or ActionReplace item, as output.Item.CheckWrite checks. A
 // deferred item Plan.Successor names, whose turn to create the name has
 // come, is processed with its Action set to output.ActionCreate.
 //
-// The settings, and the encode options for the item's format, are checked
-// before the source is read. Nothing holds the decoded source once it is
-// resized, so the collector can reclaim it while the result is encoded and
+// The item, the settings, and the encode options for the item's format are
+// checked before the source is read. Nothing holds the decoded source once it
+// is resized, so the collector can reclaim it while the result is encoded and
 // written.
 //
 // The error is the failing step's own: a *decode.Error for a source that
@@ -59,11 +58,10 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // plan was made. A cancelled context fails with the step's KindCanceled
 // error, which errors.Is reports as the context's error. As with
 // output.Write, a destination returned alongside an error means the result
-// was saved but a temporary file was left behind.
+// was saved but a file the error names was left behind.
 func Process(ctx context.Context, item output.Item, settings Settings) (string, error) {
-	if !item.Writes() {
-		return "", &output.Error{Kind: output.KindValidation, Op: "process item",
-			Err: fmt.Errorf("%w: its action is %v", output.ErrNotWritten, item.Action)}
+	if err := item.CheckWrite(); err != nil {
+		return "", err
 	}
 	if err := settings.Target.Validate(); err != nil {
 		return "", err

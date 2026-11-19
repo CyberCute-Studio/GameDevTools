@@ -370,14 +370,21 @@ func TestEncodeReportsWriteFailures(t *testing.T) {
 	}
 }
 
+// panickyBounds is an image whose Bounds method panics.
+type panickyBounds struct{ image.Image }
+
+func (panickyBounds) Bounds() image.Rectangle { panic("no bounds") }
+
 // TestEncodeContainsPanics pins NFR-021: a malformed image whose pixel slice
-// is shorter than its bounds fails its own result rather than crashing the
-// caller.
+// is shorter than its bounds, a nil image of a concrete type, or one whose
+// Bounds method panics fails its own result rather than crashing the caller.
 func TestEncodeContainsPanics(t *testing.T) {
 	for _, options := range []Options{pngOptions(), jpegOptions(white)} {
 		for _, img := range []image.Image{
 			&image.NRGBA{Pix: make([]uint8, 7), Stride: 16, Rect: image.Rect(0, 0, 4, 4)},
 			&image.Gray16{Pix: make([]uint8, 3), Stride: 8, Rect: image.Rect(0, 0, 4, 4)},
+			(*image.RGBA)(nil),
+			panickyBounds{},
 		} {
 			err := Encode(&bytes.Buffer{}, img, options)
 			requireKind(t, err, KindFailed)
