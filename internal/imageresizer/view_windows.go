@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -78,12 +79,12 @@ type NativeView struct {
 	openFolder func(string) error
 	// active is the running job, or nil while none runs.
 	active *activeJob
-	// jobEvents carries the running job's events and outcome to the GUI
-	// thread.
-	jobEvents jobMailbox
-	// jobDone is closed once the latest job's goroutine has returned, or is
-	// nil before any job started.
-	jobDone chan struct{}
+	// jobs counts the job goroutines that have not returned, including those
+	// of jobs the view let go, for NativeShutdown.
+	jobs sync.WaitGroup
+	// releaseDelay is how long a cancelled job may take to stop before the
+	// view lets it go, jobReleaseDelay; tests shorten it.
+	releaseDelay time.Duration
 	// outputFolder is the folder Open Output Folder opens: the latest job's,
 	// once it saved a result, or empty.
 	outputFolder string
@@ -140,14 +141,15 @@ type checkTally struct {
 
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
 	view := &NativeView{
-		options:    options,
-		presets:    preset.NewNativeManager(manager),
-		inventory:  NewInventory(),
-		browse:     ui.BrowseForFolder,
-		pickFiles:  ui.PickImageFiles,
-		run:        job.Run,
-		confirm:    ui.Confirm,
-		openFolder: ui.OpenFolder,
+		options:      options,
+		presets:      preset.NewNativeManager(manager),
+		inventory:    NewInventory(),
+		browse:       ui.BrowseForFolder,
+		pickFiles:    ui.PickImageFiles,
+		run:          job.Run,
+		confirm:      ui.Confirm,
+		openFolder:   ui.OpenFolder,
+		releaseDelay: jobReleaseDelay,
 	}
 	view.inspector = NewInspector(decode.Inspect, view.deliverInspection)
 	return view
@@ -697,9 +699,17 @@ func (n *NativeView) refreshModeDescription() {
 	n.modeDescription.SetText(fmt.Sprintf(format, selected.Width, selected.Height))
 }
 
+// NativeDropAvailable reports drops unavailable while a job runs, as the
+// source list cannot change then, so the shell keeps the no-drop cursor
+// instead of seeming to accept a drop the view would refuse.
+func (n *NativeView) NativeDropAvailable() bool {
+	return n.active == nil
+}
+
 // NativeDropFiles handles files and folders dropped on the shell window
 // while the Image Resizer module is active (RSZ-002, RSZ-008). The shell
-// enables drag-and-drop only while the active module accepts it.
+// enables drag-and-drop only while the active module accepts it, and so
+// never while a job runs; a drop that arrives then all the same is refused.
 func (n *NativeView) NativeDropFiles(paths []string) {
 	if n.refuseWhileRunning() {
 		return
@@ -744,21 +754,21 @@ func (n *NativeView) deliverInspection(result InspectionResult) {
 	if n.dispatcher == nil || !n.results.put(result) {
 		return
 	}
-	n.postResults()
+	n.postDrain(n.applyInspections, func() bool { return n.inspector.Closed() })
 }
 
-// postResults posts the drain task for the queued results. A refused post —
-// the GUI thread's message queue is momentarily full — is retried after a
-// pause, since no later result may come to post again, and the queued
-// results would otherwise leave their items Checking for good; the drain
-// task stays outstanding meanwhile, so the retry carries every result queued
-// in the meantime. Once the view is destroyed a post can only fail, so the
-// retries stop.
-func (n *NativeView) postResults() {
-	if err := n.dispatcher.Post(n.applyInspections); err == nil || n.inspector.Closed() {
+// postDrain posts a mailbox's drain task. A refused post — the GUI thread's
+// message queue is momentarily full — is retried after a pause, since nothing
+// may come to post it again: the drain task stays outstanding meanwhile, as
+// drainSlot describes, so the retry carries everything queued in the
+// meantime, and what the mailbox holds would otherwise never reach the view,
+// leaving items Checking, or a job unfinished, for good. Once stopped reports
+// that the view is destroyed a post can only fail, so the retries stop.
+func (n *NativeView) postDrain(drain func(), stopped func() bool) {
+	if err := n.dispatcher.Post(drain); err == nil || stopped() {
 		return
 	}
-	time.AfterFunc(postRetryDelay, n.postResults)
+	time.AfterFunc(postRetryDelay, func() { n.postDrain(drain, stopped) })
 }
 
 // applyInspections resolves the delivered content checks into their items on

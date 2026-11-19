@@ -260,12 +260,19 @@ func (v *Inventory) Resolve(result InspectionResult) (index int, ok bool) {
 		return index, false
 	}
 	v.checking--
-	if result.Err != nil {
-		item.Status, item.Detail = failureStatus(result.Err)
-		return index, true
-	}
-	item.Status, item.Detail, item.Info = StatusReady, "", result.Info
+	item.resolve(result)
 	return index, true
+}
+
+// resolve gives the item its content check's outcome: Ready with the
+// decoded description, or the failure's status and explanation.
+func (s *SourceItem) resolve(result InspectionResult) {
+	if result.Err != nil {
+		s.Status, s.Detail = failureStatus(result.Err)
+		s.Info = decode.Info{}
+		return
+	}
+	s.Status, s.Detail, s.Info = StatusReady, "", result.Info
 }
 
 // failureStatus maps a typed decode failure to the list status and its

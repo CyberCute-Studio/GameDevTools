@@ -31,6 +31,12 @@ func (e *sourceError) Error() string {
 	return e.detail
 }
 
+// errReleased marks an item that was still in flight when the view let its
+// cancelled job go, because a read or write of it was not responding and so
+// could not observe the cancellation. It is the item's Cancelled status's
+// Err, which resultDetail explains, and names no file left behind.
+var errReleased = errors.New("a read or write of the image was not responding when the job was let go")
+
 // SetResult records what the running job reported for the item with the
 // given ID and returns its index; ok is false when no listed item has the
 // ID. The item's row and detail then show the job's state for it instead of
@@ -67,9 +73,10 @@ func (v *Inventory) Ready() int {
 // IDs at the same indexes, so the job's events can be matched to their items
 // whatever the list does meanwhile. A Ready item carries its content check's
 // description; an item the list could not use carries why, so the job ends
-// it Failed with that reason and keeps protecting its path (RSZ-026). An
-// item still being checked carries neither, which the job reports as
-// job.ErrUnchecked; the view starts no job while any is.
+// it Failed with that reason and keeps protecting its path (RSZ-026), unless
+// the job checks it again first, as Recheckable describes. An item still
+// being checked carries neither, which the job reports as job.ErrUnchecked;
+// the view starts no job while any is.
 func (v *Inventory) JobInputs() ([]job.Input, []uint64) {
 	inputs := make([]job.Input, len(v.items))
 	ids := make([]uint64, len(v.items))
@@ -85,6 +92,49 @@ func (v *Inventory) JobInputs() ([]job.Input, []uint64) {
 		}
 	}
 	return inputs, ids
+}
+
+// Recheckable lists, by index and in list order, the items a job checks
+// again before it starts, so that it takes each as it now is rather than as
+// it was when it was added (RSZ-049): every item whose content check found it
+// unusable, or that could not be found when it was added, and whose
+// extension is supported, as the file may since have become readable, come
+// back, or been replaced. An item refused for its extension keeps its status,
+// which its name decides.
+func (v *Inventory) Recheckable() []int {
+	var indexes []int
+	for index, item := range v.items {
+		if item.Status != StatusReady && item.Status != StatusChecking && SupportedExtension(item.Path) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+// Recheck applies a content check made again before a job, for an item
+// Recheckable listed, and returns the item's index: the item is then Ready,
+// or unusable for the check's reason, as Resolve would make it. ok is false
+// when no listed item has the ID, or the item is being checked, which its own
+// check settles.
+func (v *Inventory) Recheck(result InspectionResult) (index int, ok bool) {
+	index, ok = v.IndexOf(result.ID)
+	if !ok || v.items[index].Status == StatusChecking {
+		return -1, false
+	}
+	v.items[index].Inspected = true
+	v.items[index].resolve(result)
+	return index, true
+}
+
+// recheckedInput is the job input for an item checked again before its job:
+// the content the check found, or why the item still cannot be used, as
+// JobInputs gives an item the list could not use.
+func recheckedInput(path string, result InspectionResult) job.Input {
+	if result.Err == nil {
+		return job.Input{Path: path, Info: result.Info}
+	}
+	status, detail := failureStatus(result.Err)
+	return job.Input{Path: path, Err: &sourceError{status: status, detail: detail}}
 }
 
 // stateLabel is the source-list status of an item in a job state
@@ -110,8 +160,9 @@ func stateLabel(state job.State) string {
 // (RSZ-046): where a result was saved, and why under a numbered name; which
 // file a skip left untouched, and why; why an item failed, by the category
 // of its error (UX-010) and with how to recover where one applies; and that
-// a cancelled item saved nothing. A file a write could not remove is named
-// whatever the item ended in.
+// a cancelled item saved nothing, or, for one still in flight when the view
+// let its job go (errReleased), why its outcome is not known. A file a write
+// could not remove is named whatever the item ended in.
 func resultDetail(status job.Status) string {
 	switch status.State {
 	case job.StateProcessing:
@@ -127,6 +178,9 @@ func resultDetail(status job.Status) string {
 	case job.StateFailed:
 		return fmt.Sprintf(ui.ResizeDetailFailed, failureText(status.Err))
 	case job.StateCancelled:
+		if errors.Is(status.Err, errReleased) {
+			return ui.ResizeDetailReleased
+		}
 		return ui.ResizeDetailCancelled + leftBehindDetail(status.Err)
 	}
 	return ui.ResizeDetailPending
@@ -182,9 +236,10 @@ func failureText(err error) string {
 	return ui.FormatError(errorKind(err), err) + recoveryHint(err)
 }
 
-// primaryError is the error that ended an item. A job joins it with the
-// errors of earlier attempts that left a file behind, after it, so it is the
-// first of a joined error; any other error is its own.
+// primaryError is the error that ended an item. A joined error lists it
+// first, followed only by errors that name a file left behind, as
+// job.Status.Err documents and the job's tests pin; any other error is its
+// own.
 func primaryError(err error) error {
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		if errs := joined.Unwrap(); len(errs) > 0 && errs[0] != nil {
@@ -300,14 +355,17 @@ func jobFailureMessage(err error) string {
 }
 
 // summaryNotice summarizes a finished job (RSZ-046): the Completed, Skipped,
-// Failed, and Cancelled counts, whether the user cancelled it, and how many
-// items left a file that could not be removed; per-file details are in the
-// list. A job in which every item failed is an error, one in which any
-// failed or was cancelled a warning, and any other a success.
-func summaryNotice(summary job.Summary, cancelled bool) ui.Notice {
+// Failed, and Cancelled counts, whether it was cancelled, and how many items
+// left a file that could not be removed; per-file details are in the list.
+// Only a cancellation ends items Cancelled, so the counts say whether the job
+// was cancelled: a Cancel Resize that came once every item had ended changed
+// nothing, and the job reads as finished. A job in which every item failed
+// is an error, one in which any failed or was cancelled a warning, and any
+// other a success.
+func summaryNotice(summary job.Summary) ui.Notice {
 	progress := summary.Progress
 	format := ui.ResizeJobFinished
-	if cancelled {
+	if progress.Cancelled > 0 {
 		format = ui.ResizeJobCancelled
 	}
 	message := fmt.Sprintf(format, progress.Completed, progress.Skipped, progress.Failed, progress.Cancelled, progress.Total)
@@ -324,7 +382,7 @@ func summaryNotice(summary job.Summary, cancelled bool) ui.Notice {
 	switch {
 	case progress.Failed > 0 && progress.Failed == progress.Total:
 		kind = ui.NoticeError
-	case progress.Failed > 0 || progress.Cancelled > 0 || cancelled || left > 0:
+	case progress.Failed > 0 || progress.Cancelled > 0 || left > 0:
 		kind = ui.NoticeWarning
 	}
 	return ui.Notice{Kind: kind, Message: message}
@@ -348,27 +406,43 @@ func progressMessage(progress job.Progress, current string, others int, cancelli
 	return message
 }
 
-// jobFinish is a job's outcome as job.Run returned it.
+// widestProgress is the longest progress a running job of total items can
+// show, as progressMessage words it, with every count at the total and its
+// longest file name in flight beside total others, so the job section can
+// keep room for any of them (AC-A04).
+func widestProgress(total int, longest string) string {
+	message := fmt.Sprintf(ui.ResizeJobProgress, total, total, total, total, total)
+	if longest != "" {
+		message += fmt.Sprintf(ui.ResizeJobProcessingMore, longest, total)
+	}
+	return message
+}
+
+// jobFinish is a job's outcome: what job.Run returned, and the content
+// checks the job made again before it started, which the view applies to the
+// source list. released marks the outcome the view made up itself for a
+// cancelled job it let go, as releaseJob describes.
 type jobFinish struct {
-	summary job.Summary
-	err     error
+	summary   job.Summary
+	err       error
+	rechecked []InspectionResult
+	released  bool
 }
 
 // jobMailbox hands a running job's events, and then its outcome, from the
-// job's goroutine to the GUI thread in batches, as resultMailbox does for
-// content checks: at most one drain task is outstanding at a time, so
-// however quickly items change state, the job adds at most one message to
-// the GUI thread's queue and can never fill it. It keeps only each item's
-// latest event, as every event carries the counts of every state, so a
-// drain applies the latest state of each item that changed and the latest
-// counts. The outcome is taken with the events that precede it, so it is
-// applied after them. It is safe for concurrent use.
+// job's goroutine to the GUI thread in batches, posting its drain tasks as
+// drainSlot describes, so however quickly items change state, the job adds
+// at most one message to the GUI thread's queue and can never fill it. It
+// keeps only each item's latest event, as every event carries the counts of
+// every state, so a drain applies the latest state of each item that changed
+// and the latest counts. The outcome is taken with the events that precede
+// it, so it is applied after them. It is safe for concurrent use.
 type jobMailbox struct {
 	mu     sync.Mutex
 	latest map[int]mailedEvent
 	next   uint64
 	finish *jobFinish
-	posted bool
+	slot   drainSlot
 }
 
 // mailedEvent is an item's latest event, numbered in arrival order.
@@ -387,7 +461,7 @@ func (m *jobMailbox) put(event job.Event) bool {
 	}
 	m.next++
 	m.latest[event.Index] = mailedEvent{seq: m.next, event: event}
-	return m.claim()
+	return m.slot.claim()
 }
 
 // end queues the job's outcome, after every event it reported, and reports
@@ -396,17 +470,7 @@ func (m *jobMailbox) end(finish jobFinish) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.finish = &finish
-	return m.claim()
-}
-
-// claim marks a drain task outstanding, reporting whether none was. The
-// caller holds mu.
-func (m *jobMailbox) claim() bool {
-	if m.posted {
-		return false
-	}
-	m.posted = true
-	return true
+	return m.slot.claim()
 }
 
 // take removes and returns the queued events, each item's latest in the
@@ -433,6 +497,7 @@ func (m *jobMailbox) take() ([]job.Event, *jobFinish) {
 		events[index] = entry.event
 	}
 	finish := m.finish
-	m.latest, m.finish, m.posted = nil, nil, false
+	m.latest, m.finish = nil, nil
+	m.slot.release()
 	return events, finish
 }

@@ -115,7 +115,8 @@ var (
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
-	procEnableWindow                  = user32.NewProc("EnableWindow")
+	procSetFocus                      = user32.NewProc("SetFocus")
+	procGetNextDlgTabItem             = user32.NewProc("GetNextDlgTabItem")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
 	procGetSysColor                   = user32.NewProc("GetSysColor")
@@ -261,14 +262,6 @@ func postShellMessage(hwnd uintptr, message uint32) error {
 		return callError("PostMessageW", err)
 	}
 	return nil
-}
-
-// boolArgument is a Win32 BOOL argument.
-func boolArgument(value bool) uintptr {
-	if value {
-		return 1
-	}
-	return 0
 }
 
 func setWindowText(hwnd windows.Handle, value string) {

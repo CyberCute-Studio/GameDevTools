@@ -40,16 +40,26 @@ type browseInfo struct {
 	iImage         int32
 }
 
+// initializeCOM initializes a single-threaded COM apartment on the calling
+// thread, as the folder picker and the shell extensions a shell verb loads
+// require, and returns the call that balances it. Every successful
+// CoInitializeEx must be balanced by CoUninitialize — S_FALSE, for a thread
+// already initialized, as much as S_OK — and a failed one, such as
+// RPC_E_CHANGED_MODE on a thread initialized for another model, must not
+// be, so the call returned then does nothing.
+func initializeCOM() (uninitialize func()) {
+	result, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded)
+	if int32(result) < 0 {
+		return func() {}
+	}
+	return func() { procCoUninitialize.Call() }
+}
+
 // BrowseForFolder opens the modal folder picker and returns the chosen
 // absolute folder. It reports false without an error when the user cancels.
 func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) {
 	// The picker requires an initialized COM apartment on the calling thread.
-	// S_FALSE means the thread is already initialized; only S_OK must be
-	// balanced with CoUninitialize.
-	initialized, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded)
-	if initialized == 0 {
-		defer procCoUninitialize.Call()
-	}
+	defer initializeCOM()()
 	displayName := make([]uint16, windows.MAX_PATH)
 	info := browseInfo{
 		hwndOwner:      parent,
@@ -87,10 +97,7 @@ func OpenFolder(folder string) error {
 	}
 	// As for the folder picker, shell extensions the verb may load expect an
 	// initialized COM apartment.
-	initialized, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded)
-	if initialized == 0 {
-		defer procCoUninitialize.Call()
-	}
+	defer initializeCOM()()
 	result, _, callErr := procShellExecuteW.Call(
 		0,
 		uintptr(unsafe.Pointer(utf16("explore"))),

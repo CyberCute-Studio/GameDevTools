@@ -395,6 +395,10 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	if err != nil {
 		t.Fatal(err)
 	}
+	action, err := ui.NewButton(windows.Handle(hwnd), "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	shell := &nativeShell{
 		navigator:   navigator,
 		hwnd:        windows.Handle(hwnd),
@@ -402,6 +406,7 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 		navButtons:  make(map[core.ModuleID]windows.Handle),
 		navIDs:      make(map[uint16]core.ModuleID),
 		nativeViews: make(map[core.ModuleID]nativeView),
+		action:      action,
 		note:        note,
 	}
 	if native != nil {
@@ -582,7 +587,9 @@ func (v *availabilityView) NativeActionAvailable() bool { return v.available }
 // TestShellDisablesAnUnavailablePrimaryAction pins that the shell disables
 // the primary action button while the module view reports the action
 // unavailable, re-reading it on every relayout, such as the one that follows
-// the action itself, and enables it again once it is available.
+// the action itself, and enables it again once it is available. A button it
+// disables while the button has the keyboard focus first hands the focus on
+// to the next control, so the keyboard is never stranded on it (AC-A03).
 func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
 	native := &availabilityView{available: true}
 	shell := newCommandTestShell(t, native)
@@ -591,13 +598,12 @@ func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	shell.navigator = navigator
-	action, err := ui.NewButton(shell.hwnd, "Act", ui.ButtonOptions{ID: actionCommand})
+	next, err := ui.NewButton(shell.hwnd, "Next", ui.ButtonOptions{ID: 210})
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell.action = action.Handle()
 	isEnabled := func() bool {
-		result, _, _ := procIsWindowEnabled.Call(uintptr(shell.action))
+		result, _, _ := procIsWindowEnabled.Call(uintptr(shell.action.Handle()))
 		return result != 0
 	}
 
@@ -606,9 +612,13 @@ func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
 		t.Fatal("an available primary action was disabled")
 	}
 	native.available = false
+	shell.action.Focus()
 	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), nil)
 	if native.actions != 1 || isEnabled() {
 		t.Fatalf("after the action: %d actions, enabled = %v; want 1 and disabled", native.actions, isEnabled())
+	}
+	if shell.action.HasFocus() || !next.HasFocus() {
+		t.Fatal("the disabled primary action kept the keyboard focus instead of handing it to the next control")
 	}
 	native.available = true
 	shell.layout()
@@ -622,5 +632,49 @@ func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
 	shell.layout()
 	if isEnabled() {
 		t.Fatal("a primary action no view runs was enabled")
+	}
+}
+
+var procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
+
+// dropAvailabilityView is a drop target that reports whether it takes drops
+// now, as the Image Resizer source list does while a resize job runs.
+type dropAvailabilityView struct {
+	dropRecordingView
+	available bool
+}
+
+func (v *dropAvailabilityView) NativeDropAvailable() bool { return v.available }
+
+// TestShellRegistersDropsOnlyWhileAvailable pins that the shell registers
+// the window and its children for drops only while the drop target reports
+// drops available, re-reading it on every relayout, so a drop the view would
+// refuse keeps the no-drop cursor.
+func TestShellRegistersDropsOnlyWhileAvailable(t *testing.T) {
+	const gwlExStyle, wsExAcceptFiles = ^uintptr(19), 0x10
+	native := &dropAvailabilityView{available: true}
+	shell := newCommandTestShell(t, native)
+	child, err := ui.NewButton(shell.hwnd, "Child", ui.ButtonOptions{ID: 211})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepts := func(hwnd windows.Handle) bool {
+		style, _, _ := procGetWindowLongPtrW.Call(uintptr(hwnd), gwlExStyle)
+		return style&wsExAcceptFiles != 0
+	}
+
+	shell.layout()
+	if !accepts(shell.hwnd) || !accepts(child.Handle()) {
+		t.Fatal("an available drop target was not registered for drops")
+	}
+	native.available = false
+	shell.layout()
+	if accepts(shell.hwnd) || accepts(child.Handle()) {
+		t.Fatal("the window stayed registered for drops the view refuses")
+	}
+	native.available = true
+	shell.layout()
+	if !accepts(shell.hwnd) || !accepts(child.Handle()) {
+		t.Fatal("the window was not registered again once drops were available")
 	}
 }

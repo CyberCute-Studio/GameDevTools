@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -61,6 +62,55 @@ func TestInventoryJobInputsCarryEachItemsCheck(t *testing.T) {
 	}
 }
 
+// TestInventoryRechecksFailedItems pins which items a job checks again
+// before it starts (RSZ-049) — every item whose check failed, or that could
+// not be found when added, but not one refused for its extension, nor a Ready
+// or Checking one — and that a check made again settles the item as its
+// first check would have.
+func TestInventoryRechecksFailedItems(t *testing.T) {
+	directory := t.TempDir()
+	inventory := NewInventory()
+	summary := inventory.Add([]string{
+		writeSource(t, directory, "ready.png"),
+		writeSource(t, directory, "damaged.png"),
+		writeSource(t, directory, "pending.png"),
+		writeSource(t, directory, "notes.txt"),
+		filepath.Join(directory, "missing.jpg"),
+	})
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[0].ID, Info: decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3}})
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[1].ID, Err: &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}})
+
+	if got := inventory.Recheckable(); len(got) != 2 || got[0] != 1 || got[1] != 4 {
+		t.Fatalf("Recheckable() = %v, want [1 4]", got)
+	}
+	info := decode.Info{Format: decode.FormatPNG, Width: 8, Height: 6}
+	if index, ok := inventory.Recheck(InspectionResult{ID: inventory.Item(1).ID, Info: info}); !ok || index != 1 {
+		t.Fatalf("Recheck(damaged) = %d, %v", index, ok)
+	}
+	if item := inventory.Item(1); item.Status != StatusReady || item.Detail != "" || item.Info != info || !item.Inspected {
+		t.Fatalf("item checked again = %+v, want Ready with its new description", item)
+	}
+	if _, ok := inventory.Recheck(InspectionResult{ID: inventory.Item(4).ID, Err: &decode.Error{Kind: decode.KindRead, Err: fs.ErrNotExist}}); !ok {
+		t.Fatal("Recheck(missing) was refused")
+	}
+	if item := inventory.Item(4); item.Status != StatusInaccessible || !strings.Contains(item.Detail, "not exist") {
+		t.Fatalf("missing item checked again = %+v", item)
+	}
+	if _, ok := inventory.Recheck(InspectionResult{ID: inventory.Item(2).ID, Info: info}); ok || inventory.Item(2).Status != StatusChecking {
+		t.Fatal("Recheck settled an item its own check is still running for")
+	}
+	if _, ok := inventory.Recheck(InspectionResult{ID: 1 << 40}); ok {
+		t.Fatal("Recheck found an item for an unknown ID")
+	}
+	if input := recheckedInput(`C:\In\a.png`, InspectionResult{Info: info}); input.Err != nil || input.Info != info {
+		t.Fatalf("recheckedInput(ready) = %+v", input)
+	}
+	var source *sourceError
+	if input := recheckedInput(`C:\In\a.png`, InspectionResult{Err: &decode.Error{Kind: decode.KindUnsupported, Err: decode.ErrUnrecognized}}); !errors.As(input.Err, &source) || source.status != StatusUnsupported {
+		t.Fatalf("recheckedInput(unsupported) = %+v", input)
+	}
+}
+
 // TestSourceItemShowsJobResults pins that a row shows the job's state for
 // its item in words (RSZ-043, UX-005) and the detail the item's result,
 // until ClearResults restores the content check.
@@ -85,6 +135,7 @@ func TestSourceItemShowsJobResults(t *testing.T) {
 		{name: "skipped", id: photo.ID, status: job.Status{State: job.StateSkipped, Destination: `C:\Out\photo.png`, Reason: output.ReasonExists}, row: "photo.png — 40 × 30 px — Skipped", detail: `Skipped: C:\Out\photo.png was left untouched because a file with that name already exists.`},
 		{name: "skipped duplicate", id: photo.ID, status: job.Status{State: job.StateSkipped, Destination: `C:\Out\photo.png`, Reason: output.ReasonDuplicate}, row: "photo.png — 40 × 30 px — Skipped", detail: `Skipped: C:\Out\photo.png was left untouched because another image in this job saved that name.`},
 		{name: "cancelled", id: photo.ID, status: job.Status{State: job.StateCancelled}, row: "photo.png — 40 × 30 px — Cancelled", detail: ui.ResizeDetailCancelled},
+		{name: "let go", id: photo.ID, status: job.Status{State: job.StateCancelled, Destination: `C:\Out\photo.png`, Err: errReleased}, row: "photo.png — 40 × 30 px — Cancelled", detail: ui.ResizeDetailReleased},
 		{name: "failed source", id: notes.ID, status: job.Status{State: job.StateFailed, Err: &sourceError{status: StatusUnsupported, detail: ui.SourceUnsupportedDetail}}, row: "notes.txt — Failed", detail: "Failed: Unsupported format: " + ui.SourceUnsupportedDetail},
 	}
 	for _, test := range tests {
@@ -245,27 +296,28 @@ func TestJobFailureMessagePresentsEachCause(t *testing.T) {
 }
 
 // TestSummaryNoticeCountsEveryOutcome pins the completion summary (RSZ-046):
-// every outcome's count, whether the user cancelled, items that left a file
-// behind, and a severity that never relies on color alone.
+// every outcome's count, whether the job was cancelled — as its Cancelled
+// count says, so a cancellation that came once every item had ended reads as
+// finished — items that left a file behind, and a severity that never relies
+// on color alone.
 func TestSummaryNoticeCountsEveryOutcome(t *testing.T) {
 	leftover := &output.Error{Kind: output.KindWrite, Err: output.ErrLeftBehind}
 	tests := []struct {
-		name      string
-		summary   job.Summary
-		cancelled bool
-		kind      ui.NoticeKind
-		text      string
+		name    string
+		summary job.Summary
+		kind    ui.NoticeKind
+		text    string
 	}{
 		{name: "all completed", summary: job.Summary{Progress: job.Progress{Total: 2, Completed: 2}}, kind: ui.NoticeSuccess, text: "Success: Resize finished: 2 completed, 0 skipped, 0 failed, 0 cancelled, of 2 image(s)."},
 		{name: "skipped only", summary: job.Summary{Progress: job.Progress{Total: 2, Completed: 1, Skipped: 1}}, kind: ui.NoticeSuccess, text: "1 skipped"},
 		{name: "some failed", summary: job.Summary{Progress: job.Progress{Total: 3, Completed: 2, Failed: 1}}, kind: ui.NoticeWarning, text: "1 failed"},
 		{name: "all failed", summary: job.Summary{Progress: job.Progress{Total: 2, Failed: 2}}, kind: ui.NoticeError, text: "2 failed"},
-		{name: "cancelled", summary: job.Summary{Progress: job.Progress{Total: 3, Completed: 1, Cancelled: 2}}, cancelled: true, kind: ui.NoticeWarning, text: "Warning: Resize cancelled: 1 completed, 0 skipped, 0 failed, 2 cancelled, of 3 image(s). Completed files were kept"},
+		{name: "cancelled", summary: job.Summary{Progress: job.Progress{Total: 3, Completed: 1, Cancelled: 2}}, kind: ui.NoticeWarning, text: "Warning: Resize cancelled: 1 completed, 0 skipped, 0 failed, 2 cancelled, of 3 image(s). Completed files were kept"},
 		{name: "left behind", summary: job.Summary{Items: []job.Status{{State: job.StateCompleted, Err: leftover}, {State: job.StateCompleted}}, Progress: job.Progress{Total: 2, Completed: 2}}, kind: ui.NoticeWarning, text: "1 image(s) left a file that could not be removed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			notice := summaryNotice(test.summary, test.cancelled)
+			notice := summaryNotice(test.summary)
 			if notice.Kind != test.kind || !strings.Contains(notice.Text(), test.text) {
 				t.Fatalf("summaryNotice() = %v %q, want %v containing %q", notice.Kind, notice.Text(), test.kind, test.text)
 			}
@@ -288,6 +340,13 @@ func TestProgressMessageNamesTheCurrentFile(t *testing.T) {
 	}
 	if got := progressMessage(progress, "b.png", 1, true); !strings.HasPrefix(got, "Cancelling:") || !strings.Contains(got, "3 of 10 image(s) done") {
 		t.Fatalf("progress while cancelling = %q", got)
+	}
+	// The widest progress is at least as long as any the job can show.
+	widest := widestProgress(10, "longest.png")
+	for _, got := range []string{progressMessage(progress, "b.png", 3, false), progressMessage(job.Progress{Total: 10, Completed: 10}, "longest.png", 9, false)} {
+		if len(got) > len(widest) {
+			t.Fatalf("progress %q is longer than the widest %q", got, widest)
+		}
 	}
 }
 

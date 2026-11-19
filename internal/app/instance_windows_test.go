@@ -45,6 +45,43 @@ func TestAcquireInstanceDetectsExisting(t *testing.T) {
 	procCloseHandle.Call(third)
 }
 
+// TestClaimInstanceWaitsForAClosingInstance covers a launch during the
+// running instance's shutdown, which holds the mutex after its window is
+// gone while a module's background work stops: the claim takes the mutex
+// once that instance exits rather than exiting without showing anything,
+// and gives up as activated, never running beside it, once the wait is
+// over.
+func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
+	name := fmt.Sprintf(`Local\GameDevTools.TestInstance.%d`, time.Now().UnixNano())
+	const noWindow = "GameDevToolsNoSuchWindowClass"
+	closing, already, err := acquireInstance(name)
+	if err != nil || already {
+		t.Fatalf("acquireInstance() = %v, %v", already, err)
+	}
+
+	if handle, activated, err := claimInstance(name, noWindow, 100*time.Millisecond); err != nil || !activated || handle != 0 {
+		t.Fatalf("claim while held = (%d, %v, %v), want to give up as activated", handle, activated, err)
+	}
+
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		procCloseHandle.Call(closing)
+	}()
+	handle, activated, err := claimInstance(name, noWindow, 5*time.Second)
+	if err != nil || activated || handle == 0 {
+		t.Fatalf("claim after the instance exited = (%d, %v, %v), want the mutex", handle, activated, err)
+	}
+	defer procCloseHandle.Call(handle)
+	other, already, err := acquireInstance(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	procCloseHandle.Call(other)
+	if !already {
+		t.Fatal("the claimed mutex was not held")
+	}
+}
+
 // TestActivateExistingInstanceRestoresWindow covers the APP-005 activation:
 // a second launch restores the running instance's minimized window. A
 // missing window reports false instead of failing.

@@ -211,17 +211,40 @@ func (i *Inspector) run(worker uint64) {
 	}
 }
 
+// drainSlot is the posting protocol the view's mailboxes share. At most one
+// drain task is outstanding at a time, so however quickly a background
+// goroutine hands results on, it adds one dispatcher message — and one shell
+// relayout — per GUI turn rather than one per result, and can never fill the
+// GUI thread's message queue. A drain task whose post is being retried counts
+// as outstanding, so the retry carries everything queued meanwhile. The
+// mailbox's own mutex guards it.
+type drainSlot struct {
+	posted bool
+}
+
+// claim marks a drain task outstanding and reports whether the caller must
+// post it: true only when none was.
+func (s *drainSlot) claim() bool {
+	if s.posted {
+		return false
+	}
+	s.posted = true
+	return true
+}
+
+// release marks the outstanding drain task run, so the next result queued
+// posts a new one.
+func (s *drainSlot) release() {
+	s.posted = false
+}
+
 // resultMailbox hands finished checks from the worker goroutine to the GUI
-// thread in batches. At most one drain task is outstanding at a time, so a
-// burst of quick checks costs one dispatcher message — and one shell relayout
-// — per GUI turn rather than one per file, and can never fill the GUI
-// thread's message queue. A drain task whose post is being retried counts as
-// outstanding, so the retry carries every result queued meanwhile. It is
+// thread in batches, posting its drain tasks as drainSlot describes. It is
 // safe for concurrent use.
 type resultMailbox struct {
 	mu      sync.Mutex
 	pending []InspectionResult
-	posted  bool
+	slot    drainSlot
 }
 
 // put queues a result and reports whether the caller must post a drain task:
@@ -230,11 +253,7 @@ func (m *resultMailbox) put(result InspectionResult) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pending = append(m.pending, result)
-	if m.posted {
-		return false
-	}
-	m.posted = true
-	return true
+	return m.slot.claim()
 }
 
 // take removes and returns every queued result, in arrival order; the next
@@ -243,7 +262,8 @@ func (m *resultMailbox) take() []InspectionResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	results := m.pending
-	m.pending, m.posted = nil, false
+	m.pending = nil
+	m.slot.release()
 	return results
 }
 
