@@ -5,6 +5,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -86,7 +87,11 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 // completes (RSZ-047). A path that is not a folder now — the folder was
 // deleted, or a file took its name — is refused rather than handed to the
 // shell, and the shell's explore verb, which only folders have, is used, so
-// a file is never opened or run in a folder's place.
+// a file is never opened or run in a folder's place. Looking at the folder
+// and the shell's call each block for as long as its drive does not
+// respond, so the GUI thread calls it on a goroutine of its own; it keeps
+// that goroutine on one thread while it holds the COM apartment it
+// initializes.
 func OpenFolder(folder string) error {
 	info, err := os.Stat(folder)
 	if err != nil {
@@ -95,43 +100,39 @@ func OpenFolder(folder string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a folder", folder)
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	// As for the folder picker, shell extensions the verb may load expect an
 	// initialized COM apartment.
 	defer initializeCOM()()
-	result, _, callErr := procShellExecuteW.Call(
-		0,
-		uintptr(unsafe.Pointer(utf16("explore"))),
-		uintptr(unsafe.Pointer(utf16(folder))),
-		0, 0, swShowNormal,
-	)
-	if result <= 32 {
-		if callErr == windows.ERROR_SUCCESS {
-			return fmt.Errorf("ShellExecuteW(explore) failed with code %d", result)
-		}
-		return fmt.Errorf("ShellExecuteW(explore) failed with code %d: %w", result, callErr)
-	}
-	return nil
+	return shellExecute("explore", utf16("explore"), utf16(folder), nil)
 }
 
 // RevealInFolder opens File Explorer with the given file selected. It runs
 // only on explicit user request: the application never opens folders on its
 // own after an operation completes.
 func RevealInFolder(path string) error {
-	parameters := `/select,"` + path + `"`
-	// ShellExecuteW reports success as a value greater than 32; a failure
-	// value IS the error code and the thread's last error is unreliable,
-	// so the code must be part of the reported error.
+	return shellExecute("explorer.exe", nil, utf16("explorer.exe"), utf16(`/select,"`+path+`"`))
+}
+
+// shellExecute runs ShellExecuteW with no owner window for the verb, which
+// is the default when nil, on the file with the parameters, which may be
+// nil. ShellExecuteW reports success as a value greater than 32; a failure
+// value IS the error code and the thread's last error is unreliable, so the
+// code is part of the reported error, which names the call by what.
+func shellExecute(what string, verb, file, parameters *uint16) error {
 	result, _, err := procShellExecuteW.Call(
-		0, 0,
-		uintptr(unsafe.Pointer(utf16("explorer.exe"))),
-		uintptr(unsafe.Pointer(utf16(parameters))),
+		0,
+		uintptr(unsafe.Pointer(verb)),
+		uintptr(unsafe.Pointer(file)),
+		uintptr(unsafe.Pointer(parameters)),
 		0, swShowNormal,
 	)
 	if result <= 32 {
 		if err == windows.ERROR_SUCCESS {
-			return fmt.Errorf("ShellExecuteW(explorer.exe) failed with code %d", result)
+			return fmt.Errorf("ShellExecuteW(%s) failed with code %d", what, result)
 		}
-		return fmt.Errorf("ShellExecuteW(explorer.exe) failed with code %d: %w", result, err)
+		return fmt.Errorf("ShellExecuteW(%s) failed with code %d: %w", what, result, err)
 	}
 	return nil
 }

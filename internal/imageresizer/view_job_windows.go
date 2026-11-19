@@ -63,8 +63,10 @@ type activeJob struct {
 	ids      []uint64
 	rechecks []int
 	// longest is the longest file name among the job's inputs, which the job
-	// section keeps room for (jobStatusHeight).
-	longest string
+	// section keeps room for, and reserved the room it keeps, as
+	// jobStatusHeight describes.
+	longest  string
+	reserved jobReserve
 	// folder is the output folder as the job plans into it.
 	folder string
 	cancel context.CancelFunc
@@ -88,6 +90,13 @@ type activeJob struct {
 type inFlight struct {
 	index  int
 	source string
+}
+
+// jobReserve is the height the job section keeps for a running job's
+// progress, and the content width and the scale, as the scaled 20, it was
+// measured at.
+type jobReserve struct {
+	width, unit, height int32
 }
 
 // track applies one item's event to the job's counts and to the items being
@@ -250,7 +259,11 @@ func (n *NativeView) commitJobFields() bool {
 // Cancel Resize — Start Resize, which had it, is disabled while the job runs
 // — and runs the job on its own goroutine. The source list cannot change
 // while the job runs, as its rows are the job's items; selecting an image
-// still shows its state and result (AC-A04).
+// still shows its state and result (AC-A04). Until the job reports its
+// first event, the job section says that it is starting, and, when it
+// checks images again first, that no image starts until those checks are
+// done, as a check of a source on a drive that is not responding takes as
+// long as the drive does.
 func (n *NativeView) startJob(start jobStart) {
 	ctx, cancel := context.WithCancel(context.Background())
 	active := &activeJob{
@@ -277,15 +290,21 @@ func (n *NativeView) startJob(start jobStart) {
 	n.outputFolder = ""
 	n.openButton.Enable(false)
 	n.refreshSourceSelection()
-	n.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: fmt.Sprintf(ui.ResizeJobStarting, len(start.ids))})
+	starting := fmt.Sprintf(ui.ResizeJobStarting, len(start.ids))
+	if count := len(start.rechecks); count > 0 {
+		starting += fmt.Sprintf(ui.ResizeJobRechecking, count)
+	}
+	n.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: starting})
 	n.jobs.Add(1)
 	go n.runJob(ctx, active, start.request)
 }
 
 // runJob runs the job on its own goroutine — first checking again the
 // inputs whose content check had failed, then the job itself — and hands its
-// outcome to the GUI thread after its last event. A panic that escapes the
-// job is reported as its failure rather than ending the process (NFR-021).
+// outcome to the GUI thread after its last event. A job cancelled while it
+// checked them again reports the inputs it had not checked yet Cancelled
+// (cancelUnchecked). A panic that escapes the job is reported as its failure
+// rather than ending the process (NFR-021).
 func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.Request) {
 	defer n.jobs.Done()
 	defer close(active.done)
@@ -296,7 +315,7 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 				finish.summary, finish.err = job.Summary{}, fmt.Errorf("%w: %v", job.ErrUnexpected, recovered)
 			}
 		}()
-		finish.rechecked = n.recheck(ctx, active, request.Inputs)
+		checked := n.recheck(ctx, active, request.Inputs)
 		finish.summary, finish.err = n.run(ctx, request, func(event job.Event) {
 			// job.Run calls this for every change of an item's state, and it
 			// only hands the event on, as Run requires: the GUI thread applies
@@ -305,6 +324,9 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 				n.postJobEvents(active)
 			}
 		})
+		if finish.err == nil {
+			cancelUnchecked(&finish.summary, active.rechecks[checked:])
+		}
 	}()
 	if active.events.end(finish) {
 		n.postJobEvents(active)
@@ -318,28 +340,29 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 // that still cannot be used fails with its current reason. The list's
 // content checks are idle meanwhile, as no image is being checked when a job
 // starts and none can be added while it runs, so this decodes one source at
-// a time as they do (NFR-014). It returns the checks made, which the view
-// applies to the list when the job ends. Once the job is cancelled the rest
-// keep the reasons their earlier checks gave.
-func (n *NativeView) recheck(ctx context.Context, active *activeJob, inputs []job.Input) []InspectionResult {
-	results := make([]InspectionResult, 0, len(active.rechecks))
-	for _, index := range active.rechecks {
+// a time as they do (NFR-014). Each check made goes to the job's mailbox,
+// which the view applies to the list when the job ends, however it ends. It
+// returns how many of the inputs it checked again, in Recheckable's order:
+// once the job is cancelled the rest are not checked, and the job reports
+// them Cancelled.
+func (n *NativeView) recheck(ctx context.Context, active *activeJob, inputs []job.Input) int {
+	for checked, index := range active.rechecks {
 		input := &inputs[index]
 		info, err := n.inspector.check(ctx, input.Path)
 		if ctx.Err() != nil {
-			break
+			return checked
 		}
 		result := InspectionResult{ID: active.ids[index], Info: info, Err: err}
-		results = append(results, result)
+		active.events.recheck(result)
 		*input = recheckedInput(input.Path, result)
 	}
-	return results
+	return len(active.rechecks)
 }
 
 // postJobEvents posts the drain task for the job's queued events, retried
 // when refused, as postDrain describes.
 func (n *NativeView) postJobEvents(active *activeJob) {
-	n.postDrain(func() { n.applyJobEvents(active) }, n.closed.Load)
+	n.postDrain(func() { n.applyJobEvents(active) }, n.destroyed)
 }
 
 // applyJobEvents applies the job's queued events on the GUI thread: each
@@ -383,7 +406,8 @@ func (n *NativeView) applyJobEvents(active *activeJob) {
 }
 
 // finishJob ends the job on the GUI thread, after applying the content
-// checks it made again to the source list. A job that failed before it
+// checks it made again to the source list — those it made before it stopped
+// responding, for a job the view let go. A job that failed before it
 // reported anything shows why, and every row its content check again; one
 // that stopped unexpectedly after it started keeps what it reported, and its
 // items that had not ended are Failed with its error; a finished or
@@ -391,14 +415,19 @@ func (n *NativeView) applyJobEvents(active *activeJob) {
 // counts (RSZ-046), and says so when the view let it go. Open Output Folder
 // is offered when the output folder holds a result, without opening it
 // (RSZ-047). Only rows whose text changed are rewritten, so a row the job's
-// last events already show is left alone. The keyboard focus leaves Cancel
-// Resize before it is disabled, for Open Output Folder when it is offered
-// and the source list otherwise.
+// last events already show is left alone. A notice that the source list
+// cannot change while the job runs no longer holds, and is cleared while the
+// status area still shows it. The keyboard focus leaves Cancel Resize before
+// it is disabled, for Open Output Folder when it is offered and the source
+// list otherwise.
 func (n *NativeView) finishJob(active *activeJob, finish jobFinish) {
 	n.active = nil
 	active.cancel()
-	for _, result := range finish.rechecked {
+	for _, result := range active.events.takeRechecked() {
 		n.inventory.Recheck(result)
+	}
+	if n.busyNotice != 0 && n.status.Revision() == n.busyNotice {
+		n.status.Clear()
 	}
 	switch {
 	case finish.err != nil && !active.reported:
@@ -471,7 +500,7 @@ func (n *NativeView) awaitCancelled(active *activeJob) {
 	select {
 	case <-active.done:
 	case <-timer.C:
-		n.postDrain(func() { n.releaseJob(active) }, n.closed.Load)
+		n.postDrain(func() { n.releaseJob(active) }, n.destroyed)
 	}
 }
 
@@ -526,14 +555,23 @@ func (n *NativeView) showJobNotice(notice ui.Notice) {
 }
 
 // openOutputFolder opens the folder the latest job saved its results in,
-// only on the user's request (RSZ-047, RSZ-048).
+// only on the user's request (RSZ-047, RSZ-048). Looking at the folder and
+// handing it to the shell each block for as long as its drive does not
+// respond, as a network share that went offline after the job, so both run
+// on a goroutine of their own, which must not freeze the window (TECH-005);
+// a failure is shown in the job section through the shell dispatcher.
 func (n *NativeView) openOutputFolder() {
-	if n.outputFolder == "" {
+	folder, open := n.outputFolder, n.openFolder
+	if folder == "" || n.dispatcher == nil {
 		return
 	}
-	if err := n.openFolder(n.outputFolder); err != nil {
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.ResizeOpenFolderFailed, err)})
-	}
+	go func() {
+		if err := open(folder); err != nil {
+			n.postDrain(func() {
+				n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.ResizeOpenFolderFailed, err)})
+			}, n.destroyed)
+		}
+	}()
 }
 
 // setResult records the job's status for the item with the given ID and
@@ -628,25 +666,35 @@ func (n *NativeView) createJobControls(parent windows.Handle) error {
 }
 
 // jobStatusHeight is the height of the job's progress or result, or 0 when
-// there is none. While a job runs it is at least the height of the longest
-// progress the job can show at this width — widestProgress for its total and
-// longest file name, and the cancelling progress — so a progress that wraps
-// differently for each file does not move the source list below it between
-// the user's clicks (AC-A04): the section changes height only when a job
-// starts or ends.
+// there is none. While a job runs it is the height the job reserves at this
+// width and scale: at first that of the longest progress the job can show —
+// widestProgress for its total and longest file name, and the cancelling
+// progress, measured once for each width and scale — and then also that of
+// every progress the job has shown, so it never shrinks: a progress that
+// wraps differently for each file does not move the source list below it
+// between the user's clicks (AC-A04). A file name that renders wider than
+// the longest by bytes, such as one of wide letters, can make a progress
+// taller than the first reservation: the section then grows once and keeps
+// that height until the job ends, rather than changing with every file.
 func (n *NativeView) jobStatusHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
 	text := n.jobStatus.Text()
 	if text == "" {
 		return 0
 	}
 	height := max(scale(20), measure(text, width))
-	if active := n.active; active != nil {
+	active := n.active
+	if active == nil {
+		return height
+	}
+	if unit := scale(20); active.reserved.width != width || active.reserved.unit != unit {
 		total := len(active.ids)
+		active.reserved = jobReserve{width: width, unit: unit}
 		for _, message := range []string{widestProgress(total, active.longest), fmt.Sprintf(ui.ResizeJobCancelling, total, total)} {
-			height = max(height, measure(ui.Notice{Kind: ui.NoticeInfo, Message: message}.Text(), width))
+			active.reserved.height = max(active.reserved.height, measure(ui.Notice{Kind: ui.NoticeInfo, Message: message}.Text(), width))
 		}
 	}
-	return height
+	active.reserved.height = max(active.reserved.height, height)
+	return active.reserved.height
 }
 
 // jobSectionHeight mirrors layoutJobSection.

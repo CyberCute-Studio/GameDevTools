@@ -241,6 +241,7 @@ const (
 	CancelResizeAction = "Cancel Resize"
 
 	ResizeJobStarting       = "Starting to resize %d image(s)…"
+	ResizeJobRechecking     = " First checking again the %d image(s) that could not be used: resizing starts once these checks finish, which takes longer while a drive is not responding."
 	ResizeJobProgress       = "Resizing: %d of %d image(s) done — %d completed, %d skipped, %d failed."
 	ResizeJobProcessing     = " Processing %s."
 	ResizeJobProcessingMore = " Processing %s and %d more."

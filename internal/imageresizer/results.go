@@ -1,6 +1,7 @@
 package imageresizer
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -356,12 +357,12 @@ func jobFailureMessage(err error) string {
 
 // summaryNotice summarizes a finished job (RSZ-046): the Completed, Skipped,
 // Failed, and Cancelled counts, whether it was cancelled, and how many items
-// left a file that could not be removed; per-file details are in the list.
-// Only a cancellation ends items Cancelled, so the counts say whether the job
-// was cancelled: a Cancel Resize that came once every item had ended changed
-// nothing, and the job reads as finished. A job in which every item failed
-// is an error, one in which any failed or was cancelled a warning, and any
-// other a success.
+// left a file that could not be removed, as leftFile tells; per-file details
+// are in the list. Only a cancellation ends items Cancelled, so the counts
+// say whether the job was cancelled: a Cancel Resize that came once every
+// item had ended changed nothing, and the job reads as finished. A job in
+// which every item failed is an error, one in which any failed or was
+// cancelled a warning, and any other a success.
 func summaryNotice(summary job.Summary) ui.Notice {
 	progress := summary.Progress
 	format := ui.ResizeJobFinished
@@ -371,7 +372,7 @@ func summaryNotice(summary job.Summary) ui.Notice {
 	message := fmt.Sprintf(format, progress.Completed, progress.Skipped, progress.Failed, progress.Cancelled, progress.Total)
 	left := 0
 	for _, status := range summary.Items {
-		if errors.Is(status.Err, output.ErrLeftBehind) {
+		if leftFile(status) {
 			left++
 		}
 	}
@@ -386,6 +387,40 @@ func summaryNotice(summary job.Summary) ui.Notice {
 		kind = ui.NoticeWarning
 	}
 	return ui.Notice{Kind: kind, Message: message}
+}
+
+// leftFile reports whether an item left a file that could not be removed, as
+// resultDetail names it. An item of a final state other than Failed carries
+// an error only when it did, as job.Status.Err documents — a temporary file,
+// or, for a Completed item, the file its result replaced, moved aside, that
+// could not then be deleted, which output.Write does not mark
+// output.ErrLeftBehind — but for errReleased, which names none; a Failed
+// item's error names one when it wraps output.ErrLeftBehind.
+func leftFile(status job.Status) bool {
+	switch {
+	case status.Err == nil || errors.Is(status.Err, errReleased):
+		return false
+	case status.State == job.StateFailed:
+		return errors.Is(status.Err, output.ErrLeftBehind)
+	}
+	return status.State.Final()
+}
+
+// cancelUnchecked ends Cancelled, in the summary of a job cancelled while it
+// checked its inputs again, the inputs, by index, it had not checked again
+// yet (Inventory.Recheckable). The job, cancelled before it planned, ended
+// them Failed with the reasons their earlier checks gave, which no longer say
+// whether they can be used; like every input the cancellation kept the job
+// from processing, they are Cancelled (RSZ-045), so the summary reads as
+// cancelled.
+func cancelUnchecked(summary *job.Summary, unchecked []int) {
+	for _, index := range unchecked {
+		if index < len(summary.Items) && summary.Items[index].State == job.StateFailed {
+			summary.Items[index] = job.Status{State: job.StateCancelled}
+			summary.Progress.Failed--
+			summary.Progress.Cancelled++
+		}
+	}
 }
 
 // progressMessage is the running job's progress (RSZ-042): how many of its
@@ -418,15 +453,13 @@ func widestProgress(total int, longest string) string {
 	return message
 }
 
-// jobFinish is a job's outcome: what job.Run returned, and the content
-// checks the job made again before it started, which the view applies to the
-// source list. released marks the outcome the view made up itself for a
-// cancelled job it let go, as releaseJob describes.
+// jobFinish is a job's outcome: what job.Run returned. released marks the
+// outcome the view made up itself for a cancelled job it let go, as
+// releaseJob describes.
 type jobFinish struct {
-	summary   job.Summary
-	err       error
-	rechecked []InspectionResult
-	released  bool
+	summary  job.Summary
+	err      error
+	released bool
 }
 
 // jobMailbox hands a running job's events, and then its outcome, from the
@@ -436,13 +469,36 @@ type jobFinish struct {
 // keeps only each item's latest event, as every event carries the counts of
 // every state, so a drain applies the latest state of each item that changed
 // and the latest counts. The outcome is taken with the events that precede
-// it, so it is applied after them. It is safe for concurrent use.
+// it, so it is applied after them. It also keeps the content checks the job
+// makes again before it starts, which the view applies to the source list
+// when the job ends, however it ends. It is safe for concurrent use.
 type jobMailbox struct {
-	mu     sync.Mutex
-	latest map[int]mailedEvent
-	next   uint64
-	finish *jobFinish
-	slot   drainSlot
+	mu        sync.Mutex
+	latest    map[int]mailedEvent
+	next      uint64
+	finish    *jobFinish
+	rechecked []InspectionResult
+	slot      drainSlot
+}
+
+// recheck keeps a content check the job made again. It posts no drain task,
+// as the view takes the checks only once the job ends (takeRechecked).
+func (m *jobMailbox) recheck(result InspectionResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rechecked = append(m.rechecked, result)
+}
+
+// takeRechecked removes and returns the content checks the job made again so
+// far, in the order it made them: every one when the job reported its
+// outcome, and those made before it stopped responding when the view lets
+// it go.
+func (m *jobMailbox) takeRechecked() []InspectionResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rechecked := m.rechecked
+	m.rechecked = nil
+	return rechecked
 }
 
 // mailedEvent is an item's latest event, numbered in arrival order.
@@ -483,15 +539,7 @@ func (m *jobMailbox) take() ([]job.Event, *jobFinish) {
 	for _, entry := range m.latest {
 		entries = append(entries, entry)
 	}
-	slices.SortFunc(entries, func(a, b mailedEvent) int {
-		switch {
-		case a.seq < b.seq:
-			return -1
-		case a.seq > b.seq:
-			return 1
-		}
-		return 0
-	})
+	slices.SortFunc(entries, func(a, b mailedEvent) int { return cmp.Compare(a.seq, b.seq) })
 	events := make([]job.Event, len(entries))
 	for index, entry := range entries {
 		events[index] = entry.event

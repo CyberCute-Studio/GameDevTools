@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -70,6 +69,10 @@ type NativeView struct {
 	// notice, or an area left empty, never a notice another part of the view
 	// raised in the meantime.
 	sourceNotice uint64
+	// busyNotice is the status area's revision right after it last said that
+	// the source list cannot change while a job runs, which finishJob clears
+	// while the area still shows it, or 0.
+	busyNotice uint64
 
 	// run runs a resize job, confirm asks for an Overwrite job's
 	// confirmation, and openFolder opens the output folder on request; tests
@@ -88,9 +91,6 @@ type NativeView struct {
 	// outputFolder is the folder Open Output Folder opens: the latest job's,
 	// once it saved a result, or empty.
 	outputFolder string
-	// closed is set once the view is destroyed, so a refused post of a job's
-	// events is not retried.
-	closed atomic.Bool
 
 	jobStatus    *ui.StatusArea
 	cancelButton *ui.Button
@@ -576,25 +576,33 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 // on a slow network share or an online-only file blocks. NativeShutdown
 // waits, within a bound, for the job. Any result a worker or the job still
 // finishes fails to post harmlessly against the destroyed window, and the
-// post is not retried.
+// post is not retried, as closing the inspector marks the view destroyed.
 func (n *NativeView) NativeDestroy() {
-	n.closed.Store(true)
+	n.inspector.Close()
 	if n.active != nil {
 		n.active.cancel()
 	}
-	n.inspector.Close()
 	n.status.Destroy()
 	n.jobStatus.Destroy()
 	n.presets.NativeDestroy()
 }
 
+// destroyed reports whether NativeDestroy has run, which closes the
+// inspector, so a refused post of a drain task, which can then only fail
+// again, is not retried.
+func (n *NativeView) destroyed() bool {
+	return n.inspector.Closed()
+}
+
 // refuseWhileRunning explains, while a job runs, that the source list cannot
-// change, as its rows are the job's items, and reports whether it did.
+// change, as its rows are the job's items, and reports whether it did. The
+// job's end clears the explanation while the status area still shows it.
 func (n *NativeView) refuseWhileRunning() bool {
 	if n.active == nil {
 		return false
 	}
 	n.showSourceNotice(ui.Notice{Kind: ui.NoticeWarning, Message: ui.ImagesBusy})
+	n.busyNotice = n.status.Revision()
 	return true
 }
 
@@ -754,7 +762,7 @@ func (n *NativeView) deliverInspection(result InspectionResult) {
 	if n.dispatcher == nil || !n.results.put(result) {
 		return
 	}
-	n.postDrain(n.applyInspections, func() bool { return n.inspector.Closed() })
+	n.postDrain(n.applyInspections, n.destroyed)
 }
 
 // postDrain posts a mailbox's drain task. A refused post — the GUI thread's

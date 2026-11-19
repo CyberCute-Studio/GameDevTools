@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/jpeg"
 	"os"
@@ -95,14 +96,15 @@ func expectedSize(t *testing.T, view *NativeView, width, height int) (int, int) 
 // the view (AC-R06): every valid image is resized and saved, each invalid
 // one ends Failed with its reason, the rows show each outcome, the summary
 // counts them (RSZ-046), and the output folder opens only on request
-// (RSZ-047, RSZ-048).
+// (RSZ-047, RSZ-048), off the GUI thread, so a folder that does not respond
+// cannot freeze the window.
 func TestNativeViewResizesEveryReadyImageEndToEnd(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	var opened []string
+	opened := make(chan string, 4)
 	view.openFolder = func(path string) error {
-		opened = append(opened, path)
+		opened <- path
 		return nil
 	}
 	view.NativeDropFiles([]string{
@@ -130,8 +132,8 @@ func TestNativeViewResizesEveryReadyImageEndToEnd(t *testing.T) {
 		t.Fatal("the keyboard focus did not move to Cancel Resize")
 	}
 	// The job's events reach the view only through the dispatcher, which
-	// the test has not drained yet.
-	if got := view.list.ItemText(0); got != "photo.png — 8 × 6 px — Pending" || view.jobStatus.Text() != "Information: Starting to resize 4 image(s)…" {
+	// the test has not drained yet. damaged.png is checked again first.
+	if got := view.list.ItemText(0); got != "photo.png — 8 × 6 px — Pending" || view.jobStatus.Text() != "Information: Starting to resize 4 image(s)…"+fmt.Sprintf(ui.ResizeJobRechecking, 1) {
 		t.Fatalf("row at the start = %q, status = %q", got, view.jobStatus.Text())
 	}
 	drainJob(t, view, dispatcher)
@@ -171,7 +173,7 @@ func TestNativeViewResizesEveryReadyImageEndToEnd(t *testing.T) {
 	}
 
 	if len(opened) != 0 {
-		t.Fatalf("the output folder was opened without a request: %q", opened)
+		t.Fatalf("the output folder was opened without a request: %q", <-opened)
 	}
 	if !view.NativeActionAvailable() || !enabled(view.addButton) || !enabled(view.clearButton) || enabled(view.cancelButton) || !enabled(view.openButton) {
 		t.Fatal("the controls did not return to their idle state, with Open Output Folder offered")
@@ -180,11 +182,27 @@ func TestNativeViewResizesEveryReadyImageEndToEnd(t *testing.T) {
 		t.Fatal("the keyboard focus did not move from Cancel Resize to Open Output Folder")
 	}
 	view.NativeCommand(jobCommandBase+openOutputFolderCommand, 0)
-	if len(opened) != 1 || opened[0] != filepath.Clean(folder) {
-		t.Fatalf("Open Output Folder opened %q, want %q", opened, folder)
+	select {
+	case got := <-opened:
+		if got != filepath.Clean(folder) {
+			t.Fatalf("Open Output Folder opened %q, want %q", got, folder)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Open Output Folder did not open the folder")
 	}
-	view.openFolder = func(string) error { return errors.New("explorer is unavailable") }
+
+	// A folder that does not respond holds only the goroutine opening it.
+	unblock := make(chan struct{})
+	view.openFolder = func(string) error {
+		<-unblock
+		return errors.New("explorer is unavailable")
+	}
 	view.NativeCommand(jobCommandBase+openOutputFolderCommand, 0)
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Warning: Resize finished:") {
+		t.Fatalf("status while the folder is being opened = %q", got)
+	}
+	close(unblock)
+	dispatcher.runNext(t)
 	if got := view.jobStatus.Text(); got != "Error: The output folder could not be opened: explorer is unavailable" {
 		t.Fatalf("status after a failed open = %q", got)
 	}
@@ -322,8 +340,8 @@ func (r *cancellableRunner) run(ctx context.Context, request job.Request, observ
 // TestNativeViewCancelStopsTheJob pins the running job's interaction
 // (AC-A04, AC-R13): its progress names the file being processed, selecting
 // an image shows its state, the source list cannot change and Start Resize
-// is refused, and Cancel Resize stops the job, which ends every unfinished
-// image Cancelled (RSZ-045).
+// is refused, with a notice the job's end clears, and Cancel Resize stops
+// the job, which ends every unfinished image Cancelled (RSZ-045).
 func TestNativeViewCancelStopsTheJob(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
@@ -386,6 +404,31 @@ func TestNativeViewCancelStopsTheJob(t *testing.T) {
 	}
 	if !view.NativeActionAvailable() || !view.NativeDropAvailable() || enabled(view.openButton) {
 		t.Fatal("Start Resize or drops were not available again, or Open Output Folder was offered without results")
+	}
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status once the job ended = %q, want the notice that the list cannot change cleared", got)
+	}
+}
+
+// TestNativeViewKeepsANoticeRaisedAfterTheBusyOne pins that the job's end
+// clears only the notice that the source list cannot change: one the view
+// raised after it, such as a failed settings save, stays.
+func TestNativeViewKeepsANoticeRaisedAfterTheBusyOne(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "only.png")})
+	settle(t, view, dispatcher)
+	runner := &cancellableRunner{started: make(chan struct{})}
+	view.run = runner.run
+	t.Cleanup(func() { waitJobDone(t, view) })
+	view.NativeAction()
+	<-runner.started
+	view.NativeCommand(sourcesCommandBase+clearListCommand, 0)
+	view.presentResult(fmt.Errorf("%w: disk is read-only", ErrPersistence), "")
+	later := view.status.Text()
+	view.NativeCommand(jobCommandBase+cancelResizeCommand, 0)
+	drainJob(t, view, dispatcher)
+	if got := view.status.Text(); got != later || got == "" {
+		t.Fatalf("status once the job ended = %q, want %q", got, later)
 	}
 }
 
@@ -636,14 +679,17 @@ func (r *stuckRunner) run(ctx context.Context, request job.Request, observe func
 // read or write is not responding cannot lock the view (RSZ-045, AC-A04):
 // once the release delay has passed, every item that had not ended is
 // Cancelled, the one in flight with why its outcome is unknown, the summary
-// says the job did not stop, and Start Resize and the source list are
-// available again; what the job reports once its blocked call returns is
-// ignored, and the next job runs.
+// says the job did not stop, the list shows the content checks the job made
+// again before it stopped responding, and Start Resize and the source list
+// are available again; what the job reports once its blocked call returns
+// is ignored, and the next job runs.
 func TestNativeViewLetsGoOfAJobThatDoesNotStop(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
-	view.NativeDropFiles([]string{writeViewSource(t, directory, "stuck.png"), writeViewSource(t, directory, "waiting.png")})
+	fixed := writeViewFile(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
+	view.NativeDropFiles([]string{writeViewSource(t, directory, "stuck.png"), writeViewSource(t, directory, "waiting.png"), fixed})
 	settle(t, view, dispatcher)
+	writeViewFile(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
 	runner := &stuckRunner{started: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(runner.release) }) }
@@ -657,8 +703,12 @@ func TestNativeViewLetsGoOfAJobThatDoesNotStop(t *testing.T) {
 	dispatcher.runNext(t)
 	view.NativeCommand(jobCommandBase+cancelResizeCommand, 0)
 	drainJob(t, view, dispatcher)
-	if got := listContents(view.list); got[0] != "stuck.png — 4 × 3 px — Cancelled" || got[1] != "waiting.png — 4 × 3 px — Cancelled" {
-		t.Fatalf("rows after letting the job go = %q", got)
+	want := []string{"stuck.png — 4 × 3 px — Cancelled", "waiting.png — 4 × 3 px — Cancelled", "fixed.png — 8 × 6 px — Cancelled"}
+	if got := listContents(view.list); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("rows after letting the job go = %q, want %q", got, want)
+	}
+	if view.inventory.Ready() != 3 {
+		t.Fatalf("%d images Ready after letting the job go, want 3: the check made again was lost", view.inventory.Ready())
 	}
 	selectRow(view, 0)
 	if got := view.pathDetail.Text(); got != ui.ResizeDetailReleased {
@@ -669,7 +719,7 @@ func TestNativeViewLetsGoOfAJobThatDoesNotStop(t *testing.T) {
 		t.Fatalf("waiting detail = %q", got)
 	}
 	status := view.jobStatus.Text()
-	if !strings.HasPrefix(status, "Warning: Resize cancelled: 0 completed, 0 skipped, 0 failed, 2 cancelled, of 2 image(s).") || !strings.HasSuffix(status, ui.ResizeJobReleased) {
+	if !strings.HasPrefix(status, "Warning: Resize cancelled: 0 completed, 0 skipped, 0 failed, 3 cancelled, of 3 image(s).") || !strings.HasSuffix(status, ui.ResizeJobReleased) {
 		t.Fatalf("summary after letting the job go = %q", status)
 	}
 	if !view.NativeActionAvailable() || !view.NativeDropAvailable() || !enabled(view.addButton) || enabled(view.cancelButton) || enabled(view.openButton) {
@@ -691,8 +741,50 @@ func TestNativeViewLetsGoOfAJobThatDoesNotStop(t *testing.T) {
 	view.run = job.Run
 	view.NativeAction()
 	drainJob(t, view, dispatcher)
-	if got := listContents(view.list); got[0] != "stuck.png — 4 × 3 px — Completed" || got[1] != "waiting.png — 4 × 3 px — Completed" {
+	if got := listContents(view.list); got[0] != "stuck.png — 4 × 3 px — Completed" || got[1] != "waiting.png — 4 × 3 px — Completed" || got[2] != "fixed.png — 8 × 6 px — Completed" {
 		t.Fatalf("rows after the next job = %q", got)
+	}
+}
+
+// TestNativeViewCancelledWhileCheckingAgain pins a job cancelled while it
+// checks failed images again (RSZ-045, RSZ-049): an image it checked again
+// fails with its current reason, one it had not checked yet is Cancelled
+// rather than Failed with the reason of a check it never repeated, and the
+// summary reads as cancelled. The job section says, until the job reports,
+// that it checks those images first.
+func TestNativeViewCancelledWhileCheckingAgain(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	gate := useGatedInspector(view)
+	directory := sourceDir(t, view)
+	view.NativeDropFiles([]string{writeViewSource(t, directory, "damaged_first.png"), writeViewSource(t, directory, "damaged_second.png")})
+	gate.release <- struct{}{}
+	gate.release <- struct{}{}
+	settle(t, view, dispatcher)
+	gate.waitFor(t, gate.started)
+	gate.waitFor(t, gate.started)
+	t.Cleanup(func() { waitJobDone(t, view) })
+
+	view.NativeAction()
+	if got, want := view.jobStatus.Text(), "Information: Starting to resize 2 image(s)…"+fmt.Sprintf(ui.ResizeJobRechecking, 2); got != want {
+		t.Fatalf("status at the start = %q, want %q", got, want)
+	}
+	if first := gate.waitFor(t, gate.started); filepath.Base(first) != "damaged_first.png" {
+		t.Fatalf("checked %q again first", first)
+	}
+	gate.release <- struct{}{}
+	gate.waitFor(t, gate.started)
+	view.NativeCommand(jobCommandBase+cancelResizeCommand, 0)
+	drainJob(t, view, dispatcher)
+	want := []string{"damaged_first.png — Failed", "damaged_second.png — Cancelled"}
+	if got := listContents(view.list); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("rows after cancelling = %q, want %q", got, want)
+	}
+	selectRow(view, 1)
+	if got := view.pathDetail.Text(); got != ui.ResizeDetailCancelled {
+		t.Fatalf("unchecked detail = %q", got)
+	}
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Warning: Resize cancelled: 0 completed, 0 skipped, 1 failed, 1 cancelled, of 2 image(s).") {
+		t.Fatalf("summary after cancelling = %q", got)
 	}
 }
 
@@ -783,8 +875,11 @@ func TestNativeViewFinishesAJobThatEndedBeforeItsCancel(t *testing.T) {
 
 // TestNativeViewJobSectionKeepsItsHeightWhileAJobRuns pins AC-A04's review
 // of the list while a job runs: the job section keeps room for the longest
-// progress the job can show, so a progress that wraps differently for each
-// file does not move the source list between the user's clicks.
+// progress the job can show, measured once for the width, so a progress that
+// wraps differently for each file does not move the source list between the
+// user's clicks, and a progress taller than that room, for a name that
+// renders wider than the longest by bytes, grows the section once, never
+// shrinking it again while the job runs.
 func TestNativeViewJobSectionKeepsItsHeightWhileAJobRuns(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
@@ -795,12 +890,17 @@ func TestNativeViewJobSectionKeepsItsHeightWhileAJobRuns(t *testing.T) {
 	view.run = runner.run
 	t.Cleanup(func() { waitJobDone(t, view) })
 	scale := func(value int32) int32 { return value }
-	// Each line holds 40 characters, 20 pixels high.
+	// Each line holds 40 columns, 20 pixels high; a W takes 4 columns.
+	cancellingMeasures := 0
 	measure := func(text string, width int32) int32 {
 		if text == "" {
 			return 0
 		}
-		return 20 * int32((len([]rune(text))+39)/40)
+		if strings.HasPrefix(text, "Information: Cancelling:") && !strings.HasPrefix(view.jobStatus.Text(), "Information: Cancelling:") {
+			cancellingMeasures++
+		}
+		columns := len([]rune(text)) + 3*strings.Count(text, "W")
+		return 20 * int32((columns+39)/40)
 	}
 
 	view.NativeAction()
@@ -814,9 +914,26 @@ func TestNativeViewJobSectionKeepsItsHeightWhileAJobRuns(t *testing.T) {
 	if got := view.NativeHeight(600, scale, measure); got != height {
 		t.Fatalf("height with the long file in progress = %d, want %d", got, height)
 	}
+	if cancellingMeasures != 1 {
+		t.Fatalf("the reserved progress was measured %d times at one width, want once", cancellingMeasures)
+	}
+
+	wide := strings.Repeat("W", 30) + ".png"
+	if len(wide) >= len(long) {
+		t.Fatal("the wide name must be shorter by bytes than the longest")
+	}
+	view.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(view.active.progress, wide, 1, false)})
+	grown := view.NativeHeight(600, scale, measure)
+	if grown <= height {
+		t.Fatalf("height with the wide file in progress = %d, want more than %d", grown, height)
+	}
+	view.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(view.active.progress, "a.png", 1, false)})
+	if got := view.NativeHeight(600, scale, measure); got != grown {
+		t.Fatalf("height once the wide file ended = %d, want %d", got, grown)
+	}
 	view.NativeCommand(jobCommandBase+cancelResizeCommand, 0)
-	if got := view.NativeHeight(600, scale, measure); got != height {
-		t.Fatalf("height while cancelling = %d, want %d", got, height)
+	if got := view.NativeHeight(600, scale, measure); got != grown {
+		t.Fatalf("height while cancelling = %d, want %d", got, grown)
 	}
 	drainJob(t, view, dispatcher)
 }

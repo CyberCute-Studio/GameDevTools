@@ -314,6 +314,15 @@ func TestSummaryNoticeCountsEveryOutcome(t *testing.T) {
 		{name: "all failed", summary: job.Summary{Progress: job.Progress{Total: 2, Failed: 2}}, kind: ui.NoticeError, text: "2 failed"},
 		{name: "cancelled", summary: job.Summary{Progress: job.Progress{Total: 3, Completed: 1, Cancelled: 2}}, kind: ui.NoticeWarning, text: "Warning: Resize cancelled: 1 completed, 0 skipped, 0 failed, 2 cancelled, of 3 image(s). Completed files were kept"},
 		{name: "left behind", summary: job.Summary{Items: []job.Status{{State: job.StateCompleted, Err: leftover}, {State: job.StateCompleted}}, Progress: job.Progress{Total: 2, Completed: 2}}, kind: ui.NoticeWarning, text: "1 image(s) left a file that could not be removed"},
+		// The file a replacement moved aside and could not delete is named by
+		// a write error that does not wrap ErrLeftBehind; a Failed item's own
+		// error names no file left behind, and errReleased none either.
+		{name: "replaced file left", summary: job.Summary{Items: []job.Status{
+			{State: job.StateCompleted, Err: &output.Error{Kind: output.KindWrite, Op: "remove replaced file", Err: &fs.PathError{Op: "delete", Path: `C:\Out\.gamedevtools-replaced-1.png`, Err: fs.ErrPermission}}},
+			{State: job.StateFailed, Err: &output.Error{Kind: output.KindWrite, Err: output.ErrDiskFull}},
+			{State: job.StateFailed, Err: errors.Join(errors.New("decode failed"), leftover)},
+			{State: job.StateCancelled, Err: errReleased},
+		}, Progress: job.Progress{Total: 4, Completed: 1, Failed: 2, Cancelled: 1}}, kind: ui.NoticeWarning, text: "2 image(s) left a file that could not be removed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -386,6 +395,43 @@ func TestJobMailboxCoalescesEventsAndEndsLast(t *testing.T) {
 	}
 	if !mailbox.end(jobFinish{err: errors.New("failed")}) {
 		t.Fatal("an outcome with nothing outstanding did not ask for a drain task")
+	}
+
+	// The content checks made again are kept, in order, until the view takes
+	// them when the job ends.
+	mailbox.recheck(InspectionResult{ID: 1})
+	mailbox.recheck(InspectionResult{ID: 2})
+	if events, finish = mailbox.take(); len(events) != 0 || finish == nil {
+		t.Fatalf("take() = %+v, %+v; want the outcome alone", events, finish)
+	}
+	if rechecked := mailbox.takeRechecked(); len(rechecked) != 2 || rechecked[0].ID != 1 || rechecked[1].ID != 2 {
+		t.Fatalf("takeRechecked() = %+v, want checks 1 and 2", rechecked)
+	}
+	if rechecked := mailbox.takeRechecked(); len(rechecked) != 0 {
+		t.Fatalf("takeRechecked() again = %+v, want none", rechecked)
+	}
+}
+
+// TestCancelUncheckedCancelsOnlyFailedInputs pins that a job cancelled while
+// it checked inputs again reports Cancelled the inputs it had not checked
+// yet, which it ended Failed with their earlier reasons, and moves their
+// counts, leaving every other item as it ended.
+func TestCancelUncheckedCancelsOnlyFailedInputs(t *testing.T) {
+	stale := &sourceError{status: StatusCorrupt, detail: "damaged"}
+	summary := job.Summary{
+		Items: []job.Status{
+			{State: job.StateFailed, Err: stale},
+			{State: job.StateCancelled},
+			{State: job.StateFailed, Err: stale},
+		},
+		Progress: job.Progress{Total: 3, Failed: 2, Cancelled: 1},
+	}
+	cancelUnchecked(&summary, []int{1, 2, 7})
+	if summary.Items[0].State != job.StateFailed || summary.Items[1] != (job.Status{State: job.StateCancelled}) || summary.Items[2] != (job.Status{State: job.StateCancelled}) {
+		t.Fatalf("items = %+v", summary.Items)
+	}
+	if summary.Progress != (job.Progress{Total: 3, Failed: 1, Cancelled: 2}) {
+		t.Fatalf("progress = %+v", summary.Progress)
 	}
 }
 
