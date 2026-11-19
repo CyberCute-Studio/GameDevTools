@@ -93,8 +93,8 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	if resizerFolderErr != nil && resizerOptionsManager.Options().OutputFolder == "" {
-		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.ResizeFolderUnavailable, resizerFolderErr))
+	if warning := resizerOptionsManager.FolderWarning(resizerFolderErr); warning != "" {
+		loaded.Warnings = append(loaded.Warnings, warning)
 	}
 	if len(loaded.Warnings) > 0 && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})

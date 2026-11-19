@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 )
@@ -41,24 +42,35 @@ func NewOptionsStore(store *settings.Store, defaultFolder string) (*OptionsStore
 	return options, nil
 }
 
-func (s *OptionsStore) Load(value settings.Settings) (ResizeOptions, error) {
+// Load returns the stored resize options, or the defaults when none are
+// stored, and the stored output folder the default folder replaced, one only
+// earlier builds accepted, or "" when it replaced none, so the caller can
+// warn about it.
+func (s *OptionsStore) Load(value settings.Settings) (ResizeOptions, string, error) {
 	options := DefaultOptions(s.defaultFolder)
-	stored, exists, err := decodeOptions(value.Modules[string(moduleID)])
+	found, err := decodeOptions(value.Modules[string(moduleID)])
 	if err != nil {
-		return ResizeOptions{}, err
+		return ResizeOptions{}, "", err
 	}
-	if !exists {
+	if !found.exists {
 		// The default folder is not validated here: when the Pictures folder
 		// cannot be resolved the application must still start so the user can
 		// choose an output folder, as the startup warning announces.
-		return options, nil
+		return options, "", nil
 	}
+	// decodeOptions validated every stored field.
+	stored := found.stored
 	options.Format = stored.Format
 	options.Collision = stored.Collision
 	options.JPEGQuality = stored.JPEGQuality
 	options.Background = stored.Background
+	if found.legacyFolder {
+		// The default folder, unvalidated as above, replaces a folder only
+		// earlier builds accepted.
+		return options, stored.OutputFolder, nil
+	}
 	options.OutputFolder = stored.OutputFolder
-	return options, options.Validate()
+	return options, "", nil
 }
 
 func (s *OptionsStore) Save(value *settings.Settings, options ResizeOptions) error {
@@ -80,48 +92,75 @@ func (s *OptionsStore) Save(value *settings.Settings, options ResizeOptions) err
 }
 
 func validateOptionsSection(section json.RawMessage) error {
-	_, _, err := decodeOptions(section)
+	_, err := decodeOptions(section)
 	return err
 }
 
-func decodeOptions(section json.RawMessage) (storedOptions, bool, error) {
+// decodedOptions is what decodeOptions finds in a settings section.
+type decodedOptions struct {
+	stored storedOptions
+	// exists reports whether the section holds stored options.
+	exists bool
+	// legacyFolder reports whether their output folder is one only earlier
+	// builds accepted, which the stored options keep but jobs refuse.
+	legacyFolder bool
+}
+
+// decodeOptions decodes and validates the stored resize options.
+func decodeOptions(section json.RawMessage) (decodedOptions, error) {
 	if len(section) == 0 {
-		return storedOptions{}, false, nil
+		return decodedOptions{}, nil
 	}
 	fields, err := decodeSectionFields(section)
 	if err != nil {
-		return storedOptions{}, false, err
+		return decodedOptions{}, err
 	}
 	data, exists := fields[optionsKey]
 	if !exists {
-		return storedOptions{}, false, nil
+		return decodedOptions{}, nil
 	}
 	if _, err := decodeObjectFields("stored resize options", data); err != nil {
-		return storedOptions{}, false, err
+		return decodedOptions{}, err
 	}
-	var stored storedOptions
+	found := decodedOptions{exists: true}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&stored); err != nil {
-		return storedOptions{}, false, fmt.Errorf("decode stored resize options: %w", err)
+	if err := decoder.Decode(&found.stored); err != nil {
+		return decodedOptions{}, fmt.Errorf("decode stored resize options: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return storedOptions{}, false, errors.New("stored resize options contain trailing JSON values")
+		return decodedOptions{}, errors.New("stored resize options contain trailing JSON values")
 	}
+	stored := found.stored
 	if stored.Version != OptionsVersion {
-		return storedOptions{}, false, fmt.Errorf("unsupported resize options version %d", stored.Version)
+		return decodedOptions{}, fmt.Errorf("unsupported resize options version %d", stored.Version)
 	}
 	options := ResizeOptions{
-		Format:       stored.Format,
-		Collision:    stored.Collision,
-		JPEGQuality:  stored.JPEGQuality,
-		Background:   stored.Background,
-		OutputFolder: stored.OutputFolder,
+		Format:      stored.Format,
+		Collision:   stored.Collision,
+		JPEGQuality: stored.JPEGQuality,
+		Background:  stored.Background,
 	}
-	if err := options.Validate(); err != nil {
-		return storedOptions{}, false, fmt.Errorf("validate stored resize options: %w", err)
+	if err := options.validateEncoding(); err != nil {
+		return decodedOptions{}, fmt.Errorf("validate stored resize options: %w", err)
 	}
-	return stored, true, nil
+	switch err := output.ValidateFolder(stored.OutputFolder); {
+	case err == nil:
+	case errors.Is(err, output.ErrFolderName), errors.Is(err, output.ErrFolderRoot):
+		// Builds before output planning accepted any absolute folder path
+		// in valid text, including one whose own name ends in a space or a
+		// period, one with a folder name in its path that ends in a period,
+		// one with a colon that names a file stream, one that names only a
+		// volume or a server, and one on a device that holds no folders, such
+		// as a named pipe, which jobs now refuse. Such a folder gives
+		// way to the default folder on load, with a warning, rather than the
+		// whole settings file failing validation and every module losing its
+		// settings.
+		found.legacyFolder = true
+	default:
+		return decodedOptions{}, fmt.Errorf("validate stored resize options: %w", folderMessage(err))
+	}
+	return found, nil
 }
 
 func encodeOptions(section json.RawMessage, options ResizeOptions) (json.RawMessage, error) {

@@ -2,6 +2,8 @@ package imageresizer
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func TestOptionsStoreDefaultsWithoutSection(t *testing.T) {
@@ -20,7 +23,7 @@ func TestOptionsStoreDefaultsWithoutSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	options, err := optionsStore.Load(settings.Default())
+	options, _, err := optionsStore.Load(settings.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +33,7 @@ func TestOptionsStoreDefaultsWithoutSection(t *testing.T) {
 
 	value := settings.Default()
 	value.Modules[string(shell.ModuleImageResizer)] = json.RawMessage(`{"presets":{"version":1,"custom":[]}}`)
-	options, err = optionsStore.Load(value)
+	options, _, err = optionsStore.Load(value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +81,12 @@ func TestOptionsStoreRoundTripAndPresetCoexistence(t *testing.T) {
 	if len(loaded.Warnings) != 0 {
 		t.Fatalf("restart warnings = %v", loaded.Warnings)
 	}
-	restored, err := restartedOptions.Load(loaded.Settings)
+	restored, replaced, err := restartedOptions.Load(loaded.Settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored != options {
-		t.Fatalf("restored options = %+v, want %+v", restored, options)
+	if restored != options || replaced != "" {
+		t.Fatalf("restored options = %+v, replaced folder %q, want %+v and none", restored, replaced, options)
 	}
 
 	restartedRepository, err := preset.NewRepository(shell.ModuleImageResizer, restartedStore)
@@ -101,7 +104,7 @@ func TestOptionsStoreRoundTripAndPresetCoexistence(t *testing.T) {
 	if err := restartedRepository.Save(&loaded.Settings, library); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := restartedOptions.Load(loaded.Settings)
+	reloaded, _, err := restartedOptions.Load(loaded.Settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +141,7 @@ func TestOptionsStoreRejectsMalformedSections(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, _, err := decodeOptions(json.RawMessage(test.section))
+			_, err := decodeOptions(json.RawMessage(test.section))
 			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
 				t.Fatalf("decodeOptions() error = %v, want text containing %q", err, test.wantErr)
 			}
@@ -153,15 +156,204 @@ func TestOptionsStoreValidSection(t *testing.T) {
 		t.Fatal(err)
 	}
 	section := json.RawMessage(`{"resize":{"version":1,"format":"jpeg","collision":"overwrite","jpegQuality":40,"background":"#102030","outputFolder":` + string(quoted) + `}}`)
-	stored, exists, err := decodeOptions(section)
+	found, err := decodeOptions(section)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists {
-		t.Fatal("stored resize options were not detected")
+	if !found.exists || found.legacyFolder {
+		t.Fatalf("stored resize options detected = %v, legacy folder = %v", found.exists, found.legacyFolder)
 	}
-	if stored.Format != FormatJPEG || stored.Collision != CollisionOverwrite || stored.JPEGQuality != 40 || stored.Background != "#102030" || stored.OutputFolder != folder {
+	if stored := found.stored; stored.Format != FormatJPEG || stored.Collision != CollisionOverwrite || stored.JPEGQuality != 40 || stored.Background != "#102030" || stored.OutputFolder != folder {
 		t.Fatalf("stored options = %+v", stored)
+	}
+}
+
+// TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault: earlier builds
+// saved an output folder Windows resolves to another path, such as one whose
+// own name ends in a space or a period, or with a folder name in its path
+// that ends in a period, or that names only a volume or a server, or a device
+// that holds no folders, such as a named pipe, which output planning now
+// refuses.
+// Loading such a file keeps every other setting, the preset library
+// included, and only the folder falls back to the default, rather than the
+// whole file being reset as invalid; the options manager reports the folder
+// it replaced, so the application can say why the folder changed instead of
+// forgetting the user's folder in silence.
+func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
+	folder := testFolder(t)
+	// Outside Windows paths have no volume name, and every name is kept.
+	var legacyFolders []string
+	if volume := filepath.VolumeName(folder); volume != "" {
+		legacyFolders = append(legacyFolders, folder+".", folder+" ", filepath.Join(folder+".", "Resized"),
+			filepath.Join(folder, "NUL"), folder+"::$INDEX_ALLOCATION", filepath.Join(folder, "x:y"),
+			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`, `\\.\pipe\Resized`)
+	}
+	for _, saved := range legacyFolders {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		store := settings.NewStore(settings.Paths{ConfigFile: path})
+		preset.RegisterValidators(store)
+		optionsStore, err := NewOptionsStore(store, folder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repository, err := preset.NewRepository(shell.ModuleImageResizer, store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value := settings.Default()
+		presetManager, err := preset.NewManager(repository, &value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := presetManager.Create("Icon", 512, 512, preset.ResizeCropToFill); err != nil {
+			t.Fatal(err)
+		}
+		options := ResizeOptions{Format: FormatJPEG, Collision: CollisionSkip, JPEGQuality: 55, Background: "#102030", OutputFolder: folder}
+		if err := optionsStore.Save(&value, options); err != nil {
+			t.Fatal(err)
+		}
+		kept, err := NewOptionsManager(optionsStore, &value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kept.Options() != options || kept.FolderWarning(nil) != "" {
+			t.Fatalf("a valid stored folder loads as %+v, warning %q", kept.Options(), kept.FolderWarning(nil))
+		}
+		// Write the folder an earlier build would have saved.
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		quoted, err := json.Marshal(folder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := json.Marshal(saved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		edited := strings.Replace(string(data), string(quoted), string(legacy), 1)
+		if edited == string(data) {
+			t.Fatalf("the saved settings do not hold the folder %s: %s", quoted, data)
+		}
+		if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		defaultFolder := testFolder(t)
+		restarted := settings.NewStore(settings.Paths{ConfigFile: path})
+		preset.RegisterValidators(restarted)
+		restartedOptions, err := NewOptionsStore(restarted, defaultFolder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded := restarted.Load()
+		if len(loaded.Warnings) != 0 {
+			t.Fatalf("%q: load warnings = %v", saved, loaded.Warnings)
+		}
+		restored, replaced, err := restartedOptions.Load(loaded.Settings)
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		want := options
+		want.OutputFolder = defaultFolder
+		if restored != want || replaced != saved {
+			t.Fatalf("%q: restored options = %+v, replaced folder %q, want %+v", saved, restored, replaced, want)
+		}
+		manager, err := NewOptionsManager(restartedOptions, &loaded.Settings)
+		if err != nil {
+			t.Fatalf("%q: %v", saved, err)
+		}
+		if manager.Options() != want {
+			t.Fatalf("%q: manager options = %+v", saved, manager.Options())
+		}
+		if warning := manager.FolderWarning(nil); warning != fmt.Sprintf(ui.ResizeFolderReplaced, saved) {
+			t.Fatalf("%q: replaced folder warning = %q", saved, warning)
+		}
+		restartedRepository, err := preset.NewRepository(shell.ModuleImageResizer, restarted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		library, err := restartedRepository.Load(loaded.Settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(library.Custom()) != 1 || library.Custom()[0].Name != "Icon" {
+			t.Fatalf("%q: the preset library was lost: %+v", saved, library.Custom())
+		}
+		// Saving another module's settings keeps validating the file.
+		if err := restartedRepository.Save(&loaded.Settings, library); err != nil {
+			t.Fatalf("%q: save presets: %v", saved, err)
+		}
+		if backups, _ := filepath.Glob(path + ".corrupt-*"); len(backups) != 0 {
+			t.Fatalf("%q: the settings file was backed up as invalid: %v", saved, backups)
+		}
+	}
+}
+
+// TestFolderWarning: the application shows one startup warning about the
+// output folder, which asks the user to choose a folder once. When no
+// default folder could be resolved, nothing takes the place of a stored
+// folder only earlier builds accepted, so the warning says the default
+// folder is unavailable too rather than that it is selected, and no second
+// warning about the default folder follows.
+func TestFolderWarning(t *testing.T) {
+	folder := testFolder(t)
+	if filepath.VolumeName(folder) == "" {
+		t.Skip("outside Windows no folder only earlier builds accepted is refused by its name")
+	}
+	unavailable := errors.New("locate Pictures folder: not found")
+	tests := []struct {
+		name          string
+		stored        string
+		defaultFolder string
+		defaultErr    error
+		want          string
+	}{
+		{name: "valid stored folder", stored: folder, defaultFolder: folder, want: ""},
+		{name: "valid stored folder without a default", stored: folder, defaultErr: unavailable, want: ""},
+		{name: "replaced by the default", stored: folder + ".", defaultFolder: folder, want: fmt.Sprintf(ui.ResizeFolderReplaced, folder+".")},
+		// The warning says why the default folder is unavailable, as it does
+		// when no folder was stored.
+		{name: "refused without a default", stored: folder + ".", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".", unavailable)},
+		{name: "no stored folder", defaultFolder: folder, want: ""},
+		{name: "no stored folder and no default", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderUnavailable, unavailable)},
+		// No folder is selected though nothing says why, as when the store
+		// was given no default folder and no error: the warnings still say
+		// the default folder is unavailable, rather than formatting a nil
+		// error or saying nothing.
+		{name: "refused without a default or a reason", stored: folder + ".", want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".", ui.ResizeDefaultFolderUnknown)},
+		{name: "no stored folder, default, or reason", want: fmt.Sprintf(ui.ResizeFolderUnavailable, ui.ResizeDefaultFolderUnknown)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+			optionsStore, err := NewOptionsStore(store, test.defaultFolder)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := settings.Default()
+			if test.stored != "" {
+				quoted, err := json.Marshal(test.stored)
+				if err != nil {
+					t.Fatal(err)
+				}
+				value.Modules = map[string]json.RawMessage{
+					string(moduleID): json.RawMessage(`{"resize":{"version":1,"format":"png","collision":"rename","jpegQuality":90,"background":"#FFFFFF","outputFolder":` + string(quoted) + `}}`),
+				}
+			}
+			manager, err := NewOptionsManager(optionsStore, &value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			warning := manager.FolderWarning(test.defaultErr)
+			if warning != test.want {
+				t.Fatalf("FolderWarning = %q, want %q", warning, test.want)
+			}
+			if strings.Contains(warning, "%!") || (test.defaultErr != nil && warning != "" && !strings.Contains(warning, test.defaultErr.Error())) {
+				t.Fatalf("FolderWarning = %q, want one that says why the default folder is unavailable", warning)
+			}
+		})
 	}
 }
 
@@ -197,7 +389,7 @@ func TestMalformedResizeOptionsRecoverThroughStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options, err := optionsStore.Load(loaded.Settings)
+	options, _, err := optionsStore.Load(loaded.Settings)
 	if err != nil {
 		t.Fatal(err)
 	}

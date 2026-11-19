@@ -109,6 +109,26 @@ func TestInventoryAddDeduplicatesFullPathsCaseInsensitively(t *testing.T) {
 	}
 }
 
+// TestInventoryRemoveReleasesTheClaimedKey: removal releases the key the
+// item claimed when it was listed, rather than one computed again from its
+// path, so the path can be listed again however its key would be computed
+// now.
+func TestInventoryRemoveReleasesTheClaimedKey(t *testing.T) {
+	directory := t.TempDir()
+	ready := writeSource(t, directory, "photo.png")
+	inventory := NewInventory()
+	inventory.Add([]string{ready, writeSource(t, directory, "other.png")})
+	// The item's path now gives another key than the one it claimed.
+	inventory.items[0].Path = filepath.Join(directory, "renamed.png")
+	inventory.Remove([]int{0})
+	if summary := inventory.Add([]string{ready}); summary.Added != 1 || summary.Duplicates != 0 {
+		t.Fatalf("re-add after removal = %+v, want 1 added", summary)
+	}
+	if summary := inventory.Add([]string{filepath.Join(directory, "other.png")}); summary.Duplicates != 1 {
+		t.Fatalf("re-add of the item still listed = %+v, want a duplicate", summary)
+	}
+}
+
 func TestInventoryAddExpandsFoldersNonrecursively(t *testing.T) {
 	directory := t.TempDir()
 	first := writeSource(t, directory, "one.png")

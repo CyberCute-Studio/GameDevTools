@@ -7,26 +7,30 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 var ErrPersistence = errors.New("resize settings persistence failed")
 
-type OutputFormat string
+// OutputFormat and CollisionPolicy are defined by the output planner, which
+// interprets them, so the planner needs nothing from this package and the
+// view can start jobs that plan their outputs.
+type OutputFormat = output.Format
 
 const (
-	FormatKeepSource OutputFormat = "keep-source"
-	FormatPNG        OutputFormat = "png"
-	FormatJPEG       OutputFormat = "jpeg"
+	FormatKeepSource = output.FormatKeepSource
+	FormatPNG        = output.FormatPNG
+	FormatJPEG       = output.FormatJPEG
 )
 
-type CollisionPolicy string
+type CollisionPolicy = output.Collision
 
 const (
-	CollisionRename    CollisionPolicy = "rename"
-	CollisionSkip      CollisionPolicy = "skip"
-	CollisionOverwrite CollisionPolicy = "overwrite"
+	CollisionRename    = output.CollisionRename
+	CollisionSkip      = output.CollisionSkip
+	CollisionOverwrite = output.CollisionOverwrite
 )
 
 const (
@@ -56,23 +60,25 @@ func DefaultOptions(outputFolder string) ResizeOptions {
 }
 
 func (o ResizeOptions) Validate() error {
-	switch o.Format {
-	case FormatKeepSource, FormatPNG, FormatJPEG:
-	default:
+	if err := o.validateEncoding(); err != nil {
+		return err
+	}
+	return validateOutputFolder(o.OutputFolder)
+}
+
+// validateEncoding checks every option but the output folder.
+func (o ResizeOptions) validateEncoding() error {
+	if !o.Format.Valid() {
 		return errors.New(ui.ResizeFormatInvalid)
 	}
-	switch o.Collision {
-	case CollisionRename, CollisionSkip, CollisionOverwrite:
-	default:
+	if !o.Collision.Valid() {
 		return errors.New(ui.CollisionInvalid)
 	}
 	if o.JPEGQuality < MinJPEGQuality || o.JPEGQuality > MaxJPEGQuality {
 		return errors.New(ui.JPEGQualityRange)
 	}
-	if _, err := ParseBackground(o.Background); err != nil {
-		return err
-	}
-	return validateOutputFolder(o.OutputFolder)
+	_, err := ParseBackground(o.Background)
+	return err
 }
 
 // ParseJPEGQuality converts the quality field text into the supported 1–100
@@ -114,23 +120,90 @@ func ParseBackground(input string) (string, error) {
 	return "#" + strings.ToUpper(value[1:]), nil
 }
 
-func validateOutputFolder(folder string) error {
-	if folder == "" {
-		return errors.New(ui.OutputFolderRequired)
+// defaultFolder is the default output folder (RSZ-021) under the Pictures
+// folder the system knows for the user, known, or, when that cannot be
+// located (knownErr) or gives a folder the output planner's folder rules
+// refuse, under the Pictures folder in the user's profile, which home
+// locates. When neither gives a folder, the error says why: the known
+// Pictures folder's refusal, else the profile's, else why the folders could
+// not be located.
+func defaultFolder(known string, knownErr error, home func() (string, error)) (string, error) {
+	var refused error
+	if knownErr == nil && known != "" {
+		folder, err := defaultFolderIn(known)
+		if err == nil {
+			return folder, nil
+		}
+		refused = err
 	}
-	if strings.ContainsRune(folder, 0) || strings.ContainsRune(folder, '�') {
+	profile, homeErr := home()
+	if homeErr == nil {
+		folder, err := defaultFolderIn(filepath.Join(profile, "Pictures"))
+		if err == nil {
+			return folder, nil
+		}
+		if refused == nil {
+			refused = err
+		}
+	}
+	switch {
+	case refused != nil:
+		return "", refused
+	case knownErr != nil:
+		return "", fmt.Errorf("locate Pictures folder: %w", knownErr)
+	}
+	return "", fmt.Errorf("locate Pictures folder: %w", homeErr)
+}
+
+// defaultFolderIn is the default output folder under a Pictures folder, or
+// why it cannot be used when the output planner's folder rules refuse it. The
+// Pictures folder's path is first resolved as Windows resolves it, so one
+// that ends in a period or a space, which Windows drops, gives a folder in
+// the Pictures folder Windows opens for it. A default no job could plan into,
+// as under a Pictures folder whose path leads through a device or holds a
+// colon, is reported as unavailable, as one that cannot be located is,
+// rather than selected.
+func defaultFolderIn(pictures string) (string, error) {
+	folder := filepath.Join(resolveFolder(pictures), "GameDevTools", "Resized")
+	if err := output.ValidateFolder(folder); err != nil {
+		return "", fmt.Errorf("%s: %w", folder, err)
+	}
+	return folder, nil
+}
+
+// validateOutputFolder applies the output planner's folder rules, so a
+// folder the options accept is one a job can plan into.
+func validateOutputFolder(folder string) error {
+	return folderMessage(output.ValidateFolder(folder))
+}
+
+// folderMessage turns an output.ValidateFolder failure into the message the
+// view shows for it.
+func folderMessage(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, output.ErrFolderEmpty):
+		return errors.New(ui.OutputFolderRequired)
+	case errors.Is(err, output.ErrFolderNotAbsolute):
+		return errors.New(ui.OutputFolderNotAbsolute)
+	case errors.Is(err, output.ErrFolderRoot):
+		return errors.New(ui.OutputFolderRootInvalid)
+	case errors.Is(err, output.ErrFolderName):
+		return errors.New(ui.OutputFolderNameInvalid)
+	default:
 		return errors.New(ui.OutputFolderInvalid)
 	}
-	if !filepath.IsAbs(folder) {
-		return errors.New(ui.OutputFolderNotAbsolute)
-	}
-	return nil
 }
 
 type OptionsManager struct {
 	store    *OptionsStore
 	settings *settings.Settings
 	options  ResizeOptions
+	// replaced is the stored output folder that the default folder replaced
+	// when the options were loaded, because only earlier builds accepted it
+	// and jobs refuse it, or "" when no stored folder was replaced.
+	replaced string
 }
 
 func NewOptionsManager(store *OptionsStore, value *settings.Settings) (*OptionsManager, error) {
@@ -140,15 +213,43 @@ func NewOptionsManager(store *OptionsStore, value *settings.Settings) (*OptionsM
 	if value == nil {
 		return nil, errors.New("settings value is required")
 	}
-	options, err := store.Load(*value)
+	options, replaced, err := store.Load(*value)
 	if err != nil {
 		return nil, err
 	}
-	return &OptionsManager{store: store, settings: value, options: options}, nil
+	return &OptionsManager{store: store, settings: value, options: options, replaced: replaced}, nil
 }
 
 func (m *OptionsManager) Options() ResizeOptions {
 	return m.options
+}
+
+// FolderWarning returns the one startup warning about the output folder, or
+// "" when there is none. defaultErr is why the default folder could not be
+// resolved, or nil when it was. When the options were loaded with a stored
+// folder that only earlier builds accepted, the warning names that folder,
+// so the user learns why the folder changed before the next save forgets
+// the old one, and says the default folder is selected in its place, or,
+// when the default folder could not be resolved, that it is unavailable too,
+// and why, so no folder is selected; without a replaced folder it says why
+// the default folder is unavailable when no folder is selected. When no
+// folder is selected but defaultErr is nil, as when the store was given no
+// default folder and no error, the warning says the default folder's
+// location is unknown rather than formatting a nil error. The user is asked
+// to choose a folder once, whatever happened.
+func (m *OptionsManager) FolderWarning(defaultErr error) string {
+	if m.options.OutputFolder == "" && defaultErr == nil {
+		defaultErr = errors.New(ui.ResizeDefaultFolderUnknown)
+	}
+	switch {
+	case m.replaced != "" && m.options.OutputFolder != "":
+		return fmt.Sprintf(ui.ResizeFolderReplaced, m.replaced)
+	case m.replaced != "":
+		return fmt.Sprintf(ui.ResizeFolderRefused, m.replaced, defaultErr)
+	case m.options.OutputFolder == "":
+		return fmt.Sprintf(ui.ResizeFolderUnavailable, defaultErr)
+	}
+	return ""
 }
 
 func (m *OptionsManager) SetFormat(format OutputFormat) error {

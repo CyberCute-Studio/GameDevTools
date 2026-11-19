@@ -1,0 +1,1524 @@
+//go:build windows
+
+package output
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"golang.org/x/sys/windows"
+)
+
+func mustIdentify(t *testing.T, path string) fileID {
+	t.Helper()
+	found, err := identify(path)
+	if err != nil {
+		t.Fatalf("identify %s: %v", path, err)
+	}
+	return found.id
+}
+
+// junction links path to the target folder with a directory junction, which
+// needs no privilege. It reports false when the volume cannot hold one.
+func junction(t *testing.T, path, target string) bool {
+	t.Helper()
+	output, err := exec.Command("cmd", "/c", "mklink", "/J", path, target).CombinedOutput()
+	if err != nil {
+		t.Logf("create junction: %v: %s", err, output)
+		return false
+	}
+	// Remove the junction itself before the temporary folders, so their
+	// cleanup never walks into the target through it.
+	t.Cleanup(func() { os.Remove(path) })
+	return true
+}
+
+// mustJunction is junction for a test that needs one, which it skips when
+// the volume cannot hold one.
+func mustJunction(t *testing.T, path, target string) {
+	t.Helper()
+	if !junction(t, path, target) {
+		t.Skip("the volume cannot hold a junction")
+	}
+}
+
+// fsctlSetReparsePoint is FSCTL_SET_REPARSE_POINT.
+const fsctlSetReparsePoint = 0x000900A4
+
+// dataReparsePoint gives the file at path a reparse point that is no link,
+// with a tag no filter handles, the way a sync client marks the files it
+// keeps. Since Go 1.23 os.Lstat reports such a file as irregular. Files the
+// user owns accept such a reparse point without any privilege.
+func dataReparsePoint(t *testing.T, path string) {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatalf("encode %s: %v", path, err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer windows.CloseHandle(handle)
+	// REPARSE_GUID_DATA_BUFFER: tag, data length, reserved, GUID, data.
+	const data = "test"
+	buffer := make([]byte, 24+len(data))
+	binary.LittleEndian.PutUint32(buffer[0:], 0x00000099) // a third-party tag, no name surrogate
+	binary.LittleEndian.PutUint16(buffer[4:], uint16(len(data)))
+	copy(buffer[8:24], "GameDevToolsTest")
+	copy(buffer[24:], data)
+	var returned uint32
+	if err := windows.DeviceIoControl(handle, fsctlSetReparsePoint, &buffer[0], uint32(len(buffer)), nil, 0, &returned, nil); err != nil {
+		t.Skipf("set a reparse point on %s: %v", path, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode().Type() != fs.ModeIrregular {
+		t.Skipf("os.Lstat reports the reparse point as %v (%v), not as irregular", info, err)
+	}
+}
+
+func TestIdentifyRecognizesEveryPathToAFile(t *testing.T) {
+	folder := t.TempDir()
+	path := filepath.Join(folder, "Original.png")
+	writeFile(t, path, "pixels")
+	want := mustIdentify(t, path)
+
+	aliases := []string{strings.ToUpper(path), strings.ToLower(path)}
+	link := filepath.Join(folder, "hard-link.png")
+	if err := os.Link(path, link); err != nil {
+		t.Fatalf("hard-link: %v", err)
+	}
+	aliases = append(aliases, link)
+	// A volume that cannot hold a junction leaves that alias out; the other
+	// checks still run.
+	if linked := filepath.Join(t.TempDir(), "junction"); junction(t, linked, folder) {
+		aliases = append(aliases, filepath.Join(linked, "Original.png"))
+	}
+	if short, err := shortName(path); err == nil && !strings.EqualFold(short, path) {
+		aliases = append(aliases, short)
+	}
+	for _, alias := range aliases {
+		if got := mustIdentify(t, alias); got != want {
+			t.Errorf("identify(%s) = %+v, want %+v", alias, got, want)
+		}
+	}
+
+	other := filepath.Join(folder, "other.png")
+	writeFile(t, other, "pixels")
+	if mustIdentify(t, other) == want {
+		t.Fatal("two distinct files report the same identity")
+	}
+	if _, err := identify(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("identify(missing) = %v, want a not-exist error", err)
+	}
+	if _, err := identify(filepath.Join(folder, "missing", "x.png")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("identify(missing folder) = %v, want a not-exist error", err)
+	}
+}
+
+func shortName(path string) (string, error) {
+	long, err := windows.UTF16FromString(path)
+	if err != nil {
+		return "", err
+	}
+	buffer := make([]uint16, windows.MAX_LONG_PATH)
+	length, err := windows.GetShortPathName(&long[0], &buffer[0], uint32(len(buffer)))
+	if err != nil {
+		return "", err
+	}
+	return windows.UTF16ToString(buffer[:length]), nil
+}
+
+// TestIdentifyReadsLongPaths: a destination deeper than MAX_PATH is still
+// compared by identity, as os.Lstat can still inspect it.
+func TestIdentifyReadsLongPaths(t *testing.T) {
+	folder := t.TempDir()
+	for len(folder) < 300 {
+		folder = filepath.Join(folder, strings.Repeat("d", 40))
+	}
+	path := filepath.Join(folder, "deep.png")
+	writeFile(t, path, "pixels")
+	link := filepath.Join(t.TempDir(), "short.png")
+	if err := os.Link(path, link); err != nil {
+		t.Fatalf("hard-link: %v", err)
+	}
+	if mustIdentify(t, path) != mustIdentify(t, link) {
+		t.Fatal("a long path reports a different identity than its short hard link")
+	}
+}
+
+// TestIdentifyResolvesPathsAsTheOSPackageDoes: a short or long path reaches
+// the file os.Lstat and the decoder reach, even when Windows drops a
+// trailing space or dot from its last name, the path uses forward slashes,
+// or it is marked extended with forward slashes. A source listed that way is
+// therefore still recognized by its identity, and a confirmed Overwrite
+// never replaces it.
+func TestIdentifyResolvesPathsAsTheOSPackageDoes(t *testing.T) {
+	short := filepath.Join(t.TempDir(), "shallow.png")
+	writeFile(t, short, "pixels")
+	folder := t.TempDir()
+	for len(folder) < 300 {
+		folder = filepath.Join(folder, strings.Repeat("d", 40))
+	}
+	path := filepath.Join(folder, "deep.png")
+	writeFile(t, path, "pixels")
+	for _, file := range []string{short, path} {
+		want := mustIdentify(t, file)
+		for _, alias := range []string{file + " ", file + ".", filepath.ToSlash(file), `//?/` + filepath.ToSlash(file), `//?/` + filepath.ToSlash(file) + "."} {
+			if _, err := os.Lstat(alias); err != nil {
+				t.Fatalf("os.Lstat(%q): %v", alias, err)
+			}
+			if got := mustIdentify(t, alias); got != want {
+				t.Errorf("identify(%q) = %+v, want %+v", alias, got, want)
+			}
+		}
+	}
+
+	// The listed path's key differs from the natural destination's, so only
+	// the identity shows that deep.png is the source.
+	plan := mustPrepare(t, jobRequest(folder, CollisionOverwrite, png(path+" ")))
+	assertItems(t, plan, []expect{{"deep_2.png", ActionCreate, ReasonSource}})
+	materialize(t, plan, "result")
+	if readFile(t, path) != "pixels" {
+		t.Fatal("the source listed with a trailing space was overwritten")
+	}
+}
+
+func TestExtendedPath(t *testing.T) {
+	long := `C:\` + strings.Repeat(`folder\`, 40) + "x.png"
+	share := `\\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"
+	tests := []struct{ path, want string }{
+		// Every absolute path is resolved and marked, whatever its length,
+		// so no threshold of the os package's decides how it is read.
+		{`C:\short\x.png`, `\\?\C:\short\x.png`},
+		{`C:\short\x.png .`, `\\?\C:\short\x.png`},
+		{`C:/short/./x.png`, `\\?\C:\short\x.png`},
+		{`C:\`, `\\?\C:\`},
+		{`\\server\share\x.png`, `\\?\UNC\server\share\x.png`},
+		// A device path is resolved, and then names what the extended-length
+		// path to the same name does.
+		{`\\.\C:\x.png`, `\\?\C:\x.png`},
+		{`\\.\C:\in\..\x.png.`, `\\?\C:\x.png`},
+		{`\\.\UNC\server\share\x.png`, `\\?\UNC\server\share\x.png`},
+		{`C:\in\NUL`, `\\?\NUL`},
+		{`short\x.png`, `short\x.png`},
+		{long, `\\?\` + long},
+		{share, `\\?\UNC\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"},
+		{`\\?\` + long, `\\?\` + long},
+		// \??\ is the NT spelling of \\?\, which Windows takes alike.
+		{`\??\` + long, `\\?\` + long},
+		{`\??\C:\x.png.`, `\\?\C:\x.png.`},
+		{`\\?\C:\x.png.`, `\\?\C:\x.png.`},
+		// Windows takes only \\?\ written with backslashes verbatim; it
+		// resolves the prefix written with a forward slash like a device
+		// path, dropping trailing spaces and periods, and so does
+		// extendedPath, rather than marking it a UNC path.
+		{`//?/` + filepath.ToSlash(long), `\\?\` + long},
+		{`//?/C:/x.png.`, `\\?\C:\x.png`},
+		{`\\?/C:\in\..\x.png `, `\\?\C:\x.png`},
+		{`/\?\C:\x.png.`, `\\?\C:\x.png`},
+		{`//?/UNC/server/share/x.png.`, `\\?\UNC\server\share\x.png`},
+		{filepath.ToSlash(long), `\\?\` + long},
+		{strings.Replace(long, `\x.png`, `\.\x.png`, 1), `\\?\` + long},
+		// GetFullPathName drops trailing spaces and dots from the last name,
+		// as Windows does for every path it is not told to take verbatim.
+		{long + " ", `\\?\` + long},
+		{long + ". .", `\\?\` + long},
+	}
+	for _, test := range tests {
+		if got := extendedPath(test.path); got != test.want {
+			t.Errorf("extendedPath(%q) = %q, want %q", test.path, got, test.want)
+		}
+	}
+}
+
+// TestNamesVolume: a drive, volume, or share root, or a volume, device, or
+// server itself, is no file in a folder, in every spelling; anything on it
+// may be.
+func TestNamesVolume(t *testing.T) {
+	for path, want := range map[string]bool{
+		`C:\`:                          true,
+		`C:/`:                          true,
+		`\\?\C:\`:                      true,
+		`\??\C:\`:                      true,
+		`\\.\C:\`:                      true,
+		`\\?\C:`:                       true,
+		`\\server\share`:               true,
+		`\\server\share\`:              true,
+		`\\?\UNC\server\share`:         true,
+		`\\.\UNC\server\share\`:        true,
+		`\\?\UNC\server`:               true,
+		`C:\In`:                        false,
+		`C:\In\x.png`:                  false,
+		`\\server\share\x.png`:         false,
+		`\\?\UNC\server\share\x.png`:   false,
+		`\\?\Volume{0}\Pictures\x.png`: false,
+	} {
+		if got := namesVolume(resolvedPath(path)); got != want {
+			t.Errorf("namesVolume(resolvedPath(%q)) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestFindEntry: the folder lists a plain file, and a file whose reparse
+// point is no link, as files, and a folder or a junction as neither, each
+// under its own name, even when the path reaches it through its 8.3 short
+// name or a long path.
+func TestFindEntry(t *testing.T) {
+	folder := t.TempDir()
+	assertEntry := func(path string, want entry) {
+		t.Helper()
+		if got, err := findEntry(path); err != nil || got != want {
+			t.Fatalf("findEntry(%s) = %+v, %v, want %+v", path, got, err, want)
+		}
+	}
+	plain := filepath.Join(folder, "Plain photograph.png")
+	writeFile(t, plain, "pixels")
+	assertEntry(plain, entry{name: "Plain photograph.png", file: true})
+	assertEntry(strings.ToUpper(plain), entry{name: "Plain photograph.png", file: true})
+	if short, err := shortName(plain); err == nil && !strings.EqualFold(filepath.Base(short), filepath.Base(plain)) {
+		assertEntry(short, entry{name: "Plain photograph.png", file: true})
+	}
+	assertEntry(folder, entry{name: filepath.Base(folder)})
+	if linked := filepath.Join(t.TempDir(), "junction"); junction(t, linked, folder) {
+		assertEntry(linked, entry{name: "junction"})
+	}
+	if _, err := findEntry(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("findEntry(missing) = %v, want a not-exist error", err)
+	}
+
+	deep := folder
+	for len(deep) < 300 {
+		deep = filepath.Join(deep, strings.Repeat("d", 40))
+	}
+	long := filepath.Join(deep, "deep.png")
+	writeFile(t, long, "pixels")
+	assertEntry(long, entry{name: "deep.png", file: true})
+
+	marked := filepath.Join(folder, "marked.png")
+	writeFile(t, marked, "pixels")
+	dataReparsePoint(t, marked)
+	assertEntry(marked, entry{name: "marked.png", file: true})
+}
+
+// TestPrepareClassifiesReparsePointsAtDestinations: a junction with a
+// destination's name is never replaced, while a file with a reparse point
+// that is no link is a file: a confirmed Overwrite considers replacing it,
+// and renames here only because the file cannot be opened to read its
+// identity, as no filter handles the test's reparse tag.
+func TestPrepareClassifiesReparsePointsAtDestinations(t *testing.T) {
+	t.Run("junction", func(t *testing.T) {
+		out := t.TempDir()
+		mustJunction(t, filepath.Join(out, "x.png"), t.TempDir())
+		want := map[Collision]expect{
+			CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {"x_2.png", ActionCreate, ReasonExists},
+		}
+		for _, policy := range policies {
+			plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+			assertItems(t, plan, []expect{want[policy]})
+		}
+	})
+
+	t.Run("data reparse point", func(t *testing.T) {
+		out := t.TempDir()
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "earlier")
+		dataReparsePoint(t, destination)
+		want := map[Collision]expect{
+			CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {"x_2.png", ActionCreate, ReasonUnverified},
+		}
+		for _, policy := range policies {
+			plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+			assertItems(t, plan, []expect{want[policy]})
+		}
+	})
+}
+
+// TestPrepareComparesPathsCaseInsensitively: Windows paths differing only in
+// letter case name one file, so they collide and are protected alike.
+func TestPrepareComparesPathsCaseInsensitively(t *testing.T) {
+	folder := t.TempDir()
+	source := filepath.Join(folder, "Hero.png")
+	writeFile(t, source, "original")
+	existing := t.TempDir()
+	writeFile(t, filepath.Join(existing, "SKY.PNG"), "earlier")
+	for _, policy := range policies {
+		// The output folder is the source folder spelled in upper case.
+		plan := mustPrepare(t, jobRequest(strings.ToUpper(folder), policy, png(source)))
+		if policy == CollisionSkip {
+			assertItems(t, plan, []expect{{"Hero.png", ActionSkip, ReasonSource}})
+		} else {
+			assertItems(t, plan, []expect{{"Hero_2.png", ActionCreate, ReasonSource}})
+		}
+
+		plan = mustPrepare(t, jobRequest(existing, policy, png(filepath.Join(t.TempDir(), "sky.png"))))
+		switch policy {
+		case CollisionRename:
+			assertItems(t, plan, []expect{{"sky_2.png", ActionCreate, ReasonExists}})
+		case CollisionSkip:
+			assertItems(t, plan, []expect{{"sky.png", ActionSkip, ReasonExists}})
+		case CollisionOverwrite:
+			assertItems(t, plan, []expect{{"sky.png", ActionReplace, ReasonNone}})
+		}
+	}
+}
+
+// TestPrepareRecognizesSourcesUnderOtherNames pins RSZ-026 for aliases a
+// path comparison cannot see: under Overwrite, a destination that is a hard
+// link to a source, or that reaches a source through a junction, is that
+// source and is never replaced. Rename and Skip, which never replace, treat
+// it as any existing file.
+func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
+	want := map[Collision]expect{
+		CollisionRename:    {"x_2.png", ActionCreate, ReasonExists},
+		CollisionSkip:      {"x.png", ActionSkip, ReasonExists},
+		CollisionOverwrite: {"x_2.png", ActionCreate, ReasonSource},
+	}
+
+	t.Run("hard link", func(t *testing.T) {
+		for _, policy := range policies {
+			in, out := t.TempDir(), t.TempDir()
+			sourceA := filepath.Join(in, "x.png")
+			sourceB := filepath.Join(in, "other.png")
+			writeFile(t, sourceA, "source x")
+			writeFile(t, sourceB, "source other")
+			// out\x.png is the second source under another name.
+			if err := os.Link(sourceB, filepath.Join(out, "x.png")); err != nil {
+				t.Fatalf("hard-link: %v", err)
+			}
+			plan := mustPrepare(t, jobRequest(out, policy, png(sourceA), png(sourceB)))
+			assertItems(t, plan, []expect{want[policy], {"other.png", ActionCreate, ReasonNone}})
+			materialize(t, plan, "result")
+			if readFile(t, sourceB) != "source other" {
+				t.Fatalf("%s: the hard-linked source was overwritten", policy)
+			}
+		}
+	})
+
+	t.Run("junction", func(t *testing.T) {
+		for _, policy := range policies {
+			in := t.TempDir()
+			source := filepath.Join(in, "x.png")
+			writeFile(t, source, "source x")
+			out := filepath.Join(t.TempDir(), "out")
+			mustJunction(t, out, in)
+			plan := mustPrepare(t, jobRequest(out, policy, png(source)))
+			assertItems(t, plan, []expect{want[policy]})
+			materialize(t, plan, "result")
+			if readFile(t, source) != "source x" {
+				t.Fatalf("%s: the source reached through a junction was overwritten", policy)
+			}
+		}
+	})
+
+	// A listed file the job does not process is protected by identity too.
+	t.Run("protected hard link", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		unprocessed := filepath.Join(in, "too-large.png")
+		writeFile(t, unprocessed, "too large to resize")
+		if err := os.Link(unprocessed, filepath.Join(out, "x.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "x.png")))
+		request.Protected = []string{unprocessed}
+		plan := mustPrepare(t, request)
+		assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonSource}})
+		materialize(t, plan, "result")
+		if readFile(t, unprocessed) != "too large to resize" {
+			t.Fatal("the hard-linked protected file was overwritten")
+		}
+	})
+
+	// Overwrite replaces an existing file under a numbered name only when
+	// it is no source either.
+	t.Run("numbered hard link", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		source := filepath.Join(in, "other.png")
+		writeFile(t, source, "source other")
+		if err := os.Link(source, filepath.Join(out, "x_2.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		plan := mustPrepare(t, jobRequest(out, CollisionOverwrite,
+			png(filepath.Join(t.TempDir(), "x.png")),
+			png(filepath.Join(t.TempDir(), "x.png")),
+			png(source),
+		))
+		assertItems(t, plan, []expect{
+			{"x.png", ActionCreate, ReasonNone},
+			{"x_3.png", ActionCreate, ReasonDuplicate},
+			{"other.png", ActionCreate, ReasonNone},
+		})
+		materialize(t, plan, "result")
+		if readFile(t, source) != "source other" {
+			t.Fatal("the hard-linked source under a numbered name was overwritten")
+		}
+	})
+}
+
+// TestPrepareComparesFileIndexesAcrossShares pins RSZ-026 for a Samba
+// server, which reports a volume serial number of its own for each share:
+// one file reached through two shares reports its one file index under two
+// serial numbers. A confirmed Overwrite never replaces a destination whose
+// file index is a listed file's, or that lies in the folder of a listed file
+// it cannot read, or that another item replaces, whatever serial number each
+// path reports; it renames the result instead.
+func TestPrepareComparesFileIndexesAcrossShares(t *testing.T) {
+	// throughShares reports each path's file index under the serial number
+	// of the share it names.
+	throughShares := func(shares map[string]fileID, denied string) faultyFiles {
+		return faultyFiles{identity: func(path string) (identity, error) {
+			if strings.EqualFold(path, denied) {
+				return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+			}
+			found, err := identify(path)
+			for shared, id := range shares {
+				if strings.EqualFold(path, shared) {
+					found.id = id
+				}
+			}
+			return found, err
+		}}
+	}
+	overwrite := func(t *testing.T, out string, files fileSystem, protected []string, sources ...Source) Plan {
+		t.Helper()
+		request := jobRequest(out, CollisionOverwrite, sources...)
+		request.Protected = protected
+		plan, err := prepare(context.Background(), request, files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		materialize(t, plan, "result")
+		return plan
+	}
+
+	t.Run("source", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		source := filepath.Join(in, "x.png")
+		writeFile(t, source, "source x")
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "the source through another share")
+		files := throughShares(map[string]fileID{source: {volume: 1, index: 7}, destination: {volume: 2, index: 7}}, "")
+		plan := overwrite(t, out, files, nil, png(source))
+		assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+		if readFile(t, destination) != "the source through another share" {
+			t.Fatal("the source reached through another share was overwritten")
+		}
+	})
+
+	t.Run("folder of an unreadable listed file", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		protected := filepath.Join(in, "denied.png")
+		writeFile(t, protected, "inaccessible original")
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "earlier")
+		files := throughShares(map[string]fileID{in: {volume: 1, index: 9}, out: {volume: 2, index: 9}}, protected)
+		plan := overwrite(t, out, files, []string{protected}, png(filepath.Join(t.TempDir(), "x.png")))
+		assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+	})
+
+	t.Run("file another item replaces", func(t *testing.T) {
+		out := t.TempDir()
+		first, second := filepath.Join(out, "a.png"), filepath.Join(out, "b.png")
+		writeFile(t, first, "earlier a")
+		writeFile(t, second, "earlier b")
+		files := throughShares(map[string]fileID{first: {volume: 1, index: 5}, second: {volume: 2, index: 5}}, "")
+		plan := overwrite(t, out, files, nil, png(filepath.Join(t.TempDir(), "a.png")), png(filepath.Join(t.TempDir(), "b.png")))
+		assertItems(t, plan, []expect{{"a.png", ActionReplace, ReasonNone}, {"b_2.png", ActionCreate, ReasonDuplicate}})
+	})
+}
+
+// TestStillReplaceable pins NFR-020 after planning: the file a confirmed
+// Overwrite plans to replace stays replaceable while it is the same file,
+// unchanged, and stops being so once a source is moved or linked to its
+// name, or the file gains another name, which may be a listed path, even
+// where the file that took its place reports the same identity,
+// as on a FAT32 or exFAT volume, so the writer can refuse to replace a source
+// that took the file's place after the plan was made. A rewritten file is
+// not replaced either. Only ActionReplace items replace.
+func TestStillReplaceable(t *testing.T) {
+	prepareReplace := func(t *testing.T) (Plan, string, string) {
+		t.Helper()
+		in, out := t.TempDir(), t.TempDir()
+		source := filepath.Join(in, "x.png")
+		writeFile(t, source, "source x")
+		other := filepath.Join(in, "other.png")
+		writeFile(t, other, "source other")
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "earlier")
+		plan := mustPrepare(t, jobRequest(out, CollisionOverwrite, png(source), png(other)))
+		assertItems(t, plan, []expect{{"x.png", ActionReplace, ReasonNone}, {"other.png", ActionCreate, ReasonNone}})
+		if !plan.Items[0].StillReplaceable() {
+			t.Fatal("the planned file is not replaceable right after planning")
+		}
+		if plan.Items[1].StillReplaceable() {
+			t.Fatal("an ActionCreate item reports a file to replace")
+		}
+		return plan, other, destination
+	}
+
+	t.Run("rewritten", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		writeFile(t, destination, "rewritten by another program")
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("the planned file is replaceable after its content changed")
+		}
+	})
+
+	// A FAT32 or exFAT volume gives a file the identity of the folder entry
+	// it takes, so a source moved into the entry the planned file freed
+	// reports the planned file's identity; only its stamp tells it apart.
+	t.Run("source with the planned identity", func(t *testing.T) {
+		plan, other, destination := prepareReplace(t)
+		planned := plan.Items[0].replaces.id
+		files := faultyFiles{identity: func(path string) (identity, error) {
+			found, err := identify(path)
+			if strings.EqualFold(path, destination) {
+				found.id = planned
+			}
+			return found, err
+		}}
+		if !plan.Items[0].stillReplaceable(files) {
+			t.Fatal("the planned file is not replaceable right after planning")
+		}
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("remove the destination: %v", err)
+		}
+		if err := os.Rename(other, destination); err != nil {
+			t.Fatalf("move the source onto the destination: %v", err)
+		}
+		if plan.Items[0].stillReplaceable(files) {
+			t.Fatal("a source that took the planned file's place and identity is replaceable")
+		}
+	})
+
+	t.Run("source moved onto it", func(t *testing.T) {
+		plan, other, destination := prepareReplace(t)
+		if err := os.Rename(other, destination); err != nil {
+			t.Fatalf("move the source onto the destination: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a source moved onto the destination is replaceable")
+		}
+	})
+
+	t.Run("source linked to it", func(t *testing.T) {
+		plan, other, destination := prepareReplace(t)
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("remove the destination: %v", err)
+		}
+		if err := os.Link(other, destination); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a source linked to the destination's name is replaceable")
+		}
+	})
+
+	t.Run("gone", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("remove the destination: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a destination that is gone is replaceable")
+		}
+	})
+
+	// A link put at the destination's name after planning reaches the
+	// planned file by its identity, wherever the file now has its name,
+	// which may be a listed path; no policy replaces a link.
+	t.Run("replaced by a link to it", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		moved := filepath.Join(t.TempDir(), "x.png")
+		if err := os.Rename(destination, moved); err != nil {
+			t.Fatalf("move the planned file: %v", err)
+		}
+		if err := os.Symlink(moved, destination); err != nil {
+			t.Skipf("create a file symbolic link: %v", err)
+		}
+		if found, err := identify(destination); err != nil || found != plan.Items[0].replaces {
+			t.Fatalf("the link does not reach the planned file unchanged: %+v, %v", found, err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a link to the planned file is replaceable")
+		}
+	})
+
+	// Without the privilege to create a symbolic link, the folder's listing
+	// is faked: a link, and a file the name reaches only as its 8.3 short
+	// name, are no file listed under the destination's own name, though the
+	// identity read through them is the planned file's.
+	for name, listed := range map[string]func(path string) entry{
+		"listed as a link": func(path string) entry { return entry{name: filepath.Base(path)} },
+		"listed under another name": func(path string) entry {
+			return entry{name: "long name of " + filepath.Base(path), file: true}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan, _, destination := prepareReplace(t)
+			files := faultyFiles{entry: func(path string) (entry, error) {
+				if strings.EqualFold(path, destination) {
+					return listed(path), nil
+				}
+				return findEntry(path)
+			}}
+			if plan.Items[0].stillReplaceable(files) {
+				t.Fatal("an entry that is no file listed under the destination's name is replaceable")
+			}
+		})
+	}
+
+	t.Run("not listed", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		files := faultyFiles{entry: func(path string) (entry, error) {
+			return entry{}, &fs.PathError{Op: "find", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+		}}
+		if plan.Items[0].stillReplaceable(files) {
+			t.Fatalf("%s is replaceable though its folder cannot list it", destination)
+		}
+	})
+
+	// A name the planned file gains after planning may be a listed path,
+	// such as that of a source that no longer existed when the plan was
+	// made, and adding a name changes neither its size nor its times.
+	t.Run("linked elsewhere", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		if err := os.Link(destination, filepath.Join(t.TempDir(), "x.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a planned file that gained a name since the plan is replaceable")
+		}
+	})
+}
+
+// TestPrepareNeverReplacesAFileThroughItsShortName pins AC-R10 for 8.3
+// names: a natural destination that is only the short name of an existing
+// file with another long name, such as PHOTOG~1.png for photograph.png,
+// does not name that file, though Windows opens it through the short name,
+// so a confirmed Overwrite renames the result rather than replace a file the
+// job was never asked to replace. Rename and Skip treat it as any existing
+// file.
+func TestPrepareNeverReplacesAFileThroughItsShortName(t *testing.T) {
+	for _, policy := range policies {
+		out := t.TempDir()
+		existing := filepath.Join(out, "photograph.png")
+		writeFile(t, existing, "unlisted original")
+		short, err := shortName(existing)
+		if err != nil || strings.EqualFold(filepath.Base(short), filepath.Base(existing)) {
+			t.Skipf("the volume gives %s no short name (%q, %v)", existing, short, err)
+		}
+		alias := strings.TrimSuffix(filepath.Base(short), filepath.Ext(short))
+		want := map[Collision]expect{
+			CollisionRename:    {alias + "_2.png", ActionCreate, ReasonExists},
+			CollisionSkip:      {alias + ".png", ActionSkip, ReasonExists},
+			CollisionOverwrite: {alias + "_2.png", ActionCreate, ReasonExists},
+		}
+		plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), alias+".png"))))
+		assertItems(t, plan, []expect{want[policy]})
+		materialize(t, plan, "result")
+		if readFile(t, existing) != "unlisted original" {
+			t.Fatalf("%s replaced %s through its short name %s", policy, existing, alias+".png")
+		}
+	}
+}
+
+// TestPrepareRenamesWhenIdentityIsUnreadable: Overwrite replaces only a
+// file it can prove is not a source. When the destination's identity cannot
+// be read, the result is renamed instead, and the destination is read once
+// however many items it is the natural destination of; the other policies
+// never replace and are unaffected.
+func TestPrepareRenamesWhenIdentityIsUnreadable(t *testing.T) {
+	out := t.TempDir()
+	destination := filepath.Join(out, "x.png")
+	writeFile(t, destination, "earlier")
+	sources := []Source{png(filepath.Join(t.TempDir(), "x.png")), png(filepath.Join(t.TempDir(), "x.png"))}
+	want := map[Collision][]expect{
+		CollisionRename: {{"x_2.png", ActionCreate, ReasonExists}, {"x_3.png", ActionCreate, ReasonExists}},
+		CollisionSkip:   {{"x.png", ActionSkip, ReasonExists}, {"x.png", ActionSkip, ReasonExists}},
+		CollisionOverwrite: {
+			{"x_2.png", ActionCreate, ReasonUnverified},
+			{"x_3.png", ActionCreate, ReasonUnverified},
+		},
+	}
+	for _, policy := range policies {
+		reads := 0
+		files := faultyFiles{identity: func(path string) (identity, error) {
+			if strings.EqualFold(path, destination) {
+				reads++
+				return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+			}
+			return identify(path)
+		}}
+		plan, err := prepare(context.Background(), jobRequest(out, policy, sources...), files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		assertItems(t, plan, want[policy])
+		if wantReads := map[bool]int{true: 1}[policy == CollisionOverwrite]; reads != wantReads {
+			t.Fatalf("%s read the destination's identity %d times, want %d", policy, reads, wantReads)
+		}
+	}
+}
+
+// deny gives the file a protected, empty DACL, as an original copied from
+// another account can carry, so the user may not even read its attributes
+// and its identity cannot be read. Its folder still lists it.
+func deny(t *testing.T, path string) {
+	t.Helper()
+	writeFile(t, path, "inaccessible original")
+	setDACL(t, path, "D:P")
+	t.Cleanup(func() { setDACL(t, path, "D:P(A;;FA;;;WD)") })
+	if _, err := identify(path); err == nil {
+		t.Fatalf("the identity of %s can be read despite its empty DACL", path)
+	}
+}
+
+// missingDrive returns the root of a drive letter no volume is mounted at,
+// or false when every letter is in use.
+func missingDrive(t *testing.T) (string, bool) {
+	t.Helper()
+	drives, err := windows.GetLogicalDrives()
+	if err != nil {
+		t.Fatalf("list drives: %v", err)
+	}
+	for letter := 'Z'; letter >= 'D'; letter-- {
+		if drives&(1<<(letter-'A')) == 0 {
+			return string(letter) + `:\`, true
+		}
+	}
+	return "", false
+}
+
+// TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe pins RSZ-026 and
+// AC-R10 for listed files whose identity cannot be read. Such a file, when
+// it is a plain file in a folder that can be read, has its name in that
+// folder, so a confirmed Overwrite still replaces an existing file with a
+// single name elsewhere; it renames only a file that may be the listed one:
+// one in the same folder, or one with more names. A listed file that cannot
+// be located — its folder, drive, or share cannot be reached, as a removed
+// SUBST drive or link leaves while the file remains under another path — may
+// be any file, so it is never taken for a missing one and nothing is
+// replaced; only a file missing from a folder that exists is gone.
+func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
+	plan := func(t *testing.T, out string, files fileSystem, protected string) Plan {
+		t.Helper()
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(t.TempDir(), "x.png")))
+		request.Protected = []string{protected}
+		plan, err := prepare(context.Background(), request, files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		materialize(t, plan, "result")
+		return plan
+	}
+	outputFolder := func(t *testing.T) string {
+		out := t.TempDir()
+		writeFile(t, filepath.Join(out, "x.png"), "earlier")
+		return out
+	}
+	replaced := []expect{{"x.png", ActionReplace, ReasonNone}}
+	renamed := []expect{{"x_2.png", ActionCreate, ReasonUnverified}}
+
+	t.Run("inaccessible file in another folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "denied.png")
+		deny(t, protected)
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	t.Run("inaccessible file in the output folder", func(t *testing.T) {
+		out := outputFolder(t)
+		protected := filepath.Join(out, "denied.png")
+		deny(t, protected)
+		assertItems(t, plan(t, out, osFiles{}, protected), renamed)
+	})
+
+	t.Run("inaccessible file and a destination with two names", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "denied.png")
+		deny(t, protected)
+		out := outputFolder(t)
+		if err := os.Link(filepath.Join(out, "x.png"), filepath.Join(t.TempDir(), "elsewhere.png")); err != nil {
+			t.Fatalf("hard-link: %v", err)
+		}
+		assertItems(t, plan(t, out, osFiles{}, protected), renamed)
+	})
+
+	t.Run("folder that cannot be found", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "gone", "x.png")
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
+	// A network redirector or a file system an application implements may
+	// report a path whose folder is gone as a missing name, where NTFS
+	// reports a missing folder. The folder is gone, so the file is not taken
+	// for a missing one.
+	t.Run("folder that cannot be found reported as a missing name", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "gone", "x.png")
+		missingName := func(op, path string) error {
+			return &fs.PathError{Op: op, Path: path, Err: windows.ERROR_FILE_NOT_FOUND}
+		}
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.EqualFold(path, protected) {
+					return identity{}, missingName("open", path)
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return nil, missingName("lstat", path)
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	// A path says nothing of whether it named a folder, so a listed folder
+	// that cannot be inspected at all, as when its drive has gone, cannot be
+	// told from a file that cannot be located.
+	t.Run("folder on a drive that cannot be found", func(t *testing.T) {
+		root, ok := missingDrive(t)
+		if !ok {
+			t.Skip("every drive letter is in use")
+		}
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, filepath.Join(root, "Pictures")), renamed)
+	})
+
+	t.Run("drive that cannot be found", func(t *testing.T) {
+		root, ok := missingDrive(t)
+		if !ok {
+			t.Skip("every drive letter is in use")
+		}
+		protected := filepath.Join(root, "Pictures", "x.png")
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
+	t.Run("share that cannot be found", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "share", "x.png")
+		unreachable := func(path string) error {
+			return &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_BAD_NETPATH}
+		}
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.EqualFold(path, protected) {
+					return identity{}, unreachable(path)
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return nil, unreachable(path)
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	t.Run("inaccessible link", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "link.png")
+		writeFile(t, protected, "stands in for a link")
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.EqualFold(path, protected) {
+					return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return fakeInfo{name: filepath.Base(path), mode: fs.ModeSymlink}, nil
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	// A listed link whose target cannot be found is no missing file, though
+	// its own folder is there: its target may lie behind a drive, share, or
+	// folder that is gone, which a redirector may report as a missing name,
+	// while the file stays reachable under another path.
+	t.Run("link whose target is reported missing", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "link.png")
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.EqualFold(path, protected) {
+					return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_FILE_NOT_FOUND}
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return fakeInfo{name: filepath.Base(path), mode: fs.ModeSymlink}, nil
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	t.Run("symbolic link to nothing", func(t *testing.T) {
+		in := t.TempDir()
+		protected := filepath.Join(in, "link.png")
+		if err := os.Symlink(filepath.Join(in, "gone", "x.png"), protected); err != nil {
+			t.Skipf("cannot create a symbolic link: %v", err)
+		}
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
+	// A file whose reparse point only says how its data is stored, such as
+	// one OneDrive keeps in sync, has its name in its folder like any other
+	// file. No filter handles the test's reparse tag, so its identity cannot
+	// be read, while its reparse point can.
+	storedOriginal := func(t *testing.T, path string) {
+		t.Helper()
+		writeFile(t, path, "synced original")
+		dataReparsePoint(t, path)
+		if _, err := identify(path); err == nil {
+			t.Skipf("the identity of %s can be read", path)
+		}
+	}
+
+	t.Run("inaccessible stored file in another folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "synced.png")
+		storedOriginal(t, protected)
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	t.Run("inaccessible stored file in the output folder", func(t *testing.T) {
+		out := outputFolder(t)
+		protected := filepath.Join(out, "synced.png")
+		storedOriginal(t, protected)
+		assertItems(t, plan(t, out, osFiles{}, protected), renamed)
+	})
+
+	t.Run("file missing from its folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "gone.png")
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	// A folder the source list could not read is no file, wherever it is,
+	// so no existing file can be it.
+	t.Run("inaccessible folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "denied")
+		denyFolder(t, protected)
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	t.Run("inaccessible folder in the output folder", func(t *testing.T) {
+		out := outputFolder(t)
+		protected := filepath.Join(out, "denied")
+		denyFolder(t, protected)
+		assertItems(t, plan(t, out, osFiles{}, protected), replaced)
+	})
+
+	// A drive or share root names a folder however it is reached, so one
+	// that cannot be reached is no file either.
+	t.Run("share root that cannot be reached", func(t *testing.T) {
+		protected := `\\unreachable.invalid\photos`
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.HasPrefix(path, `\\unreachable.invalid`) {
+					return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_BAD_NETPATH}
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.HasPrefix(path, `\\unreachable.invalid`) {
+					return nil, &fs.PathError{Op: "lstat", Path: path, Err: windows.ERROR_BAD_NETPATH}
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), replaced)
+	})
+}
+
+// denyFolder creates a folder with a protected, empty DACL, as a folder
+// copied from another account can carry, so its identity cannot be read
+// while its parent still lists it.
+func denyFolder(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, path, "D:P")
+	t.Cleanup(func() { setDACL(t, path, "D:P(A;OICI;FA;;;WD)") })
+	if _, err := identify(path); err == nil {
+		t.Fatalf("the identity of %s can be read despite its empty DACL", path)
+	}
+	if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+		t.Fatalf("Lstat(%s) = %v, %v, want a folder", path, info, err)
+	}
+}
+
+// TestPrepareFailsStreamNames pins RSZ-026 for a source whose name holds a
+// colon, as a path to a file's stream does, wherever the colon falls: its
+// destination would be a stream of another file in the output folder, which
+// may be a listed original, or, when the colon follows the name's last
+// period, a result named after the file that holds the stream, so the item
+// fails rather than add a stream to that file or name a result after it.
+func TestPrepareFailsStreamNames(t *testing.T) {
+	tests := []struct{ source, destination string }{
+		{"photo.png:thumb.png", "photo.png:thumb.png"},
+		// The extension the destination drops holds the colon.
+		{"photo.png:alt", "photo.png"},
+	}
+	for _, test := range tests {
+		for _, policy := range policies {
+			out := t.TempDir()
+			original := filepath.Join(out, "photo.png")
+			writeFile(t, original, "listed original")
+			request := jobRequest(out, policy, png(filepath.Join(t.TempDir(), test.source)))
+			request.Protected = []string{original}
+			plan := mustPrepare(t, request)
+			assertItems(t, plan, []expect{{test.destination, ActionFail, ReasonNone}})
+			if err := plan.Items[0].Err; !errors.Is(err, ErrNameStream) || !strings.Contains(err.Error(), test.source) {
+				t.Fatalf("%s, %s: error = %v, want ErrNameStream naming the source", test.source, policy, err)
+			}
+			materialize(t, plan, "result")
+			if _, err := os.Lstat(original + ":thumb.png"); err == nil {
+				t.Fatalf("%s, %s added a stream to %s", test.source, policy, original)
+			}
+			if readFile(t, original) != "listed original" {
+				t.Fatalf("%s, %s changed %s", test.source, policy, original)
+			}
+		}
+	}
+}
+
+// TestPrepareReadsEachIdentityOnce: a confirmed Overwrite job reads each
+// path's identity once. A destination is opened once for both its identity
+// and its number of names, and the folder holding several listed files
+// whose identities cannot be read is read once for all of them.
+func TestPrepareReadsEachIdentityOnce(t *testing.T) {
+	in := t.TempDir()
+	var protected []string
+	denied := map[string]bool{}
+	for _, name := range []string{"a.png", "b.png", "c.png"} {
+		path := filepath.Join(in, name)
+		writeFile(t, path, "inaccessible original")
+		protected = append(protected, path)
+		denied[PathKey(path)] = true
+	}
+	out := t.TempDir()
+	writeFile(t, filepath.Join(out, "x.png"), "earlier")
+	reads := map[string]int{}
+	files := faultyFiles{identity: func(path string) (identity, error) {
+		reads[PathKey(path)]++
+		if denied[PathKey(path)] {
+			return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+		}
+		return identify(path)
+	}}
+	request := jobRequest(out, CollisionOverwrite, png(filepath.Join(t.TempDir(), "x.png")))
+	request.Protected = protected
+	plan, err := prepare(context.Background(), request, files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	assertItems(t, plan, []expect{{"x.png", ActionReplace, ReasonNone}})
+	if reads[PathKey(in)] != 1 || reads[PathKey(filepath.Join(out, "x.png"))] != 1 || reads[PathKey(out)] != 1 {
+		t.Fatalf("identity reads = %v, want one of each path", reads)
+	}
+}
+
+// TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced: a listed file
+// that cannot be located may be any existing file, so a confirmed Overwrite
+// renames whatever it finds, and the identities of the listed files after it
+// are not read: they could only change why a result is renamed.
+func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(out, "x.png"), "earlier")
+	request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "gone", "x.png")))
+	for _, name := range []string{"a.png", "b.png", "c.png"} {
+		path := filepath.Join(in, name)
+		writeFile(t, path, "listed")
+		request.Protected = append(request.Protected, path)
+	}
+	reads := 0
+	files := faultyFiles{identity: func(path string) (identity, error) {
+		if strings.EqualFold(filepath.Dir(path), in) {
+			reads++
+		}
+		return identify(path)
+	}}
+	plan, err := prepare(context.Background(), request, files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+	if reads != 0 {
+		t.Fatalf("read %d identities of listed files after one that cannot be located, want none", reads)
+	}
+}
+
+// TestPrepareNeverOpensListedDevices pins RSZ-026 for listed paths through a
+// device other than a drive, a volume, or a share: planning never opens one,
+// as opening a named pipe connects to the program serving it and opening a
+// port claims it, and since such a path may still lead to a file, as an NT
+// device path can, a confirmed Overwrite renames rather than replaces. A
+// drive root or a drive's volume names no file however it is reached, so it
+// is not opened either, and a confirmed Overwrite still replaces.
+func TestPrepareNeverOpensListedDevices(t *testing.T) {
+	in := t.TempDir()
+	pipe := "GameDevTools-" + filepath.Base(in)
+	volume := filepath.VolumeName(in)
+	tests := []struct {
+		protected string
+		want      expect
+	}{
+		{filepath.Join(in, "NUL"), expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\.\pipe\` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`//./pipe/` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\?\pipe\` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\.\COM1`, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\?\GLOBALROOT\Device\NamedPipe\` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{volume + `\`, expect{"x.png", ActionReplace, ReasonNone}},
+		{`\\?\` + volume, expect{"x.png", ActionReplace, ReasonNone}},
+	}
+	for _, test := range tests {
+		out := t.TempDir()
+		writeFile(t, filepath.Join(out, "x.png"), "earlier")
+		var opened []string
+		record := func(path string) { opened = append(opened, path) }
+		files := faultyFiles{
+			stat:     func(path string) (fs.FileInfo, error) { record(path); return os.Stat(path) },
+			lstat:    func(path string) (fs.FileInfo, error) { record(path); return os.Lstat(path) },
+			identity: func(path string) (identity, error) { record(path); return identify(path) },
+			entry:    func(path string) (entry, error) { record(path); return findEntry(path) },
+		}
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "x.png")))
+		request.Protected = []string{test.protected}
+		plan, err := prepare(context.Background(), request, files)
+		if err != nil {
+			t.Fatalf("%s: prepare: %v", test.protected, err)
+		}
+		item := plan.Items[0]
+		if got := (expect{filepath.Base(item.Destination), item.Action, item.Reason}); got != test.want {
+			t.Errorf("%s: item = %+v, want %+v", test.protected, got, test.want)
+		}
+		for _, path := range opened {
+			if PathKey(path) == PathKey(test.protected) {
+				t.Errorf("%s: the planner opened %s", test.protected, path)
+			}
+		}
+	}
+}
+
+// TestPrepareReportsDeniedFolderCreation pins RSZ-030 with a real access
+// failure: an output folder whose parent refuses new folders is reported as
+// a permission failure of the folder that could not be created, named as
+// the request spells it, though the folder is created through its
+// extended-length path.
+func TestPrepareReportsDeniedFolderCreation(t *testing.T) {
+	parent := t.TempDir()
+	setDACL(t, parent, "D:P(D;;0x4;;;WD)(A;OICI;FA;;;WD)") // deny FILE_ADD_SUBDIRECTORY
+	t.Cleanup(func() { setDACL(t, parent, "D:P(A;OICI;FA;;;WD)") })
+	for _, out := range []string{filepath.Join(parent, "Resized"), filepath.Join(parent, "Resized", "deeper")} {
+		_, err := Prepare(context.Background(), jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("error = %v, want a permission failure", err)
+		}
+		var pathErr *fs.PathError
+		if !errors.As(err, &pathErr) || pathErr.Path != filepath.Join(parent, "Resized") {
+			t.Fatalf("error = %v, want one naming %s", err, filepath.Join(parent, "Resized"))
+		}
+	}
+}
+
+// TestPrepareFindsFilesInTheWayUnderNamesWindowsKeeps pins the ErrNotFolder
+// rule for a folder path through a name Windows keeps only in the middle of
+// a path, such as "Photos ": the parents are inspected under the names the
+// path gives them, as they are created, not as the entry the name reaches
+// once it ends a path, which is "Photos". A file named "Photos" beside a
+// folder that cannot be created is no file in the way, and a file named
+// "Photos " is one, whatever stands at "Photos".
+func TestPrepareFindsFilesInTheWayUnderNamesWindowsKeeps(t *testing.T) {
+	source := png(filepath.Join(t.TempDir(), "x.png"))
+
+	t.Run("file at the shortened name", func(t *testing.T) {
+		parent := t.TempDir()
+		writeFile(t, filepath.Join(parent, "Photos"), "file")
+		setDACL(t, parent, "D:P(D;;0x4;;;WD)(A;OICI;FA;;;WD)") // deny FILE_ADD_SUBDIRECTORY
+		t.Cleanup(func() { setDACL(t, parent, "D:P(A;OICI;FA;;;WD)") })
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, "Photos ", "Resized"), CollisionRename, source))
+		assertKind(t, err, KindFolder)
+		if errors.Is(err, ErrNotFolder) || !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("error = %v, want a permission failure rather than a file in the way", err)
+		}
+	})
+
+	t.Run("file at the kept name", func(t *testing.T) {
+		parent := t.TempDir()
+		if err := os.Mkdir(filepath.Join(parent, "Photos"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		blocker := filepath.Join(parent, "Photos ")
+		removeVerbatim(t, blocker)
+		if err := os.WriteFile(`\\?\`+blocker, []byte("file"), 0o644); err != nil {
+			t.Fatalf("create %q: %v", blocker, err)
+		}
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(blocker, "Resized"), CollisionRename, source))
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, ErrNotFolder) {
+			t.Fatalf("error = %v, want ErrNotFolder", err)
+		}
+	})
+}
+
+// TestPrepareFindsLinksToNoFolderInTheWay pins the ErrNotFolder rule for a
+// link that leads to no folder, such as a junction whose target was deleted,
+// standing at the output folder's path or at a folder that would hold it.
+// Stat cannot follow it, so it cannot be inspected as a folder, but it stands
+// in the way all the same, and the folder that holds it says nothing about
+// it. Nothing is created at the link's former target.
+func TestPrepareFindsLinksToNoFolderInTheWay(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "link")
+	mustJunction(t, link, target)
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{link, filepath.Join(link, "Resized")} {
+		_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, ErrNotFolder) {
+			t.Errorf("%s: error = %v, want ErrNotFolder", folder, err)
+		}
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Lstat(%s) = %v, want the junction's target still missing", target, err)
+	}
+}
+
+// TestPrepareRefusesFolderStreams: a name with a colon names a stream to
+// NTFS, so Resized::$INDEX_ALLOCATION opens the folder Resized under another
+// spelling, through which a destination would escape the comparison with a
+// listed path in Resized that no longer exists, and x:y cannot be created.
+// Both are refused before anything is created.
+func TestPrepareRefusesFolderStreams(t *testing.T) {
+	parent := t.TempDir()
+	resized := filepath.Join(parent, "Resized")
+	if err := os.Mkdir(resized, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{resized + "::$INDEX_ALLOCATION", `\\?\` + resized + "::$INDEX_ALLOCATION", filepath.Join(parent, "x:y")} {
+		for _, policy := range policies {
+			_, err := Prepare(context.Background(), jobRequest(folder, policy, png(filepath.Join(resized, "gone.png"))))
+			assertKind(t, err, KindValidation)
+			if !errors.Is(err, ErrFolderName) {
+				t.Fatalf("%s: error = %v, want ErrFolderName", folder, err)
+			}
+		}
+	}
+	if entries, err := os.ReadDir(parent); err != nil || len(entries) != 1 {
+		t.Fatalf("the parent holds %v (%v) after refused requests", entries, err)
+	}
+}
+
+func setDACL(t *testing.T, path, sddl string) {
+	t.Helper()
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatalf("parse %s: %v", sddl, err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatalf("read DACL: %v", err)
+	}
+	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatalf("set DACL on %s: %v", path, err)
+	}
+}
+
+// TestPrepareReportsInvalidFolderPaths pins RSZ-030 for paths Windows
+// refuses: reserved characters and a drive that does not exist. Neither is a
+// file in the way, though Windows reports a missing drive with the error
+// code os.MkdirAll also returns for one.
+func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
+	source := png(filepath.Join(t.TempDir(), "x.png"))
+	folders := []string{filepath.Join(t.TempDir(), `bad<name>`)}
+	if root, ok := missingDrive(t); ok {
+		folders = append(folders, filepath.Join(root, "GameDevTools", "Resized"))
+	}
+	for _, folder := range folders {
+		_, err := Prepare(context.Background(), jobRequest(folder, CollisionRename, source))
+		assertKind(t, err, KindFolder)
+		if errors.Is(err, ErrNotFolder) {
+			t.Errorf("%s: error = %v, reported as a file in the way", folder, err)
+		}
+	}
+}
+
+// TestPrepareRefusesFolderNamesWindowsChanges: Windows drops a single
+// trailing period from a name a path leads through, so a path through such a
+// name is refused before anything is created, rather than leaving a stray
+// folder under the shortened name.
+func TestPrepareRefusesFolderNamesWindowsChanges(t *testing.T) {
+	source := png(filepath.Join(t.TempDir(), "x.png"))
+	for _, name := range []string{"sub.", "sub ."} {
+		parent := t.TempDir()
+		_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, name, "Resized"), CollisionRename, source))
+		assertKind(t, err, KindValidation)
+		if !errors.Is(err, ErrFolderName) {
+			t.Fatalf("%q: error = %v, want ErrFolderName", name, err)
+		}
+		if entries, err := os.ReadDir(parent); err != nil || len(entries) != 0 {
+			t.Fatalf("%q: the parent holds %v (%v) after a refused request", name, entries, err)
+		}
+	}
+}
+
+// verbatimFolder creates a folder whose name ends in characters Windows drops
+// from the last name of a path, as a Mac or a tool using extended-length paths
+// can, which the ordinary path through it reaches but cannot remove, so the
+// test removes it.
+func verbatimFolder(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(`\\?\`+path, 0o755); err != nil {
+		t.Fatalf("create %q: %v", path, err)
+	}
+	removeVerbatim(t, path)
+}
+
+// removeVerbatim removes the folder at path and everything in it, through its
+// extended-length path, when the test ends.
+func removeVerbatim(t *testing.T, path string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := os.RemoveAll(`\\?\` + path); err != nil {
+			t.Errorf("remove %q: %v", path, err)
+		}
+	})
+}
+
+// TestPrepareCreatesFoldersUnderNamesWindowsKeeps pins RSZ-030 for a path
+// through a name Windows keeps there but drops from the last name of a path,
+// such as a trailing space or two trailing periods: whether neither folder,
+// only the one with that name, or both exist, the output folder is created
+// and planned into as named, the result lands in it, and no stray folder
+// under the shortened name appears.
+func TestPrepareCreatesFoldersUnderNamesWindowsKeeps(t *testing.T) {
+	for _, name := range []string{"Photos ", "Photos. ", "v2.."} {
+		for _, existing := range []int{0, 1, 2} {
+			parent := t.TempDir()
+			kept := filepath.Join(parent, name)
+			out := filepath.Join(kept, "Resized")
+			removeVerbatim(t, kept)
+			if existing >= 1 {
+				verbatimFolder(t, kept)
+			}
+			if existing == 2 {
+				verbatimFolder(t, out)
+			}
+			for _, policy := range policies {
+				plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+				if plan.Folder != out {
+					t.Fatalf("%q: Folder = %q, want %q", name, plan.Folder, out)
+				}
+				assertItems(t, plan, []expect{{"x.png", ActionCreate, ReasonNone}})
+			}
+			plan := mustPrepare(t, jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+			materialize(t, plan, "result")
+			if readFile(t, `\\?\`+filepath.Join(out, "x.png")) != "result result 0" {
+				t.Fatalf("%q (%d existing): the result is not in the folder named", name, existing)
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil || len(entries) != 1 || entries[0].Name() != name {
+				t.Fatalf("%q (%d existing): the parent holds %v (%v), want only the folder %q", name, existing, entries, err, name)
+			}
+		}
+	}
+}
+
+// TestPrepareTakesNamesWindowsOpensAsDevicesAsTaken: a destination name
+// Windows resolves to anything but a file in the output folder, as it
+// resolves NUL to the device, and Windows 10 NUL.png or COM1.jpg too, is
+// taken, without the planner opening the device: Rename and Overwrite rename
+// the result past it, and Skip skips it, each with ReasonDevice, so the item
+// says why rather than report an existing file where there is none.
+// Planners never produce a name without an extension, so the test plans a
+// NUL destination directly.
+func TestPrepareTakesNamesWindowsOpensAsDevicesAsTaken(t *testing.T) {
+	want := map[Collision]expect{
+		CollisionRename:    {"NUL_2", ActionCreate, ReasonDevice},
+		CollisionSkip:      {"NUL", ActionSkip, ReasonDevice},
+		CollisionOverwrite: {"NUL_2", ActionCreate, ReasonDevice},
+	}
+	for _, policy := range policies {
+		out := t.TempDir()
+		var opened []string
+		record := func(path string) { opened = append(opened, path) }
+		files := faultyFiles{
+			lstat:    func(path string) (fs.FileInfo, error) { record(path); return os.Lstat(path) },
+			identity: func(path string) (identity, error) { record(path); return identify(path) },
+			entry:    func(path string) (entry, error) { record(path); return findEntry(path) },
+		}
+		p := newPlanner(context.Background(), jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))), out, files)
+		device := filepath.Join(out, "NUL")
+		item := Item{Source: filepath.Join(t.TempDir(), "NUL"), Destination: device, DuplicateOf: -1}
+		resolved, err := p.natural(0, &item)
+		if err == nil && !resolved {
+			err = p.resolve(0, &item)
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", policy, err)
+		}
+		if got := (expect{filepath.Base(item.Destination), item.Action, item.Reason}); got != want[policy] {
+			t.Errorf("%s: item = %+v, want %+v (err: %v)", policy, got, want[policy], item.Err)
+		}
+		for _, path := range opened {
+			if PathKey(path) == PathKey(device) {
+				t.Errorf("%s: the planner opened %s", policy, path)
+			}
+		}
+	}
+}
+
+// TestPrepareTakesExtendedLengthFoldersVerbatim: Windows changes no name in
+// an extended-length path, so an output folder whose name ends in a period
+// is created and planned into under exactly that name.
+func TestPrepareTakesExtendedLengthFoldersVerbatim(t *testing.T) {
+	parent := t.TempDir()
+	out := `\\?\` + filepath.Join(parent, "out.")
+	// os.RemoveAll cannot remove a folder named out. through the temporary
+	// folder's ordinary path, so the test removes it, after its files.
+	t.Cleanup(func() {
+		entries, _ := os.ReadDir(out)
+		for _, file := range entries {
+			os.Remove(filepath.Join(out, file.Name()))
+		}
+		os.Remove(out)
+	})
+	plan := mustPrepare(t, jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+	if plan.Folder != out {
+		t.Fatalf("Folder = %q, want %q", plan.Folder, out)
+	}
+	assertItems(t, plan, []expect{{"x.png", ActionCreate, ReasonNone}})
+	materialize(t, plan, "result")
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "out." || !entries[0].IsDir() {
+		t.Fatalf("the parent holds %v (%v), want only the folder out.", entries, err)
+	}
+}

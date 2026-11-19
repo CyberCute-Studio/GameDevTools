@@ -91,6 +91,14 @@ const (
 	OutputFolderRequired    = "An output folder is required. Choose a folder with Browse."
 	OutputFolderInvalid     = "The output folder contains characters that are not valid text. Choose the folder again."
 	OutputFolderNotAbsolute = "The output folder must be an absolute local path. Choose the folder again."
+	OutputFolderNameInvalid = "The output folder cannot be used: " + outputFolderNameRule + ", so results would not be saved in the folder named. Choose another folder."
+	OutputFolderRootInvalid = "The output folder cannot be used: " + outputFolderRootRule + ". Choose a folder with Browse."
+
+	// outputFolderNameRule and outputFolderRootRule state the two output
+	// folder rules that only output planning applies, for every message
+	// that reports a folder breaking one.
+	outputFolderNameRule = "Windows would change a name in its path, such as a name that ends in a space or a period, or read one as a device name such as NUL, or as a file stream because it contains a colon"
+	outputFolderRootRule = "its path names a drive, volume, device, or server rather than a folder on it"
 
 	CaptureModeSelected    = "Capture mode is now %s."
 	OutputFormatSelected   = "Screenshots are saved as %s."
@@ -161,8 +169,8 @@ const (
 	ResizeBackgroundInvalid = "Enter a background color as # followed by six hexadecimal digits, such as #FFFFFF."
 
 	ResizeCollisionRenameDescription    = "Rename (default): the new file is saved as name_2, name_3, and so on until an unused name is found. Existing files stay untouched."
-	ResizeCollisionSkipDescription      = "Skip: the item is marked Skipped and the existing file stays untouched."
-	ResizeCollisionOverwriteDescription = "Overwrite: existing output files are replaced, but only after you confirm when the job starts. Source images are never overwritten."
+	ResizeCollisionSkipDescription      = "Skip: the item is marked Skipped and the existing file stays untouched, as does a source image with that name. When two images in the job would produce the same file name, only one is saved: the first, or the next if the first cannot be saved."
+	ResizeCollisionOverwriteDescription = "Overwrite: an existing file with the output's name is replaced, but only after you confirm when the job starts. Source images are never overwritten: when the existing item is a source image, another output of the same job, a folder or link, or a file that cannot be confirmed not to be a source image, the output is saved as name_2, name_3, and so on, at the first unused name, so no other file is replaced."
 
 	ResizeFormatSelected     = "Resized images are saved as %s."
 	ResizeFormatKeepSelected = "Resized images keep their source format."
@@ -172,6 +180,16 @@ const (
 	ResizeOptionsSaveFailed  = "The resize setting change remains in memory, but settings could not be saved: %v"
 	ResizeOperationFailed    = "Resize setting operation failed: %v"
 	ResizeFolderUnavailable  = "The default Pictures output folder is unavailable: %v. Choose an output folder before resizing."
+	ResizeFolderReplaced     = resizeSavedFolderRefused + " The default output folder is selected instead; choose another folder with Browse."
+	ResizeFolderRefused      = resizeSavedFolderRefused + " The default Pictures output folder is unavailable too: %v. Choose an output folder with Browse before resizing."
+	// ResizeDefaultFolderUnknown is the reason ResizeFolderUnavailable and
+	// ResizeFolderRefused give when no folder is selected and nothing says
+	// why the default folder is unavailable.
+	ResizeDefaultFolderUnknown = "its location is unknown"
+
+	// resizeSavedFolderRefused begins both startup warnings about a saved
+	// output folder that only earlier builds accepted.
+	resizeSavedFolderRefused = "The saved output folder for resized images, %s, can no longer be used: " + outputFolderNameRule + ", or " + outputFolderRootRule + "."
 
 	SourceImagesLabel    = "&Source images"
 	SourceImagesHint     = "Drop PNG or JPEG files — or a folder of images — anywhere on this view, or choose files with Add Images. Each file's content is checked in the background, and sources are opened read-only and never modified."
