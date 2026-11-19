@@ -12,9 +12,13 @@
 // (RSZ-028): its color is blended with the background in proportion to its
 // alpha, so a fully transparent pixel becomes the background and an opaque
 // one keeps its color. 16-bit samples are rounded to the nearest 8-bit value,
-// grayscale stays grayscale, and the quality is the job's 1–100 setting
-// (RSZ-029). The blend and the rounding are integer arithmetic, so the same
-// image and options give the same bytes on every platform.
+// and the quality is the job's 1–100 setting (RSZ-029). A grayscale result,
+// which has no alpha, stays a one-component grayscale JPEG. A result with
+// alpha is flattened in color, as the background may be any color, so a gray
+// source with transparency, which the decoder and the resizer carry as color
+// with alpha, gives a color JPEG. The blend and the rounding are integer
+// arithmetic, so the same image and options give the same bytes on every
+// platform.
 //
 // No metadata is written: no EXIF, so no orientation tag either, as the
 // pixels are already upright (RSZ-018), and no ICC profile, comments, or

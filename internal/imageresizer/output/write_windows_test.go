@@ -261,9 +261,11 @@ func TestWriteReportsWriteFailures(t *testing.T) {
 // TestWriteObservesCancellation pins RSZ-045 at the item level: a context
 // cancelled before the write, while it encodes, or once the result is
 // complete but before it is renamed saves nothing and removes the temporary
-// file.
+// file. While it encodes, the encoder's next write fails, even one the
+// buffer would take without writing to the file, so the encoder stops there
+// rather than at the next full buffer.
 func TestWriteObservesCancellation(t *testing.T) {
-	for _, when := range []string{"before", "while encoding", "before renaming"} {
+	for _, when := range []string{"before", "while encoding", "while encoding little", "before renaming"} {
 		out := t.TempDir()
 		item := planOne(t, out, CollisionRename, filepath.Join(t.TempDir(), "photo.png"), ActionCreate)
 		ctx, cancel := context.WithCancel(context.Background())
@@ -277,6 +279,16 @@ func TestWriteObservesCancellation(t *testing.T) {
 				w.Write(bytes.Repeat([]byte("p"), 2*writeBuffer))
 				cancel()
 				_, err := w.Write(bytes.Repeat([]byte("p"), 2*writeBuffer))
+				return err
+			}
+		case "while encoding little":
+			encode = func(w io.Writer) error {
+				w.Write([]byte("p"))
+				cancel()
+				_, err := w.Write([]byte("p"))
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("the write after the cancellation returned %v, want the context's error", err)
+				}
 				return err
 			}
 		case "before renaming":
@@ -545,6 +557,193 @@ func TestWriteNeverReplacesAReadOnlyFile(t *testing.T) {
 	assertNames(t, setup.out, "photo.png")
 }
 
+// TestWriteChecksTheReplacedFileBeforeEncoding: an ActionReplace item whose
+// file is read-only or changed since planning fails before anything is
+// encoded, with the error Write would meet when replacing it, which
+// Item.CheckWrite returns too; a file another program has open passes the
+// early look, as it may be closed by the time Write holds it.
+func TestWriteChecksTheReplacedFileBeforeEncoding(t *testing.T) {
+	changes := map[string]struct {
+		change func(t *testing.T, setup replaceSetup)
+		kind   Kind
+		want   error
+	}{
+		"read-only": {func(t *testing.T, setup replaceSetup) {
+			if err := os.Chmod(setup.destination, 0o444); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(setup.destination, 0o644) })
+		}, KindWrite, ErrReadOnly},
+		"rewritten": {func(t *testing.T, setup replaceSetup) {
+			writeFile(t, setup.destination, "rewritten by another program")
+		}, KindChanged, ErrDestinationChanged},
+		"source moved there": {func(t *testing.T, setup replaceSetup) {
+			os.Remove(setup.destination)
+			if err := os.Rename(setup.source, setup.destination); err != nil {
+				t.Fatal(err)
+			}
+		}, KindChanged, ErrDestinationChanged},
+	}
+	for name, tc := range changes {
+		t.Run(name, func(t *testing.T) {
+			setup := newReplaceSetup(t)
+			tc.change(t, setup)
+			checked := setup.item.CheckWrite()
+			assertKind(t, checked, tc.kind)
+			if !errors.Is(checked, tc.want) {
+				t.Fatalf("CheckWrite = %v, want %v", checked, tc.want)
+			}
+			encoded := false
+			path, err := Write(context.Background(), setup.item, func(w io.Writer) error {
+				encoded = true
+				return text("new")(w)
+			})
+			assertKind(t, err, tc.kind)
+			if path != "" || encoded || !errors.Is(err, tc.want) {
+				t.Fatalf("Write = %q, %v, encoded %v, want %v before encoding", path, err, encoded, tc.want)
+			}
+		})
+	}
+	setup := newReplaceSetup(t)
+	handle := openWithoutSharingDelete(t, setup.destination)
+	defer windows.CloseHandle(handle)
+	if err := setup.item.CheckWrite(); err != nil {
+		t.Fatalf("CheckWrite refuses a file another program has open: %v", err)
+	}
+}
+
+// TestWriteKeepsAFileMarkedReadOnlyWhileHeld: holding a file does not stop
+// another program from marking it read-only after Write checked it. Such a
+// file cannot be deleted once the result has its name, so it is kept under
+// its .gamedevtools-replaced- name with its content, and Write returns the
+// destination with a KindWrite error that names it.
+func TestWriteKeepsAFileMarkedReadOnlyWhileHeld(t *testing.T) {
+	setup := newReplaceSetup(t)
+	steps := writeSteps{pinned: func() {
+		if err := os.Chmod(setup.destination, 0o444); err != nil {
+			t.Fatalf("mark the held file read-only: %v", err)
+		}
+	}}
+	path, err := write(context.Background(), setup.item, text("new"), steps)
+	aside := asideFiles(t, setup.out)
+	for _, file := range aside {
+		t.Cleanup(func() { os.Chmod(file, 0o644) })
+	}
+	assertKind(t, err, KindWrite)
+	if path != setup.destination || !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("Write = %q, %v, want the destination and a permission failure", path, err)
+	}
+	if readFile(t, setup.destination) != "new" {
+		t.Fatal("the result does not have the destination's name")
+	}
+	if len(aside) != 1 || readFile(t, aside[0]) != "old" || !strings.Contains(err.Error(), aside[0]) {
+		t.Fatalf("files moved aside = %q after %v, want the replaced file, named in the error", aside, err)
+	}
+}
+
+// openToRead opens a file for reading while allowing every other program to
+// read, write, and delete it, as a picture viewer, the search indexer, or a
+// virus scanner does.
+func openToRead(t *testing.T, path string) windows.Handle {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, shareAll, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	return handle
+}
+
+// TestWriteRemovesTheNamesOfFilesOthersHaveOpen: a file Write deletes loses
+// its name at once even while another program that allowed deletion still
+// has it open, rather than staying listed, under a name no program can open,
+// rename, or delete, until that program closes it; the program still reads
+// the content it opened. This holds for the file a replacement moved aside
+// and for the temporary file of a failed write.
+func TestWriteRemovesTheNamesOfFilesOthersHaveOpen(t *testing.T) {
+	t.Run("moved aside", func(t *testing.T) {
+		setup := newReplaceSetup(t)
+		viewer := openToRead(t, setup.destination)
+		defer windows.CloseHandle(viewer)
+		if _, err := Write(context.Background(), setup.item, text("new")); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		assertNames(t, setup.out, "photo.png")
+		content := make([]byte, 8)
+		var n uint32
+		if err := windows.ReadFile(viewer, content, &n, nil); err != nil || string(content[:n]) != "old" {
+			t.Fatalf("the viewer read %q, %v, want the content it opened", content[:n], err)
+		}
+	})
+	t.Run("temporary", func(t *testing.T) {
+		out := t.TempDir()
+		item := planOne(t, out, CollisionRename, filepath.Join(t.TempDir(), "photo.png"), ActionCreate)
+		broken := errors.New("encoder broke")
+		var indexer windows.Handle
+		_, err := Write(context.Background(), item, func(w io.Writer) error {
+			temps := temporaryFiles(t, out)
+			if len(temps) != 1 {
+				t.Fatalf("temporary files while encoding: %q", temps)
+			}
+			indexer = openToRead(t, temps[0])
+			return broken
+		})
+		if indexer != 0 {
+			defer windows.CloseHandle(indexer)
+		}
+		if err != broken {
+			t.Fatalf("Write = %v, want the encoder's error", err)
+		}
+		assertNames(t, out)
+	})
+}
+
+// TestCheckHeldFindsARetargetedPath: the folders that hold a held file can be
+// neither renamed nor removed, so a folder that no longer lists the held file
+// means a link in the destination's path now leads elsewhere, and the
+// destination changed.
+func TestCheckHeldFindsARetargetedPath(t *testing.T) {
+	real, elsewhere := t.TempDir(), t.TempDir()
+	out := filepath.Join(t.TempDir(), "out")
+	mustJunction(t, out, real)
+	writeFile(t, filepath.Join(real, "photo.png"), "old")
+	item := planOne(t, out, CollisionOverwrite, filepath.Join(t.TempDir(), "photo.png"), ActionReplace)
+	held, err := hold(item.Destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(held)
+	if err := os.Rename(real, real+"-moved"); err == nil {
+		t.Fatal("the held file's folder was renamed")
+	}
+	if err := os.Remove(out); err != nil {
+		t.Fatalf("remove the junction: %v", err)
+	}
+	mustJunction(t, out, elsewhere)
+	err = checkHeld(&heldFile{fileSystem: osFiles{}, handle: held}, item)
+	assertKind(t, err, KindChanged)
+	if !errors.Is(err, ErrDestinationChanged) {
+		t.Fatalf("error = %v, want ErrDestinationChanged", err)
+	}
+}
+
+// TestUnusedNameGivesUp: a folder that reports every name as taken ends the
+// search after tempAttempts names, with an error that names the folder and
+// suits either search.
+func TestUnusedNameGivesUp(t *testing.T) {
+	tries := 0
+	_, err := unusedName(`C:\Out`, tempName, func(string) error {
+		tries++
+		return windows.ERROR_FILE_EXISTS
+	})
+	if err == nil || tries != tempAttempts || !strings.Contains(err.Error(), `C:\Out`) || strings.Contains(err.Error(), "temporary") {
+		t.Fatalf("after %d tries: %v", tries, err)
+	}
+}
+
 // openWithoutSharingDelete opens a file the way many programs do, allowing
 // others to read and write it but not to delete or rename it.
 func openWithoutSharingDelete(t *testing.T, path string) windows.Handle {
@@ -634,7 +833,8 @@ func TestWriteHoldsTheContentItChecked(t *testing.T) {
 // TestCheckHeldTellsFailuresFromChanges: a held file whose folder entry
 // cannot be listed, as when listing is denied or a network share fails, is a
 // write failure carrying the system's error, not a destination that changed;
-// a folder that no longer lists the held file changed.
+// a path that no longer leads to the held file changed, as
+// TestCheckHeldFindsARetargetedPath shows.
 func TestCheckHeldTellsFailuresFromChanges(t *testing.T) {
 	setup := newReplaceSetup(t)
 	held, err := hold(setup.destination)

@@ -251,7 +251,9 @@ func TestJPEGPixelsAreExact(t *testing.T) {
 }
 
 // TestJPEGKeepsGrayscale: a grayscale result is stored as a one-component
-// JPEG, at 8 and 16 bits per sample.
+// JPEG, at 8 and 16 bits per sample. A gray picture with alpha, which reaches
+// the encoder as color with alpha, is flattened in color, as the package
+// documents, since the background it is flattened against may be a color.
 func TestJPEGKeepsGrayscale(t *testing.T) {
 	for _, name := range []string{"Gray", "Gray16"} {
 		img := resizerTypes(24, 16)[name]
@@ -262,6 +264,18 @@ func TestJPEGKeepsGrayscale(t *testing.T) {
 		if _, ok := decoded.(*image.Gray); !ok {
 			t.Fatalf("%s: decoded as %T, want *image.Gray", name, decoded)
 		}
+	}
+	translucent := image.NewNRGBA(image.Rect(0, 0, 16, 16))
+	for i := 0; i < len(translucent.Pix); i += 4 {
+		copy(translucent.Pix[i:], []uint8{0x80, 0x80, 0x80, 0x80})
+	}
+	red := color.RGBA{R: 0xff, A: 0xff}
+	decoded, err := jpeg.Decode(bytes.NewReader(mustEncode(t, translucent, jpegOptions(red))))
+	if err != nil {
+		t.Fatalf("gray with alpha: decode: %v", err)
+	}
+	if r, g, _, _ := decoded.At(8, 8).RGBA(); r>>8 < 0xb0 || g>>8 > 0x50 {
+		t.Fatalf("gray with alpha over red decoded as %T with %v, want the blend with the red", decoded, decoded.At(8, 8))
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -42,15 +43,40 @@ func TestWriteGivesResultsTheUsualPermissions(t *testing.T) {
 	}
 }
 
-// TestLinkUnsupported: a file system without hard links is told apart from
-// a name that is taken.
+// TestLinkUnsupported: a file system without hard links, or one that refused
+// the link, is told apart from a name that is taken, and keeps the system's
+// error, so errors.Is reports EPERM as the permission failure it may be.
 func TestLinkUnsupported(t *testing.T) {
 	for _, errno := range []syscall.Errno{syscall.EPERM, syscall.ENOTSUP, syscall.EOPNOTSUPP} {
-		if !linkUnsupported(&os.LinkError{Op: "link", Err: errno}) {
-			t.Fatalf("%v is not read as a file system without hard links", errno)
+		err := linkFailure(&os.LinkError{Op: "link", Err: errno})
+		if !linkUnsupported(&os.LinkError{Op: "link", Err: errno}) || !errors.Is(err, errLinkUnsupported) || !errors.Is(err, errno) {
+			t.Fatalf("%v: claim's error is %v, want errLinkUnsupported and the system's error", errno, err)
 		}
 	}
-	if linkUnsupported(&os.LinkError{Op: "link", Err: syscall.EEXIST}) || !errors.Is(&os.LinkError{Op: "link", Err: syscall.EEXIST}, os.ErrExist) {
+	if !errors.Is(linkFailure(&os.LinkError{Op: "link", Err: syscall.EPERM}), fs.ErrPermission) {
+		t.Fatal("EPERM is no longer reported as a permission failure")
+	}
+	taken := &os.LinkError{Op: "link", Err: syscall.EEXIST}
+	if linkUnsupported(taken) || linkFailure(taken) != error(taken) || !errors.Is(taken, os.ErrExist) {
 		t.Fatal("a taken name is read as a file system without hard links")
+	}
+}
+
+// TestCheckWriteRefusesReplacing: outside Windows, where planning plans no
+// replacement, an ActionReplace item is refused before anything is encoded.
+func TestCheckWriteRefusesReplacing(t *testing.T) {
+	out := t.TempDir()
+	item := Item{Action: ActionReplace, Destination: filepath.Join(out, "photo.png")}
+	if err := item.CheckWrite(); !errors.Is(err, errReplaceUnsupported) {
+		t.Fatalf("CheckWrite = %v, want errReplaceUnsupported", err)
+	}
+	encoded := false
+	_, err := Write(context.Background(), item, func(w io.Writer) error {
+		encoded = true
+		return nil
+	})
+	var writeErr *Error
+	if !errors.As(err, &writeErr) || writeErr.Kind != KindWrite || encoded || !errors.Is(err, errReplaceUnsupported) {
+		t.Fatalf("Write = %v, encoded %v, want errReplaceUnsupported before encoding", err, encoded)
 	}
 }

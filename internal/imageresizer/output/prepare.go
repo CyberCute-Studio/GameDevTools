@@ -653,11 +653,12 @@ func (i Item) Renamed() bool {
 // server that reports one identity for every file gives any file; only its
 // stamp tells it apart. A file rewritten since the plan is not replaced
 // either, as nothing tells it from such a file. Write makes this same check,
-// reading the identity through the handle it holds the file with so that
-// nothing else can change, move, replace, or delete it, immediately before it
-// replaces the file, and replaces nothing when the check fails. It reports
-// false for every other action, and when the entry cannot be listed or the
-// file's identity cannot be read.
+// reading the identity through the handle it holds the file with so that no
+// other program can write to, move, replace, or delete it, immediately before
+// it replaces the file, and replaces nothing when the check fails;
+// Item.CheckWrite makes it too, before any work is done for the item. It
+// reports false for every other action, and when the entry cannot be listed
+// or the file's identity cannot be read.
 func (i Item) StillReplaceable() bool {
 	return i.stillReplaceable(osFiles{})
 }

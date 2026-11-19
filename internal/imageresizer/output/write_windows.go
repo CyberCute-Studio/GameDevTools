@@ -170,49 +170,77 @@ func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 // hold opens the file at the destination for deletion while denying every
 // other program write and delete access, so that, until the handle is
 // closed, no program can change the file's content, move, rename, delete, or
-// replace it, nor give its name to another file, and what checkHeld finds
-// still holds when Write deletes the file. A program that already has the
-// file open for writing, or without allowing deletion, makes it fail with a
-// sharing violation. It opens a link or a folder at the destination as
-// itself, which checkHeld then refuses.
+// replace it, nor give its name to another file: the file checkHeld checks is
+// the one Write deletes, with the content it checked. Sharing does not
+// govern a file's attributes, times, or other names, so a program can still
+// mark the held file read-only, change its times, or link another name to
+// it, none of which changes the content Write deletes. A program that
+// already has the file open for writing, or without allowing deletion, makes
+// it fail with a sharing violation. It opens a link or a folder at the
+// destination as itself, which checkHeld then refuses.
 func hold(destination string) (windows.Handle, error) {
 	name, err := windowsPath("open", destination)
 	if err != nil {
 		return 0, err
 	}
 	handle, err := windows.CreateFile(name, windows.DELETE|windows.FILE_READ_ATTRIBUTES|windows.SYNCHRONIZE,
-		windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING,
-		windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+		windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, entryFlags, 0)
 	if err != nil {
 		return 0, &fs.PathError{Op: "open", Path: destination, Err: err}
 	}
 	return handle, nil
 }
 
+// entryFlags open the entry at a path as itself, a link or a folder included,
+// rather than what a link leads to.
+const entryFlags = windows.FILE_FLAG_OPEN_REPARSE_POINT | windows.FILE_FLAG_BACKUP_SEMANTICS
+
+// checkReplace is the look Item.CheckWrite takes at the file an
+// ActionReplace item replaces, before any work is done for the item:
+// checkHeld's check, through a handle that requests no access to the file
+// and so holds nothing. A file that is no longer the planned one, unchanged,
+// or is read-only fails the item as Write would; a planned file deleted since
+// does not, as Write creates the result in its place, and neither does a file
+// another program has open, which it may have closed by the time Write holds
+// the file.
+func checkReplace(item Item) error {
+	handle, err := open(item.Destination, entryFlags)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return nil
+	}
+	if err != nil {
+		return writeFailure("open existing file", err)
+	}
+	defer windows.CloseHandle(handle)
+	return checkHeld(&heldFile{fileSystem: osFiles{}, handle: handle}, item)
+}
+
 // heldFile is the filesystem as checkHeld inspects it: the folder lists the
 // entry at the destination as planning lists it, through the fileSystem, and
 // the identity is read through the handle that holds the file, so the file
-// checked is the one Write moves aside and deletes. It keeps the attributes
-// read with the identity.
+// checked is the one Write moves aside and deletes.
 type heldFile struct {
 	fileSystem
-	handle     windows.Handle
-	attributes uint32
+	handle windows.Handle
 }
 
 func (h *heldFile) Identity(path string) (identity, error) {
-	found, attributes, err := identifyHandle(h.handle, path)
-	h.attributes = attributes
+	found, _, err := identifyHandle(h.handle, path)
 	return found, err
 }
 
-// checkHeld checks that the held file is the one the plan proved is none of
-// the sources, unchanged, with Item.StillReplaceable's own check, and that it
-// is not read-only. The handle keeps the file at the destination's name, with
-// its content, while the checks run, so their answer still holds when it is
-// replaced. A failure to list the entry or read its identity is a KindWrite
-// error, except that a folder no longer listing the held file, which keeps
-// its name, means the folder itself was moved or replaced.
+// checkHeld checks that the file the handle is open to is the one the plan
+// proved is none of the sources, unchanged, with Item.StillReplaceable's own
+// check, and that it is not read-only, reading its attributes through the
+// handle once that check has passed. The handle Write holds the file with
+// keeps the file at the destination's name, with its content, while the
+// checks run, so their answer for the content still holds when it is
+// replaced. A failure to list the entry or read the file's identity or
+// attributes is a KindWrite error, except that a folder no longer listing
+// the held file, which keeps its name, means the path no longer leads to the
+// held file's folder: a junction, link, or drive mapping in it now leads
+// elsewhere, as a folder that holds an open file can be neither renamed nor
+// removed.
 func checkHeld(files *heldFile, item Item) error {
 	switch err := item.verifyReplaceable(files); {
 	case errors.Is(err, ErrDestinationChanged):
@@ -222,7 +250,11 @@ func checkHeld(files *heldFile, item Item) error {
 	case err != nil:
 		return writeFailure("check existing file", err)
 	}
-	if files.attributes&windows.FILE_ATTRIBUTE_READONLY != 0 {
+	_, attributes, err := identifyHandle(files.handle, item.Destination)
+	if err != nil {
+		return writeFailure("check existing file", err)
+	}
+	if attributes&windows.FILE_ATTRIBUTE_READONLY != 0 {
 		return kindError(KindWrite, "replace existing file", fmt.Errorf("%s: %w", item.Destination, ErrReadOnly))
 	}
 	return nil
@@ -284,8 +316,20 @@ func renameHandle(handle windows.Handle, target string) error {
 }
 
 // deleteHandle marks the file a handle is open to, which needs delete
-// access, for deletion once the handle is closed.
+// access, for deletion once the handle is closed. It asks for POSIX
+// semantics, so the file's name is gone as soon as the handle is closed even
+// while another program that allowed deletion, such as a picture viewer, the
+// search indexer, or a virus scanner, still has the file open; that program
+// keeps reading the file until it closes it. Marked the classic way, the name
+// would stay until the last such handle closed, naming a file no program can
+// open, rename, or delete meanwhile. A file system without POSIX deletion,
+// such as FAT32 or exFAT, marks the file the classic way. A read-only file is
+// refused either way.
 func deleteHandle(handle windows.Handle) error {
+	posix := uint32(windows.FILE_DISPOSITION_DELETE | windows.FILE_DISPOSITION_POSIX_SEMANTICS)
+	if windows.SetFileInformationByHandle(handle, windows.FileDispositionInfoEx, (*byte)(unsafe.Pointer(&posix)), uint32(unsafe.Sizeof(posix))) == nil {
+		return nil
+	}
 	disposition := byte(1)
 	return windows.SetFileInformationByHandle(handle, windows.FileDispositionInfo, &disposition, 1)
 }

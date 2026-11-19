@@ -47,9 +47,11 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // come, is processed with its Action set to output.ActionCreate.
 //
 // The item, the settings, and the encode options for the item's format are
-// checked before the source is read. Nothing holds the decoded source once it
-// is resized, so the collector can reclaim it while the result is encoded and
-// written.
+// checked before the source is read, and so is the file an ActionReplace item
+// replaces, as output.Item.CheckWrite checks it: an item whose file changed
+// since planning or is read-only fails before its source is decoded. Nothing
+// holds the decoded source once it is resized, so the collector can reclaim
+// it while the result is encoded and written.
 //
 // The error is the failing step's own: a *decode.Error for a source that
 // cannot be read or decoded, a *resize.Error, an *encode.Error, or an

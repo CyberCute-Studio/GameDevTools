@@ -11,15 +11,18 @@ import (
 )
 
 var (
-	// errReplaceUnsupported is the cause of the KindWrite error Write returns
-	// for an ActionReplace item outside Windows, where planning never proves
-	// a file replaceable and so plans none.
+	// errReplaceUnsupported is the cause of the KindWrite error Write and
+	// Item.CheckWrite return for an ActionReplace item outside Windows, where
+	// planning never proves a file replaceable and so plans none.
 	errReplaceUnsupported = errors.New("replacing an existing file is supported on Windows only")
 	// errLinkUnsupported is the cause of the KindWrite error Write returns
-	// outside Windows when the output folder's file system cannot give a
-	// file a second name, which saving a result without replacing anything
-	// needs there.
-	errLinkUnsupported = errors.New("the output folder's file system does not support hard links, which saving a result needs outside Windows")
+	// outside Windows when the output folder's file system does not give the
+	// result's temporary file a second name, which saving a result without
+	// replacing anything needs there. link(2) reports EPERM both for a file
+	// system without hard links and for a link the system refuses, so the
+	// error wraps the system's error too, and errors.Is reports EPERM as
+	// fs.ErrPermission.
+	errLinkUnsupported = errors.New("saving a result outside Windows needs a hard link, which the output folder's file system does not support or refused")
 )
 
 // tempFile is the temporary file a result is written to.
@@ -50,12 +53,17 @@ func (t *tempFile) sync() error { return t.file.Sync() }
 
 // claim gives the file the destination's name without replacing anything
 // there: a hard link, which the system refuses to create over an existing
-// entry. A file system without hard links fails with errLinkUnsupported
-// rather than the permission failure the system reports.
+// entry.
 func (t *tempFile) claim(destination string) error {
-	err := os.Link(t.path, destination)
+	return linkFailure(os.Link(t.path, destination))
+}
+
+// linkFailure is the error claim returns for link(2)'s: a link the file
+// system does not support, or refused, is marked errLinkUnsupported and keeps
+// the system's error.
+func linkFailure(err error) error {
 	if err != nil && !nameTaken(err) && linkUnsupported(err) {
-		return fmt.Errorf("%w (%v)", errLinkUnsupported, err)
+		return fmt.Errorf("%w: %w", errLinkUnsupported, err)
 	}
 	return err
 }
@@ -70,8 +78,12 @@ func (t *tempFile) finish() error {
 // temporary one, which finish removes.
 func (t *tempFile) discard() error { return t.finish() }
 
-func replace(*tempFile, Item, writeSteps) (bool, error) {
-	return false, kindError(KindWrite, "replace existing file", errReplaceUnsupported)
+func replace(_ *tempFile, item Item, _ writeSteps) (bool, error) {
+	return false, checkReplace(item)
+}
+
+func checkReplace(Item) error {
+	return kindError(KindWrite, "replace existing file", errReplaceUnsupported)
 }
 
 func nameTaken(err error) bool { return errors.Is(err, fs.ErrExist) }
@@ -79,8 +91,8 @@ func nameTaken(err error) bool { return errors.Is(err, fs.ErrExist) }
 func diskFull(err error) bool { return errors.Is(err, syscall.ENOSPC) }
 
 // linkUnsupported reports whether creating a hard link failed because the
-// file system has none: link(2) reports EPERM for that, and some file
-// systems report ENOTSUP.
+// file system has none, or refused it: link(2) reports EPERM for either, and
+// some file systems report ENOTSUP.
 func linkUnsupported(err error) bool {
 	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }

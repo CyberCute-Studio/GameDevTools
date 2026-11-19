@@ -291,6 +291,37 @@ func TestProcessChecksSettingsBeforeReading(t *testing.T) {
 	}
 }
 
+// TestProcessChecksTheReplacedFileBeforeReading: a confirmed Overwrite item
+// whose existing file was marked read-only after planning fails with
+// ErrReadOnly before its source is read, so a missing source is not what is
+// reported, and the file is kept.
+func TestProcessChecksTheReplacedFileBeforeReading(t *testing.T) {
+	source := writeSource(t, "sprite.png", encodePNG(t, halfTransparent()))
+	out := t.TempDir()
+	destination := filepath.Join(out, "sprite.png")
+	if err := os.WriteFile(destination, []byte("earlier result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item := planOne(t, source, decode.FormatPNG, output.FormatKeepSource, output.CollisionOverwrite, out)
+	if item.Action != output.ActionReplace {
+		t.Skipf("planned %v (%v): replacing needs file identities, read on Windows only", item.Action, item.Reason)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(destination, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(destination, 0o644)
+	path, err := Process(context.Background(), item, settings(8, 8, preset.ResizeFit, white))
+	if path != "" || !errors.Is(err, output.ErrReadOnly) {
+		t.Fatalf("Process = %q, %v, want ErrReadOnly before the source is read", path, err)
+	}
+	if content, readErr := os.ReadFile(destination); readErr != nil || string(content) != "earlier result" {
+		t.Fatalf("the read-only file holds %q, %v", content, readErr)
+	}
+}
+
 // TestProcessObservesCancellation: a cancelled context fails the item with an
 // error errors.Is reports as the context's, and saves nothing.
 func TestProcessObservesCancellation(t *testing.T) {
