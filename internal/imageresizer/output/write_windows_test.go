@@ -175,6 +175,46 @@ func TestWriteNeverReplacesAFileThatAppeared(t *testing.T) {
 	}
 }
 
+// TestWriteChecksATakenNameBeforeEncoding: an ActionCreate item whose name a
+// file or a folder took after planning fails with ErrDestinationTaken before
+// anything is encoded, as Item.CheckWrite reports too, and what took the name
+// is kept.
+func TestWriteChecksATakenNameBeforeEncoding(t *testing.T) {
+	takers := map[string]func(t *testing.T, path string){
+		"file": func(t *testing.T, path string) { writeFile(t, path, "another program's") },
+		"folder": func(t *testing.T, path string) {
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, take := range takers {
+		t.Run(name, func(t *testing.T) {
+			out := t.TempDir()
+			item := planOne(t, out, CollisionRename, filepath.Join(t.TempDir(), "photo.png"), ActionCreate)
+			if err := item.CheckWrite(); err != nil {
+				t.Fatalf("CheckWrite of a free name: %v", err)
+			}
+			take(t, item.Destination)
+			checked := item.CheckWrite()
+			assertKind(t, checked, KindChanged)
+			if !errors.Is(checked, ErrDestinationTaken) {
+				t.Fatalf("CheckWrite = %v, want ErrDestinationTaken", checked)
+			}
+			encoded := false
+			path, err := Write(context.Background(), item, func(w io.Writer) error {
+				encoded = true
+				return text("result")(w)
+			})
+			assertKind(t, err, KindChanged)
+			if path != "" || encoded || !errors.Is(err, ErrDestinationTaken) {
+				t.Fatalf("Write = %q, %v, encoded %v, want ErrDestinationTaken before encoding", path, err, encoded)
+			}
+			assertNames(t, out, "photo.png")
+		})
+	}
+}
+
 // TestWriteRemovesTheTemporaryFileWhenEncodingFails pins RSZ-027 and NFR-023
 // for the encoder's own failures: its error is returned as it is, and
 // neither a partial result nor its temporary file is left, even when the
@@ -863,6 +903,33 @@ func TestWriteFailsForAFileInUse(t *testing.T) {
 			assertNames(t, setup.out, "photo.png")
 		})
 	}
+}
+
+// TestWriteWaitsForABriefOpen: a file another program opens without allowing
+// deletion only briefly, as a thumbnail generator or a sync client reading it
+// may, is replaced once that program closes it, rather than failing the item
+// with the sharing violation.
+func TestWriteWaitsForABriefOpen(t *testing.T) {
+	setup := newReplaceSetup(t)
+	handle := openWithoutSharingDelete(t, setup.destination)
+	closed := make(chan struct{})
+	steps := writeSteps{written: func() {
+		// The result is complete; the program closes the file well within
+		// the time Write waits for it.
+		time.AfterFunc(40*time.Millisecond, func() {
+			windows.CloseHandle(handle)
+			close(closed)
+		})
+	}}
+	path, err := write(context.Background(), setup.item, text("new"), steps)
+	<-closed
+	if err != nil || path != setup.destination {
+		t.Fatalf("Write = %q, %v, want the file replaced once it was closed", path, err)
+	}
+	if readFile(t, setup.destination) != "new" {
+		t.Fatal("the file was not replaced")
+	}
+	assertNames(t, setup.out, "photo.png")
 }
 
 // TestWriteHoldsTheContentItChecked: once Write has checked the file it

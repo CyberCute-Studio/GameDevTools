@@ -204,7 +204,7 @@ func TestJPEGPixelsAreExact(t *testing.T) {
 	}
 
 	// A 3 × 2 sub-image of a 5 × 3 16-bit picture, so its rows are spaced
-	// wider than they are packed.
+	// wider than they are long; each is packed into its own row's start.
 	full := image.NewNRGBA64(image.Rect(0, 0, 5, 3))
 	for y := range 3 {
 		for x := range 5 {
@@ -214,8 +214,8 @@ func TestJPEGPixelsAreExact(t *testing.T) {
 	full.SetNRGBA64(2, 2, color.NRGBA64{R: 0xffff, G: 0, B: 0, A: 0x8000})
 	sub := full.SubImage(image.Rect(1, 1, 4, 3)).(*image.NRGBA64)
 	packed := jpegPixels(sub, background).(*image.RGBA)
-	if packed.Rect != image.Rect(1, 1, 4, 3) || packed.Stride != 12 || len(packed.Pix) != 24 {
-		t.Fatalf("packed image = %v stride %d, %d bytes", packed.Rect, packed.Stride, len(packed.Pix))
+	if packed.Rect != image.Rect(1, 1, 4, 3) || packed.Stride != sub.Stride || &packed.Pix[0] != &sub.Pix[0] {
+		t.Fatalf("packed image = %v stride %d, want the sub-image's memory and stride %d", packed.Rect, packed.Stride, sub.Stride)
 	}
 	for y := 1; y < 3; y++ {
 		for x := 1; x < 4; x++ {
@@ -236,7 +236,7 @@ func TestJPEGPixelsAreExact(t *testing.T) {
 
 	gray := image.NewGray16(image.Rect(0, 0, 3, 1))
 	copy(gray.Pix, []uint8{0x00, 0x80, 0x7f, 0x80, 0xff, 0xff})
-	if got := jpegPixels(gray, background).(*image.Gray).Pix; !bytes.Equal(got, []uint8{0, 0x7f, 0xff}) {
+	if got := jpegPixels(gray, background).(*image.Gray).Pix[:3]; !bytes.Equal(got, []uint8{0, 0x7f, 0xff}) {
 		t.Fatalf("Gray16 narrowed to %v", got)
 	}
 
@@ -247,6 +247,46 @@ func TestJPEGPixelsAreExact(t *testing.T) {
 		0xff, 0xff, (0xff*0x7f + 0x7f) / 0xff, 0xff,
 	}) {
 		t.Fatalf("premultiplied RGBA flattened to %v", got)
+	}
+}
+
+// TestJPEGPixelsStayWithinTheImage: converting a sub-image in place gives the
+// pixels converting the whole picture gives there, and changes no pixel of
+// the picture outside the sub-image, though their bytes lie between its rows,
+// for every image type the resizer produces, 16-bit ones narrowed to 8 bits
+// included.
+func TestJPEGPixelsStayWithinTheImage(t *testing.T) {
+	background := color.RGBA{R: 10, G: 200, B: 0xff, A: 0xff}
+	region := image.Rect(2, 1, 5, 6)
+	for name, full := range resizerTypes(7, 6) {
+		whole := jpegPixels(resizerTypes(7, 6)[name], background)
+		around := make(map[image.Point]color.Color)
+		for y := range 6 {
+			for x := range 7 {
+				if p := image.Pt(x, y); !p.In(region) {
+					around[p] = full.At(x, y)
+				}
+			}
+		}
+		sub := full.(interface {
+			SubImage(image.Rectangle) image.Image
+		}).SubImage(region)
+		got := jpegPixels(sub, background)
+		if got.Bounds() != region {
+			t.Fatalf("%s: bounds = %v, want %v", name, got.Bounds(), region)
+		}
+		for y := region.Min.Y; y < region.Max.Y; y++ {
+			for x := region.Min.X; x < region.Max.X; x++ {
+				if c, want := got.At(x, y), whole.At(x, y); c != want {
+					t.Fatalf("%s: pixel (%d, %d) = %+v, want %+v", name, x, y, c, want)
+				}
+			}
+		}
+		for p, want := range around {
+			if c := full.At(p.X, p.Y); c != want {
+				t.Fatalf("%s: pixel %v outside the sub-image changed from %+v to %+v", name, p, want, c)
+			}
+		}
 	}
 }
 
@@ -381,6 +421,27 @@ func TestEncodeReportsWriteFailures(t *testing.T) {
 				t.Fatalf("%v after %d bytes: error = %v, want it to wrap the writer's", options.Format, budget, err)
 			}
 		}
+	}
+}
+
+// TestEncodeKeepsAPanicAfterAWriteFailure: an encoder that panics after the
+// writer failed is still reported as the write failure, and the panic joins
+// it rather than being lost.
+func TestEncodeKeepsAPanicAfterAWriteFailure(t *testing.T) {
+	diskFull := errors.New("disk full")
+	// The JPEG encoder keeps reading pixels after a failed write, and this
+	// picture's luma ends halfway down, well after the encoder's first 4 KiB
+	// of output have failed to be written.
+	img := image.NewYCbCr(image.Rect(0, 0, 512, 512), image.YCbCrSubsampleRatio444)
+	rng := rand.New(rand.NewPCG(3, 5))
+	for i := range img.Y {
+		img.Y[i], img.Cb[i], img.Cr[i] = uint8(rng.Uint32()), uint8(rng.Uint32()), uint8(rng.Uint32())
+	}
+	img.Y = img.Y[:len(img.Y)/2]
+	err := Encode(&failingWriter{err: diskFull}, img, jpegOptions(white))
+	requireKind(t, err, KindWrite)
+	if !errors.Is(err, diskFull) || !errors.Is(err, ErrUnexpected) {
+		t.Fatalf("error = %v, want it to wrap the writer's error and ErrUnexpected", err)
 	}
 }
 

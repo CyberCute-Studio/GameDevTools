@@ -46,12 +46,15 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // deferred item Plan.Successor names, whose turn to create the name has
 // come, is processed with its Action set to output.ActionCreate.
 //
-// The item, the settings, and the encode options for the item's format are
-// checked before the source is read, and so is the file an ActionReplace item
-// replaces, as output.Item.CheckWrite checks it: an item whose file changed
-// since planning or is read-only fails before its source is decoded. Nothing
-// holds the decoded source once it is resized, so the collector can reclaim
-// it while the result is encoded and written.
+// The item is checked first, as output.Item.CheckWrite checks it, and then
+// the preset and the encode options for the item's format, so a JPEG
+// result's quality and background are checked and a PNG result's, which PNG
+// ignores, are not; all before the source is read. So an item that saves no
+// file, an ActionCreate item whose name another program took since planning,
+// and an ActionReplace item whose file changed since or is read-only fail
+// before the source is decoded. Nothing holds the decoded source once it is
+// resized, so the collector can reclaim it while the result is encoded and
+// written.
 //
 // The error is the failing step's own: a *decode.Error for a source that
 // cannot be read or decoded, a *resize.Error, an *encode.Error, or an
@@ -60,8 +63,8 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // plan was made. A cancelled context fails with the running step's
 // KindCanceled error, which errors.Is reports as the context's error; one
 // cancelled before Process starts fails with output's KindCanceled error
-// before the item is checked, so a cancelled item is reported as cancelled
-// rather than by what checking its replaced file would find. As with
+// before anything is checked, so a cancelled item is reported as cancelled
+// rather than by what checking its destination would find. As with
 // output.Write, a destination returned alongside an error means the result
 // was saved but a file the error names was left behind.
 func Process(ctx context.Context, item output.Item, settings Settings) (string, error) {

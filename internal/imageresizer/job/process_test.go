@@ -289,6 +289,32 @@ func TestProcessChecksSettingsBeforeReading(t *testing.T) {
 	if !errors.As(err, &decodeErr) || decodeErr.Kind != decode.KindRead {
 		t.Fatalf("error = %v, want the missing source's read error", err)
 	}
+	// A PNG result ignores the JPEG settings, so they fail only JPEG items.
+	item.Format = decode.FormatPNG
+	_, err = Process(context.Background(), item, bad)
+	if !errors.As(err, &decodeErr) || decodeErr.Kind != decode.KindRead {
+		t.Fatalf("PNG item: error = %v, want the missing source's read error", err)
+	}
+}
+
+// TestProcessChecksATakenNameBeforeReading: an item whose name another program
+// took after planning fails with ErrDestinationTaken before its source is
+// read, so a missing source is not what is reported, and the file that took
+// the name is kept.
+func TestProcessChecksATakenNameBeforeReading(t *testing.T) {
+	out := t.TempDir()
+	item := planOne(t, filepath.Join(t.TempDir(), "missing.png"), decode.FormatPNG, output.FormatKeepSource, output.CollisionRename, out)
+	if err := os.WriteFile(item.Destination, []byte("another program's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := Process(context.Background(), item, settings(8, 8, preset.ResizeFit, white))
+	var outputErr *output.Error
+	if path != "" || !errors.As(err, &outputErr) || outputErr.Kind != output.KindChanged || !errors.Is(err, output.ErrDestinationTaken) {
+		t.Fatalf("Process = %q, %v, want ErrDestinationTaken before the source is read", path, err)
+	}
+	if content, readErr := os.ReadFile(item.Destination); readErr != nil || string(content) != "another program's" {
+		t.Fatalf("the file that took the name holds %q, %v", content, readErr)
+	}
 }
 
 // TestProcessChecksTheReplacedFileBeforeReading: a confirmed Overwrite item

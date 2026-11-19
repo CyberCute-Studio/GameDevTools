@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 )
 
@@ -80,7 +81,8 @@ var (
 //
 // An ActionCreate item's result takes the destination's name only while
 // nothing has it: a file another program wrote there after the plan was made
-// is never replaced, and the item fails with ErrDestinationTaken.
+// is never replaced, and the item fails with ErrDestinationTaken, before the
+// result is encoded when Item.CheckWrite already finds the file there.
 //
 // An ActionReplace item replaces only the file the plan proved is none of the
 // sources, unchanged (RSZ-026, NFR-020). Item.CheckWrite looks at that file
@@ -104,7 +106,9 @@ var (
 // is gone by the time Write runs is not needed: the result is created in its
 // place, again without replacing anything. A read-only file is never
 // replaced (ErrReadOnly), and a file another program holds open for writing,
-// or without allowing deletion, cannot be. Holding a file does not stop
+// or without allowing deletion, cannot be: Write waits a fraction of a second
+// for such a program to close it, as one reading it briefly does, and then
+// fails the item with the sharing violation. Holding a file does not stop
 // another program from changing its attributes: a file marked read-only
 // after Write checked it cannot be deleted once the result has its name, so
 // it keeps its .gamedevtools-replaced- name, which the KindWrite error Write
@@ -119,10 +123,10 @@ var (
 // result's temporary file.
 //
 // The context cancels the write before anything is done for it, even before
-// an ActionReplace item's file is looked at, so a cancelled item is reported
-// as cancelled rather than by what that look would find; at encode's next
-// write, which fails with the context's error; and once more before the
-// result is renamed (RSZ-045). From then on Write finishes.
+// the destination is looked at, so a cancelled item is reported as cancelled
+// rather than by what that look would find; at encode's next write, which
+// fails with the context's error; and once more before the result is renamed
+// (RSZ-045). From then on Write finishes.
 //
 // Failures are *Error values: Item.CheckWrite's error for an item it refuses,
 // and KindValidation for a nil encode function (ErrNotWritten); KindCanceled;
@@ -172,10 +176,8 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 	if err := ctx.Err(); err != nil {
 		return "", kindError(KindCanceled, "write result", err)
 	}
-	if item.Action == ActionReplace {
-		if err := checkReplace(item); err != nil {
-			return "", err
-		}
+	if err := item.checkDestination(); err != nil {
+		return "", err
 	}
 	temp, err := createTemp(filepath.Dir(item.Destination))
 	if err != nil {
@@ -236,7 +238,11 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 // An item whose action is neither ActionCreate nor ActionReplace, as Writes
 // reports, saves no file (ErrNotWritten), and no plan gives an item a
 // Destination that is not an absolute path, as the zero Item has; both are
-// KindValidation errors. For an ActionReplace item, CheckWrite also makes
+// KindValidation errors. An ActionCreate item whose destination has an entry
+// now, such as a file another program wrote there after planning, fails as
+// Write would fail it when renaming the result (KindChanged,
+// ErrDestinationTaken); a failure to look passes, as Write's rename meets
+// whatever stands there. For an ActionReplace item, CheckWrite makes
 // Item.StillReplaceable's check of the file at the destination, without
 // holding it, and fails the item as Write would when that file is no longer
 // the planned one, unchanged (KindChanged, ErrDestinationChanged), or is
@@ -251,8 +257,19 @@ func (i Item) CheckWrite() error {
 	if err := i.checkSaves(); err != nil {
 		return err
 	}
+	return i.checkDestination()
+}
+
+// checkDestination is the part of CheckWrite that looks at the destination
+// of an item that saves a file.
+func (i Item) checkDestination() error {
 	if i.Action == ActionReplace {
 		return checkReplace(i)
+	}
+	// Lstat reports any entry, a link or a folder included, as the rename
+	// that would give the result its name meets it.
+	if _, err := os.Lstat(i.Destination); err == nil {
+		return kindError(KindChanged, "check destination", fmt.Errorf("%s: %w", i.Destination, ErrDestinationTaken))
 	}
 	return nil
 }

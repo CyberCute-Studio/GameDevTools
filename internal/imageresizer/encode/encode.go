@@ -27,8 +27,10 @@
 // Encode takes ownership of the image it is given. To keep memory bounded
 // (NFR-014) — a 100-megapixel result occupies up to 800 MB — JPEG output
 // flattens and narrows the pixels in the image's own memory rather than in a
-// copy, so the image must not be used once Encode returns. PNG output does not
-// change the image.
+// copy, so the image must not be used once Encode returns. It writes only the
+// bytes of the image's own pixels, so a sub-image's conversion changes no
+// pixel outside it in the picture it is part of. PNG output does not change
+// the image.
 //
 // Functions are safe to call from any goroutine and never touch the GUI;
 // callers run them off the GUI thread (TECH-005). A panic while encoding, such
@@ -65,7 +67,8 @@ const (
 	// not opaque, an image without pixels, or one too large for JPEG.
 	KindInvalid Kind = iota
 	// KindWrite means writing the encoded bytes failed. The error wraps the
-	// writer's own error.
+	// writer's own error, and ErrUnexpected too when the encoder panicked
+	// after the write failed.
 	KindWrite
 	// KindFailed means the encoder failed for a reason of its own, or
 	// panicked, which a malformed image or a defect in the encoder can cause
@@ -166,17 +169,23 @@ func Encode(w io.Writer, img image.Image, options Options) (err error) {
 	// conversion or the encoder would panic too. Either is this result's
 	// failure, contained here as the decoder and the resizer contain theirs
 	// (NFR-021). A failure of w that the encoder met first is still reported
-	// as the write failure it is.
+	// as the write failure it is, joined by a panic that followed it, so the
+	// panic is not lost.
 	defer func() {
 		recovered := recover()
-		switch {
-		case tracked.err != nil:
-			err = &Error{Kind: KindWrite, Format: options.Format, Err: tracked.err}
-		case recovered != nil:
-			cause := fmt.Errorf("%w: %v", ErrUnexpected, recovered)
+		var cause error
+		if recovered != nil {
+			cause = fmt.Errorf("%w: %v", ErrUnexpected, recovered)
 			if panicErr, ok := recovered.(error); ok {
 				cause = fmt.Errorf("%w: %w", ErrUnexpected, panicErr)
 			}
+		}
+		switch {
+		case tracked.err != nil && cause != nil:
+			err = &Error{Kind: KindWrite, Format: options.Format, Err: errors.Join(tracked.err, cause)}
+		case tracked.err != nil:
+			err = &Error{Kind: KindWrite, Format: options.Format, Err: tracked.err}
+		case cause != nil:
 			err = &Error{Kind: KindFailed, Format: options.Format, Err: cause}
 		}
 	}()
@@ -219,9 +228,11 @@ func (t *trackedWriter) Write(p []byte) (int, error) {
 // *image.RGBA for color, whose rows the encoder reads directly. The image
 // types the resizer produces are converted in their own memory: translucent
 // pixels are flattened against the background and 16-bit samples rounded to
-// 8 bits, and a 16-bit image's narrower rows are packed into the start of
-// its pixel slice. A *image.YCbCr is stored as it is. Any other type is read
-// through At into a new *image.RGBA.
+// 8 bits, and each of a 16-bit image's narrower rows is packed into the
+// start of its own row, so nothing outside the image's rows changes, even
+// for a sub-image, whose rows lie between pixels of the picture it is part
+// of. A *image.YCbCr is stored as it is. Any other type is read through At
+// into a new *image.RGBA.
 func jpegPixels(img image.Image, background color.RGBA) image.Image {
 	switch m := img.(type) {
 	case *image.Gray, *image.YCbCr:
@@ -278,20 +289,20 @@ func over16(value uint32, background uint8, alpha uint32) uint8 {
 
 func sample16(p []uint8) uint32 { return uint32(p[0])<<8 | uint32(p[1]) }
 
-// narrowGray16 rounds each sample to 8 bits, packing the rows into the start
-// of the image's pixel slice. Each packed row starts no later than the 16-bit
-// row it is read from, and each sample is written no later than its own
-// bytes, so nothing is overwritten before it is read.
+// narrowGray16 rounds each sample to 8 bits, packing each row into the first
+// half of its own 16-bit row, so the 8-bit image keeps the 16-bit one's
+// stride. Each sample is written no later than its own bytes, so nothing is
+// overwritten before it is read, and no byte outside the image's rows is
+// written: a sub-image's stride spans pixels of the picture it is part of.
 func narrowGray16(m *image.Gray16) *image.Gray {
 	width, height := m.Rect.Dx(), m.Rect.Dy()
 	for y := range height {
 		row := m.Pix[y*m.Stride : y*m.Stride+2*width]
-		packed := m.Pix[y*width : y*width+width]
 		for x := range width {
-			packed[x] = narrow8(sample16(row[2*x:]))
+			row[x] = narrow8(sample16(row[2*x:]))
 		}
 	}
-	return &image.Gray{Pix: m.Pix[:width*height], Stride: width, Rect: m.Rect}
+	return &image.Gray{Pix: m.Pix, Stride: m.Stride, Rect: m.Rect}
 }
 
 // flattenRGBA flattens the translucent pixels of a premultiplied image in
@@ -337,48 +348,47 @@ func flattenNRGBA(m *image.NRGBA, background color.RGBA) *image.RGBA {
 }
 
 // narrowRGBA64 flattens a 16-bit premultiplied image and rounds it to 8 bits,
-// packing the rows into the start of its pixel slice as narrowGray16 does.
+// packing each row into the first half of its own 16-bit row as narrowGray16
+// does.
 func narrowRGBA64(m *image.RGBA64, background color.RGBA) *image.RGBA {
 	width, height := m.Rect.Dx(), m.Rect.Dy()
 	for y := range height {
 		row := m.Pix[y*m.Stride : y*m.Stride+8*width]
-		packed := m.Pix[y*4*width : (y+1)*4*width]
 		for x := range width {
 			p := row[8*x:]
 			alpha := sample16(p[6:])
 			// The samples are read before any byte of the pixel is written:
 			// the packed pixel overlaps its own first bytes.
 			r, g, b := sample16(p), sample16(p[2:]), sample16(p[4:])
-			q := packed[4*x:]
+			q := row[4*x:]
 			q[0] = over16(r, background.R, alpha)
 			q[1] = over16(g, background.G, alpha)
 			q[2] = over16(b, background.B, alpha)
 			q[3] = 0xff
 		}
 	}
-	return &image.RGBA{Pix: m.Pix[:4*width*height], Stride: 4 * width, Rect: m.Rect}
+	return &image.RGBA{Pix: m.Pix, Stride: m.Stride, Rect: m.Rect}
 }
 
 // narrowNRGBA64 flattens a 16-bit straight-alpha image and rounds it to 8
-// bits, packing the rows into the start of its pixel slice as narrowGray16
-// does.
+// bits, packing each row into the first half of its own 16-bit row as
+// narrowGray16 does.
 func narrowNRGBA64(m *image.NRGBA64, background color.RGBA) *image.RGBA {
 	width, height := m.Rect.Dx(), m.Rect.Dy()
 	for y := range height {
 		row := m.Pix[y*m.Stride : y*m.Stride+8*width]
-		packed := m.Pix[y*4*width : (y+1)*4*width]
 		for x := range width {
 			p := row[8*x:]
 			alpha := sample16(p[6:])
 			r, g, b := sample16(p), sample16(p[2:]), sample16(p[4:])
-			q := packed[4*x:]
+			q := row[4*x:]
 			q[0] = blend16(r, background.R, alpha)
 			q[1] = blend16(g, background.G, alpha)
 			q[2] = blend16(b, background.B, alpha)
 			q[3] = 0xff
 		}
 	}
-	return &image.RGBA{Pix: m.Pix[:4*width*height], Stride: 4 * width, Rect: m.Rect}
+	return &image.RGBA{Pix: m.Pix, Stride: m.Stride, Rect: m.Rect}
 }
 
 // flattenColors reads an image of any other type through At into a new

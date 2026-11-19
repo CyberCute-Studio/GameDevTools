@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -118,7 +119,7 @@ func (t *tempFile) discard() error {
 // destination's name.
 func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 	destination := item.Destination
-	held, err := hold(destination)
+	held, err := holdOnceClosed(destination)
 	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
 		// The planned file is gone and nothing has its name: the result is
 		// created there, without replacing anything that takes the name
@@ -181,8 +182,9 @@ func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 // mark the held file read-only, change its times, or link another name to
 // it, none of which changes the content Write deletes. A program that
 // already has the file open for writing, or without allowing deletion, makes
-// it fail with a sharing violation. It opens a link or a folder at the
-// destination as itself, which checkHeld then refuses.
+// it fail with a sharing violation, which holdOnceClosed waits out briefly.
+// It opens a link or a folder at the destination as itself, which checkHeld
+// then refuses.
 func hold(destination string) (windows.Handle, error) {
 	name, err := windowsPath("open", destination)
 	if err != nil {
@@ -194,6 +196,32 @@ func hold(destination string) (windows.Handle, error) {
 		return 0, &fs.PathError{Op: "open", Path: destination, Err: err}
 	}
 	return handle, nil
+}
+
+// holdAttempts and holdDelay bound how long replace waits for another program
+// to close the file it replaces: it tries hold again after holdDelay, and
+// after twice as long each time after that, so the attempts span about 375
+// milliseconds before the sharing violation fails the item.
+const (
+	holdAttempts = 5
+	holdDelay    = 25 * time.Millisecond
+)
+
+// holdOnceClosed is hold, tried again while another program has the file
+// open for writing or without allowing deletion, as a picture viewer, a
+// thumbnail generator, or a sync client reading the file briefly may, so such
+// a brief open does not fail the item. A file that stays open that way still
+// fails it with the sharing violation; any other failure fails it at once.
+func holdOnceClosed(destination string) (windows.Handle, error) {
+	delay := holdDelay
+	for attempt := 1; ; attempt++ {
+		handle, err := hold(destination)
+		if err == nil || attempt == holdAttempts || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+			return handle, err
+		}
+		time.Sleep(delay)
+		delay *= 2
+	}
 }
 
 // entryFlags open the entry at a path as itself, a link or a folder included,
