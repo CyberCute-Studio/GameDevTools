@@ -1325,7 +1325,8 @@ func TestPrepareFailsOneDestinationWithoutStoppingOthers(t *testing.T) {
 
 // TestPrepareFailsWhenTheFolderGoes: a name is free only when it is missing
 // from a folder that exists. When the output folder goes after Prepare has
-// opened it, as when its drive is removed, no destination is planned as
+// opened it, as when its drive is removed or a file takes its name, no
+// destination is planned as
 // free, and the job fails once with the folder's failure, as an unusable
 // folder does, rather than every item failing on its own (UX-010), whether
 // the first name that cannot be checked is a natural destination or a
@@ -1375,6 +1376,43 @@ func TestPrepareFailsWhenTheFolderGoes(t *testing.T) {
 			t.Fatalf("error = %v, want the missing folder", failure)
 		}
 	})
+
+	// A file that takes the output folder's name after Prepare opened it
+	// leaves the folder's path reachable, but no name in it can be checked,
+	// as Windows reports ERROR_PATH_NOT_FOUND for them. The job fails once
+	// with ErrNotFolder, as it does when the file is there before Prepare
+	// runs, rather than every item failing on its own.
+	for _, policy := range policies {
+		t.Run(string(policy)+" replaced by a file", func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "out")
+			lstats := 0
+			files := faultyFiles{lstat: func(path string) (fs.FileInfo, error) {
+				lstats++
+				if lstats == 1 {
+					if err := os.Remove(out); err != nil {
+						t.Fatalf("remove the output folder: %v", err)
+					}
+					writeFile(t, out, "file")
+				}
+				return os.Lstat(path)
+			}}
+			var sources []Source
+			for index := 0; index < 20; index++ {
+				sources = append(sources, png(filepath.Join(t.TempDir(), fmt.Sprintf("y%d.png", index))))
+			}
+			_, err := prepare(context.Background(), jobRequest(out, policy, sources...), files)
+			failure := assertKind(t, err, KindFolder)
+			if !errors.Is(failure, ErrNotFolder) || failure.Op != "open output folder" {
+				t.Fatalf("error = %v, want ErrNotFolder", failure)
+			}
+			if lstats != 1 {
+				t.Fatalf("checked %d destinations, want only the first", lstats)
+			}
+			if readFile(t, out) != "file" {
+				t.Fatal("the file in the folder's place was changed")
+			}
+		})
+	}
 }
 
 // TestPrepareChecksTheFolderSparingly: destinations that cannot be checked

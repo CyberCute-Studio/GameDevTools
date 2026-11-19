@@ -675,6 +675,13 @@ func prepareFolder(files fileSystem, folder string) error {
 		}
 		return kindError(KindFolder, "create output folder", err)
 	}
+	return openFolder(files, folder)
+}
+
+// openFolder checks that the output folder can be reached and is a folder,
+// both when Prepare opens it and when the planner checks whether it still
+// is one.
+func openFolder(files fileSystem, folder string) error {
 	info, err := files.Stat(folder)
 	if err != nil {
 		return kindError(KindFolder, "open output folder", err)
@@ -947,7 +954,7 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		item.Reason = ReasonExists
 		return false, nil
 	}
-	if reason := p.ownFile(item.Destination, found.mode); reason != ReasonNone {
+	if reason := p.ownFile(key, item.Destination, found.mode); reason != ReasonNone {
 		item.Reason = reason
 		return false, nil
 	}
@@ -1042,24 +1049,23 @@ func (p *planner) fail(item *Item, op string, err error) {
 
 // folderLost is called for each destination name that cannot be checked,
 // which may mean the output folder itself can no longer be reached, as when
-// its drive or share has gone since Prepare opened it. Every later name
-// would then fail too, so it returns the folder's failure as a KindFolder
-// error that fails the job once, as an unusable folder does, rather than
-// every remaining item failing on its own (UX-010). The folder is checked at
-// the first, second, fourth, eighth, and so on name of the job that cannot
-// be checked, so names that cannot be checked in a reachable folder cost a
-// few checks rather than one each, and a folder that becomes unreachable is
-// noticed before the job has met twice the names that could not be checked
-// when the folder was last reached.
+// its drive or share has gone since Prepare opened it, or is no longer a
+// folder, as when a file has taken its name, which Windows reports for a
+// name in it with the ERROR_PATH_NOT_FOUND a missing drive reports. Every
+// later name would then fail too, so it returns the folder's failure as a
+// KindFolder error that fails the job once, as an unusable folder does,
+// rather than every remaining item failing on its own (UX-010). The folder
+// is checked at the first, second, fourth, eighth, and so on name of the job
+// that cannot be checked, so names that cannot be checked in a reachable
+// folder cost a few checks rather than one each, and a folder that becomes
+// unreachable is noticed before the job has met twice the names that could
+// not be checked when the folder was last reached.
 func (p *planner) folderLost() error {
 	p.unchecked++
 	if p.unchecked&(p.unchecked-1) != 0 {
 		return nil
 	}
-	if _, err := p.files.Stat(p.folder); err != nil {
-		return kindError(KindFolder, "open output folder", err)
-	}
-	return nil
+	return openFolder(p.files, p.folder)
 }
 
 // probe inspects a destination path without following a final link, so a
@@ -1091,12 +1097,11 @@ func (p *planner) probe(key, path string) probe {
 // from a junction or another link. An entry of any other type, such as a
 // folder or a symbolic link, is returned as no file without being listed.
 // This is the one place that decides which entries are files. Each path is
-// listed once per plan.
-func (p *planner) listFile(path string, mode fs.FileMode) (entry, error) {
+// listed once per plan, cached by its path key.
+func (p *planner) listFile(key, path string, mode fs.FileMode) (entry, error) {
 	if kind := mode.Type(); kind != 0 && kind != fs.ModeIrregular {
 		return entry{}, nil
 	}
-	key := PathKey(path)
 	if cached, ok := p.listings[key]; ok {
 		return cached.entry, cached.err
 	}
@@ -1115,8 +1120,8 @@ func (p *planner) listFile(path string, mode fs.FileMode) (entry, error) {
 // so PHOTOG~1.png can reach photograph.png. It reports ReasonUnverified when
 // the folder cannot list the entry, which then cannot be proven to be
 // either, and ReasonNone for the destination's own file.
-func (p *planner) ownFile(path string, mode fs.FileMode) Reason {
-	listed, err := p.listFile(path, mode)
+func (p *planner) ownFile(key, path string, mode fs.FileMode) Reason {
+	listed, err := p.listFile(key, path, mode)
 	switch {
 	case err != nil:
 		return ReasonUnverified
@@ -1208,7 +1213,7 @@ func (p *planner) unreadable(path string) {
 	if info.Mode().Type() != 0 {
 		// A regular file is a file without listing it; any other entry is
 		// one only when its folder lists it as one.
-		listed, err := p.listFile(path, info.Mode())
+		listed, err := p.listFile(PathKey(path), path, info.Mode())
 		if err != nil || !listed.file {
 			p.unverified = true
 			return
