@@ -266,6 +266,14 @@ var (
 // folder Resized under another spelling, so its destinations would escape
 // the comparison with the sources' paths, and a folder such as x:y cannot
 // be created at all. Such a path is refused.
+//
+// A device path, however it is written, holds folders only on a drive, a
+// volume named by its GUID, or a share. One that leads through any other
+// device, such as the named pipe \\.\pipe\x or the NT device path
+// \\?\GLOBALROOT\Device\..., names a device or something on one rather than
+// a folder, and creating it, as Prepare does, would open that device, which
+// for a named pipe connects to the program serving it. Such a path is
+// refused as ErrFolderRoot.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -281,6 +289,9 @@ func ValidateFolder(folder string) error {
 	}
 	if namesStream(clean) || (!verbatim(folder) && !resolvesAsWritten(clean)) {
 		return ErrFolderName
+	}
+	if namesDevice(resolvedPath(folder)) {
+		return ErrFolderRoot
 	}
 	return nil
 }
@@ -301,33 +312,57 @@ func pathNames(path string) []string {
 	})
 }
 
-// namesRoot reports whether a cleaned absolute path names only a drive,
-// volume, device, or server rather than a folder on it: whether nothing but
-// its volume name is left, and that volume name is no share. For the
-// extended-length UNC prefixes, \\?\UNC and \??\UNC, filepath.VolumeName
-// stops before the server and share, which it takes into the volume name of
-// \\server\share and \\.\UNC\server\share, so for those the path's first
-// two names must be the server and the share.
-func namesRoot(clean string) bool {
-	volume := filepath.VolumeName(clean)
-	if strings.EqualFold(volume, `\\?\UNC`) || strings.EqualFold(volume, `\??\UNC`) {
-		return len(pathNames(clean[len(volume):])) < 2
+// rootDepth is how many names an absolute path, cleaned or as resolvedPath
+// gives it, holds below its root folder: 0 for a drive, volume, or share
+// root, and -1 for a path that names only a drive, volume, device, or
+// server, without even its root folder, such as \\?\C:, \\.\NUL, \\server,
+// or \\?\UNC\server. A share is its own root folder however it is spelled.
+// For the extended-length UNC prefixes, \\?\UNC and \??\UNC,
+// filepath.VolumeName stops before the server and share, which it takes
+// into the volume name of \\server\share and \\.\UNC\server\share, so for
+// those the path's first two names are the server and the share.
+func rootDepth(path string) int {
+	volume := filepath.VolumeName(path)
+	rest := path[len(volume):]
+	names := len(pathNames(rest))
+	switch {
+	case strings.EqualFold(volume, `\\?\UNC`), strings.EqualFold(volume, `\??\UNC`):
+		return max(names-2, -1)
+	case rest == "" && !shareRoot(volume):
+		return -1
 	}
-	return len(volume) == len(clean) && !shareRoot(volume)
+	return names
 }
 
+// namesRoot reports whether a cleaned absolute path names only a drive,
+// volume, device, or server rather than a folder on it.
+func namesRoot(clean string) bool { return rootDepth(clean) < 0 }
+
 // namesVolume reports whether a path, as resolvedPath gives it, names a
-// drive, volume, or share root, or a volume, device, or server itself:
-// whether nothing is left of it but its volume name, or for the
-// extended-length UNC prefix, its server and share. However such a path is
-// reached, it names no file in a folder.
-func namesVolume(resolved string) bool {
-	volume := filepath.VolumeName(resolved)
-	names := len(pathNames(resolved[len(volume):]))
-	if strings.EqualFold(volume, `\\?\UNC`) {
-		return names <= 2
+// drive, volume, or share root, or a volume, device, or server itself.
+// However such a path is reached, it names no file in a folder.
+func namesVolume(resolved string) bool { return rootDepth(resolved) <= 0 }
+
+// namesDevice reports whether a path, as resolvedPath gives it, is a device
+// path that leads to no drive, volume, or share: one whose first element is
+// neither a drive letter, nor a volume's GUID name, nor UNC. resolvedPath
+// writes every device path Windows resolves, \\.\ or //?/, as \\?\, as it
+// does the NT spelling \??\.
+func namesDevice(resolved string) bool {
+	device, extended := strings.CutPrefix(filepath.VolumeName(resolved), `\\?\`)
+	if !extended {
+		return false
 	}
-	return names == 0
+	const guid = "Volume{"
+	switch {
+	case len(device) == 2 && device[1] == ':' && 'a' <= device[0]|0x20 && device[0]|0x20 <= 'z':
+		return false
+	case strings.EqualFold(device, "UNC"):
+		return false
+	case len(device) > len(guid)+1 && strings.EqualFold(device[:len(guid)], guid) && strings.HasSuffix(device, "}"):
+		return false
+	}
+	return true
 }
 
 // shareRoot reports whether a volume name, as filepath.VolumeName gives it
@@ -410,9 +445,13 @@ type Request struct {
 	// original, whether or not the job resizes it (RSZ-026, NFR-020). A path
 	// is only compared, never named after, so any absolute path is accepted,
 	// including a folder or a drive or share root the source list holds as
-	// inaccessible, which is no file, whether or not it can be read. A file
-	// whose identity cannot be read where it stands stops an Overwrite job
-	// from replacing any file it may be.
+	// inaccessible. A folder that can still be inspected is no file, whether
+	// or not it can be read, and a drive or share root names a folder however
+	// it is reached. A file whose identity cannot be read where it stands
+	// stops an Overwrite job from replacing any file it may be, and so does
+	// any other listed path that cannot be located at all, as when its
+	// folder, drive, or share has gone: a path says nothing of whether it
+	// named a folder, so such a folder cannot be told from such a file.
 	Protected []string
 	// Folder is the absolute path of the output folder.
 	Folder string
@@ -547,28 +586,35 @@ func (i Item) Renamed() bool {
 	return i.Action == ActionCreate && i.Reason != ReasonNone
 }
 
-// StillReplaceable reports whether the file at an ActionReplace item's
+// StillReplaceable reports whether the entry at an ActionReplace item's
 // Destination is still the file the plan proved is none of the sources,
-// unchanged: the same file by its identity, with the number of names, the
-// size, and the creation and last-write times it had when the plan was made.
-// A file that has gained a name since may have gained it at a listed path,
-// such as that of a source that no longer existed when the plan was made,
-// and replacing it would change that name's content too. A source moved or
-// linked to the destination's name after planning is another file. So is a
-// file that takes the planned file's place and merely repeats its identity,
-// as a FAT32 or exFAT volume gives a file the identity of the folder entry it
-// takes, or a server that reports one identity for every file gives any
-// file; only its stamp tells it apart. A file rewritten since the plan is not
-// replaced either, as nothing tells it from such a file. The writer checks
-// this immediately before it replaces the file, and replaces nothing when it
+// unchanged: a file its folder lists under the destination's own name, as
+// the plan required, and the same file by its identity, with the number of
+// names, the size, and the creation and last-write times it had when the
+// plan was made. A link put at the destination's name after planning reaches
+// the planned file by its identity wherever the file now has its name, which
+// may be a listed path, and no policy replaces a link. A file that has
+// gained a name since may have gained it at a listed path, such as that of a
+// source that no longer existed when the plan was made, and replacing it
+// would change that name's content too. A source moved or linked to the
+// destination's name after planning is another file. So is a file that takes
+// the planned file's place and merely repeats its identity, as a FAT32 or
+// exFAT volume gives a file the identity of the folder entry it takes, or a
+// server that reports one identity for every file gives any file; only its
+// stamp tells it apart. A file rewritten since the plan is not replaced
+// either, as nothing tells it from such a file. The writer checks this
+// immediately before it replaces the file, and replaces nothing when it
 // reports false. It reports false for every other action, and when the
-// file's identity cannot be read.
+// entry cannot be listed or the file's identity cannot be read.
 func (i Item) StillReplaceable() bool {
 	return i.stillReplaceable(osFiles{})
 }
 
 func (i Item) stillReplaceable(files fileSystem) bool {
 	if i.Action != ActionReplace {
+		return false
+	}
+	if listed, err := files.Entry(i.Destination); err != nil || !ownEntry(listed, i.Destination) {
 		return false
 	}
 	found, err := files.Identity(i.Destination)
@@ -730,13 +776,16 @@ func validatePath(path string) error {
 }
 
 // validateFile checks that a source's path can name its result: that it is
-// a path validatePath accepts whose last element is a name.
+// a path validatePath accepts whose last element is a name, and that names a
+// file in a folder once Windows resolves it, as the result is named after
+// that resolution. \\.\C:\..\photo.png resolves to the device \\.\photo.png,
+// and C:\In\NUL to the NUL device, which leave no file name.
 func validateFile(path string) error {
 	if err := validatePath(path); err != nil {
 		return err
 	}
-	switch name := filepath.Base(path); name {
-	case ".", "..", string(filepath.Separator):
+	switch name := filepath.Base(path); {
+	case name == ".", name == "..", name == string(filepath.Separator), namesVolume(resolvedPath(path)):
 		return errors.New("the path does not name a file")
 	}
 	return nil
@@ -788,6 +837,26 @@ func fileInTheWay(files fileSystem, folder string) bool {
 		}
 		path = parent
 	}
+}
+
+// fileMissing reports whether a file could not be opened or inspected
+// because no entry has its name in its folder: the error says the name was
+// not found, and the path's folder, as Windows resolves the path, is still a
+// folder, as the planner's filesystem reports it. A path whose folder cannot
+// be found is not missing: a drive, share, or link it leads through may be
+// gone while the file remains, reachable by another path, and a listed file
+// taken for missing loses the identity comparison that would recognize it
+// there. Windows reports such a path as ERROR_PATH_NOT_FOUND, but a network
+// redirector or a file system an application implements may report a
+// missing folder as a missing name, and outside Windows both are ENOENT, so
+// the folder is checked rather than the error trusted alone.
+func fileMissing(files fileSystem, err error) bool {
+	var pathErr *fs.PathError
+	if !nameNotFound(err) || !errors.As(err, &pathErr) {
+		return false
+	}
+	info, statErr := files.Stat(filepath.Dir(resolvedPath(pathErr.Path)))
+	return statErr == nil && info.IsDir()
 }
 
 // fileSystem is the filesystem access planning needs, so tests can inject
@@ -1266,10 +1335,18 @@ func (p *planner) ownFile(key, path string, mode fs.FileMode) Reason {
 	switch {
 	case err != nil:
 		return ReasonUnverified
-	case !listed.file || foldCase(listed.name) != foldCase(filepath.Base(path)):
+	case !ownEntry(listed, path):
 		return ReasonExists
 	}
 	return ReasonNone
+}
+
+// ownEntry reports whether the folder lists the entry a path opens as a
+// file under the path's own last name, compared case-insensitively, rather
+// than as a folder or a link, or under a long name the path reaches through
+// an 8.3 short name.
+func ownEntry(listed entry, path string) bool {
+	return listed.file && foldCase(listed.name) == foldCase(filepath.Base(path))
 }
 
 // replaceable decides whether an Overwrite job may replace the existing file
@@ -1358,7 +1435,8 @@ func (p *planner) listedAs(id fileID) (Reason, error) {
 // in a folder whose identity can be read, the file has its name in that
 // folder; otherwise, such as for a file whose folder, drive, or share, or a
 // link it leads through, can no longer be reached, the file may be any
-// existing file.
+// existing file. A listed folder that can no longer be inspected at all is
+// such a path too, as nothing tells it from a file.
 func (p *planner) unreadable(listed listedPath) {
 	if namesVolume(listed.resolved) {
 		return

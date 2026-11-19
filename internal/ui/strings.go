@@ -98,7 +98,7 @@ const (
 	// folder rules that only output planning applies, for every message
 	// that reports a folder breaking one.
 	outputFolderNameRule = "Windows would change a name in its path, such as a name that ends in a space or a period, or read one as a device name such as NUL, or as a file stream because it contains a colon"
-	outputFolderRootRule = "its path names a drive, volume, or server rather than a folder on it"
+	outputFolderRootRule = "its path names a drive, volume, device, or server rather than a folder on it"
 
 	CaptureModeSelected    = "Capture mode is now %s."
 	OutputFormatSelected   = "Screenshots are saved as %s."

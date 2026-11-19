@@ -274,6 +274,24 @@ func TestValidateFolder(t *testing.T) {
 		{`\\?\C:\Art\x:y`, ErrFolderName},
 		{`\\server\share\x:y`, ErrFolderName},
 		{`\\?\UNC\server\share\x:y`, ErrFolderName},
+		// A device path holds folders only on a drive, a volume named by its
+		// GUID, or a share, in every spelling; any other device, such as a
+		// named pipe, a mailslot, a serial port, or an NT device path, holds
+		// none, and creating the folder would open the device.
+		{`\\?\c:\Art\Resized`, nil},
+		{`\\.\C:\Art\Resized`, nil},
+		{`\\?\Volume{00000000-0000-0000-0000-000000000000}\Resized`, nil},
+		{`\\.\volume{00000000-0000-0000-0000-000000000000}\Resized`, nil},
+		{`\\.\pipe\x`, ErrFolderRoot},
+		{`//./pipe/x`, ErrFolderRoot},
+		{`\\?\pipe\x`, ErrFolderRoot},
+		{`\??\pipe\x`, ErrFolderRoot},
+		{`//?/pipe/x`, ErrFolderRoot},
+		{`\\.\mailslot\x`, ErrFolderRoot},
+		{`\\.\COM1\x`, ErrFolderRoot},
+		{`\\.\C\x`, ErrFolderRoot},
+		{`\\.\Volume{}\x`, ErrFolderRoot},
+		{`\\?\GLOBALROOT\Device\HarddiskVolume1\Resized`, ErrFolderRoot},
 	}
 	for _, test := range tests {
 		if err := ValidateFolder(test.folder); !errors.Is(err, test.want) || (err == nil) != (test.want == nil) {
@@ -474,6 +492,9 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		// spelled; it is refused here rather than failing as a folder that
 		// cannot be created.
 		{name: "extended-length server", mutate: func(r *Request) { r.Folder = `\\?\UNC\server` }, want: ErrFolderRoot},
+		// A named pipe is no folder, and creating one there would connect to
+		// the program serving the pipe.
+		{name: "named pipe", mutate: func(r *Request) { r.Folder = `\\.\pipe\GameDevTools-` + filepath.Base(in) }, want: ErrFolderRoot},
 		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
 		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
 		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
@@ -483,6 +504,13 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		{name: "empty source", mutate: func(r *Request) { r.Sources = append(r.Sources, png("")) }},
 		{name: "NUL in source", mutate: func(r *Request) { r.Sources = append(r.Sources, png(valid.Path+"\x00.png")) }},
 		{name: "root source", mutate: func(r *Request) { r.Sources = append(r.Sources, png(root)) }},
+		// The result is named after the source as Windows resolves it, and
+		// these resolve to devices, \\.\photo.png and \\.\NUL, which leave no
+		// file name to give it.
+		{name: "source resolving past its drive", mutate: func(r *Request) {
+			r.Sources = append(r.Sources, png(`\\.\`+filepath.VolumeName(in)+`\..\photo.png`))
+		}},
+		{name: "source named as a device", mutate: func(r *Request) { r.Sources = append(r.Sources, png(filepath.Join(in, "NUL"))) }},
 		{name: "unknown source format", mutate: func(r *Request) {
 			r.Sources = append(r.Sources, Source{Path: filepath.Join(in, "a.png"), Format: decode.FormatUnknown})
 		}},
@@ -1140,9 +1168,9 @@ func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 // TestPrepareAcceptsProtectedFoldersAndRoots: the source list holds a dropped
 // folder or drive root it cannot read as an inaccessible item, which the job
 // passes on as a protected path. Such a path is only compared, so it does not
-// fail the job. One whose identity can be read is no file a destination can
-// be, so a confirmed Overwrite still replaces; one that cannot be located,
-// such as a drive with no medium, may be any file, so the result is renamed.
+// fail the job. A folder or root whose identity can be read is no file a
+// destination can be, so a confirmed Overwrite still replaces, and so is a
+// root that cannot be reached, such as a drive with no medium.
 func TestPrepareAcceptsProtectedFoldersAndRoots(t *testing.T) {
 	in := t.TempDir()
 	root := filepath.VolumeName(in) + string(filepath.Separator)

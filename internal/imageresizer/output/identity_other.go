@@ -42,18 +42,12 @@ func namesStream(string) bool { return false }
 // mkdirAll creates a folder and every missing folder that holds it.
 func mkdirAll(path string) error { return os.MkdirAll(path, 0o755) }
 
-// fileMissing reports whether a file could not be opened because no entry
-// has its name in its folder, as on Windows. The error alone cannot tell, as
-// a path whose folder is gone fails with the same ENOENT, so the path's
-// folder must still be one, as the planner's filesystem reports it: a name
-// in an output folder removed while a plan is made is not free.
-func fileMissing(files fileSystem, err error) bool {
-	var pathErr *fs.PathError
-	if !errors.Is(err, fs.ErrNotExist) || !errors.As(err, &pathErr) {
-		return false
-	}
-	info, statErr := files.Stat(filepath.Dir(pathErr.Path))
-	return statErr == nil && info.IsDir()
+// nameNotFound reports whether an error says the path was not found. A path
+// whose folder is gone fails with the same ENOENT, so fileMissing checks the
+// folder: a name in an output folder removed while a plan is made is not
+// free.
+func nameNotFound(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // findEntry describes the entry at path outside Windows, which has no second

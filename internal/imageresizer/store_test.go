@@ -171,8 +171,9 @@ func TestOptionsStoreValidSection(t *testing.T) {
 // TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault: earlier builds
 // saved an output folder Windows resolves to another path, such as one whose
 // own name ends in a space or a period, or with a folder name in its path
-// that ends in a period, or that names only a volume or a server, which
-// output planning now refuses.
+// that ends in a period, or that names only a volume or a server, or a device
+// that holds no folders, such as a named pipe, which output planning now
+// refuses.
 // Loading such a file keeps every other setting, the preset library
 // included, and only the folder falls back to the default, rather than the
 // whole file being reset as invalid; the options manager reports the folder
@@ -185,7 +186,7 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	if volume := filepath.VolumeName(folder); volume != "" {
 		legacyFolders = append(legacyFolders, folder+".", folder+" ", filepath.Join(folder+".", "Resized"),
 			filepath.Join(folder, "NUL"), folder+"::$INDEX_ALLOCATION", filepath.Join(folder, "x:y"),
-			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`)
+			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`, `\\.\pipe\Resized`)
 	}
 	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")

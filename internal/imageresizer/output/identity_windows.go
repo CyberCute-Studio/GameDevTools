@@ -76,12 +76,11 @@ func filetime(time windows.Filetime) uint64 {
 	return uint64(time.HighDateTime)<<32 | uint64(time.LowDateTime)
 }
 
-// fileMissing reports whether a file could not be opened because no entry
-// has its name in its folder. A path whose folder cannot be found is not
-// missing: a drive, share, or link it leads through may be gone while the
-// file remains, reachable by another path. On Windows the error alone tells,
-// so the filesystem is not consulted.
-func fileMissing(_ fileSystem, err error) bool {
+// nameNotFound reports whether an error says that no entry has the path's
+// last name, ERROR_FILE_NOT_FOUND, rather than that a folder it leads
+// through could not be found, ERROR_PATH_NOT_FOUND, which fileMissing never
+// takes for a missing file.
+func nameNotFound(err error) bool {
 	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND)
 }
 

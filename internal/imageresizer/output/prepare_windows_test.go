@@ -636,6 +636,60 @@ func TestStillReplaceable(t *testing.T) {
 		}
 	})
 
+	// A link put at the destination's name after planning reaches the
+	// planned file by its identity, wherever the file now has its name,
+	// which may be a listed path; no policy replaces a link.
+	t.Run("replaced by a link to it", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		moved := filepath.Join(t.TempDir(), "x.png")
+		if err := os.Rename(destination, moved); err != nil {
+			t.Fatalf("move the planned file: %v", err)
+		}
+		if err := os.Symlink(moved, destination); err != nil {
+			t.Skipf("create a file symbolic link: %v", err)
+		}
+		if found, err := identify(destination); err != nil || found != plan.Items[0].replaces {
+			t.Fatalf("the link does not reach the planned file unchanged: %+v, %v", found, err)
+		}
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("a link to the planned file is replaceable")
+		}
+	})
+
+	// Without the privilege to create a symbolic link, the folder's listing
+	// is faked: a link, and a file the name reaches only as its 8.3 short
+	// name, are no file listed under the destination's own name, though the
+	// identity read through them is the planned file's.
+	for name, listed := range map[string]func(path string) entry{
+		"listed as a link": func(path string) entry { return entry{name: filepath.Base(path)} },
+		"listed under another name": func(path string) entry {
+			return entry{name: "long name of " + filepath.Base(path), file: true}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			plan, _, destination := prepareReplace(t)
+			files := faultyFiles{entry: func(path string) (entry, error) {
+				if strings.EqualFold(path, destination) {
+					return listed(path), nil
+				}
+				return findEntry(path)
+			}}
+			if plan.Items[0].stillReplaceable(files) {
+				t.Fatal("an entry that is no file listed under the destination's name is replaceable")
+			}
+		})
+	}
+
+	t.Run("not listed", func(t *testing.T) {
+		plan, _, destination := prepareReplace(t)
+		files := faultyFiles{entry: func(path string) (entry, error) {
+			return entry{}, &fs.PathError{Op: "find", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+		}}
+		if plan.Items[0].stillReplaceable(files) {
+			t.Fatalf("%s is replaceable though its folder cannot list it", destination)
+		}
+	})
+
 	// A name the planned file gains after planning may be a listed path,
 	// such as that of a source that no longer existed when the plan was
 	// made, and adding a name changes neither its size nor its times.
@@ -804,6 +858,43 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 	t.Run("folder that cannot be found", func(t *testing.T) {
 		protected := filepath.Join(t.TempDir(), "gone", "x.png")
 		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
+	// A network redirector or a file system an application implements may
+	// report a path whose folder is gone as a missing name, where NTFS
+	// reports a missing folder. The folder is gone, so the file is not taken
+	// for a missing one.
+	t.Run("folder that cannot be found reported as a missing name", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "gone", "x.png")
+		missingName := func(op, path string) error {
+			return &fs.PathError{Op: op, Path: path, Err: windows.ERROR_FILE_NOT_FOUND}
+		}
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.EqualFold(path, protected) {
+					return identity{}, missingName("open", path)
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return nil, missingName("lstat", path)
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	// A path says nothing of whether it named a folder, so a listed folder
+	// that cannot be inspected at all, as when its drive has gone, cannot be
+	// told from a file that cannot be located.
+	t.Run("folder on a drive that cannot be found", func(t *testing.T) {
+		root, ok := missingDrive(t)
+		if !ok {
+			t.Skip("every drive letter is in use")
+		}
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, filepath.Join(root, "Pictures")), renamed)
 	})
 
 	t.Run("drive that cannot be found", func(t *testing.T) {

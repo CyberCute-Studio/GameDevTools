@@ -120,13 +120,51 @@ func ParseBackground(input string) (string, error) {
 	return "#" + strings.ToUpper(value[1:]), nil
 }
 
-// defaultFolderIn is the default output folder under the Pictures folder
-// (RSZ-021), or why it cannot be used when the output planner's folder rules
-// refuse it, as for a Pictures folder whose path holds a name Windows would
-// change. A default no job could plan into is then reported as unavailable,
-// as one that cannot be resolved is, rather than selected.
+// defaultFolder is the default output folder (RSZ-021) under the Pictures
+// folder the system knows for the user, known, or, when that cannot be
+// located (knownErr) or gives a folder the output planner's folder rules
+// refuse, under the Pictures folder in the user's profile, which home
+// locates. When neither gives a folder, the error says why: the known
+// Pictures folder's refusal, else the profile's, else why the folders could
+// not be located.
+func defaultFolder(known string, knownErr error, home func() (string, error)) (string, error) {
+	var refused error
+	if knownErr == nil && known != "" {
+		folder, err := defaultFolderIn(known)
+		if err == nil {
+			return folder, nil
+		}
+		refused = err
+	}
+	profile, homeErr := home()
+	if homeErr == nil {
+		folder, err := defaultFolderIn(filepath.Join(profile, "Pictures"))
+		if err == nil {
+			return folder, nil
+		}
+		if refused == nil {
+			refused = err
+		}
+	}
+	switch {
+	case refused != nil:
+		return "", refused
+	case knownErr != nil:
+		return "", fmt.Errorf("locate Pictures folder: %w", knownErr)
+	}
+	return "", fmt.Errorf("locate Pictures folder: %w", homeErr)
+}
+
+// defaultFolderIn is the default output folder under a Pictures folder, or
+// why it cannot be used when the output planner's folder rules refuse it. The
+// Pictures folder's path is first resolved as Windows resolves it, so one
+// that ends in a period or a space, which Windows drops, gives a folder in
+// the Pictures folder Windows opens for it. A default no job could plan into,
+// as under a Pictures folder whose path leads through a device or holds a
+// colon, is reported as unavailable, as one that cannot be located is,
+// rather than selected.
 func defaultFolderIn(pictures string) (string, error) {
-	folder := filepath.Join(pictures, "GameDevTools", "Resized")
+	folder := filepath.Join(resolveFolder(pictures), "GameDevTools", "Resized")
 	if err := output.ValidateFolder(folder); err != nil {
 		return "", fmt.Errorf("%s: %w", folder, err)
 	}

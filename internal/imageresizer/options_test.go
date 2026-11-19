@@ -41,26 +41,79 @@ func TestDefaultOptions(t *testing.T) {
 }
 
 // TestDefaultFolderIn: the default output folder lies under the Pictures
-// folder, and a Pictures folder that gives one the output folder rules
-// refuse leaves no default, as one that cannot be located does, rather than
-// a default every job would refuse.
+// folder Windows opens for the Pictures folder's path, and a Pictures folder
+// that gives one the output folder rules refuse leaves no default, as one
+// that cannot be located does, rather than a default every job would refuse.
 func TestDefaultFolderIn(t *testing.T) {
 	pictures := t.TempDir()
-	folder, err := defaultFolderIn(pictures)
-	if want := filepath.Join(pictures, "GameDevTools", "Resized"); err != nil || folder != want {
-		t.Fatalf("defaultFolderIn(%q) = %q, %v, want %q", pictures, folder, err, want)
-	}
+	want := filepath.Join(pictures, "GameDevTools", "Resized")
+	spellings := []string{pictures}
 	refused := map[string]error{"Pictures": output.ErrFolderNotAbsolute}
 	if runtime.GOOS == "windows" {
-		// Windows drops the period that ends a name a longer path leads
-		// through.
-		refused[pictures+"."] = output.ErrFolderName
+		// Windows drops a trailing period or space from the Pictures
+		// folder's own name, and the output folder lies in the folder it
+		// opens, rather than in one with the name only a longer path keeps.
+		spellings = append(spellings, pictures+".", pictures+" ", pictures+". ")
+		// A colon names a stream however the path is resolved, and a device
+		// path that leads to no drive, volume, or share holds no folder.
+		refused[pictures+`\x:y`] = output.ErrFolderName
+		refused[`\\.\pipe\Pictures`] = output.ErrFolderRoot
+	}
+	for _, spelling := range spellings {
+		if folder, err := defaultFolderIn(spelling); err != nil || folder != want {
+			t.Errorf("defaultFolderIn(%q) = %q, %v, want %q", spelling, folder, err, want)
+		}
 	}
 	for pictures, want := range refused {
 		folder, err := defaultFolderIn(pictures)
 		if folder != "" || !errors.Is(err, want) || !strings.Contains(err.Error(), pictures) {
 			t.Errorf("defaultFolderIn(%q) = %q, %v, want an error naming the folder with %v", pictures, folder, err, want)
 		}
+	}
+}
+
+// TestDefaultFolder: the default output folder lies under the known Pictures
+// folder, or under the profile's when the known one cannot be located or
+// gives a folder the rules refuse, and when neither gives one the error says
+// why, preferring the known folder's refusal.
+func TestDefaultFolder(t *testing.T) {
+	known, profile := t.TempDir(), t.TempDir()
+	under := func(pictures string) string { return filepath.Join(pictures, "GameDevTools", "Resized") }
+	home := func() (string, error) { return profile, nil }
+	relativeHome := func() (string, error) { return "profile", nil }
+	lookupErr, homeErr := errors.New("element not found"), errors.New("no profile")
+	noHome := func() (string, error) { return "", homeErr }
+	knownRefusal, profileRefusal := under("Pictures"), under(filepath.Join("profile", "Pictures"))
+	tests := []struct {
+		name     string
+		known    string
+		knownErr error
+		home     func() (string, error)
+		want     string
+		wantErr  error
+		// refusal is the refused folder the error names.
+		refusal string
+	}{
+		{name: "known folder", known: known, home: home, want: under(known)},
+		{name: "known folder not located", knownErr: lookupErr, home: home, want: under(filepath.Join(profile, "Pictures"))},
+		{name: "known folder empty", home: home, want: under(filepath.Join(profile, "Pictures"))},
+		{name: "known folder refused", known: "Pictures", home: home, want: under(filepath.Join(profile, "Pictures"))},
+		{name: "known folder refused without a profile", known: "Pictures", home: noHome, wantErr: output.ErrFolderNotAbsolute, refusal: knownRefusal},
+		{name: "both refused", known: "Pictures", home: relativeHome, wantErr: output.ErrFolderNotAbsolute, refusal: knownRefusal},
+		{name: "profile refused", knownErr: lookupErr, home: relativeHome, wantErr: output.ErrFolderNotAbsolute, refusal: profileRefusal},
+		{name: "nothing located", knownErr: lookupErr, home: noHome, wantErr: lookupErr},
+		{name: "no profile", home: noHome, wantErr: homeErr},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			folder, err := defaultFolder(test.known, test.knownErr, test.home)
+			if folder != test.want || !errors.Is(err, test.wantErr) || (err == nil) != (test.wantErr == nil) {
+				t.Fatalf("defaultFolder = %q, %v, want %q, %v", folder, err, test.want, test.wantErr)
+			}
+			if test.refusal != "" && !strings.HasPrefix(err.Error(), test.refusal+":") {
+				t.Fatalf("error %v does not name the refused folder %s", err, test.refusal)
+			}
+		})
 	}
 }
 
@@ -115,6 +168,7 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 		{name: "parent ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+" ", "Resized") }},
 		{name: "parent ending in two periods", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+"..", "Resized") }},
 		{name: "volume without a folder", mutate: func(o *ResizeOptions) { o.OutputFolder = `\\?\` + filepath.VolumeName(folder) }, wantErr: volumeErr},
+		{name: "folder on a named pipe", mutate: func(o *ResizeOptions) { o.OutputFolder = `\\.\pipe\Resized` }, wantErr: volumeErr},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
