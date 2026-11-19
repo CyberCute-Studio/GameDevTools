@@ -167,9 +167,17 @@ func resolvesAsWritten(clean string) bool {
 
 // namesStream reports whether a cleaned absolute path holds a colon after
 // its volume name, which NTFS reads as naming a stream of the file or folder
-// before it, whether or not the path is extended-length.
+// before it, whether or not the path is extended-length, or in the server or
+// share name of a share's volume name, \\server\share or
+// \\.\UNC\server\share, which neither name may hold. The \\?\UNC spelling of
+// a share puts both names after its volume name, so every spelling of one
+// path gets one answer.
 func namesStream(clean string) bool {
-	return strings.ContainsRune(clean[len(filepath.VolumeName(clean)):], ':')
+	volume := filepath.VolumeName(clean)
+	if strings.ContainsRune(clean[len(volume):], ':') {
+		return true
+	}
+	return shareRoot(volume) && strings.ContainsRune(volume, ':')
 }
 
 // mkdirAll creates a folder, and every missing folder that holds it, through

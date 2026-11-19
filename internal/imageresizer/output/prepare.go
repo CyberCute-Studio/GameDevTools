@@ -254,18 +254,25 @@ var (
 // own resolution of it rather than with a model of its rules, so a path
 // through a name Windows keeps there, such as "Photos " or "v2..", is
 // accepted, and Prepare creates any missing folder in it under the name the
-// path gives. An extended-length path, marked \\?\ or \??\ with backslashes
-// only, is one Windows takes verbatim, so every name in it is kept and the
-// rule does not apply. Windows resolves the same prefix written with a
-// forward slash, such as //?/, like any other device path, so such a path is
-// compared with its resolution too.
+// path gives. Prepare creates and plans into the path as filepath.Clean
+// writes it, so the path as written must resolve to the same folder as its
+// cleaned form: Clean writes \\.\UNC\server\share\..\x as
+// \\.\UNC\server\share\x, while Windows resolves it to \\.\UNC\server\x, the
+// share x, so it is refused. An extended-length path, marked \\?\ or \??\
+// with backslashes only, is one Windows takes verbatim, so every name in it
+// is kept and the rule does not apply. Windows resolves the same prefix
+// written with a forward slash, such as //?/, like any other device path, so
+// such a path is compared with its resolution too.
 //
 // A colon after the volume name, which no Windows file or folder name may
 // hold, makes NTFS read the name as a stream of the file or folder before
 // it, in an extended-length path too: Resized::$INDEX_ALLOCATION opens the
 // folder Resized under another spelling, so its destinations would escape
 // the comparison with the sources' paths, and a folder such as x:y cannot
-// be created at all. Such a path is refused.
+// be created at all. Such a path is refused, and so is one with a colon in
+// a share's server or share name, which neither may hold, however the share
+// is spelled: filepath.VolumeName takes both names into the volume name of
+// \\server\share and \\.\UNC\server\share, but not of \\?\UNC\server\share.
 //
 // A device path, however it is written, holds folders only on a drive, a
 // volume named by its GUID, or a share. One that leads through any other
@@ -290,8 +297,12 @@ func ValidateFolder(folder string) error {
 	if namesStream(clean) || (!verbatim(folder) && !resolvesAsWritten(clean)) {
 		return ErrFolderName
 	}
-	if namesDevice(resolvedPath(folder)) {
+	resolved := resolvedPath(folder)
+	if namesDevice(resolved) {
 		return ErrFolderRoot
+	}
+	if resolved != resolvedPath(clean) {
+		return ErrFolderName
 	}
 	return nil
 }
@@ -450,8 +461,13 @@ type Request struct {
 	// it is reached. A file whose identity cannot be read where it stands
 	// stops an Overwrite job from replacing any file it may be, and so does
 	// any other listed path that cannot be located at all, as when its
-	// folder, drive, or share has gone: a path says nothing of whether it
-	// named a folder, so such a folder cannot be told from such a file.
+	// folder, drive, or share has gone, or a link it ends in leads to nothing
+	// that can be found: a path says nothing of whether it named a folder, so
+	// such a folder cannot be told from such a file. A path through a device
+	// other than a drive, a volume, or a share, such as a named pipe or a
+	// serial port, is never opened, as opening it would connect to the pipe's
+	// server or claim the port, and since it may still lead to a file, as an
+	// NT device path can, it stops an Overwrite job from replacing anything.
 	Protected []string
 	// Folder is the absolute path of the output folder.
 	Folder string
@@ -839,17 +855,21 @@ func fileInTheWay(files fileSystem, folder string) bool {
 	}
 }
 
-// fileMissing reports whether a file could not be opened or inspected
-// because no entry has its name in its folder: the error says the name was
-// not found, and the path's folder, as Windows resolves the path, is still a
-// folder, as the planner's filesystem reports it. A path whose folder cannot
-// be found is not missing: a drive, share, or link it leads through may be
-// gone while the file remains, reachable by another path, and a listed file
-// taken for missing loses the identity comparison that would recognize it
-// there. Windows reports such a path as ERROR_PATH_NOT_FOUND, but a network
-// redirector or a file system an application implements may report a
-// missing folder as a missing name, and outside Windows both are ENOENT, so
-// the folder is checked rather than the error trusted alone.
+// fileMissing reports whether an entry could not be inspected because no
+// entry has its name in its folder. err is the planner's filesystem's Lstat
+// failure, which inspects the entry itself rather than what a final link
+// leads to, so a link whose target cannot be found is never taken for a
+// missing entry: the target may be behind a drive, share, or folder that is
+// gone. The error must say the name was not found, and the path's folder, as
+// Windows resolves the path, must still be a folder, as the planner's
+// filesystem reports it. A path whose folder cannot be found is not missing:
+// a drive, share, or link it leads through may be gone while the file
+// remains, reachable by another path, and a listed file taken for missing
+// loses the identity comparison that would recognize it there. Windows
+// reports such a path as ERROR_PATH_NOT_FOUND, but a network redirector or a
+// file system an application implements may report a missing folder as a
+// missing name, and outside Windows both are ENOENT, so the folder is
+// checked rather than the error trusted alone.
 func fileMissing(files fileSystem, err error) bool {
 	var pathErr *fs.PathError
 	if !nameNotFound(err) || !errors.As(err, &pathErr) {
@@ -962,7 +982,8 @@ type planner struct {
 	format              Format
 	collision           Collision
 	sources             []Source
-	// listed holds every source and protected path.
+	// listed holds every source and protected path, the sources first, each
+	// at its index in sources.
 	listed []listedPath
 	// sourceKeys holds the path key of every listed path, so no destination
 	// is ever planned onto one, whether or not it still exists.
@@ -990,8 +1011,9 @@ type planner struct {
 	sourceFiles map[fileID]struct{}
 	loaded      bool
 	// unverified reports that some listed path may exist but its identity,
-	// and where it lies, could not be read, so no existing file can be
-	// proven not to be it.
+	// and where it lies, could not be read, or are not read because the path
+	// leads through a device, so no existing file can be proven not to be
+	// it.
 	unverified bool
 	// unverifiedFolders holds the identities, without volume serial numbers,
 	// of the folders holding a listed file that is no link but whose own
@@ -1081,7 +1103,7 @@ func (p *planner) plan() ([]Item, error) {
 		item := Item{
 			Source:      source.Path,
 			Format:      format,
-			Destination: filepath.Join(p.folder, stem(source.Path)+Extension(format)),
+			Destination: filepath.Join(p.folder, stem(p.listed[index].resolved)+Extension(format)),
 			DuplicateOf: -1,
 		}
 		resolved, err := p.natural(index, &item)
@@ -1400,18 +1422,7 @@ func (p *planner) listedAs(id fileID) (Reason, error) {
 			if err := p.ctx.Err(); err != nil {
 				return ReasonNone, kindError(KindCanceled, "plan outputs", err)
 			}
-			found, err := p.files.Identity(listed.path)
-			switch {
-			case err == nil:
-				p.sourceIDs[found.id] = struct{}{}
-				p.sourceFiles[found.id.anyVolume()] = struct{}{}
-			case fileMissing(p.files, err):
-				// No file has the name in its folder any more, so none can
-				// be overwritten through it; the path stays protected by its
-				// key.
-			default:
-				p.unreadable(listed)
-			}
+			p.load(listed)
 			if p.unverified {
 				break
 			}
@@ -1427,22 +1438,54 @@ func (p *planner) listedAs(id fileID) (Reason, error) {
 	return ReasonNone, nil
 }
 
-// unreadable records a listed path that may exist but whose identity could
-// not be read, such as a file the user may not open. A drive, volume, or
-// share root, which names a folder however it is reached, and a folder that
-// is no link are no file, so no existing file can be one, and an unreachable
-// root is not inspected. When the path names a file, one that is no link,
-// in a folder whose identity can be read, the file has its name in that
-// folder; otherwise, such as for a file whose folder, drive, or share, or a
-// link it leads through, can no longer be reached, the file may be any
-// existing file. A listed folder that can no longer be inspected at all is
-// such a path too, as nothing tells it from a file.
-func (p *planner) unreadable(listed listedPath) {
-	if namesVolume(listed.resolved) {
-		return
+// load reads the identity of one listed path for listedAs. A path through a
+// device other than a drive, a volume named by its GUID, or a share, such as
+// a named pipe, a serial port, or an NT device path, is never opened, as
+// planning never opens a device: opening a named pipe connects to the
+// program serving it, and opening a port claims it. Such a path may still
+// lead to a file, as \\?\GLOBALROOT\Device\HarddiskVolume1\In\photo.png
+// does, and cannot be located without opening it, so, like a listed file
+// that cannot be located, it may be any existing file. A drive, volume, or
+// share root, or a drive, volume, or server itself, names no file in a
+// folder however it is reached, so no existing file can be it, and it is
+// not opened either.
+func (p *planner) load(listed listedPath) {
+	switch {
+	case namesDevice(listed.resolved):
+		p.unverified = true
+	case namesVolume(listed.resolved):
+		// No file to compare.
+	default:
+		found, err := p.files.Identity(listed.path)
+		if err != nil {
+			p.unreadable(listed)
+			return
+		}
+		p.sourceIDs[found.id] = struct{}{}
+		p.sourceFiles[found.id.anyVolume()] = struct{}{}
 	}
+}
+
+// unreadable records a listed path whose identity could not be read, such as
+// a file the user may not open, one that no longer exists, or one whose
+// folder, drive, or share, or a link it leads through, can no longer be
+// reached. Its entry is inspected itself, without following a final link.
+// When no entry has its name in a folder that is still there, no file can be
+// overwritten through it, and the path stays protected by its key. A folder
+// that is no link is no file, so no existing file can be one. When the path
+// names a file, one that is no link, in a folder whose identity can be read,
+// the file has its name in that folder; otherwise the file may be any
+// existing file. A link whose target cannot be found is such a path, as its
+// target may be behind a drive, share, or folder that is gone, and so is a
+// listed folder that can no longer be inspected at all, as nothing tells it
+// from a file.
+func (p *planner) unreadable(listed listedPath) {
 	info, err := p.files.Lstat(listed.path)
-	if err != nil {
+	switch {
+	case err == nil:
+	case fileMissing(p.files, err):
+		return
+	default:
 		p.unverified = true
 		return
 	}
@@ -1491,11 +1534,13 @@ func (p *planner) mayBeUnverified(links uint32) bool {
 	return links != 1
 }
 
-// stem is the source's base file name without its extension, the name as
-// Windows resolves it, so a source listed as photo.png followed by a period
-// Windows drops, which is photo.png, gives photo rather than photo.png.
-func stem(path string) string {
-	base := filepath.Base(resolvedPath(path))
+// stem is a source's base file name without its extension, given the
+// source's path as resolvedPath gives it, which newPlanner keeps for every
+// listed path: the name as Windows resolves it, so a source listed as
+// photo.png followed by a period Windows drops, which is photo.png, gives
+// photo rather than photo.png.
+func stem(resolved string) string {
+	base := filepath.Base(resolved)
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 

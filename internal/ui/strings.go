@@ -182,6 +182,10 @@ const (
 	ResizeFolderUnavailable  = "The default Pictures output folder is unavailable: %v. Choose an output folder before resizing."
 	ResizeFolderReplaced     = resizeSavedFolderRefused + " The default output folder is selected instead; choose another folder with Browse."
 	ResizeFolderRefused      = resizeSavedFolderRefused + " The default Pictures output folder is unavailable too: %v. Choose an output folder with Browse before resizing."
+	// ResizeDefaultFolderUnknown is the reason ResizeFolderUnavailable and
+	// ResizeFolderRefused give when no folder is selected and nothing says
+	// why the default folder is unavailable.
+	ResizeDefaultFolderUnknown = "its location is unknown"
 
 	// resizeSavedFolderRefused begins both startup warnings about a saved
 	// output folder that only earlier builds accepted.

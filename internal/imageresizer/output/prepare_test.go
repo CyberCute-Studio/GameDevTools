@@ -274,6 +274,30 @@ func TestValidateFolder(t *testing.T) {
 		{`\\?\C:\Art\x:y`, ErrFolderName},
 		{`\\server\share\x:y`, ErrFolderName},
 		{`\\?\UNC\server\share\x:y`, ErrFolderName},
+		// No server or share name may hold a colon either, and one path gets
+		// one answer however the share is spelled, though
+		// filepath.VolumeName takes both names into the volume name of
+		// \\server\share and \\.\UNC\server\share.
+		{`\\server\share:x\Resized`, ErrFolderName},
+		{`\\.\UNC\server\share:x\Resized`, ErrFolderName},
+		{`//./UNC/server/share:x/Resized`, ErrFolderName},
+		{`\\?\UNC\server\share:x\Resized`, ErrFolderName},
+		{`\\server:x\share\Resized`, ErrFolderName},
+		{`\\.\UNC\server:x\share\Resized`, ErrFolderName},
+		{`\\?\UNC\server:x\share\Resized`, ErrFolderName},
+		// Prepare plans into the path as filepath.Clean writes it, so the path
+		// as written must resolve to that same folder. Clean keeps ".." inside
+		// \\.\UNC\server\share, while Windows takes \\.\UNC as the root of
+		// that spelling and resolves the path to the share x; in the other
+		// spellings both read ".." alike.
+		{`\\.\UNC\server\share\..\x`, ErrFolderName},
+		{`//./UNC/server/share/../x`, ErrFolderName},
+		{`\\.\UNC\server\share\Art\..\x`, nil},
+		{`\\server\share\..\x`, nil},
+		{`\\server\share\Art\..\x`, nil},
+		{`C:\Art\..\Resized`, nil},
+		{`C:\Art\.\Resized\`, nil},
+		{`\\.\C:\Art\..\Resized`, nil},
 		// A device path holds folders only on a drive, a volume named by its
 		// GUID, or a share, in every spelling; any other device, such as a
 		// named pipe, a mailslot, a serial port, or an NT device path, holds
@@ -1896,7 +1920,7 @@ func TestPrepareNeverOverwritesASource(t *testing.T) {
 		written := map[string]bool{}
 		for index, item := range plan.Items {
 			source := sources[index]
-			natural := stem(source.Path) + Extension(EncodedFormat(request.Format, source.Format))
+			natural := stem(resolvedPath(source.Path)) + Extension(EncodedFormat(request.Format, source.Format))
 			name := filepath.Base(item.Destination)
 			if filepath.Dir(item.Destination) != out {
 				t.Fatalf("%s: item %d destination %s is outside the output folder", label, index, item.Destination)

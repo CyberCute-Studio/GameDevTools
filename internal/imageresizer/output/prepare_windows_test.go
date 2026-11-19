@@ -948,6 +948,38 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
 	})
 
+	// A listed link whose target cannot be found is no missing file, though
+	// its own folder is there: its target may lie behind a drive, share, or
+	// folder that is gone, which a redirector may report as a missing name,
+	// while the file stays reachable under another path.
+	t.Run("link whose target is reported missing", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "link.png")
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.EqualFold(path, protected) {
+					return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_FILE_NOT_FOUND}
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.EqualFold(path, protected) {
+					return fakeInfo{name: filepath.Base(path), mode: fs.ModeSymlink}, nil
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), renamed)
+	})
+
+	t.Run("symbolic link to nothing", func(t *testing.T) {
+		in := t.TempDir()
+		protected := filepath.Join(in, "link.png")
+		if err := os.Symlink(filepath.Join(in, "gone", "x.png"), protected); err != nil {
+			t.Skipf("cannot create a symbolic link: %v", err)
+		}
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), renamed)
+	})
+
 	// A file whose reparse point only says how its data is stored, such as
 	// one OneDrive keeps in sync, has its name in its folder like any other
 	// file. No filter handles the test's reparse tag, so its identity cannot
@@ -1120,6 +1152,59 @@ func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
 	assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
 	if reads != 0 {
 		t.Fatalf("read %d identities of listed files after one that cannot be located, want none", reads)
+	}
+}
+
+// TestPrepareNeverOpensListedDevices pins RSZ-026 for listed paths through a
+// device other than a drive, a volume, or a share: planning never opens one,
+// as opening a named pipe connects to the program serving it and opening a
+// port claims it, and since such a path may still lead to a file, as an NT
+// device path can, a confirmed Overwrite renames rather than replaces. A
+// drive root or a drive's volume names no file however it is reached, so it
+// is not opened either, and a confirmed Overwrite still replaces.
+func TestPrepareNeverOpensListedDevices(t *testing.T) {
+	in := t.TempDir()
+	pipe := "GameDevTools-" + filepath.Base(in)
+	volume := filepath.VolumeName(in)
+	tests := []struct {
+		protected string
+		want      expect
+	}{
+		{filepath.Join(in, "NUL"), expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\.\pipe\` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`//./pipe/` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\?\pipe\` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\.\COM1`, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{`\\?\GLOBALROOT\Device\NamedPipe\` + pipe, expect{"x_2.png", ActionCreate, ReasonUnverified}},
+		{volume + `\`, expect{"x.png", ActionReplace, ReasonNone}},
+		{`\\?\` + volume, expect{"x.png", ActionReplace, ReasonNone}},
+	}
+	for _, test := range tests {
+		out := t.TempDir()
+		writeFile(t, filepath.Join(out, "x.png"), "earlier")
+		var opened []string
+		record := func(path string) { opened = append(opened, path) }
+		files := faultyFiles{
+			stat:     func(path string) (fs.FileInfo, error) { record(path); return os.Stat(path) },
+			lstat:    func(path string) (fs.FileInfo, error) { record(path); return os.Lstat(path) },
+			identity: func(path string) (identity, error) { record(path); return identify(path) },
+			entry:    func(path string) (entry, error) { record(path); return findEntry(path) },
+		}
+		request := jobRequest(out, CollisionOverwrite, png(filepath.Join(in, "x.png")))
+		request.Protected = []string{test.protected}
+		plan, err := prepare(context.Background(), request, files)
+		if err != nil {
+			t.Fatalf("%s: prepare: %v", test.protected, err)
+		}
+		item := plan.Items[0]
+		if got := (expect{filepath.Base(item.Destination), item.Action, item.Reason}); got != test.want {
+			t.Errorf("%s: item = %+v, want %+v", test.protected, got, test.want)
+		}
+		for _, path := range opened {
+			if PathKey(path) == PathKey(test.protected) {
+				t.Errorf("%s: the planner opened %s", test.protected, path)
+			}
+		}
 	}
 }
 

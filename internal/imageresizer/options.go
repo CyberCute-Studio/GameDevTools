@@ -232,15 +232,21 @@ func (m *OptionsManager) Options() ResizeOptions {
 // the old one, and says the default folder is selected in its place, or,
 // when the default folder could not be resolved, that it is unavailable too,
 // and why, so no folder is selected; without a replaced folder it says why
-// the default folder is unavailable when no folder is selected. The user is
-// asked to choose a folder once, whatever happened.
+// the default folder is unavailable when no folder is selected. When no
+// folder is selected but defaultErr is nil, as when the store was given no
+// default folder and no error, the warning says the default folder's
+// location is unknown rather than formatting a nil error. The user is asked
+// to choose a folder once, whatever happened.
 func (m *OptionsManager) FolderWarning(defaultErr error) string {
+	if m.options.OutputFolder == "" && defaultErr == nil {
+		defaultErr = errors.New(ui.ResizeDefaultFolderUnknown)
+	}
 	switch {
 	case m.replaced != "" && m.options.OutputFolder != "":
 		return fmt.Sprintf(ui.ResizeFolderReplaced, m.replaced)
 	case m.replaced != "":
 		return fmt.Sprintf(ui.ResizeFolderRefused, m.replaced, defaultErr)
-	case defaultErr != nil && m.options.OutputFolder == "":
+	case m.options.OutputFolder == "":
 		return fmt.Sprintf(ui.ResizeFolderUnavailable, defaultErr)
 	}
 	return ""

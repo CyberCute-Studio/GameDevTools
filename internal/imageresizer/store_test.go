@@ -318,6 +318,12 @@ func TestFolderWarning(t *testing.T) {
 		{name: "refused without a default", stored: folder + ".", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".", unavailable)},
 		{name: "no stored folder", defaultFolder: folder, want: ""},
 		{name: "no stored folder and no default", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderUnavailable, unavailable)},
+		// No folder is selected though nothing says why, as when the store
+		// was given no default folder and no error: the warnings still say
+		// the default folder is unavailable, rather than formatting a nil
+		// error or saying nothing.
+		{name: "refused without a default or a reason", stored: folder + ".", want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".", ui.ResizeDefaultFolderUnknown)},
+		{name: "no stored folder, default, or reason", want: fmt.Sprintf(ui.ResizeFolderUnavailable, ui.ResizeDefaultFolderUnknown)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
