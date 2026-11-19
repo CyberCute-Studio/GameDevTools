@@ -185,9 +185,10 @@ func TestEncodedFormatAndExtension(t *testing.T) {
 	}
 }
 
-// TestValidateFolder: no folder name in an output folder's path may end in a
-// space or a period, which Windows removes, except in an extended-length
-// path, which Windows takes verbatim; and the path must name a folder, not
+// TestValidateFolder: an output folder's own name may not end in a space or a
+// period, and no folder name in its path in a period, which Windows removes,
+// except in an extended-length path, which Windows takes verbatim; and the
+// path must name a folder, not
 // only a drive, volume, device, or server, where filepath.Join would put a
 // file name straight after the volume.
 func TestValidateFolder(t *testing.T) {
@@ -232,11 +233,18 @@ func TestValidateFolder(t *testing.T) {
 		{`\\.\UNC\server\share\Art.`, ErrFolderName},
 		{`C:`, ErrFolderNotAbsolute},
 		{`C:\Art.\Resized`, ErrFolderName},
-		{`C:\Art \Resized`, ErrFolderName},
+		{`C:\Art .\Resized`, ErrFolderName},
 		{`C:/Art./Resized`, ErrFolderName},
 		{`C:\Art\Resized.`, ErrFolderName},
-		{`\\server\share\Art \Resized`, ErrFolderName},
+		{`C:\Art\Resized `, ErrFolderName},
+		{`C:\Art\Resized. `, ErrFolderName},
 		{`\\.\C:\Art.\Resized`, ErrFolderName},
+		// Windows keeps a trailing space on a name a longer path leads
+		// through, so such a path names the folder it spells; Prepare only
+		// plans into it when the folder exists.
+		{`C:\Art \Resized`, nil},
+		{`C:\Art. \Resized`, nil},
+		{`\\server\share\Art \Resized`, nil},
 		{`\\?\C:\Art.\Resized `, nil},
 		{`//?/C:/Art./Resized`, nil},
 		{`\??\C:\Art \Resized.`, nil},
@@ -255,6 +263,19 @@ func TestPathKey(t *testing.T) {
 	}
 	if PathKey(`C:\In\a.png`) == PathKey(`C:\In\b.png`) {
 		t.Fatal("two files share a key")
+	}
+	// Spellings Windows resolves to one name share a key; a name Windows
+	// takes verbatim keeps the trailing period it would otherwise drop.
+	for _, alias := range []string{`\\?\C:\In\photo.png`, `C:/In/photo.png`, `C:\In\photo.png `, `C:\In\photo.png.`, `//?/C:/In/photo.png`} {
+		if PathKey(alias) != PathKey(`C:\In\photo.png`) {
+			t.Errorf("PathKey(%q) = %q, want the key of C:\\In\\photo.png, %q", alias, PathKey(alias), PathKey(`C:\In\photo.png`))
+		}
+	}
+	if PathKey(`\\server\share\photo.png`) != PathKey(`\\?\UNC\server\share\photo.png`) {
+		t.Error("a share path and its extended-length spelling have different keys")
+	}
+	if PathKey(`\\?\C:\In\photo.png.`) == PathKey(`C:\In\photo.png`) {
+		t.Error("a verbatim name with a trailing period shares the key of the name without it")
 	}
 	// Go holds a name with an unpaired surrogate, which NTFS accepts, in
 	// WTF-8. Two such names differ in bytes that are not valid UTF-8, which
@@ -395,10 +416,10 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		{name: "folder ending in a space", mutate: func(r *Request) { r.Folder += " " }, want: ErrFolderName},
 		{name: "folder ending in a period", mutate: func(r *Request) { r.Folder += "." }, want: ErrFolderName},
 		{name: "folder ending in periods and a separator", mutate: func(r *Request) { r.Folder += `..\` }, want: ErrFolderName},
-		// Creating a missing folder with such a name on the way would leave
-		// a stray folder the rest of the path never reaches.
-		{name: "parent ending in a space", mutate: func(r *Request) {
-			r.Folder = filepath.Join(filepath.Dir(r.Folder), "sub ", "out")
+		// Windows can remove a trailing period from a name a longer path
+		// leads through, so the path may lead to another folder.
+		{name: "parent ending in a period", mutate: func(r *Request) {
+			r.Folder = filepath.Join(filepath.Dir(r.Folder), "sub.", "out")
 		}, want: ErrFolderName},
 		// A volume without its root folder's separator is no folder, and
 		// joining a file name to it gives \\?\C:x.png.
@@ -479,7 +500,7 @@ type faultyFiles struct {
 	mkdirAll func(path string) error
 	stat     func(path string) (fs.FileInfo, error)
 	lstat    func(path string) (fs.FileInfo, error)
-	identity func(path string) (fileID, uint32, error)
+	identity func(path string) (identity, error)
 	entry    func(path string) (entry, error)
 }
 
@@ -504,7 +525,7 @@ func (f faultyFiles) Lstat(path string) (fs.FileInfo, error) {
 	return f.osFiles.Lstat(path)
 }
 
-func (f faultyFiles) Identity(path string) (fileID, uint32, error) {
+func (f faultyFiles) Identity(path string) (identity, error) {
 	if f.identity != nil {
 		return f.identity(path)
 	}
@@ -1038,16 +1059,24 @@ func TestPrepareProtectsListedSourcesItDoesNotProcess(t *testing.T) {
 }
 
 // TestPrepareProtectsSourcesThatNoLongerExist: a listed source that has
-// disappeared still keeps its path; nothing is planned onto it.
+// disappeared still keeps its path; nothing is planned onto it, even when
+// the output folder spells the source's folder as an extended-length path or
+// the source is listed with a trailing space Windows drops.
 func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 	folder := t.TempDir()
-	for _, policy := range policies {
-		plan := mustPrepare(t, jobRequest(folder, policy, png(filepath.Join(folder, "gone.png"))))
-		if policy == CollisionSkip {
-			assertItems(t, plan, []expect{{"gone.png", ActionSkip, ReasonSource}})
-			continue
+	for _, spelling := range []struct{ folder, source string }{
+		{folder, filepath.Join(folder, "gone.png")},
+		{`\\?\` + folder, filepath.Join(folder, "gone.png")},
+		{folder, filepath.Join(folder, "gone.png ")},
+	} {
+		for _, policy := range policies {
+			plan := mustPrepare(t, jobRequest(spelling.folder, policy, png(spelling.source)))
+			if policy == CollisionSkip {
+				assertItems(t, plan, []expect{{"gone.png", ActionSkip, ReasonSource}})
+				continue
+			}
+			assertItems(t, plan, []expect{{"gone_2.png", ActionCreate, ReasonSource}})
 		}
-		assertItems(t, plan, []expect{{"gone_2.png", ActionCreate, ReasonSource}})
 	}
 }
 
@@ -1217,7 +1246,7 @@ func TestPrepareSkipsIdentityUnlessOverwriting(t *testing.T) {
 	}
 	for _, policy := range policies {
 		calls := 0
-		files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
+		files := faultyFiles{identity: func(path string) (identity, error) {
 			calls++
 			return identify(path)
 		}}

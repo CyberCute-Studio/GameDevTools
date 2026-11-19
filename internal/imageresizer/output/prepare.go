@@ -21,11 +21,12 @@
 // rather than an earlier result (RSZ-049).
 //
 // No plan ever writes over a source (RSZ-026, NFR-020). Destinations are
-// compared by path, case-insensitively, with every source of the job and
-// with every other file listed as a source that the job does not process.
-// Before Overwrite replaces an existing file it also compares the file's
-// identity with theirs, so a hard link, a junction, or another alias of a
-// source is recognized as that source. A destination that is a source is
+// compared by path, as Windows resolves it and case-insensitively, with every
+// source of the job and with every other file listed as a source that the
+// job does not process. Before Overwrite replaces an existing file it also
+// compares the file's identity with theirs, so a hard link, a junction, a
+// path through another share of a Samba server, or another alias of a source
+// is recognized as that source. A destination that is a source is
 // never replaced, even under Overwrite: Rename and Overwrite rename the
 // result instead, and Skip skips it. Overwrite replaces an existing file
 // only when it can prove the file is none of the sources; when the file's
@@ -36,14 +37,16 @@
 // anything, so they do not read identities.
 //
 // Prepare validates the request, creates the output folder when it does not
-// exist (RSZ-030), and inspects the destinations as the filesystem stands
-// when it runs, so re-running a job plans afresh rather than assuming
-// earlier results (RSZ-049). A file can still appear at a planned
-// destination after Prepare returns; the writer must finalize ActionCreate
-// items without replacing anything. A source can likewise be moved or linked
-// to the name of a file planned for replacement, so the writer replaces an
-// ActionReplace item's file only while Item.StillReplaceable reports that it
-// is still the file the plan proved is none of the sources.
+// exist (RSZ-030), unless a folder name in its path ends in a space, which
+// Windows would remove from the folder it creates, and inspects the
+// destinations as the filesystem stands when it runs, so re-running a job
+// plans afresh rather than assuming earlier results (RSZ-049). A file can
+// still appear at a planned destination after Prepare returns; the writer
+// must finalize ActionCreate items without replacing anything. A source can
+// likewise be moved or linked to the name of a file planned for replacement,
+// so the writer replaces an ActionReplace item's file only while
+// Item.StillReplaceable reports that it is still the file the plan proved is
+// none of the sources, unchanged.
 //
 // Failures are reported as *Error values with a Kind. A failure that
 // concerns the whole job — an invalid request, a missing confirmation, or an
@@ -204,6 +207,11 @@ var (
 	// numbered name it may take was already used, by this item's search or
 	// an earlier one with the same name.
 	ErrNoUnusedName = fmt.Errorf("no unused output file name was found among the numbered names _2 to _%d", maxSuffix)
+	// ErrFolderNotCreatable is the cause of the KindFolder error returned
+	// when an output folder that does not exist has a folder name in its
+	// path that ends in a space, which Windows would remove from the folder
+	// it creates.
+	ErrFolderNotCreatable = errors.New("the output folder does not exist, and it cannot be created as named, as a folder name in its path ends in a space, which Windows removes from a folder it creates")
 
 	// ErrFolderEmpty, ErrFolderText, ErrFolderNotAbsolute, ErrFolderRoot,
 	// and ErrFolderName are the causes ValidateFolder reports.
@@ -211,12 +219,13 @@ var (
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
 	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it")
-	ErrFolderName        = errors.New("a folder name in the path ends in a space or a period, which Windows removes")
+	ErrFolderName        = errors.New("the folder's own name ends in a space or a period, or a folder name in its path ends in a period, which Windows removes")
 )
 
 // ValidateFolder checks an output folder path the way the persisted options
 // and Prepare both require: it is not empty, is valid text, is absolute,
-// names a folder, and no folder name in it ends in a space or a period.
+// names a folder, its own name ends in neither a space nor a period, and no
+// folder name in its path ends in a period.
 //
 // An absolute path that is only a volume name, such as \\?\C: or \\.\C:
 // without the root folder's separator, or a server without a share, such as
@@ -231,14 +240,18 @@ var (
 // replaces such bytes with U+FFFD, and a U+FFFD replacement character marks
 // a path such a lossy conversion changed; either may name another folder
 // than the one chosen. Windows removes trailing spaces and periods from the
-// last name of a path it creates or opens, but not all of them from a name
-// a longer path leads through: for an output folder with such a name, the
-// folder Prepare creates and checks would not be the folder its destinations
-// lie in, and creating a missing folder with such a name on the way to it
-// would leave a stray folder without them that the rest of the path never
-// reaches. An extended-length path, marked \\?\ or \??\, is one Windows takes
-// verbatim, so every name in it keeps its spaces and periods and the rule
-// does not apply.
+// last name of a path it creates or opens, so for an output folder whose own
+// name ends in one, the folder Prepare creates and checks would not be the
+// folder its destinations lie in. From a name a longer path leads through it
+// can remove a trailing period, so a path through a folder name that ends in
+// a period may lead to another folder than the one named, but it keeps
+// trailing spaces, so a path may lead through an existing folder whose name
+// ends in a space. Windows would create such a folder without its space,
+// leaving a stray folder the rest of the path never reaches, so Prepare
+// plans into such a path only when the output folder already exists. An
+// extended-length path, marked \\?\ or \??\, is one Windows takes verbatim,
+// so every name in it keeps its spaces and periods and the rules do not
+// apply.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -252,15 +265,43 @@ func ValidateFolder(folder string) error {
 	if namesRoot(clean) {
 		return ErrFolderRoot
 	}
-	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) {
+	if verbatim(clean) {
 		return nil
 	}
-	for _, name := range pathNames(clean[len(filepath.VolumeName(clean)):]) {
-		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
+	names := folderNames(clean)
+	for index, name := range names {
+		if strings.HasSuffix(name, ".") || index == len(names)-1 && strings.HasSuffix(name, " ") {
 			return ErrFolderName
 		}
 	}
 	return nil
+}
+
+// verbatim reports whether a cleaned path is an extended-length path, which
+// Windows takes verbatim.
+func verbatim(clean string) bool {
+	return strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`)
+}
+
+// folderNames is the names of the folders in a cleaned path after its
+// volume name.
+func folderNames(clean string) []string {
+	return pathNames(clean[len(filepath.VolumeName(clean)):])
+}
+
+// spacedName reports whether a folder name in a cleaned output folder path
+// that ValidateFolder accepts ends in a space, as only a name the path leads
+// through may, and Windows keeps it there.
+func spacedName(clean string) bool {
+	if verbatim(clean) {
+		return false
+	}
+	for _, name := range folderNames(clean) {
+		if strings.HasSuffix(name, " ") {
+			return true
+		}
+	}
+	return false
 }
 
 // pathNames splits a path, or the part of one after its volume name, into
@@ -305,15 +346,19 @@ func shareRoot(volume string) bool {
 	return found && server != "" && share != "" && server != "." && server != "?"
 }
 
-// PathKey normalizes a full path for comparison. Windows paths compare
-// case-insensitively, so "photo.PNG" and "PHOTO.png" name the same file.
-// The source inventory deduplicates sources by it, and output planning
-// compares destinations with sources and with each other by it. Bytes that
-// are not valid UTF-8, such as the WTF-8 Go holds an unpaired surrogate in,
-// are kept as they are, so two names that differ only in them keep distinct
-// keys rather than both becoming U+FFFD.
+// PathKey normalizes a full path for comparison. On Windows the path is
+// resolved as Windows resolves it, so spellings of one name, such as
+// \\?\C:\In\photo.png, C:/In/photo.png, and C:\In\photo.png followed by a
+// space, which Windows drops, share a key; a name Windows takes verbatim,
+// such as \\?\C:\In\photo.png followed by a period, keeps its own. Windows
+// paths compare case-insensitively, so "photo.PNG" and "PHOTO.png" name the
+// same file. The source inventory deduplicates sources by it, and output
+// planning compares destinations with sources and with each other by it.
+// An unpaired surrogate, which Go holds in WTF-8 bytes that are not valid
+// UTF-8, is kept as it is, so two names that differ only in one keep
+// distinct keys rather than both becoming U+FFFD.
 func PathKey(path string) string {
-	return foldCase(filepath.Clean(path))
+	return foldCase(resolvedPath(path))
 }
 
 // foldCase upper-cases text for case-insensitive comparison, as PathKey
@@ -440,7 +485,8 @@ const (
 	// at the natural destination is a file it may replace: its folder could
 	// not list it as a file under the destination's own name, or the file's
 	// identity could not be read, or the identity of a listed file it may
-	// be, so the result was renamed instead of replacing it.
+	// be, or its file index is a listed file's under another volume serial
+	// number, so the result was renamed instead of replacing it.
 	ReasonUnverified
 )
 
@@ -480,9 +526,9 @@ type Item struct {
 	DuplicateOf int
 	// Err is the *Error of an ActionFail item, with KindDestination.
 	Err error
-	// replaces is the identity of the file an ActionReplace item replaces,
-	// the one the plan proved is none of the sources.
-	replaces fileID
+	// replaces is the identity and stamp of the file an ActionReplace item
+	// replaces, the one the plan proved is none of the sources.
+	replaces identity
 }
 
 // Renamed reports whether the item creates a file under a numbered name
@@ -492,12 +538,18 @@ func (i Item) Renamed() bool {
 }
 
 // StillReplaceable reports whether the file at an ActionReplace item's
-// Destination is still the file the plan proved is none of the sources: the
-// same file, by its identity, whatever it now holds. A source moved or
-// linked to the destination's name after planning is another file, so the
-// writer checks this immediately before it replaces the file, and replaces
-// nothing when it reports false. It reports false for every other action,
-// and when the file's identity cannot be read.
+// Destination is still the file the plan proved is none of the sources,
+// unchanged: the same file by its identity, with the size and the creation
+// and last-write times it had when the plan was made. A source moved or
+// linked to the destination's name after planning is another file. So is a
+// file that takes the planned file's place and merely repeats its identity,
+// as a FAT32 or exFAT volume gives a file the identity of the folder entry it
+// takes, or a server that reports one identity for every file gives any
+// file; only its stamp tells it apart. A file rewritten since the plan is not
+// replaced either, as nothing tells it from such a file. The writer checks
+// this immediately before it replaces the file, and replaces nothing when it
+// reports false. It reports false for every other action, and when the
+// file's identity cannot be read.
 func (i Item) StillReplaceable() bool {
 	return i.stillReplaceable(osFiles{})
 }
@@ -506,8 +558,8 @@ func (i Item) stillReplaceable(files fileSystem) bool {
 	if i.Action != ActionReplace {
 		return false
 	}
-	id, _, err := files.Identity(i.Destination)
-	return err == nil && id == i.replaces
+	found, err := files.Identity(i.Destination)
+	return err == nil && found.id == i.replaces.id && found.stamp == i.replaces.stamp
 }
 
 // Plan is a job's planned destinations. Items holds one entry per request
@@ -667,8 +719,18 @@ func validateFile(path string) error {
 }
 
 // prepareFolder creates the output folder when it does not exist and checks
-// that the path names a folder (RSZ-030).
+// that the path names a folder (RSZ-030). A cleaned path with a folder name
+// that ends in a space is only checked: os.MkdirAll inspects and creates each
+// folder on the way by a path that ends at that folder's name, where Windows
+// removes the trailing space it keeps in the middle of a path, so it would
+// create a stray folder without the space, or take one for the folder named.
 func prepareFolder(files fileSystem, folder string) error {
+	if spacedName(folder) {
+		if _, err := files.Stat(folder); errors.Is(err, fs.ErrNotExist) {
+			return kindError(KindFolder, "create output folder", fmt.Errorf("%s: %w: %w", folder, ErrFolderNotCreatable, err))
+		}
+		return openFolder(files, folder)
+	}
 	if err := files.MkdirAll(folder); err != nil {
 		if fileInTheWay(files, folder) {
 			err = fmt.Errorf("%w: %w", ErrNotFolder, err)
@@ -719,8 +781,8 @@ type fileSystem interface {
 	Lstat(path string) (fs.FileInfo, error)
 	// Identity returns the identity of the file the path resolves to,
 	// following links, so two paths to one file report the same identity,
-	// and the file's number of names.
-	Identity(path string) (fileID, uint32, error)
+	// with the file's number of names and its stamp.
+	Identity(path string) (identity, error)
 	// Entry returns how the folder lists the entry the path's last element
 	// opens, the entry itself rather than what a link leads to.
 	Entry(path string) (entry, error)
@@ -738,13 +800,35 @@ type entry struct {
 	file bool
 }
 
+// identity is what one read of a file's identity reports.
+type identity struct {
+	// id is the file's identity, which every path to the file through one
+	// volume or share reports.
+	id fileID
+	// links is the file's number of names: its hard links.
+	links uint32
+	// stamp is what the file's metadata says about its content.
+	stamp stamp
+}
+
+// stamp is the size of a file's content and the times the file was created
+// and last written, which change when the file is rewritten or another file
+// takes its place. Comparing identities proves two paths reach one file; the
+// stamp shows that a file is still as it was, where its identity alone
+// cannot, on a file system that gives a later file an earlier one's
+// identity.
+type stamp struct {
+	size             uint64
+	created, written uint64
+}
+
 type osFiles struct{}
 
-func (osFiles) MkdirAll(path string) error                   { return os.MkdirAll(path, 0o755) }
-func (osFiles) Stat(path string) (fs.FileInfo, error)        { return os.Stat(path) }
-func (osFiles) Lstat(path string) (fs.FileInfo, error)       { return os.Lstat(path) }
-func (osFiles) Identity(path string) (fileID, uint32, error) { return identify(path) }
-func (osFiles) Entry(path string) (entry, error)             { return findEntry(path) }
+func (osFiles) MkdirAll(path string) error             { return os.MkdirAll(path, 0o755) }
+func (osFiles) Stat(path string) (fs.FileInfo, error)  { return os.Stat(path) }
+func (osFiles) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
+func (osFiles) Identity(path string) (identity, error) { return identify(path) }
+func (osFiles) Entry(path string) (entry, error)       { return findEntry(path) }
 
 // probe is the cached result of inspecting one destination path: whether an
 // entry has its name, and that entry's type.
@@ -759,19 +843,19 @@ type verdict struct {
 	// reason is ReasonNone when the file may be replaced, otherwise why it
 	// may not: ReasonSource, ReasonUnverified, or ReasonDuplicate.
 	reason Reason
-	// id is the identity of a file that may be replaced, for ReasonNone.
-	id fileID
+	// file is the identity and stamp of a file that may be replaced, for
+	// ReasonNone.
+	file identity
 	// owner is the index of the item that already replaces the file, for
 	// ReasonDuplicate, and otherwise -1.
 	owner int
 }
 
-// identified is the cached identity of one path and the number of names of
-// the file it resolves to.
+// identified is the cached identity of one path, or why it could not be
+// read.
 type identified struct {
-	id    fileID
-	links uint32
-	err   error
+	identity
+	err error
 }
 
 // listing is the cached result of listing one path's entry in its folder.
@@ -806,21 +890,26 @@ type planner struct {
 	// files, so each folder is read once.
 	identities map[string]identified
 	// sourceIDs holds the file identities of the listed paths, loaded the
-	// first time an Overwrite job must compare an existing file with them.
-	sourceIDs map[fileID]struct{}
-	loaded    bool
+	// first time an Overwrite job must compare an existing file with them,
+	// and sourceFiles the same identities without their volume serial
+	// numbers. Like every comparison below that can only stop a
+	// replacement, sourceFiles ignores the serial, which differs for one
+	// file reached through two shares of a Samba server.
+	sourceIDs   map[fileID]struct{}
+	sourceFiles map[fileID]struct{}
+	loaded      bool
 	// unverified reports that some listed path may exist but its identity,
 	// and where it lies, could not be read, so no existing file can be
 	// proven not to be it.
 	unverified bool
-	// unverifiedFolders holds the identities of the folders holding a listed
-	// file that is no link but whose own identity could not be read. Such a
-	// file has a name in that folder, so only an existing file that may have
-	// a name there too can be it.
+	// unverifiedFolders holds the identities, without volume serial numbers,
+	// of the folders holding a listed file that is no link but whose own
+	// identity could not be read. Such a file has a name in that folder, so
+	// only an existing file that may have a name there too can be it.
 	unverifiedFolders map[fileID]struct{}
-	// replaced maps the identity of every file planned for replacement to
-	// the index of its item, so two items never replace one file through
-	// two names.
+	// replaced maps the identity, without its volume serial number, of every
+	// file planned for replacement to the index of its item, so two items
+	// never replace one file through two names.
 	replaced map[fileID]int
 	// next maps a numbered-name pattern — the upper-case name prefix and
 	// extension — to the first suffix the Rename search has not passed over.
@@ -863,6 +952,7 @@ func newPlanner(ctx context.Context, request Request, folder string, files fileS
 		listings:          make(map[string]listing),
 		identities:        make(map[string]identified),
 		sourceIDs:         make(map[fileID]struct{}),
+		sourceFiles:       make(map[fileID]struct{}),
 		unverifiedFolders: make(map[fileID]struct{}),
 		replaced:          make(map[fileID]int),
 		next:              make(map[string]int),
@@ -966,10 +1056,10 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 		item.Reason, item.DuplicateOf = decision.reason, decision.owner
 		return false, nil
 	}
-	p.replaced[decision.id] = index
+	p.replaced[decision.file.id.anyVolume()] = index
 	p.claimed[key] = index
 	item.Action = ActionReplace
-	item.replaces = decision.id
+	item.replaces = decision.file
 	return true, nil
 }
 
@@ -1139,20 +1229,20 @@ func (p *planner) replaceable(key, path string) (verdict, error) {
 	if found.err != nil {
 		return verdict{reason: ReasonUnverified, owner: -1}, nil
 	}
-	source, err := p.isSource(found.id)
+	reason, err := p.listedAs(found.id)
 	if err != nil {
 		return verdict{}, err
 	}
-	if source {
-		return verdict{reason: ReasonSource, owner: -1}, nil
+	if reason == ReasonNone && p.mayBeUnverified(found.links) {
+		reason = ReasonUnverified
 	}
-	if p.mayBeUnverified(found.links) {
-		return verdict{reason: ReasonUnverified, owner: -1}, nil
+	if reason != ReasonNone {
+		return verdict{reason: reason, owner: -1}, nil
 	}
-	if owner, twice := p.replaced[found.id]; twice {
+	if owner, twice := p.replaced[found.id.anyVolume()]; twice {
 		return verdict{reason: ReasonDuplicate, owner: owner}, nil
 	}
-	return verdict{id: found.id, owner: -1}, nil
+	return verdict{file: found.identity, owner: -1}, nil
 }
 
 // identity reads the identity of the file or folder at a path, and its
@@ -1162,26 +1252,31 @@ func (p *planner) identity(key, path string) identified {
 		return cached
 	}
 	var found identified
-	found.id, found.links, found.err = p.files.Identity(path)
+	found.identity, found.err = p.files.Identity(path)
 	p.identities[key] = found
 	return found
 }
 
-// isSource reports whether the identity belongs to one of the listed paths,
-// loading their identities on first use. Once a listed path that may be any
+// listedAs reports whether the identity belongs to one of the listed paths,
+// loading their identities on first use: ReasonSource when it is one's, and
+// ReasonUnverified when only its file index is one's, under another volume
+// serial number, as one file reached through two shares of a Samba server
+// reports, or as two files on two volumes may. It reports ReasonNone for an
+// identity that is no listed path's. Once a listed path that may be any
 // existing file is found, no existing file can be replaced, so the rest are
 // not opened: a file whose identity matches none loaded is renamed as
 // ReasonUnverified rather than ReasonSource, which renames it all the same.
-func (p *planner) isSource(id fileID) (bool, error) {
+func (p *planner) listedAs(id fileID) (Reason, error) {
 	if !p.loaded {
 		for _, path := range p.listed {
 			if err := p.ctx.Err(); err != nil {
-				return false, kindError(KindCanceled, "plan outputs", err)
+				return ReasonNone, kindError(KindCanceled, "plan outputs", err)
 			}
-			sourceID, _, err := p.files.Identity(path)
+			listed, err := p.files.Identity(path)
 			switch {
 			case err == nil:
-				p.sourceIDs[sourceID] = struct{}{}
+				p.sourceIDs[listed.id] = struct{}{}
+				p.sourceFiles[listed.id.anyVolume()] = struct{}{}
 			case fileMissing(p.files, err):
 				// No file has the name in its folder any more, so none can
 				// be overwritten through it; the path stays protected by its
@@ -1195,8 +1290,13 @@ func (p *planner) isSource(id fileID) (bool, error) {
 		}
 		p.loaded = true
 	}
-	_, source := p.sourceIDs[id]
-	return source, nil
+	if _, source := p.sourceIDs[id]; source {
+		return ReasonSource, nil
+	}
+	if _, source := p.sourceFiles[id.anyVolume()]; source {
+		return ReasonUnverified, nil
+	}
+	return ReasonNone, nil
 }
 
 // unreadable records a listed path that may exist but whose identity could
@@ -1225,7 +1325,7 @@ func (p *planner) unreadable(path string) {
 		p.unverified = true
 		return
 	}
-	p.unverifiedFolders[found.id] = struct{}{}
+	p.unverifiedFolders[found.id.anyVolume()] = struct{}{}
 }
 
 // mayBeUnverified reports whether an existing file with the given number of
@@ -1244,7 +1344,7 @@ func (p *planner) mayBeUnverified(links uint32) bool {
 	if output.err != nil {
 		return true
 	}
-	if _, held := p.unverifiedFolders[output.id]; held {
+	if _, held := p.unverifiedFolders[output.id.anyVolume()]; held {
 		return true
 	}
 	return links != 1

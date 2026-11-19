@@ -13,13 +13,22 @@ import (
 // not run.
 type fileID struct{}
 
+// anyVolume is the identity itself outside Windows, where there is none.
+func (id fileID) anyVolume() fileID { return id }
+
 var errIdentityUnsupported = errors.New("file identity is available on Windows only")
 
 // identify always fails outside Windows, so planning there never proves an
 // existing file is not a source and an Overwrite job renames instead of
 // replacing.
-func identify(string) (fileID, uint32, error) {
-	return fileID{}, 0, errIdentityUnsupported
+func identify(string) (identity, error) {
+	return identity{}, errIdentityUnsupported
+}
+
+// resolvedPath is the form of a path PathKey compares: outside Windows, the
+// cleaned path.
+func resolvedPath(path string) string {
+	return filepath.Clean(path)
 }
 
 // fileMissing reports whether a file could not be opened because no entry

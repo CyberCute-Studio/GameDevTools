@@ -18,11 +18,11 @@ import (
 
 func mustIdentify(t *testing.T, path string) fileID {
 	t.Helper()
-	id, _, err := identify(path)
+	found, err := identify(path)
 	if err != nil {
 		t.Fatalf("identify %s: %v", path, err)
 	}
-	return id
+	return found.id
 }
 
 // junction links path to the target folder with a directory junction, which
@@ -116,10 +116,10 @@ func TestIdentifyRecognizesEveryPathToAFile(t *testing.T) {
 	if mustIdentify(t, other) == want {
 		t.Fatal("two distinct files report the same identity")
 	}
-	if _, _, err := identify(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := identify(filepath.Join(folder, "missing.png")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("identify(missing) = %v, want a not-exist error", err)
 	}
-	if _, _, err := identify(filepath.Join(folder, "missing", "x.png")); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := identify(filepath.Join(folder, "missing", "x.png")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("identify(missing folder) = %v, want a not-exist error", err)
 	}
 }
@@ -423,11 +423,85 @@ func TestPrepareRecognizesSourcesUnderOtherNames(t *testing.T) {
 	})
 }
 
+// TestPrepareComparesFileIndexesAcrossShares pins RSZ-026 for a Samba
+// server, which reports a volume serial number of its own for each share:
+// one file reached through two shares reports its one file index under two
+// serial numbers. A confirmed Overwrite never replaces a destination whose
+// file index is a listed file's, or that lies in the folder of a listed file
+// it cannot read, or that another item replaces, whatever serial number each
+// path reports; it renames the result instead.
+func TestPrepareComparesFileIndexesAcrossShares(t *testing.T) {
+	// throughShares reports each path's file index under the serial number
+	// of the share it names.
+	throughShares := func(shares map[string]fileID, denied string) faultyFiles {
+		return faultyFiles{identity: func(path string) (identity, error) {
+			if strings.EqualFold(path, denied) {
+				return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+			}
+			found, err := identify(path)
+			for shared, id := range shares {
+				if strings.EqualFold(path, shared) {
+					found.id = id
+				}
+			}
+			return found, err
+		}}
+	}
+	overwrite := func(t *testing.T, out string, files fileSystem, protected []string, sources ...Source) Plan {
+		t.Helper()
+		request := jobRequest(out, CollisionOverwrite, sources...)
+		request.Protected = protected
+		plan, err := prepare(context.Background(), request, files)
+		if err != nil {
+			t.Fatalf("prepare: %v", err)
+		}
+		materialize(t, plan, "result")
+		return plan
+	}
+
+	t.Run("source", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		source := filepath.Join(in, "x.png")
+		writeFile(t, source, "source x")
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "the source through another share")
+		files := throughShares(map[string]fileID{source: {volume: 1, index: 7}, destination: {volume: 2, index: 7}}, "")
+		plan := overwrite(t, out, files, nil, png(source))
+		assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+		if readFile(t, destination) != "the source through another share" {
+			t.Fatal("the source reached through another share was overwritten")
+		}
+	})
+
+	t.Run("folder of an unreadable listed file", func(t *testing.T) {
+		in, out := t.TempDir(), t.TempDir()
+		protected := filepath.Join(in, "denied.png")
+		writeFile(t, protected, "inaccessible original")
+		destination := filepath.Join(out, "x.png")
+		writeFile(t, destination, "earlier")
+		files := throughShares(map[string]fileID{in: {volume: 1, index: 9}, out: {volume: 2, index: 9}}, protected)
+		plan := overwrite(t, out, files, []string{protected}, png(filepath.Join(t.TempDir(), "x.png")))
+		assertItems(t, plan, []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+	})
+
+	t.Run("file another item replaces", func(t *testing.T) {
+		out := t.TempDir()
+		first, second := filepath.Join(out, "a.png"), filepath.Join(out, "b.png")
+		writeFile(t, first, "earlier a")
+		writeFile(t, second, "earlier b")
+		files := throughShares(map[string]fileID{first: {volume: 1, index: 5}, second: {volume: 2, index: 5}}, "")
+		plan := overwrite(t, out, files, nil, png(filepath.Join(t.TempDir(), "a.png")), png(filepath.Join(t.TempDir(), "b.png")))
+		assertItems(t, plan, []expect{{"a.png", ActionReplace, ReasonNone}, {"b_2.png", ActionCreate, ReasonDuplicate}})
+	})
+}
+
 // TestStillReplaceable pins NFR-020 after planning: the file a confirmed
 // Overwrite plans to replace stays replaceable while it is the same file,
-// whatever it holds, and stops being so once a source is moved or linked to
-// its name, so the writer can refuse to replace a source that took the
-// file's place after the plan was made. Only ActionReplace items replace.
+// unchanged, and stops being so once a source is moved or linked to its
+// name, even where the file that took its place reports the same identity,
+// as on a FAT32 or exFAT volume, so the writer can refuse to replace a source
+// that took the file's place after the plan was made. A rewritten file is
+// not replaced either. Only ActionReplace items replace.
 func TestStillReplaceable(t *testing.T) {
 	prepareReplace := func(t *testing.T) (Plan, string, string) {
 		t.Helper()
@@ -452,8 +526,35 @@ func TestStillReplaceable(t *testing.T) {
 	t.Run("rewritten", func(t *testing.T) {
 		plan, _, destination := prepareReplace(t)
 		writeFile(t, destination, "rewritten by another program")
-		if !plan.Items[0].StillReplaceable() {
-			t.Fatal("the planned file is not replaceable after its content changed")
+		if plan.Items[0].StillReplaceable() {
+			t.Fatal("the planned file is replaceable after its content changed")
+		}
+	})
+
+	// A FAT32 or exFAT volume gives a file the identity of the folder entry
+	// it takes, so a source moved into the entry the planned file freed
+	// reports the planned file's identity; only its stamp tells it apart.
+	t.Run("source with the planned identity", func(t *testing.T) {
+		plan, other, destination := prepareReplace(t)
+		planned := plan.Items[0].replaces.id
+		files := faultyFiles{identity: func(path string) (identity, error) {
+			found, err := identify(path)
+			if strings.EqualFold(path, destination) {
+				found.id = planned
+			}
+			return found, err
+		}}
+		if !plan.Items[0].stillReplaceable(files) {
+			t.Fatal("the planned file is not replaceable right after planning")
+		}
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("remove the destination: %v", err)
+		}
+		if err := os.Rename(other, destination); err != nil {
+			t.Fatalf("move the source onto the destination: %v", err)
+		}
+		if plan.Items[0].stillReplaceable(files) {
+			t.Fatal("a source that took the planned file's place and identity is replaceable")
 		}
 	})
 
@@ -542,10 +643,10 @@ func TestPrepareRenamesWhenIdentityIsUnreadable(t *testing.T) {
 	}
 	for _, policy := range policies {
 		reads := 0
-		files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
+		files := faultyFiles{identity: func(path string) (identity, error) {
 			if strings.EqualFold(path, destination) {
 				reads++
-				return fileID{}, 0, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+				return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
 			}
 			return identify(path)
 		}}
@@ -568,7 +669,7 @@ func deny(t *testing.T, path string) {
 	writeFile(t, path, "inaccessible original")
 	setDACL(t, path, "D:P")
 	t.Cleanup(func() { setDACL(t, path, "D:P(A;;FA;;;WD)") })
-	if _, _, err := identify(path); err == nil {
+	if _, err := identify(path); err == nil {
 		t.Fatalf("the identity of %s can be read despite its empty DACL", path)
 	}
 }
@@ -662,9 +763,9 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 			return &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_BAD_NETPATH}
 		}
 		files := faultyFiles{
-			identity: func(path string) (fileID, uint32, error) {
+			identity: func(path string) (identity, error) {
 				if strings.EqualFold(path, protected) {
-					return fileID{}, 0, unreachable(path)
+					return identity{}, unreachable(path)
 				}
 				return identify(path)
 			},
@@ -682,9 +783,9 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 		protected := filepath.Join(t.TempDir(), "link.png")
 		writeFile(t, protected, "stands in for a link")
 		files := faultyFiles{
-			identity: func(path string) (fileID, uint32, error) {
+			identity: func(path string) (identity, error) {
 				if strings.EqualFold(path, protected) {
-					return fileID{}, 0, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+					return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
 				}
 				return identify(path)
 			},
@@ -706,7 +807,7 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 		t.Helper()
 		writeFile(t, path, "synced original")
 		dataReparsePoint(t, path)
-		if _, _, err := identify(path); err == nil {
+		if _, err := identify(path); err == nil {
 			t.Skipf("the identity of %s can be read", path)
 		}
 	}
@@ -747,10 +848,10 @@ func TestPrepareReadsEachIdentityOnce(t *testing.T) {
 	out := t.TempDir()
 	writeFile(t, filepath.Join(out, "x.png"), "earlier")
 	reads := map[string]int{}
-	files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
+	files := faultyFiles{identity: func(path string) (identity, error) {
 		reads[PathKey(path)]++
 		if denied[PathKey(path)] {
-			return fileID{}, 0, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
+			return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_ACCESS_DENIED}
 		}
 		return identify(path)
 	}}
@@ -780,7 +881,7 @@ func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
 		request.Protected = append(request.Protected, path)
 	}
 	reads := 0
-	files := faultyFiles{identity: func(path string) (fileID, uint32, error) {
+	files := faultyFiles{identity: func(path string) (identity, error) {
 		if strings.EqualFold(filepath.Dir(path), in) {
 			reads++
 		}
@@ -846,14 +947,16 @@ func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
 	}
 }
 
-// TestPrepareRefusesFolderNamesWindowsChanges: Windows drops a trailing
-// space or period from a folder it creates, but not always from a path that
-// leads through it, so a missing folder with such a name on the way to the
-// output folder is refused before anything is created, rather than left
-// behind as a stray folder under the shortened name.
+// TestPrepareRefusesFolderNamesWindowsChanges: Windows can drop a trailing
+// period from a name a path leads through, so a path through such a name is
+// refused as invalid. It keeps a trailing space there, but drops it from a
+// folder it creates, so an output folder that does not exist under a name
+// ending in a space is refused as one that cannot be created, whether or not
+// that folder exists. Either way the request is refused before anything is
+// created, rather than leaving a stray folder under the shortened name.
 func TestPrepareRefusesFolderNamesWindowsChanges(t *testing.T) {
 	source := png(filepath.Join(t.TempDir(), "x.png"))
-	for _, name := range []string{"sub ", "sub.", "sub..", "sub. ", "sub ."} {
+	for _, name := range []string{"sub.", "sub..", "sub ."} {
 		parent := t.TempDir()
 		_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, name, "Resized"), CollisionRename, source))
 		assertKind(t, err, KindValidation)
@@ -863,6 +966,69 @@ func TestPrepareRefusesFolderNamesWindowsChanges(t *testing.T) {
 		if entries, err := os.ReadDir(parent); err != nil || len(entries) != 0 {
 			t.Fatalf("%q: the parent holds %v (%v) after a refused request", name, entries, err)
 		}
+	}
+	for _, name := range []string{"sub ", "sub. "} {
+		for _, exists := range []bool{false, true} {
+			parent := t.TempDir()
+			if exists {
+				spacedFolder(t, filepath.Join(parent, name))
+			}
+			_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, name, "Resized"), CollisionRename, source))
+			assertKind(t, err, KindFolder)
+			if !errors.Is(err, ErrFolderNotCreatable) {
+				t.Fatalf("%q (exists %v): error = %v, want ErrFolderNotCreatable", name, exists, err)
+			}
+			want := map[bool]int{true: 1}[exists]
+			if entries, err := os.ReadDir(parent); err != nil || len(entries) != want {
+				t.Fatalf("%q (exists %v): the parent holds %v (%v) after a refused request", name, exists, entries, err)
+			}
+		}
+	}
+}
+
+// spacedFolder creates a folder whose name ends in a space, as a Mac or a
+// tool using extended-length paths can, which the ordinary path through it
+// reaches but cannot remove, so the test removes it.
+func spacedFolder(t *testing.T, path string) {
+	t.Helper()
+	verbatimPath := `\\?\` + path
+	if err := os.MkdirAll(verbatimPath, 0o755); err != nil {
+		t.Fatalf("create %q: %v", path, err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(verbatimPath); err != nil {
+			t.Errorf("remove %q: %v", path, err)
+		}
+	})
+}
+
+// TestPrepareUsesExistingFoldersWhoseNamesEndInASpace: Windows keeps the
+// trailing space of a name a path leads through, so an existing output
+// folder inside a folder whose name ends in a space is checked and planned
+// into as named, and no stray folder without the space appears.
+func TestPrepareUsesExistingFoldersWhoseNamesEndInASpace(t *testing.T) {
+	parent := t.TempDir()
+	spaced := filepath.Join(parent, "Photos ")
+	spacedFolder(t, spaced)
+	out := filepath.Join(spaced, "Resized")
+	if err := os.Mkdir(`\\?\`+out, 0o755); err != nil {
+		t.Fatalf("create %q: %v", out, err)
+	}
+	for _, policy := range policies {
+		plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+		if plan.Folder != out {
+			t.Fatalf("Folder = %q, want %q", plan.Folder, out)
+		}
+		assertItems(t, plan, []expect{{"x.png", ActionCreate, ReasonNone}})
+	}
+	plan := mustPrepare(t, jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+	materialize(t, plan, "result")
+	if readFile(t, `\\?\`+filepath.Join(out, "x.png")) != "result result 0" {
+		t.Fatal("the result is not in the folder whose name ends in a space")
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "Photos " {
+		t.Fatalf("the parent holds %v (%v), want only the folder %q", entries, err, "Photos ")
 	}
 }
 

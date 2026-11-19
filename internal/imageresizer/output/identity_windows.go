@@ -13,44 +13,66 @@ import (
 
 // fileID identifies a file on its volume, the way os.SameFile compares
 // Windows files: the volume serial number and the file index. Every path to
-// one file — a different letter case, a hard link, a junction or symbolic
-// link, a short 8.3 name, or a share path — reports the same identity. On
-// ReFS the 64-bit index may be shared by two distinct files, which can only
-// make planning treat a file as a source when it is not. FILE_ID_INFO's
-// 128-bit identifier would tell such files apart, but it is not documented
-// for every file system and redirector a path can lead through, and reading
-// it for some paths to a file but not others would let two paths to one
-// file compare unequal, the one mistake that could replace a source.
+// one file through one volume or share — a different letter case, a hard
+// link, a junction or symbolic link, or a short 8.3 name — reports the same
+// identity. A Samba server, however, reports a volume serial number of its
+// own for each share, so one file reached through two shares of the server,
+// such as a NAS's home and homes shares, reports its one file index under two
+// serial numbers. The comparisons that can only stop a replacement therefore
+// compare the file index alone (anyVolume), which, like a 64-bit index ReFS
+// may give two distinct files, can only make planning treat a file as a
+// source when it is not. FILE_ID_INFO's 128-bit identifier would tell such
+// files apart, but it is not documented for every file system and redirector
+// a path can lead through, and reading it for some paths to a file but not
+// others would let two paths to one file compare unequal, the one mistake
+// that could replace a source.
 type fileID struct {
 	volume uint32
 	index  uint64
+}
+
+// anyVolume is the identity without its volume serial number, which two
+// paths to one file through two shares of a Samba server report alike.
+func (id fileID) anyVolume() fileID {
+	return fileID{index: id.index}
 }
 
 // shareAll lets every other open of a file proceed while planning holds a
 // handle to it.
 const shareAll = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE
 
-// identify returns the identity of the file the path resolves to and its
-// number of names: its hard links. It opens the path without requesting any
-// access to its contents, so another process's sharing mode does not
-// prevent reading them, and follows links to the file they resolve to. A
-// file whose permissions deny the user even reading its attributes cannot
-// be identified.
-func identify(path string) (fileID, uint32, error) {
+// identify returns the identity of the file the path resolves to, its number
+// of names, its hard links, and its stamp, all read through one handle. It
+// opens the path without requesting any access to its contents, so another
+// process's sharing mode does not prevent reading them, and follows links to
+// the file they resolve to. A file whose permissions deny the user even
+// reading its attributes cannot be identified.
+func identify(path string) (identity, error) {
 	handle, err := open(path, windows.FILE_FLAG_BACKUP_SEMANTICS)
 	if err != nil {
-		return fileID{}, 0, err
+		return identity{}, err
 	}
 	defer windows.CloseHandle(handle)
 	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return fileID{}, 0, &fs.PathError{Op: "read file identity", Path: path, Err: err}
+		return identity{}, &fs.PathError{Op: "read file identity", Path: path, Err: err}
 	}
-	id := fileID{
-		volume: information.VolumeSerialNumber,
-		index:  uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow),
-	}
-	return id, information.NumberOfLinks, nil
+	return identity{
+		id: fileID{
+			volume: information.VolumeSerialNumber,
+			index:  uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow),
+		},
+		links: information.NumberOfLinks,
+		stamp: stamp{
+			size:    uint64(information.FileSizeHigh)<<32 | uint64(information.FileSizeLow),
+			created: filetime(information.CreationTime),
+			written: filetime(information.LastWriteTime),
+		},
+	}, nil
+}
+
+func filetime(time windows.Filetime) uint64 {
+	return uint64(time.HighDateTime)<<32 | uint64(time.LowDateTime)
 }
 
 // fileMissing reports whether a file could not be opened because no entry
@@ -117,6 +139,15 @@ func windowsPath(op, path string) (*uint16, error) {
 		return nil, &fs.PathError{Op: op, Path: path, Err: err}
 	}
 	return name, nil
+}
+
+// resolvedPath is the form of a path PathKey compares: cleaned, then
+// resolved and marked by extendedPath as every Windows call the planner
+// makes takes it, so spellings Windows resolves to one name — with or
+// without the extended-length prefix, or with trailing spaces and periods
+// that Windows drops from the last name — compare alike.
+func resolvedPath(path string) string {
+	return extendedPath(filepath.Clean(path))
 }
 
 // extendedPath resolves an absolute path with GetFullPathName, which drops

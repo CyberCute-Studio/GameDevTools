@@ -91,7 +91,7 @@ const (
 	OutputFolderRequired    = "An output folder is required. Choose a folder with Browse."
 	OutputFolderInvalid     = "The output folder contains characters that are not valid text. Choose the folder again."
 	OutputFolderNotAbsolute = "The output folder must be an absolute local path. Choose the folder again."
-	OutputFolderNameInvalid = "A folder name in the output folder's path ends in a space or a period, which Windows removes from folder names. Choose another folder."
+	OutputFolderNameInvalid = "The output folder's own name ends in a space or a period, or a folder name in its path ends in a period, which Windows removes from folder names. Choose another folder."
 	OutputFolderRootInvalid = "The output folder's path names a drive, volume, or server rather than a folder on it. Choose a folder with Browse."
 
 	CaptureModeSelected    = "Capture mode is now %s."
@@ -174,7 +174,8 @@ const (
 	ResizeOptionsSaveFailed  = "The resize setting change remains in memory, but settings could not be saved: %v"
 	ResizeOperationFailed    = "Resize setting operation failed: %v"
 	ResizeFolderUnavailable  = "The default Pictures output folder is unavailable: %v. Choose an output folder before resizing."
-	ResizeFolderReplaced     = "The saved output folder for resized images, %s, can no longer be used: a folder name in its path ends in a space or a period, which Windows removes, or the path names a drive, volume, or server rather than a folder on it. The default output folder is selected instead; choose another folder with Browse."
+	ResizeFolderReplaced     = "The saved output folder for resized images, %s, can no longer be used: its own name ends in a space or a period, or a folder name in its path ends in a period, which Windows removes, or the path names a drive, volume, or server rather than a folder on it. The default output folder is selected instead; choose another folder with Browse."
+	ResizeFolderRefused      = "The saved output folder for resized images, %s, can no longer be used: its own name ends in a space or a period, or a folder name in its path ends in a period, which Windows removes, or the path names a drive, volume, or server rather than a folder on it. Choose another output folder with Browse before resizing."
 
 	SourceImagesLabel    = "&Source images"
 	SourceImagesHint     = "Drop PNG or JPEG files — or a folder of images — anywhere on this view, or choose files with Add Images. Each file's content is checked in the background, and sources are opened read-only and never modified."
