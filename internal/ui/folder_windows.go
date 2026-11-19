@@ -15,6 +15,9 @@ const (
 	bifReturnOnlyFsDirs     = 0x0001
 	bifNewDialogStyle       = 0x0040
 	coinitApartmentThreaded = 0x2
+	coinitDisableOLE1DDE    = 0x4
+	seeMaskNoAsync          = 0x00000100
+	seeMaskFlagNoUI         = 0x00000400
 	swShowNormal            = 1
 )
 
@@ -24,11 +27,30 @@ var (
 
 	procSHBrowseForFolderW   = shell32.NewProc("SHBrowseForFolderW")
 	procSHGetPathFromIDListW = shell32.NewProc("SHGetPathFromIDListW")
-	procShellExecuteW        = shell32.NewProc("ShellExecuteW")
+	procShellExecuteExW      = shell32.NewProc("ShellExecuteExW")
 	procCoInitializeEx       = ole32.NewProc("CoInitializeEx")
 	procCoUninitialize       = ole32.NewProc("CoUninitialize")
 	procCoTaskMemFree        = ole32.NewProc("CoTaskMemFree")
 )
+
+// shellExecuteInfo is SHELLEXECUTEINFOW, which ShellExecuteExW takes.
+type shellExecuteInfo struct {
+	cbSize       uint32
+	fMask        uint32
+	hwnd         windows.Handle
+	lpVerb       *uint16
+	lpFile       *uint16
+	lpParameters *uint16
+	lpDirectory  *uint16
+	nShow        int32
+	hInstApp     uintptr
+	lpIDList     uintptr
+	lpClass      *uint16
+	hkeyClass    windows.Handle
+	dwHotKey     uint32
+	hIcon        windows.Handle
+	hProcess     windows.Handle
+}
 
 type browseInfo struct {
 	hwndOwner      windows.Handle
@@ -43,13 +65,14 @@ type browseInfo struct {
 
 // initializeCOM initializes a single-threaded COM apartment on the calling
 // thread, as the folder picker and the shell extensions a shell verb loads
-// require, and returns the call that balances it. Every successful
-// CoInitializeEx must be balanced by CoUninitialize — S_FALSE, for a thread
-// already initialized, as much as S_OK — and a failed one, such as
+// require, without OLE 1.0's DDE, as the ShellExecute documentation asks,
+// and returns the call that balances it. Every successful CoInitializeEx
+// must be balanced by CoUninitialize — S_FALSE, for a thread already
+// initialized, as much as S_OK — and a failed one, such as
 // RPC_E_CHANGED_MODE on a thread initialized for another model, must not
 // be, so the call returned then does nothing.
 func initializeCOM() (uninitialize func()) {
-	result, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded)
+	result, _, _ := procCoInitializeEx.Call(0, coinitApartmentThreaded|coinitDisableOLE1DDE)
 	if int32(result) < 0 {
 		return func() {}
 	}
@@ -91,7 +114,9 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 // and the shell's call each block for as long as its drive does not
 // respond, so the GUI thread calls it on a goroutine of its own; it keeps
 // that goroutine on one thread while it holds the COM apartment it
-// initializes.
+// initializes, and returns only once the shell has finished opening the
+// folder, as shellExecute describes, since the thread, which runs no message
+// loop, is released then.
 func OpenFolder(folder string) error {
 	info, err := os.Stat(folder)
 	if err != nil {
@@ -115,24 +140,31 @@ func RevealInFolder(path string) error {
 	return shellExecute("explorer.exe", nil, utf16("explorer.exe"), utf16(`/select,"`+path+`"`))
 }
 
-// shellExecute runs ShellExecuteW with no owner window for the verb, which
+// shellExecute runs ShellExecuteExW with no owner window for the verb, which
 // is the default when nil, on the file with the parameters, which may be
-// nil. ShellExecuteW reports success as a value greater than 32; a failure
-// value IS the error code and the thread's last error is unreliable, so the
-// code is part of the reported error, which names the call by what.
+// nil, showing no error dialog, as ShellExecuteW does: the caller reports
+// the failure. It waits for the shell to finish the activation
+// (SEE_MASK_NOASYNC), as a caller on a thread without a message loop must:
+// the shell may otherwise finish it — a DDE conversation, say — through the
+// thread's messages after the call returns, which a goroutine's thread,
+// released then, never dispatches, so the folder or file would silently
+// not open. A failure names the call by what, with the SE_ERR code the call
+// leaves in hInstApp and the thread's last error, which it sets.
 func shellExecute(what string, verb, file, parameters *uint16) error {
-	result, _, err := procShellExecuteW.Call(
-		0,
-		uintptr(unsafe.Pointer(verb)),
-		uintptr(unsafe.Pointer(file)),
-		uintptr(unsafe.Pointer(parameters)),
-		0, swShowNormal,
-	)
-	if result <= 32 {
+	info := shellExecuteInfo{
+		fMask:        seeMaskNoAsync | seeMaskFlagNoUI,
+		lpVerb:       verb,
+		lpFile:       file,
+		lpParameters: parameters,
+		nShow:        swShowNormal,
+	}
+	info.cbSize = uint32(unsafe.Sizeof(info))
+	succeeded, _, err := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info)))
+	if succeeded == 0 {
 		if err == windows.ERROR_SUCCESS {
-			return fmt.Errorf("ShellExecuteW(%s) failed with code %d", what, result)
+			return fmt.Errorf("ShellExecuteExW(%s) failed with code %d", what, info.hInstApp)
 		}
-		return fmt.Errorf("ShellExecuteW(%s) failed with code %d: %w", what, result, err)
+		return fmt.Errorf("ShellExecuteExW(%s) failed with code %d: %w", what, info.hInstApp, err)
 	}
 	return nil
 }

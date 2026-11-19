@@ -391,18 +391,19 @@ func (s *nativeShell) refreshAction() {
 
 func (s *nativeShell) actionEnabled() bool {
 	current := s.navigator.Current()
-	if current.View().PrimaryAction() == "" {
-		return false
-	}
 	native, exists := s.nativeViews[current.ID()]
-	if !exists {
+	return exists && current.View().PrimaryAction() != "" && hookAvailable[nativeActionHandler](native, nativeActionAvailability.NativeActionAvailable)
+}
+
+// hookAvailable reports whether the native view implements the hook H and,
+// when it reports the hook's availability as the optional A, reports it
+// available, as available asks.
+func hookAvailable[H, A any](native nativeView, available func(A) bool) bool {
+	if _, implements := native.(H); !implements {
 		return false
 	}
-	if _, actionable := native.(nativeActionHandler); !actionable {
-		return false
-	}
-	if availability, reports := native.(nativeActionAvailability); reports {
-		return availability.NativeActionAvailable()
+	if availability, reports := native.(A); reports {
+		return available(availability)
 	}
 	return true
 }
@@ -713,16 +714,7 @@ func (s *nativeShell) updateDropAcceptance() {
 // availability, reports them available.
 func (s *nativeShell) dropsAvailable() bool {
 	native, exists := s.nativeViews[s.navigator.Current().ID()]
-	if !exists {
-		return false
-	}
-	if _, target := native.(nativeDropTarget); !target {
-		return false
-	}
-	if availability, reports := native.(nativeDropAvailability); reports {
-		return availability.NativeDropAvailable()
-	}
-	return true
+	return exists && hookAvailable[nativeDropTarget](native, nativeDropAvailability.NativeDropAvailable)
 }
 
 // filterModuleMessage lets module views pre-handle a queued message before

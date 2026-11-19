@@ -87,24 +87,18 @@ func (v *Inventory) Ready() int {
 // JobInputs lists every item as a job input, in list order, with the item
 // IDs at the same indexes, so the job's events can be matched to their items
 // whatever the list does meanwhile. A Ready item carries its content check's
-// description; an item the list could not use carries why, so the job ends
-// it Failed with that reason and keeps protecting its path (RSZ-026), unless
-// the job checks it again first, as Recheckable describes. An item still
-// being checked carries neither, which the job reports as job.ErrUnchecked;
-// the view starts no job while any is.
+// description; any other carries why the job cannot resize it, as unusable
+// gives it: the list's reason for an item the list could not use, so the job
+// ends it Failed with that reason and keeps protecting its path (RSZ-026),
+// unless the job checks it again first, as Recheckable describes, and
+// job.ErrUnchecked for one still being checked, as the job reports an input
+// without a check; the view starts no job while any is.
 func (v *Inventory) JobInputs() ([]job.Input, []uint64) {
 	inputs := make([]job.Input, len(v.items))
 	ids := make([]uint64, len(v.items))
 	for index, item := range v.items {
 		ids[index] = item.ID
-		inputs[index] = job.Input{Path: item.Path}
-		switch item.Status {
-		case StatusReady:
-			inputs[index].Info = item.Info
-		case StatusChecking:
-		default:
-			inputs[index].Err = item.unusable()
-		}
+		inputs[index] = job.Input{Path: item.Path, Info: item.Info, Err: item.unusable()}
 	}
 	return inputs, ids
 }

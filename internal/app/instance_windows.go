@@ -7,6 +7,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 )
 
 // instanceMutexName is the per-session named mutex marking the running
@@ -18,8 +20,10 @@ const instanceMutexName = `Local\GameDevTools.SingleInstance`
 // holds the mutex but has no window: one still starting, which takes the
 // mutex before its window exists, or one closing, which holds it after its
 // window is gone until its background work has stopped — the Image Resizer
-// waits up to ten seconds for a cancelled job's images in flight.
-const instanceWait = 15 * time.Second
+// waits up to imageresizer.JobShutdownWait for a cancelled job's images in
+// flight, which the wait outlasts by five seconds for the rest of the
+// shutdown, so raising that bound raises this one.
+const instanceWait = imageresizer.JobShutdownWait + 5*time.Second
 
 // enforceSingleInstance guarantees one running instance per user session
 // (APP-005). When another instance already holds the mutex, its window is

@@ -5,6 +5,7 @@ package ui
 import (
 	"runtime"
 	"testing"
+	"unsafe"
 )
 
 // TestInitializeCOMBalancesEverySuccessfulCall pins the COM rule the folder
@@ -51,5 +52,25 @@ func TestInitializeCOMBalancesEverySuccessfulCall(t *testing.T) {
 		t.Skip("the test thread already had a COM apartment")
 	default:
 		t.Fatal(message)
+	}
+}
+
+// TestShellExecuteInfoMatchesTheWindowsLayout pins shellExecuteInfo to
+// SHELLEXECUTEINFOW's layout: ShellExecuteExW refuses a call whose cbSize it
+// does not know, and reads and writes its fields at their C offsets.
+func TestShellExecuteInfoMatchesTheWindowsLayout(t *testing.T) {
+	size, instance, process := uintptr(112), uintptr(56), uintptr(104)
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		size, instance, process = 60, 32, 56
+	}
+	var info shellExecuteInfo
+	if got := unsafe.Sizeof(info); got != size {
+		t.Fatalf("size = %d, want %d", got, size)
+	}
+	if got := unsafe.Offsetof(info.hInstApp); got != instance {
+		t.Fatalf("hInstApp offset = %d, want %d", got, instance)
+	}
+	if got := unsafe.Offsetof(info.hProcess); got != process {
+		t.Fatalf("hProcess offset = %d, want %d", got, process)
 	}
 }

@@ -1,6 +1,7 @@
 package imageresizer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -19,7 +20,7 @@ import (
 // TestInventoryJobInputsCarryEachItemsCheck pins that a job lists every
 // item in list order with its ID: a Ready item with its content check, an
 // item the list could not use with the list's own explanation as its error,
-// and one still being checked with neither.
+// and one still being checked with no check and job.ErrUnchecked.
 func TestInventoryJobInputsCarryEachItemsCheck(t *testing.T) {
 	directory := t.TempDir()
 	ready := writeSource(t, directory, "ready.png")
@@ -51,8 +52,13 @@ func TestInventoryJobInputsCarryEachItemsCheck(t *testing.T) {
 	if !errors.As(inputs[1].Err, &source) || source.status != StatusCorrupt || !strings.Contains(inputs[1].Err.Error(), "invalid checksum") {
 		t.Fatalf("damaged input error = %v", inputs[1].Err)
 	}
-	if inputs[2].Err != nil || inputs[2].Info.Format != decode.FormatUnknown {
-		t.Fatalf("checking input = %+v, want neither a check nor an error", inputs[2])
+	if !errors.Is(inputs[2].Err, job.ErrUnchecked) || inputs[2].Info.Format != decode.FormatUnknown {
+		t.Fatalf("checking input = %+v, want no check and job.ErrUnchecked", inputs[2])
+	}
+	for _, index := range []int{1, 3} {
+		if inputs[index].Info != (decode.Info{}) {
+			t.Fatalf("input %d the list could not use carries a check: %+v", index, inputs[index])
+		}
 	}
 	if !errors.As(inputs[3].Err, &source) || source.status != StatusUnsupported || inputs[3].Err.Error() != ui.SourceUnsupportedDetail {
 		t.Fatalf("unsupported input error = %v", inputs[3].Err)
@@ -472,6 +478,43 @@ func TestInventoryCancelledSummaryEndsItemsAsTheJobWould(t *testing.T) {
 	}
 	if got.Progress != (job.Progress{Total: 8, Completed: 1, Failed: 3, Cancelled: 4}) {
 		t.Fatalf("progress = %+v", got.Progress)
+	}
+}
+
+// TestInventoryCancelledSummaryAgreesWithTheJob pins cancelledSummary to
+// job.Run's own outcome for a job cancelled before it starts, on the same
+// list: an image the job cannot resize — refused for its extension, damaged,
+// or still being checked — ends Failed with the same error, and a Ready one
+// Cancelled, so the outcome the view makes up for a job it never ran, or let
+// go, cannot drift from the job's.
+func TestInventoryCancelledSummaryAgreesWithTheJob(t *testing.T) {
+	directory := t.TempDir()
+	inventory := NewInventory()
+	summary := inventory.Add([]string{
+		writeSource(t, directory, "ready.png"),
+		writeSource(t, directory, "notes.txt"),
+		writeSource(t, directory, "broken.png"),
+		writeSource(t, directory, "checking.png"),
+	})
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[0].ID, Info: decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3}})
+	inventory.Resolve(InspectionResult{ID: summary.Inspect[1].ID, Err: &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}})
+	inputs, ids := inventory.JobInputs()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	want, err := job.Run(ctx, job.Request{Inputs: inputs}, nil)
+	if err != nil {
+		t.Fatalf("job.Run() error = %v", err)
+	}
+
+	got := inventory.cancelledSummary(ids, nil, "")
+	if got.Progress != want.Progress || len(got.Items) != len(want.Items) {
+		t.Fatalf("summary = %+v, want %+v", got, want)
+	}
+	for index, status := range want.Items {
+		mine := got.Items[index]
+		if mine.State != status.State || fmt.Sprint(mine.Err) != fmt.Sprint(status.Err) || errorKind(mine.Err) != errorKind(status.Err) {
+			t.Fatalf("item %d = %+v, want %+v", index, mine, status)
+		}
 	}
 }
 

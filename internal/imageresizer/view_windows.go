@@ -70,8 +70,8 @@ type NativeView struct {
 	// raised in the meantime.
 	sourceNotice uint64
 	// busyNotice is the status area's revision right after it last said that
-	// the source list cannot change while a job runs, which finishJob clears
-	// while the area still shows it, or 0.
+	// the source list cannot change, or Start Resize run, while a job runs,
+	// which finishJob clears while the area still shows it, or 0.
 	busyNotice uint64
 
 	// run runs a resize job, confirm asks for an Overwrite job's
@@ -91,10 +91,6 @@ type NativeView struct {
 	// outputFolder is the folder Open Output Folder opens: the latest job's
 	// that saved a result, once it saved one, or empty.
 	outputFolder string
-	// jobsStarted counts the jobs the view started, so a failure to open the
-	// output folder that arrives once another job has started is not shown
-	// over that job's progress or result.
-	jobsStarted uint64
 
 	jobStatus    *ui.StatusArea
 	cancelButton *ui.Button
@@ -479,6 +475,8 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 	}
 	switch id - sourcesCommandBase {
 	case addImagesCommand:
+		// The picker does not open while a job runs; addSources checks again
+		// once it closes, as its modal loop dispatches messages.
 		if notification != 0 || n.refuseWhileRunning() {
 			return true
 		}
@@ -493,23 +491,14 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		n.addSources(paths)
 		return true
 	case removeSelectedCommand:
-		if notification != 0 || n.refuseWhileRunning() {
-			return true
+		if notification == 0 {
+			n.removeSelectedSources()
 		}
-		n.removeSelectedSources()
 		return true
 	case clearListCommand:
-		if notification != 0 || n.refuseWhileRunning() {
-			return true
+		if notification == 0 {
+			n.clearSources()
 		}
-		n.inventory.Clear()
-		n.inspector.DropAll()
-		n.checked = checkTally{}
-		n.refreshSources()
-		// Clearing disables the Clear button itself, so keyboard focus moves
-		// to the list instead of being stranded on a disabled control.
-		n.list.Focus()
-		n.showSourceNotice(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared})
 		return true
 	case sourceListCommand:
 		if notification == ui.NotificationListSelChange {
@@ -599,13 +588,24 @@ func (n *NativeView) destroyed() bool {
 }
 
 // refuseWhileRunning explains, while a job runs, that the source list cannot
-// change, as its rows are the job's items, and reports whether it did. The
-// job's end clears the explanation while the status area still shows it.
+// change, as its rows are the job's items, and reports whether it did, as
+// refuseBusy describes. Every change to the list — Add Images, a drop,
+// Remove Selected, and Clear List — goes through addSources,
+// removeSelectedSources, or clearSources, which each refuse it first.
 func (n *NativeView) refuseWhileRunning() bool {
+	return n.refuseBusy(ui.ImagesBusy)
+}
+
+// refuseBusy explains in the status area, while a job runs, why what was
+// asked cannot run until the job ends — a change to the source list, or
+// Start Resize again — and reports whether it did. The job section keeps
+// the job's progress, and the job's end clears the explanation while the
+// status area still shows it.
+func (n *NativeView) refuseBusy(message string) bool {
 	if n.active == nil {
 		return false
 	}
-	n.showSourceNotice(ui.Notice{Kind: ui.NoticeWarning, Message: ui.ImagesBusy})
+	n.showSourceNotice(ui.Notice{Kind: ui.NoticeWarning, Message: message})
 	n.busyNotice = n.status.Revision()
 	return true
 }
@@ -721,15 +721,18 @@ func (n *NativeView) NativeDropAvailable() bool {
 // NativeDropFiles handles files and folders dropped on the shell window
 // while the Image Resizer module is active (RSZ-002, RSZ-008). The shell
 // enables drag-and-drop only while the active module accepts it, and so
-// never while a job runs; a drop that arrives then all the same is refused.
+// never while a job runs; a drop that arrives then all the same is refused,
+// as addSources refuses every add then.
 func (n *NativeView) NativeDropFiles(paths []string) {
-	if n.refuseWhileRunning() {
-		return
-	}
 	n.addSources(paths)
 }
 
+// addSources adds the paths to the source list and queues their content
+// checks, unless a job runs (refuseWhileRunning).
 func (n *NativeView) addSources(paths []string) {
+	if n.refuseWhileRunning() {
+		return
+	}
 	first := n.inventory.Len()
 	summary := n.inventory.Add(paths)
 	n.refreshSources()
@@ -873,7 +876,12 @@ func summarizeChecks(added AddSummary, ready, failed int) ui.Notice {
 	return ui.Notice{Kind: kind, Message: message}
 }
 
+// removeSelectedSources removes the selected items and abandons their
+// pending content checks, unless a job runs (refuseWhileRunning).
 func (n *NativeView) removeSelectedSources() {
+	if n.refuseWhileRunning() {
+		return
+	}
 	indices := n.list.SelectedIndices()
 	if len(indices) == 0 {
 		n.showSourceNotice(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone})
@@ -893,6 +901,22 @@ func (n *NativeView) removeSelectedSources() {
 		}
 	}
 	n.showSourceNotice(notice)
+}
+
+// clearSources empties the source list and abandons every pending content
+// check, unless a job runs (refuseWhileRunning).
+func (n *NativeView) clearSources() {
+	if n.refuseWhileRunning() {
+		return
+	}
+	n.inventory.Clear()
+	n.inspector.DropAll()
+	n.checked = checkTally{}
+	n.refreshSources()
+	// Clearing disables the Clear button itself, so keyboard focus moves to
+	// the list instead of being stranded on a disabled control.
+	n.list.Focus()
+	n.showSourceNotice(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared})
 }
 
 // summarizeAdd builds the batch result notice: every add reports what was
