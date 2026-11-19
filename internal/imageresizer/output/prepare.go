@@ -44,21 +44,28 @@
 // else, as Windows 10 opens NUL.png as the NUL device, is taken, like a
 // name an existing entry has, with ReasonDevice, and the device is never
 // opened. A file can still appear at a planned destination after Prepare
-// returns; the writer must finalize ActionCreate items without replacing
+// returns, so Write finalizes an ActionCreate item without replacing
 // anything. A source can likewise be moved or linked to the name of a file
-// planned for replacement, so the writer replaces an ActionReplace item's
-// file only while Item.StillReplaceable reports that it is still the file
-// the plan proved is none of the sources, unchanged.
+// planned for replacement, so Write replaces an ActionReplace item's file
+// only while it is still the file the plan proved is none of the sources,
+// unchanged, as Item.StillReplaceable reports.
+//
+// Write saves one item's result (RSZ-027, NFR-023): the result is encoded
+// into a temporary file in the output folder and renamed to its destination
+// only once it is complete, so no partial file ever has a destination's
+// name, and a failed or cancelled write removes its temporary file. See
+// Write for how it replaces a file.
 //
 // Failures are reported as *Error values with a Kind. A failure that
 // concerns the whole job — an invalid request, a missing confirmation, or an
 // output folder that is unusable, or becomes so while the plan is made — is
 // returned by Prepare; a failure that concerns one destination is attached
-// to that item, and the other items are planned regardless (RSZ-044).
+// to that item, and the other items are planned regardless (RSZ-044). A
+// failure Write reports concerns its item alone.
 //
-// Prepare touches the filesystem and never the GUI, so callers run it off
-// the GUI thread and deliver results through the shell dispatcher, per
-// TECH-005. It is safe to call from any goroutine.
+// Prepare and Write touch the filesystem and never the GUI, so callers run
+// them off the GUI thread and deliver results through the shell dispatcher,
+// per TECH-005. They are safe to call from any goroutine.
 //
 // The package imports no other Image Resizer package but decode, so the
 // Image Resizer view and the job that runs it can both import it.
@@ -153,8 +160,21 @@ const (
 	// KindDestination means one item's destination could not be checked or
 	// named. It is attached to that item rather than returned by Prepare.
 	KindDestination
-	// KindCanceled means the context ended before planning finished.
+	// KindCanceled means the context ended before planning, or writing a
+	// result, finished.
 	KindCanceled
+	// KindWrite means Write could not save a result: creating, writing,
+	// flushing, or renaming its temporary file failed, or checking or
+	// replacing the existing file did; or, with the result saved, removing a
+	// file left behind failed, which the error names. The error wraps the
+	// operating system's error, so errors.Is reports a permission failure as
+	// fs.ErrPermission and a full drive or used-up quota as ErrDiskFull
+	// (RSZ-030).
+	KindWrite
+	// KindChanged means the item's destination changed after the plan was
+	// made, so Write saved nothing rather than replace something the plan
+	// never cleared: ErrDestinationTaken or ErrDestinationChanged.
+	KindChanged
 )
 
 func (k Kind) String() string {
@@ -169,6 +189,10 @@ func (k Kind) String() string {
 		return "destination"
 	case KindCanceled:
 		return "canceled"
+	case KindWrite:
+		return "write"
+	case KindChanged:
+		return "changed"
 	}
 	return fmt.Sprintf("Kind(%d)", int(k))
 }
@@ -489,14 +513,14 @@ type Action uint8
 
 const (
 	// ActionCreate writes a new file at Destination, where nothing existed
-	// when the plan was made. The writer must not replace a file that
-	// appears there afterwards.
+	// when the plan was made. Write never replaces a file that appears there
+	// afterwards.
 	ActionCreate Action = iota
 	// ActionReplace replaces the existing file at Destination, the item's
 	// natural destination, which the plan proved is none of the sources.
 	// Only a confirmed Overwrite job replaces, and never a file with a
-	// numbered name. The writer replaces the file only while
-	// Item.StillReplaceable reports it is still that file.
+	// numbered name. Write replaces the file only while it is still that
+	// file, as Item.StillReplaceable reports.
 	ActionReplace
 	// ActionSkip leaves Destination untouched and marks the item Skipped.
 	// Only a Skip job skips.
@@ -630,23 +654,45 @@ func (i Item) Renamed() bool {
 // exFAT volume gives a file the identity of the folder entry it takes, or a
 // server that reports one identity for every file gives any file; only its
 // stamp tells it apart. A file rewritten since the plan is not replaced
-// either, as nothing tells it from such a file. The writer checks this
-// immediately before it replaces the file, and replaces nothing when it
-// reports false. It reports false for every other action, and when the
-// entry cannot be listed or the file's identity cannot be read.
+// either, as nothing tells it from such a file. Write makes this same check
+// while it holds the file, immediately before it replaces it, as Write
+// describes, and Item.CheckWrite makes it before any work is done for the
+// item. It reports false for every other action, and when the entry cannot be
+// listed or the file's identity cannot be read.
 func (i Item) StillReplaceable() bool {
 	return i.stillReplaceable(osFiles{})
 }
 
 func (i Item) stillReplaceable(files fileSystem) bool {
-	if i.Action != ActionReplace {
-		return false
+	return i.Action == ActionReplace && i.verifyReplaceable(files) == nil
+}
+
+// verifyReplaceable is the check StillReplaceable makes for an ActionReplace
+// item, which Write makes too: nil when the entry at the destination is still
+// the planned file, unchanged, ErrDestinationChanged when it is not, and the
+// failure when its entry cannot be listed or its identity cannot be read.
+func (i Item) verifyReplaceable(files fileSystem) error {
+	listed, err := files.Entry(i.Destination)
+	if err != nil {
+		return err
 	}
-	if listed, err := files.Entry(i.Destination); err != nil || !ownEntry(listed, i.Destination) {
-		return false
+	if !ownEntry(listed, i.Destination) {
+		return ErrDestinationChanged
 	}
 	found, err := files.Identity(i.Destination)
-	return err == nil && found == i.replaces
+	if err != nil {
+		return err
+	}
+	if found != i.replaces {
+		return ErrDestinationChanged
+	}
+	return nil
+}
+
+// Writes reports whether the item saves a file: whether its action is
+// ActionCreate or ActionReplace, the actions Write accepts.
+func (i Item) Writes() bool {
+	return i.Action == ActionCreate || i.Action == ActionReplace
 }
 
 // Plan is a job's planned destinations. Items holds one entry per request

@@ -54,9 +54,16 @@ func identify(path string) (identity, error) {
 		return identity{}, err
 	}
 	defer windows.CloseHandle(handle)
+	found, _, err := identifyHandle(handle, path)
+	return found, err
+}
+
+// identifyHandle reads the identity, number of names, and stamp of the file a
+// handle is open to, and the file's attributes.
+func identifyHandle(handle windows.Handle, path string) (identity, uint32, error) {
 	var information windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return identity{}, &fs.PathError{Op: "read file identity", Path: path, Err: err}
+		return identity{}, 0, &fs.PathError{Op: "read file identity", Path: path, Err: err}
 	}
 	return identity{
 		id: fileID{
@@ -69,7 +76,7 @@ func identify(path string) (identity, error) {
 			created: filetime(information.CreationTime),
 			written: filetime(information.LastWriteTime),
 		},
-	}, nil
+	}, information.FileAttributes, nil
 }
 
 func filetime(time windows.Filetime) uint64 {

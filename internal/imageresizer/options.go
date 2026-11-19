@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/encode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -33,10 +34,12 @@ const (
 	CollisionOverwrite = output.CollisionOverwrite
 )
 
+// The JPEG quality range is the encoder's, so a quality the options accept is
+// one a job can encode with (RSZ-029).
 const (
-	MinJPEGQuality      = 1
+	MinJPEGQuality      = encode.MinQuality
 	DefaultJPEGQuality  = 90
-	MaxJPEGQuality      = 100
+	MaxJPEGQuality      = encode.MaxQuality
 	DefaultBackground   = "#FFFFFF"
 	backgroundHexDigits = 6
 )
