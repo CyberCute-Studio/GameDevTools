@@ -88,7 +88,11 @@ func checkReplace(Item) error {
 
 func nameTaken(err error) bool { return errors.Is(err, fs.ErrExist) }
 
-func diskFull(err error) bool { return errors.Is(err, syscall.ENOSPC) }
+// diskFull reports whether an operation failed because the drive is full, or
+// the user's disk quota on it is used up.
+func diskFull(err error) bool {
+	return errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT)
+}
 
 // linkUnsupported reports whether creating a hard link failed because the
 // file system has none, or refused it: link(2) reports EPERM for either, and

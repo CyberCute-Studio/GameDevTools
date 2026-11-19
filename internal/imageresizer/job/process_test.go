@@ -335,6 +335,27 @@ func TestProcessObservesCancellation(t *testing.T) {
 		t.Fatalf("Process = %q, %v, want the cancellation", path, err)
 	}
 	assertEmpty(t, out)
+
+	// A cancelled Overwrite item is reported as cancelled, not by what the
+	// check of its file would find, here that it was marked read-only.
+	replaced := t.TempDir()
+	destination := filepath.Join(replaced, "sprite.png")
+	if err := os.WriteFile(destination, []byte("earlier result"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item = planOne(t, source, decode.FormatPNG, output.FormatKeepSource, output.CollisionOverwrite, replaced)
+	if item.Action != output.ActionReplace {
+		t.Skipf("planned %v (%v): replacing needs file identities, read on Windows only", item.Action, item.Reason)
+	}
+	if err := os.Chmod(destination, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(destination, 0o644)
+	_, err = Process(ctx, item, settings(8, 8, preset.ResizeFit, white))
+	var outputErr *output.Error
+	if !errors.As(err, &outputErr) || outputErr.Kind != output.KindCanceled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled replacement: Process = %v, want output's cancellation", err)
+	}
 }
 
 // TestProcessRejectsItemsThatSaveNothing: a skipped, failed, or deferred item

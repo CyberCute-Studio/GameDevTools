@@ -165,9 +165,11 @@ const (
 	KindCanceled
 	// KindWrite means Write could not save a result: creating, writing,
 	// flushing, or renaming its temporary file failed, or checking or
-	// replacing the existing file did. The error wraps the operating system's error, so
-	// errors.Is reports a permission failure as fs.ErrPermission and a full
-	// drive as ErrDiskFull (RSZ-030).
+	// replacing the existing file did; or, with the result saved, removing a
+	// file left behind failed, which the error names. The error wraps the
+	// operating system's error, so errors.Is reports a permission failure as
+	// fs.ErrPermission and a full drive or used-up quota as ErrDiskFull
+	// (RSZ-030).
 	KindWrite
 	// KindChanged means the item's destination changed after the plan was
 	// made, so Write saved nothing rather than replace something the plan

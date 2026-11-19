@@ -62,6 +62,16 @@ func TestLinkUnsupported(t *testing.T) {
 	}
 }
 
+// TestDiskFull: a full drive and a used-up disk quota are both reported as
+// ErrDiskFull (RSZ-030).
+func TestDiskFull(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.ENOSPC, syscall.EDQUOT} {
+		if err := writeFailure("write result", &fs.PathError{Op: "write", Path: "result", Err: errno}); !errors.Is(err, ErrDiskFull) {
+			t.Fatalf("%v: error = %v, want ErrDiskFull", errno, err)
+		}
+	}
+}
+
 // TestCheckWriteRefusesReplacing: outside Windows, where planning plans no
 // replacement, an ActionReplace item is refused before anything is encoded.
 func TestCheckWriteRefusesReplacing(t *testing.T) {

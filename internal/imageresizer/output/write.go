@@ -65,7 +65,8 @@ var (
 	// replaces. errors.Is reports it as fs.ErrPermission too.
 	ErrReadOnly = fmt.Errorf("the existing file at the destination is read-only: %w", fs.ErrPermission)
 	// ErrDiskFull is wrapped, together with the operating system's error, by
-	// the KindWrite error Write returns when the output drive is full.
+	// the KindWrite error Write returns when the output drive is full, or the
+	// user's storage quota on it is used up.
 	ErrDiskFull = errors.New("the output drive is full")
 )
 
@@ -117,22 +118,27 @@ var (
 // name, which ends in the destination's extension, beside the complete
 // result's temporary file.
 //
-// The context cancels the write at encode's next write, which fails with the
-// context's error, and once more before the result is renamed (RSZ-045);
-// from then on Write finishes.
+// The context cancels the write before anything is done for it, even before
+// an ActionReplace item's file is looked at, so a cancelled item is reported
+// as cancelled rather than by what that look would find; at encode's next
+// write, which fails with the context's error; and once more before the
+// result is renamed (RSZ-045). From then on Write finishes.
 //
 // Failures are *Error values: Item.CheckWrite's error for an item it refuses,
 // and KindValidation for a nil encode function (ErrNotWritten); KindCanceled;
 // KindChanged for a destination that changed after planning; and KindWrite
 // for a failure to create, write, flush, rename, or remove a file, or to
 // check the existing one, wrapping the operating system's error, with
-// ErrDiskFull when the drive is full. An error encode returns for a reason
-// other than a failed write to the file, such as an encoder's own failure,
-// is returned as it is. A temporary file that cannot be removed after a
-// failure adds its own KindWrite error, joined to the first by errors.Join,
-// so errors.Is and errors.As find each. When the result has its name but a
-// file could not be removed afterwards, Write returns the destination with a
-// KindWrite error that names the file left behind.
+// ErrDiskFull when the drive is full or the user's quota on it is used up. A
+// failure to create, write, or flush the temporary file names the item's
+// destination as well as the temporary file, which the failure removes. An
+// error encode returns for a reason other than a failed write to the file,
+// such as an encoder's own failure, is returned as it is. A temporary file
+// that cannot be removed after a failure adds its own KindWrite error,
+// joined to the first by errors.Join, so errors.Is and errors.As find each.
+// When the result has its name but a file could not be removed afterwards,
+// Write returns the destination with a KindWrite error that names the file
+// left behind.
 func Write(ctx context.Context, item Item, encode func(io.Writer) error) (string, error) {
 	return write(ctx, item, encode, writeSteps{})
 }
@@ -157,7 +163,7 @@ type writeSteps struct {
 }
 
 func write(ctx context.Context, item Item, encode func(io.Writer) error, steps writeSteps) (path string, err error) {
-	if err := item.CheckWrite(); err != nil {
+	if err := item.checkSaves(); err != nil {
 		return "", err
 	}
 	if encode == nil {
@@ -166,9 +172,14 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 	if err := ctx.Err(); err != nil {
 		return "", kindError(KindCanceled, "write result", err)
 	}
+	if item.Action == ActionReplace {
+		if err := checkReplace(item); err != nil {
+			return "", err
+		}
+	}
 	temp, err := createTemp(filepath.Dir(item.Destination))
 	if err != nil {
-		return "", writeFailure("create temporary file", err)
+		return "", resultFailure("create temporary file", item.Destination, err)
 	}
 	// Until the result has its name, every way out of Write — a failure, a
 	// cancellation, or a panic in encode — removes the temporary file.
@@ -192,12 +203,12 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 	}
 	switch {
 	case sink.err != nil:
-		return "", sink.failure()
+		return "", sink.failure(item.Destination)
 	case encodeErr != nil:
 		return "", encodeErr
 	}
 	if err := temp.sync(); err != nil {
-		return "", writeFailure("flush result", err)
+		return "", resultFailure("flush result", item.Destination, err)
 	}
 	if steps.written != nil {
 		steps.written()
@@ -237,14 +248,23 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 // Outside Windows, where planning never plans a replacement, an
 // ActionReplace item fails as Write would fail it.
 func (i Item) CheckWrite() error {
+	if err := i.checkSaves(); err != nil {
+		return err
+	}
+	if i.Action == ActionReplace {
+		return checkReplace(i)
+	}
+	return nil
+}
+
+// checkSaves is the part of CheckWrite that looks at the item alone: that it
+// saves a file, at an absolute destination.
+func (i Item) checkSaves() error {
 	if !i.Writes() {
 		return kindError(KindValidation, "write result", fmt.Errorf("%w: its action is %v", ErrNotWritten, i.Action))
 	}
 	if !filepath.IsAbs(i.Destination) {
 		return kindError(KindValidation, "write result", fmt.Errorf("the destination %q is not an absolute path", i.Destination))
-	}
-	if i.Action == ActionReplace {
-		return checkReplace(i)
 	}
 	return nil
 }
@@ -290,6 +310,16 @@ func writeFailure(op string, err error) *Error {
 		err = fmt.Errorf("%w: %w", ErrDiskFull, err)
 	}
 	return kindError(KindWrite, op, err)
+}
+
+// resultFailure is writeFailure for a failure to create, write, or flush the
+// temporary file of the result for destination. The operating system's error
+// names only the temporary file, which the user never sees and the failed
+// write removes, so the error names the destination too.
+func resultFailure(op, destination string, err error) *Error {
+	failure := writeFailure(op, err)
+	failure.Err = fmt.Errorf("%s: %w", destination, failure.Err)
+	return failure
 }
 
 // tempName returns a random temporary file name.
@@ -360,10 +390,11 @@ func (r *resultWriter) flush() error {
 	return r.err
 }
 
-// failure is the error Write reports for the writer's failure.
-func (r *resultWriter) failure() *Error {
+// failure is the error Write reports for the writer's failure to write the
+// result for destination.
+func (r *resultWriter) failure(destination string) *Error {
 	if r.canceled {
 		return kindError(KindCanceled, "write result", r.err)
 	}
-	return writeFailure("write result", r.err)
+	return resultFailure("write result", destination, r.err)
 }

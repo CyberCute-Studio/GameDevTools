@@ -145,12 +145,17 @@ func replace(temp *tempFile, item Item, steps writeSteps) (bool, error) {
 	}
 	if err := claim(temp, destination, steps); err != nil {
 		if restoreErr := renameHandle(held, destination); restoreErr != nil {
-			if nameTaken(err) {
-				// Another program took the name while it was free: the
-				// destination changed, and the file stays where it was moved.
-				return false, kindError(KindChanged, "save result",
-					fmt.Errorf("%s: %w: another file took the name, so the existing file the result was to replace remains as %s (%v)",
-						destination, ErrDestinationChanged, aside, restoreErr))
+			if nameTaken(err) || nameTaken(restoreErr) {
+				// Another program took the name while it was free, before the
+				// result could take it or after the result failed to for
+				// another reason, which the error keeps: the destination
+				// changed, and the file stays where it was moved.
+				cause := fmt.Errorf("%s: %w: another file took the name, so the existing file the result was to replace remains as %s (%v)",
+					destination, ErrDestinationChanged, aside, restoreErr)
+				if !nameTaken(err) {
+					cause = fmt.Errorf("%w, after the result could not take the name: %w", cause, err)
+				}
+				return false, kindError(KindChanged, "save result", cause)
 			}
 			return false, kindError(KindWrite, "restore existing file",
 				fmt.Errorf("the result could not take the name %s (%w), and the existing file it was to replace remains as %s: %w",
@@ -204,15 +209,28 @@ const entryFlags = windows.FILE_FLAG_OPEN_REPARSE_POINT | windows.FILE_FLAG_BACK
 // another program has open, which it may have closed by the time Write holds
 // the file.
 func checkReplace(item Item) error {
+	return inspectReplaced(item, osFiles{})
+}
+
+// inspectReplaced is checkReplace, listing the destination's entry through
+// files. Nothing holds the file, so another program can delete or rename it
+// between the open and the listing; a folder that then no longer lists it is
+// a planned file gone since, as a failed open is, which passes. Write's own
+// check, made while it holds the file, tells such a file from a path that
+// now leads elsewhere.
+func inspectReplaced(item Item, files fileSystem) error {
 	handle, err := open(item.Destination, entryFlags)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+	if nameNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return writeFailure("open existing file", err)
 	}
 	defer windows.CloseHandle(handle)
-	return checkHeld(&heldFile{fileSystem: osFiles{}, handle: handle}, item)
+	if err := checkHeld(&heldFile{fileSystem: files, handle: handle}, item); err != nil && !nameNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // heldFile is the filesystem as checkHeld inspects it: the folder lists the
@@ -340,7 +358,11 @@ func nameTaken(err error) bool {
 	return errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS)
 }
 
-// diskFull reports whether an operation failed because the drive is full.
+// diskFull reports whether an operation failed because the drive is full, or
+// the user's storage quota on it is used up, as a share or a volume with
+// quotas reports. ERROR_NOT_ENOUGH_QUOTA is not among them: it reports a
+// process's own system resources running out, not the drive's.
 func diskFull(err error) bool {
-	return errors.Is(err, windows.ERROR_DISK_FULL) || errors.Is(err, windows.ERROR_HANDLE_DISK_FULL)
+	return errors.Is(err, windows.ERROR_DISK_FULL) || errors.Is(err, windows.ERROR_HANDLE_DISK_FULL) ||
+		errors.Is(err, windows.ERROR_DISK_QUOTA_EXCEEDED)
 }

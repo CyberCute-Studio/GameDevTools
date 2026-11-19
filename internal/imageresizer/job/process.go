@@ -57,11 +57,17 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // cannot be read or decoded, a *resize.Error, an *encode.Error, or an
 // *output.Error, including the KindValidation one for an item that saves no
 // file and the KindChanged one for a destination that changed after the
-// plan was made. A cancelled context fails with the step's KindCanceled
-// error, which errors.Is reports as the context's error. As with
+// plan was made. A cancelled context fails with the running step's
+// KindCanceled error, which errors.Is reports as the context's error; one
+// cancelled before Process starts fails with output's KindCanceled error
+// before the item is checked, so a cancelled item is reported as cancelled
+// rather than by what checking its replaced file would find. As with
 // output.Write, a destination returned alongside an error means the result
 // was saved but a file the error names was left behind.
 func Process(ctx context.Context, item output.Item, settings Settings) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", &output.Error{Kind: output.KindCanceled, Op: "process item", Err: err}
+	}
 	if err := item.CheckWrite(); err != nil {
 		return "", err
 	}

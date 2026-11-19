@@ -226,8 +226,10 @@ func (f *failAfter) Write(p []byte) (int, error) {
 
 // TestWriteReportsWriteFailures pins RSZ-030 and AC-R14: a failed write
 // leaves no partial result and no temporary file, and the error says why —
-// a full drive as ErrDiskFull, a denied write as fs.ErrPermission — even
-// when the encoder reports a failure of its own after meeting it.
+// a full drive or a used-up quota as ErrDiskFull, a denied write as
+// fs.ErrPermission — and names the destination the result was for, not only
+// the temporary file it removed, even when the encoder reports a failure of
+// its own after meeting it.
 func TestWriteReportsWriteFailures(t *testing.T) {
 	cases := []struct {
 		errno windows.Errno
@@ -235,6 +237,7 @@ func TestWriteReportsWriteFailures(t *testing.T) {
 	}{
 		{windows.ERROR_DISK_FULL, ErrDiskFull},
 		{windows.ERROR_HANDLE_DISK_FULL, ErrDiskFull},
+		{windows.ERROR_DISK_QUOTA_EXCEEDED, ErrDiskFull},
 		{windows.ERROR_ACCESS_DENIED, fs.ErrPermission},
 	}
 	for _, tc := range cases {
@@ -250,11 +253,24 @@ func TestWriteReportsWriteFailures(t *testing.T) {
 				return err
 			}, steps)
 			assertKind(t, err, KindWrite)
-			if path != "" || !errors.Is(err, tc.want) || !errors.Is(err, tc.errno) {
-				t.Fatalf("%v: Write = %q, %v, want %v", tc.errno, path, err, tc.want)
+			if path != "" || !errors.Is(err, tc.want) || !errors.Is(err, tc.errno) || !strings.Contains(err.Error(), item.Destination) {
+				t.Fatalf("%v: Write = %q, %v, want %v naming %s", tc.errno, path, err, tc.want, item.Destination)
 			}
 			assertNames(t, out)
 		}
+	}
+	if diskFull(windows.ERROR_NOT_ENOUGH_QUOTA) {
+		t.Fatal("a process's own resources running out is reported as a full drive")
+	}
+}
+
+// TestResultFailureNamesTheDestination: a failure of the temporary file, such
+// as a flush that cannot be made to fail on demand, names the destination the
+// result was for and keeps the disk-full mark.
+func TestResultFailureNamesTheDestination(t *testing.T) {
+	failure := resultFailure("flush result", `C:\Out\photo.png`, &fs.PathError{Op: "flush", Path: `C:\Out\.gamedevtools-0.tmp`, Err: windows.ERROR_DISK_FULL})
+	if failure.Kind != KindWrite || !errors.Is(failure, ErrDiskFull) || !strings.Contains(failure.Error(), `C:\Out\photo.png`) {
+		t.Fatalf("resultFailure = %v", failure)
 	}
 }
 
@@ -302,6 +318,49 @@ func TestWriteObservesCancellation(t *testing.T) {
 		}
 		assertNames(t, out)
 	}
+
+	// A cancelled ActionReplace item is reported as cancelled, not by what
+	// the look at its file would find, here that it was marked read-only.
+	setup := newReplaceSetup(t)
+	if err := os.Chmod(setup.destination, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(setup.destination, 0o644)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := Write(ctx, setup.item, text("new"))
+	assertKind(t, err, KindCanceled)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled replacement: Write = %v, want the cancellation", err)
+	}
+}
+
+// TestCheckWritePassesAFileDeletedWhileLooked: nothing holds the file
+// Item.CheckWrite looks at, so another program can delete it between the open
+// and the listing of its entry. That is a planned file gone since, which
+// passes as Write creates the result in its place, not a destination that
+// changed.
+func TestCheckWritePassesAFileDeletedWhileLooked(t *testing.T) {
+	setup := newReplaceSetup(t)
+	deleting := faultyFiles{entry: func(path string) (entry, error) {
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("delete the looked-at file: %v", err)
+		}
+		listed, err := findEntry(path)
+		if err == nil {
+			t.Skip("deleting the open file kept its name until it was closed")
+		}
+		return listed, err
+	}}
+	if err := inspectReplaced(setup.item, deleting); err != nil {
+		t.Fatalf("a file deleted while looked at fails the item: %v", err)
+	}
+	if _, err := Write(context.Background(), setup.item, text("new")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if readFile(t, setup.destination) != "new" {
+		t.Fatal("the result was not created in the deleted file's place")
+	}
 }
 
 func TestWriteRejectsItemsThatSaveNothing(t *testing.T) {
@@ -346,7 +405,9 @@ func TestWriteRejectsItemsWithoutADestination(t *testing.T) {
 }
 
 // TestWriteReportsAFolderThatIsGone: an output folder removed after planning
-// fails the item as a write failure that errors.Is reports as not existing.
+// fails the item as a write failure that errors.Is reports as not existing,
+// naming the destination rather than only the temporary file it could not
+// create.
 func TestWriteReportsAFolderThatIsGone(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 	item := planOne(t, out, CollisionRename, filepath.Join(t.TempDir(), "photo.png"), ActionCreate)
@@ -355,8 +416,8 @@ func TestWriteReportsAFolderThatIsGone(t *testing.T) {
 	}
 	_, err := Write(context.Background(), item, text("result"))
 	assertKind(t, err, KindWrite)
-	if !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("error = %v, want a not-exist error", err)
+	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), item.Destination) {
+		t.Fatalf("error = %v, want a not-exist error naming %s", err, item.Destination)
 	}
 }
 
@@ -972,6 +1033,35 @@ func TestWriteKeepsTheReplacedFileWhenTheNameIsTaken(t *testing.T) {
 		if temps := temporaryFiles(t, setup.out); len(temps) != 0 {
 			t.Fatalf("%s: temporary files were left: %q", taker, temps)
 		}
+	}
+}
+
+// TestWriteKeepsTheReplacedFileWhenTheNameIsTakenAfterAFailure: when the
+// result cannot take the free name for a reason of its own, and another
+// program takes the name before the moved file gets it back, the destination
+// changed all the same: the item fails with ErrDestinationChanged, keeping
+// the result's own failure, and the moved file keeps its
+// .gamedevtools-replaced- name, which the error gives.
+func TestWriteKeepsTheReplacedFileWhenTheNameIsTakenAfterAFailure(t *testing.T) {
+	setup := newReplaceSetup(t)
+	steps := writeSteps{claim: func() error {
+		writeFile(t, setup.destination, "another program's")
+		return windows.ERROR_ACCESS_DENIED
+	}}
+	path, err := write(context.Background(), setup.item, text("new"), steps)
+	assertKind(t, err, KindChanged)
+	if path != "" || !errors.Is(err, ErrDestinationChanged) || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		t.Fatalf("Write = %q, %v, want ErrDestinationChanged with the result's own failure", path, err)
+	}
+	if readFile(t, setup.destination) != "another program's" {
+		t.Fatal("the file that took the name was replaced")
+	}
+	aside := asideFiles(t, setup.out)
+	if len(aside) != 1 || readFile(t, aside[0]) != "old" || !strings.Contains(err.Error(), aside[0]) {
+		t.Fatalf("files moved aside = %q after %v, want the replaced file alone, named in the error", aside, err)
+	}
+	if temps := temporaryFiles(t, setup.out); len(temps) != 0 {
+		t.Fatalf("temporary files were left: %q", temps)
 	}
 }
 
