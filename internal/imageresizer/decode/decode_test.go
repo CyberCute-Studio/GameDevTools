@@ -79,19 +79,23 @@ func TestInspectPNGReportsDimensionsAndAlpha(t *testing.T) {
 	opaquePalette := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.NRGBA{A: 0xff}, color.NRGBA{R: 0xff, A: 0xff}})
 	clearPalette := image.NewPaletted(image.Rect(0, 0, 2, 2), color.Palette{color.NRGBA{A: 0xff}, color.NRGBA{}})
 
+	// bytes is the decoded image at the decoder's pixel size for the color
+	// type png.Encode writes: 4 bytes for 8-bit truecolor, with or without
+	// alpha, 8 at 16 bits per channel, and 1 for gray and for a palette.
 	cases := []struct {
 		name   string
 		img    image.Image
 		width  int
 		height int
 		alpha  bool
+		bytes  uint64
 	}{
-		{"opaque truecolor", opaque, 7, 3, false},
-		{"truecolor with alpha", translucent, 5, 9, true},
-		{"16-bit with alpha", deep, 4, 2, true},
-		{"grayscale", gray, 3, 3, false},
-		{"opaque palette", opaquePalette, 2, 2, false},
-		{"palette with transparency", clearPalette, 2, 2, true},
+		{"opaque truecolor", opaque, 7, 3, false, 7 * 3 * 4},
+		{"truecolor with alpha", translucent, 5, 9, true, 5 * 9 * 4},
+		{"16-bit with alpha", deep, 4, 2, true, 4 * 2 * 8},
+		{"grayscale", gray, 3, 3, false, 3 * 3},
+		{"opaque palette", opaquePalette, 2, 2, false, 2 * 2},
+		{"palette with transparency", clearPalette, 2, 2, true, 2 * 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,9 +104,13 @@ func TestInspectPNGReportsDimensionsAndAlpha(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := Info{Format: FormatPNG, Width: tc.width, Height: tc.height, Orientation: OrientationNormal, HasAlpha: tc.alpha}
+			want := Info{Format: FormatPNG, Width: tc.width, Height: tc.height, Orientation: OrientationNormal, HasAlpha: tc.alpha, DecodedBytes: tc.bytes}
 			if info != want {
 				t.Fatalf("Inspect = %+v, want %+v", info, want)
+			}
+			decoded, err := Decode(context.Background(), path)
+			if err != nil || decoded.Info != want {
+				t.Fatalf("Decode = %+v, %v, want %+v", decoded, err, want)
 			}
 		})
 	}
@@ -147,7 +155,12 @@ func TestDecodeJPEGFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := Info{Format: FormatJPEG, Width: 150, Height: 103, Orientation: OrientationNormal}
+			// The decoded planes alone take a byte per sample; the layout's
+			// exact estimate is pinned by the limit tests.
+			if info.DecodedBytes < 150*103 || info.DecodedBytes > MaxDecodedBytes {
+				t.Fatalf("Inspect reports %d decoded bytes", info.DecodedBytes)
+			}
+			want := Info{Format: FormatJPEG, Width: 150, Height: 103, Orientation: OrientationNormal, DecodedBytes: info.DecodedBytes}
 			if info != want {
 				t.Fatalf("Inspect = %+v, want %+v", info, want)
 			}
@@ -159,6 +172,39 @@ func TestDecodeJPEGFixtures(t *testing.T) {
 				t.Fatalf("decoded bounds = %v", bounds)
 			}
 		})
+	}
+}
+
+// TestDecodeWithinAnAllowance: a source the content check measured decodes
+// within the DecodedBytes it reported, while one rewritten since to need more
+// fails from its header with ErrOverAllowance, reporting its new dimensions,
+// and decodes once the decoder's own limit is set aside.
+func TestDecodeWithinAnAllowance(t *testing.T) {
+	for _, name := range []string{"baseline.jpeg", "progressive.jpeg", "cmyk.jpeg"} {
+		path := writeFile(t, name, readFixture(t, name))
+		info, err := Inspect(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded, err := DecodeWithin(context.Background(), path, info.DecodedBytes); err != nil || decoded.Info != info {
+			t.Fatalf("%s within its own estimate: %+v, %v", name, decoded, err)
+		}
+	}
+	path := writeFile(t, "sprite.png", encodePNG(t, image.NewNRGBA(image.Rect(0, 0, 4, 4))))
+	checked, err := Inspect(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encodePNG(t, image.NewNRGBA(image.Rect(0, 0, 64, 32))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = DecodeWithin(context.Background(), path, checked.DecodedBytes)
+	over := requireKind(t, err, KindTooLarge, FormatPNG)
+	if !errors.Is(err, ErrOverAllowance) || over.Width != 64 || over.Height != 32 {
+		t.Fatalf("error = %v at %d × %d, want ErrOverAllowance at 64 × 32", err, over.Width, over.Height)
+	}
+	if decoded, err := DecodeWithin(context.Background(), path, MaxDecodedBytes); err != nil || decoded.Width != 64 || decoded.DecodedBytes != 64*32*4 {
+		t.Fatalf("within the decoder's limit: %+v, %v", decoded, err)
 	}
 }
 
@@ -487,17 +533,17 @@ func TestReadFailureDuringTheScanIsReported(t *testing.T) {
 	oriented := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 40, 30))), comment, comment, exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
 	gray := bytes.Join([][]byte{pngHeader(20000, 20000, 8, 0), pngChunk("tEXt", make([]byte, 2*readBufferSize)), pngChunk("IDAT", nil)}, nil)
 
-	info, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(oriented)}}, false)
+	info, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(oriented)}}, false, MaxDecodedBytes)
 	if err != nil || info.Width != 30 || info.Height != 40 {
 		t.Fatalf("intact read = %+v, %v; want 30 × 40", info, err)
 	}
 	// Without image data the gray source is damaged, not too large.
-	_, _, err = decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(gray)}}, false)
+	_, _, err = decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(gray)}}, false, MaxDecodedBytes)
 	requireKind(t, err, KindCorrupt, FormatPNG)
 
 	for format, content := range map[Format][]byte{FormatJPEG: oriented, FormatPNG: gray} {
 		file := &scriptedFile{Reader: bytes.NewReader(content), failing: true, failFrom: readBufferSize}
-		_, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: file}, false)
+		_, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: file}, false, MaxDecodedBytes)
 		requireKind(t, err, KindRead, format)
 		if !errors.Is(err, errScriptedRead) {
 			t.Fatalf("%v: error = %v, want the read failure", format, err)
@@ -518,7 +564,7 @@ func TestCancellationAfterTheLastRead(t *testing.T) {
 			cancel()
 		}
 	}}
-	info, pixels, err := decodeSource(&sourceReader{ctx: ctx, file: file}, true)
+	info, pixels, err := decodeSource(&sourceReader{ctx: ctx, file: file}, true, MaxDecodedBytes)
 	requireKind(t, err, KindCanceled, FormatJPEG)
 	if pixels != nil || info != (Info{}) {
 		t.Fatalf("cancelled decode returned %+v with pixels %v", info, pixels != nil)

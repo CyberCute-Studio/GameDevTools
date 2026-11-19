@@ -169,7 +169,8 @@ const (
 	// file left behind failed, which the error names. The error wraps the
 	// operating system's error, so errors.Is reports a permission failure as
 	// fs.ErrPermission and a full drive or used-up quota as ErrDiskFull
-	// (RSZ-030).
+	// (RSZ-030), and a temporary file that could not be removed as
+	// ErrLeftBehind.
 	KindWrite
 	// KindChanged means the item's destination changed after the plan was
 	// made, so Write saved nothing rather than replace something the plan
@@ -880,6 +881,16 @@ func prepareFolder(files fileSystem, folder string) error {
 		return kindError(KindFolder, "create output folder", err)
 	}
 	return openFolder(files, folder)
+}
+
+// CheckFolder checks that a plan's output folder can still be reached and is
+// still a folder, as Prepare checks it while it plans, and returns nil or the
+// same KindFolder error. A job checks it once an item fails to write, so that
+// an output folder that has gone, as with its drive or share, fails the
+// items still waiting once, rather than each after its source is decoded and
+// resized (UX-010). It creates nothing.
+func CheckFolder(folder string) error {
+	return openFolder(osFiles{}, folder)
 }
 
 // openFolder checks that the output folder can be reached and is a folder,

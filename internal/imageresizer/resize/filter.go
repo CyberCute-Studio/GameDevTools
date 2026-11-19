@@ -98,9 +98,37 @@ func chooseOrder(horizontal, vertical *axis, src source) order {
 // each slot holds, the source row being resampled, and an output row's sums
 // and finished samples.
 func horizontalFirstBytes(horizontal, vertical *axis, l layout) int64 {
-	rowLength := int64(len(horizontal.start)) * int64(l)
-	slots := int64(vertical.widest)
-	return slots*(4*rowLength+4) + 4*int64(horizontal.hi-horizontal.lo)*int64(l) + 12*rowLength
+	return horizontalRowBytes(int64(vertical.widest), int64(len(horizontal.start)), int64(horizontal.hi-horizontal.lo), l)
+}
+
+// horizontalRowBytes is horizontalFirstBytes for a window of slots
+// resampled rows of width output columns, resampled from columns source
+// columns.
+func horizontalRowBytes(slots, width, columns int64, l layout) int64 {
+	rowLength := width * int64(l)
+	return slots*(4*rowLength+4) + 4*columns*int64(l) + 12*rowLength
+}
+
+// verticalRowBytes is the memory of the vertical-first order's working rows
+// for width output columns resampled from columns source columns: the
+// source row being read, the sums and the combined row it accumulates
+// into, and the finished output row.
+func verticalRowBytes(width, columns int64, l layout) int64 {
+	return 16*columns*int64(l) + 4*width*int64(l)
+}
+
+// rowBytes bounds the working rows a resize of a sourceWidth × sourceHeight
+// source onto geometry allocates, whichever order chooseOrder takes and
+// however the source is read: four channels, the most any source is read
+// with, the widest window of rows the vertical weights may need, and every
+// source column, though the filter reads only the columns its weights
+// reach. The horizontal-first order is taken only while its rows fit
+// rowBudget.
+func rowBytes(sourceWidth, sourceHeight int, geometry Geometry) int64 {
+	slots := weightsPerOutput(sourceHeight, geometry.ScaledHeight)
+	width, columns := int64(geometry.Width), int64(sourceWidth)
+	horizontalFirst := min(horizontalRowBytes(slots, width, columns, layoutRGBA), rowBudget)
+	return max(horizontalFirst, verticalRowBytes(width, columns, layoutRGBA))
 }
 
 // filter runs one resize.
@@ -178,6 +206,7 @@ func (f *filter) horizontalFirst() bool {
 func (f *filter) verticalFirst() bool {
 	channels := f.channels()
 	rowLength := (f.horizontal.hi - f.horizontal.lo) * channels
+	// verticalRowBytes counts these rows.
 	sourceRow := make([]int32, rowLength)
 	sums := make([]int64, rowLength)
 	combined := make([]int32, rowLength)

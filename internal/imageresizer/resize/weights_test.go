@@ -200,15 +200,70 @@ func (v virtual) At(x, y int) color.Color {
 	return v.pixel
 }
 
+// TestWorkingBytesBoundsTypicalResizes measures what whole resizes of the
+// decoder's image types allocate beyond their output — reductions and
+// enlargements, through either order, with every fitting mode — against
+// WorkingBytes, which stays a few megabytes for them rather than
+// MaxWorkingBytes, and falls back to MaxWorkingBytes for a source Plan
+// refuses.
+func TestWorkingBytesBoundsTypicalResizes(t *testing.T) {
+	translucent := image.NewNRGBA(image.Rect(0, 0, 2048, 1536))
+	translucent.Pix[3] = 0x80
+	cases := []struct {
+		name   string
+		source image.Image
+		target Target
+	}{
+		{"translucent photo fit", translucent, fit(512, 512)},
+		{"opaque texture stretched up", image.NewRGBA(image.Rect(0, 0, 300, 200)), stretch(1024, 1024)},
+		{"JPEG planes cropped", image.NewYCbCr(image.Rect(0, 0, 1600, 900), image.YCbCrSubsampleRatio420), crop(256, 256)},
+		{"gray strip cropped", image.NewGray(image.Rect(0, 0, 4000, 10)), crop(64, 64)},
+		{"deep translucent column fit", image.NewRGBA64(image.Rect(0, 0, 20, 6000)), fit(100, 300)},
+	}
+	for _, tc := range cases {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		resized, err := Resize(context.Background(), tc.source, tc.target)
+		runtime.ReadMemStats(&after)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		var output int
+		switch img := resized.(type) {
+		case *image.Gray:
+			output = len(img.Pix)
+		case *image.RGBA:
+			output = len(img.Pix)
+		case *image.NRGBA:
+			output = len(img.Pix)
+		case *image.NRGBA64:
+			output = len(img.Pix)
+		default:
+			t.Fatalf("%s: resized to %T", tc.name, resized)
+		}
+		bounds := tc.source.Bounds()
+		working := after.TotalAlloc - before.TotalAlloc - uint64(output)
+		bound := WorkingBytes(bounds.Dx(), bounds.Dy(), tc.target)
+		t.Logf("%s: %d bytes of working memory, bounded by %d", tc.name, working, bound)
+		if working > bound || bound > 8<<20 {
+			t.Errorf("%s: %d bytes of working memory, bounded by %d, want a bound over it and under 8 MiB", tc.name, working, bound)
+		}
+	}
+	if got := WorkingBytes(MaxSourceDimension+1, 1, fit(16, 16)); got != MaxWorkingBytes {
+		t.Fatalf("WorkingBytes of a source Plan refuses = %d, want MaxWorkingBytes", got)
+	}
+}
+
 // TestWorkingMemoryStaysBounded measures what Resize allocates beyond its
 // output for the most demanding shapes the source bound admits — axes of
 // MaxSourceDimension reduced to a sliver, to the widest output row, or to
 // the tallest output column, read with four channels, and the
 // horizontal-first order with its working rows just within their budget —
-// which the package documentation promises stays under 128 MiB. Each resize
-// is cancelled once it has filtered a few source rows, so the measurement
-// covers the filtering as well as the setup, and between two reads two
-// source rows apart nothing proportional to a row may be allocated.
+// which the package documentation promises stays under MaxWorkingBytes.
+// Each resize is cancelled once it has filtered a few source rows, so the
+// measurement covers the filtering as well as the setup, and between two
+// reads two source rows apart nothing proportional to a row may be
+// allocated.
 func TestWorkingMemoryStaysBounded(t *testing.T) {
 	huge := image.Rect(0, 0, MaxSourceDimension, MaxSourceDimension)
 	// Boxed once, so reading them allocates nothing.
@@ -249,8 +304,11 @@ func TestWorkingMemoryStaysBounded(t *testing.T) {
 		output := uint64(tc.target.Width * tc.target.Height * tc.bytesPerPixel)
 		working := after.TotalAlloc - before.TotalAlloc - output
 		t.Logf("%s: %.1f MiB of working memory", tc.name, float64(working)/(1<<20))
-		if working >= 128<<20 {
-			t.Errorf("%s: %.1f MiB of working memory, want under 128 MiB", tc.name, float64(working)/(1<<20))
+		if working >= MaxWorkingBytes {
+			t.Errorf("%s: %.1f MiB of working memory, want under %d MiB", tc.name, float64(working)/(1<<20), MaxWorkingBytes>>20)
+		}
+		if bound := WorkingBytes(tc.rect.Dx(), tc.rect.Dy(), tc.target); working > bound {
+			t.Errorf("%s: %d bytes of working memory, over the %d WorkingBytes bounds it by", tc.name, working, bound)
 		}
 		// Only the error the cancellation returns is allocated after the mark.
 		if filtering := after.TotalAlloc - p.marked; filtering >= 1<<10 {
