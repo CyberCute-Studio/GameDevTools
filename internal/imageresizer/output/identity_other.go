@@ -31,6 +31,13 @@ func resolvedPath(path string) string {
 	return filepath.Clean(path)
 }
 
+// resolvesAsWritten reports whether the system resolves a cleaned absolute
+// path to exactly that path. Outside Windows every name is kept as written.
+func resolvesAsWritten(string) bool { return true }
+
+// mkdirAll creates a folder and every missing folder that holds it.
+func mkdirAll(path string) error { return os.MkdirAll(path, 0o755) }
+
 // fileMissing reports whether a file could not be opened because no entry
 // has its name in its folder, as on Windows. The error alone cannot tell, as
 // a path whose folder is gone fails with the same ENOENT, so the path's

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -144,10 +145,44 @@ func windowsPath(op, path string) (*uint16, error) {
 // resolvedPath is the form of a path PathKey compares: cleaned, then
 // resolved and marked by extendedPath as every Windows call the planner
 // makes takes it, so spellings Windows resolves to one name — with or
-// without the extended-length prefix, or with trailing spaces and periods
-// that Windows drops from the last name — compare alike.
+// without the extended-length prefix, as a \??\ or \\.\ device path, or with
+// trailing spaces and periods that Windows drops from the last name —
+// compare alike.
 func resolvedPath(path string) string {
 	return extendedPath(filepath.Clean(path))
+}
+
+// resolvesAsWritten reports whether Windows resolves a cleaned absolute path
+// that is not extended-length to exactly that path, keeping every name in it
+// as written: GetFullPathName, which Windows applies to such a path before
+// it opens or creates anything, neither drops a trailing space or period
+// from a name nor reads a name as a device.
+func resolvesAsWritten(clean string) bool {
+	full, err := windows.FullPath(clean)
+	return err == nil && full == clean
+}
+
+// mkdirAll creates a folder, and every missing folder that holds it, through
+// the folder's extended-length path. os.MkdirAll inspects and creates each
+// folder on the way by a path that ends at that folder's name, and Windows
+// drops trailing spaces and periods from the last name of a path, though it
+// keeps some in a name a longer path leads through, such as the space of
+// "Photos " or the periods of "v2..". By the ordinary path, os.MkdirAll
+// would create a stray folder without them, or take an existing one for the
+// folder named. The planner passes only folders ValidateFolder accepts,
+// which Windows resolves as written, so the extended-length path names the
+// folder that its destinations lie in. A failure names the folder that could
+// not be created as the path spells it, without the prefix.
+func mkdirAll(path string) error {
+	extended := extendedPath(path)
+	err := os.MkdirAll(extended, 0o755)
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && strings.HasPrefix(extended, pathErr.Path) {
+		if rest := extended[len(pathErr.Path):]; strings.HasSuffix(path, rest) {
+			pathErr.Path = path[:len(path)-len(rest)]
+		}
+	}
+	return err
 }
 
 // extendedPath resolves an absolute path with GetFullPathName, which drops
@@ -158,11 +193,17 @@ func resolvedPath(path string) string {
 // decoder reach that same file, whether the os package passes the path on
 // as it is or resolves and marks it the same way, so identities are read
 // for the files they reach. A path already marked extended, with any
-// separators, is taken verbatim and left alone. The planner passes only
+// separators, is taken verbatim: \??\, the NT spelling of the prefix, which
+// Windows takes exactly as \\?\, is written \\?\, so both spellings of a
+// path share a key. A device path, \\.\ followed by a name, is resolved
+// like any other path, and once resolved it names what \\?\ followed by the
+// same name does, so it is marked the same way. The planner passes only
 // absolute paths.
 func extendedPath(path string) string {
-	if len(path) >= 4 && (path[:4] == `\??\` ||
-		os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) && path[2] == '?' && os.IsPathSeparator(path[3])) {
+	if len(path) >= 4 && path[:4] == `\??\` {
+		return `\\?\` + path[4:]
+	}
+	if len(path) >= 4 && os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) && path[2] == '?' && os.IsPathSeparator(path[3]) {
 		return path
 	}
 	if !filepath.IsAbs(path) {
@@ -172,11 +213,9 @@ func extendedPath(path string) string {
 	switch {
 	case err != nil:
 		return path
+	case len(full) >= 4 && os.IsPathSeparator(full[0]) && os.IsPathSeparator(full[1]) && full[2] == '.' && os.IsPathSeparator(full[3]):
+		return `\\?\` + full[4:]
 	case len(full) >= 2 && os.IsPathSeparator(full[0]) && os.IsPathSeparator(full[1]):
-		if len(full) >= 4 && full[2] == '.' && os.IsPathSeparator(full[3]) {
-			// A device path would change its meaning with the prefix.
-			return full
-		}
 		return `\\?\UNC\` + full[2:]
 	}
 	return `\\?\` + full

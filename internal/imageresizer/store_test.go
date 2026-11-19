@@ -2,6 +2,7 @@ package imageresizer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -168,9 +169,10 @@ func TestOptionsStoreValidSection(t *testing.T) {
 }
 
 // TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault: earlier builds
-// saved an output folder whose own name ends in a space or a period, or with
-// a folder name in its path that ends in a period, or that names only a
-// volume or a server, which output planning now refuses.
+// saved an output folder Windows resolves to another path, such as one whose
+// own name ends in a space or a period, or with a folder name in its path
+// that ends in a period, or that names only a volume or a server, which
+// output planning now refuses.
 // Loading such a file keeps every other setting, the preset library
 // included, and only the folder falls back to the default, rather than the
 // whole file being reset as invalid; the options manager reports the folder
@@ -178,9 +180,11 @@ func TestOptionsStoreValidSection(t *testing.T) {
 // forgetting the user's folder in silence.
 func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	folder := testFolder(t)
-	legacyFolders := []string{folder + ".", folder + " ", filepath.Join(folder+".", "Resized")}
+	// Outside Windows paths have no volume name, and every name is kept.
+	var legacyFolders []string
 	if volume := filepath.VolumeName(folder); volume != "" {
-		legacyFolders = append(legacyFolders, `\\?\`+volume, `\\?\UNC\server`)
+		legacyFolders = append(legacyFolders, folder+".", folder+" ", filepath.Join(folder+".", "Resized"),
+			filepath.Join(folder, "NUL"), `\\server\share.`, `\\?\`+volume, `\\?\UNC\server`)
 	}
 	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")
@@ -210,8 +214,8 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if kept.Options() != options || kept.ReplacedFolder() != "" || kept.ReplacedFolderWarning() != "" {
-			t.Fatalf("a valid stored folder loads as %+v, replaced folder %q, warning %q", kept.Options(), kept.ReplacedFolder(), kept.ReplacedFolderWarning())
+		if kept.Options() != options || kept.ReplacedFolder() != "" || kept.FolderWarning(nil) != "" {
+			t.Fatalf("a valid stored folder loads as %+v, replaced folder %q, warning %q", kept.Options(), kept.ReplacedFolder(), kept.FolderWarning(nil))
 		}
 		// Write the folder an earlier build would have saved.
 		data, err := os.ReadFile(path)
@@ -261,7 +265,7 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		if manager.Options() != want || manager.ReplacedFolder() != saved {
 			t.Fatalf("%q: manager options = %+v, replaced folder %q", saved, manager.Options(), manager.ReplacedFolder())
 		}
-		if warning := manager.ReplacedFolderWarning(); warning != fmt.Sprintf(ui.ResizeFolderReplaced, saved) {
+		if warning := manager.FolderWarning(nil); warning != fmt.Sprintf(ui.ResizeFolderReplaced, saved) {
 			t.Fatalf("%q: replaced folder warning = %q", saved, warning)
 		}
 		restartedRepository, err := preset.NewRepository(shell.ModuleImageResizer, restarted)
@@ -285,34 +289,57 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	}
 }
 
-// TestReplacedFolderWarningWithoutADefault: when no default folder could be
-// resolved, nothing takes the place of a stored folder only earlier builds
-// accepted, so the startup warning does not say the default folder is
-// selected; it asks the user to choose a folder.
-func TestReplacedFolderWarningWithoutADefault(t *testing.T) {
-	saved := testFolder(t) + "."
-	quoted, err := json.Marshal(saved)
-	if err != nil {
-		t.Fatal(err)
+// TestFolderWarning: the application shows one startup warning about the
+// output folder, which asks the user to choose a folder once. When no
+// default folder could be resolved, nothing takes the place of a stored
+// folder only earlier builds accepted, so the warning says the default
+// folder is unavailable too rather than that it is selected, and no second
+// warning about the default folder follows.
+func TestFolderWarning(t *testing.T) {
+	folder := testFolder(t)
+	if filepath.VolumeName(folder) == "" {
+		t.Skip("outside Windows no folder only earlier builds accepted is refused by its name")
 	}
-	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
-	optionsStore, err := NewOptionsStore(store, "")
-	if err != nil {
-		t.Fatal(err)
+	unavailable := errors.New("locate Pictures folder: not found")
+	tests := []struct {
+		name          string
+		stored        string
+		defaultFolder string
+		defaultErr    error
+		want          string
+	}{
+		{name: "valid stored folder", stored: folder, defaultFolder: folder, want: ""},
+		{name: "valid stored folder without a default", stored: folder, defaultErr: unavailable, want: ""},
+		{name: "replaced by the default", stored: folder + ".", defaultFolder: folder, want: fmt.Sprintf(ui.ResizeFolderReplaced, folder+".")},
+		{name: "refused without a default", stored: folder + ".", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderRefused, folder+".")},
+		{name: "no stored folder", defaultFolder: folder, want: ""},
+		{name: "no stored folder and no default", defaultErr: unavailable, want: fmt.Sprintf(ui.ResizeFolderUnavailable, unavailable)},
 	}
-	value := settings.Default()
-	value.Modules = map[string]json.RawMessage{
-		string(moduleID): json.RawMessage(`{"resize":{"version":1,"format":"png","collision":"rename","jpegQuality":90,"background":"#FFFFFF","outputFolder":` + string(quoted) + `}}`),
-	}
-	manager, err := NewOptionsManager(optionsStore, &value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manager.Options().OutputFolder != "" || manager.ReplacedFolder() != saved {
-		t.Fatalf("options = %+v, replaced folder %q, want no folder and %q replaced", manager.Options(), manager.ReplacedFolder(), saved)
-	}
-	if warning := manager.ReplacedFolderWarning(); warning != fmt.Sprintf(ui.ResizeFolderRefused, saved) {
-		t.Fatalf("replaced folder warning = %q", warning)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+			optionsStore, err := NewOptionsStore(store, test.defaultFolder)
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := settings.Default()
+			if test.stored != "" {
+				quoted, err := json.Marshal(test.stored)
+				if err != nil {
+					t.Fatal(err)
+				}
+				value.Modules = map[string]json.RawMessage{
+					string(moduleID): json.RawMessage(`{"resize":{"version":1,"format":"png","collision":"rename","jpegQuality":90,"background":"#FFFFFF","outputFolder":` + string(quoted) + `}}`),
+				}
+			}
+			manager, err := NewOptionsManager(optionsStore, &value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if warning := manager.FolderWarning(test.defaultErr); warning != test.want {
+				t.Fatalf("FolderWarning = %q, want %q", warning, test.want)
+			}
+		})
 	}
 }
 

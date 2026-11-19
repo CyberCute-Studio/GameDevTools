@@ -185,12 +185,10 @@ func TestEncodedFormatAndExtension(t *testing.T) {
 	}
 }
 
-// TestValidateFolder: an output folder's own name may not end in a space or a
-// period, and no folder name in its path in a period, which Windows removes,
-// except in an extended-length path, which Windows takes verbatim; and the
-// path must name a folder, not
-// only a drive, volume, device, or server, where filepath.Join would put a
-// file name straight after the volume.
+// TestValidateFolder: Windows must resolve an output folder's path as
+// written, except an extended-length path, which Windows takes verbatim; and
+// the path must name a folder, not only a drive, volume, device, or server,
+// where filepath.Join would put a file name straight after the volume.
 func TestValidateFolder(t *testing.T) {
 	tests := []struct {
 		folder string
@@ -239,12 +237,24 @@ func TestValidateFolder(t *testing.T) {
 		{`C:\Art\Resized `, ErrFolderName},
 		{`C:\Art\Resized. `, ErrFolderName},
 		{`\\.\C:\Art.\Resized`, ErrFolderName},
-		// Windows keeps a trailing space on a name a longer path leads
-		// through, so such a path names the folder it spells; Prepare only
-		// plans into it when the folder exists.
+		// GetFullPathName drops a share's trailing period or space when
+		// nothing follows the share, so the folder Prepare would check is
+		// another share than the one its destinations lie in.
+		{`\\server\share.`, ErrFolderName},
+		{`\\server\share `, ErrFolderName},
+		{`\\.\UNC\server\share.`, ErrFolderName},
+		// Windows reads NUL as the device wherever it ends a path.
+		{`C:\Art\NUL`, ErrFolderName},
+		// Windows keeps a trailing space, two periods, or a period and a
+		// space on a name a longer path leads through, so such a path names
+		// the folder it spells, and Prepare creates it under that name.
 		{`C:\Art \Resized`, nil},
 		{`C:\Art. \Resized`, nil},
+		{`C:\Art..\Resized`, nil},
+		{`C:\Art...\Resized`, nil},
+		{`C:\Art\NUL\Resized`, nil},
 		{`\\server\share\Art \Resized`, nil},
+		{`\\server\share.\Resized`, nil},
 		{`\\?\C:\Art.\Resized `, nil},
 		{`//?/C:/Art./Resized`, nil},
 		{`\??\C:\Art \Resized.`, nil},
@@ -266,13 +276,16 @@ func TestPathKey(t *testing.T) {
 	}
 	// Spellings Windows resolves to one name share a key; a name Windows
 	// takes verbatim keeps the trailing period it would otherwise drop.
-	for _, alias := range []string{`\\?\C:\In\photo.png`, `C:/In/photo.png`, `C:\In\photo.png `, `C:\In\photo.png.`, `//?/C:/In/photo.png`} {
+	for _, alias := range []string{`\\?\C:\In\photo.png`, `C:/In/photo.png`, `C:\In\photo.png `, `C:\In\photo.png.`, `//?/C:/In/photo.png`,
+		`\??\C:\In\photo.png`, `\\.\C:\In\photo.png`, `\\.\C:\In\photo.png.`, `//./C:/In/photo.png`} {
 		if PathKey(alias) != PathKey(`C:\In\photo.png`) {
 			t.Errorf("PathKey(%q) = %q, want the key of C:\\In\\photo.png, %q", alias, PathKey(alias), PathKey(`C:\In\photo.png`))
 		}
 	}
-	if PathKey(`\\server\share\photo.png`) != PathKey(`\\?\UNC\server\share\photo.png`) {
-		t.Error("a share path and its extended-length spelling have different keys")
+	for _, alias := range []string{`\\?\UNC\server\share\photo.png`, `\??\UNC\server\share\photo.png`, `\\.\UNC\server\share\photo.png`} {
+		if PathKey(alias) != PathKey(`\\server\share\photo.png`) {
+			t.Errorf("PathKey(%q) = %q, want the key of the share path, %q", alias, PathKey(alias), PathKey(`\\server\share\photo.png`))
+		}
 	}
 	if PathKey(`\\?\C:\In\photo.png.`) == PathKey(`C:\In\photo.png`) {
 		t.Error("a verbatim name with a trailing period shares the key of the name without it")
@@ -377,6 +390,20 @@ func TestPrepareNamesDestinationsAfterSources(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPrepareNamesDestinationsAsWindowsResolvesSources: a source listed
+// with trailing periods or spaces Windows drops is the file without them, so
+// its result takes the name that file's result takes, and in the source's
+// own folder is protected as that file.
+func TestPrepareNamesDestinationsAsWindowsResolvesSources(t *testing.T) {
+	in := t.TempDir()
+	for _, listed := range []string{"photo.png.", "photo.png ", "photo.png. ."} {
+		plan := mustPrepare(t, jobRequest(t.TempDir(), CollisionRename, png(filepath.Join(in, listed))))
+		assertItems(t, plan, []expect{{"photo.png", ActionCreate, ReasonNone}})
+		plan = mustPrepare(t, jobRequest(in, CollisionRename, png(filepath.Join(in, listed))))
+		assertItems(t, plan, []expect{{"photo_2.png", ActionCreate, ReasonSource}})
 	}
 }
 
@@ -1060,13 +1087,17 @@ func TestPrepareProtectsListedSourcesItDoesNotProcess(t *testing.T) {
 
 // TestPrepareProtectsSourcesThatNoLongerExist: a listed source that has
 // disappeared still keeps its path; nothing is planned onto it, even when
-// the output folder spells the source's folder as an extended-length path or
-// the source is listed with a trailing space Windows drops.
+// the output folder spells the source's folder as an extended-length path,
+// in either spelling of the prefix, or as a device path, or the source is
+// listed with a trailing space Windows drops.
 func TestPrepareProtectsSourcesThatNoLongerExist(t *testing.T) {
 	folder := t.TempDir()
 	for _, spelling := range []struct{ folder, source string }{
 		{folder, filepath.Join(folder, "gone.png")},
 		{`\\?\` + folder, filepath.Join(folder, "gone.png")},
+		{`\??\` + folder, filepath.Join(folder, "gone.png")},
+		{`\\.\` + folder, filepath.Join(folder, "gone.png")},
+		{folder, filepath.Join(`\\.\`+folder, "gone.png")},
 		{folder, filepath.Join(folder, "gone.png ")},
 	} {
 		for _, policy := range policies {

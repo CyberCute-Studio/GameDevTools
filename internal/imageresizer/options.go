@@ -178,19 +178,24 @@ func (m *OptionsManager) ReplacedFolder() string {
 	return m.replaced
 }
 
-// ReplacedFolderWarning returns the startup warning about the stored output
-// folder ReplacedFolder names, or "" when none was replaced. It says the
-// default folder is selected only when one is: when the Pictures folder
-// could not be resolved, nothing took the stored folder's place, and the
-// warning asks the user to choose a folder.
-func (m *OptionsManager) ReplacedFolderWarning() string {
+// FolderWarning returns the one startup warning about the output folder, or
+// "" when there is none. defaultErr is why the default folder could not be
+// resolved, or nil. The warning names the stored folder ReplacedFolder
+// names, and says the default folder is selected in its place, or, when the
+// default folder could not be resolved, that it is unavailable too, so no
+// folder is selected; without a replaced folder it says the default folder
+// is unavailable when no folder is selected. The user is asked to choose a
+// folder once, whatever happened.
+func (m *OptionsManager) FolderWarning(defaultErr error) string {
 	switch {
-	case m.replaced == "":
-		return ""
-	case m.options.OutputFolder == "":
+	case m.replaced != "" && m.options.OutputFolder != "":
+		return fmt.Sprintf(ui.ResizeFolderReplaced, m.replaced)
+	case m.replaced != "":
 		return fmt.Sprintf(ui.ResizeFolderRefused, m.replaced)
+	case defaultErr != nil && m.options.OutputFolder == "":
+		return fmt.Sprintf(ui.ResizeFolderUnavailable, defaultErr)
 	}
-	return fmt.Sprintf(ui.ResizeFolderReplaced, m.replaced)
+	return ""
 }
 
 func (m *OptionsManager) SetFormat(format OutputFormat) error {

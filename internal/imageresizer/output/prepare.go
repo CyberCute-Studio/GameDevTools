@@ -37,10 +37,12 @@
 // anything, so they do not read identities.
 //
 // Prepare validates the request, creates the output folder when it does not
-// exist (RSZ-030), unless a folder name in its path ends in a space, which
-// Windows would remove from the folder it creates, and inspects the
-// destinations as the filesystem stands when it runs, so re-running a job
-// plans afresh rather than assuming earlier results (RSZ-049). A file can
+// exist (RSZ-030), and inspects the destinations as the filesystem stands
+// when it runs, so re-running a job plans afresh rather than assuming
+// earlier results (RSZ-049). Every destination is a file in the output
+// folder as Windows resolves it: a name Windows would open as something
+// else, as Windows 10 opens NUL.png as the NUL device, is taken, like a
+// name an existing entry has, and the device is never opened. A file can
 // still appear at a planned destination after Prepare returns; the writer
 // must finalize ActionCreate items without replacing anything. A source can
 // likewise be moved or linked to the name of a file planned for replacement,
@@ -207,11 +209,6 @@ var (
 	// numbered name it may take was already used, by this item's search or
 	// an earlier one with the same name.
 	ErrNoUnusedName = fmt.Errorf("no unused output file name was found among the numbered names _2 to _%d", maxSuffix)
-	// ErrFolderNotCreatable is the cause of the KindFolder error returned
-	// when an output folder that does not exist has a folder name in its
-	// path that ends in a space, which Windows would remove from the folder
-	// it creates.
-	ErrFolderNotCreatable = errors.New("the output folder does not exist, and it cannot be created as named, as a folder name in its path ends in a space, which Windows removes from a folder it creates")
 
 	// ErrFolderEmpty, ErrFolderText, ErrFolderNotAbsolute, ErrFolderRoot,
 	// and ErrFolderName are the causes ValidateFolder reports.
@@ -219,13 +216,12 @@ var (
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
 	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it")
-	ErrFolderName        = errors.New("the folder's own name ends in a space or a period, or a folder name in its path ends in a period, which Windows removes")
+	ErrFolderName        = errors.New("Windows would change a name in the path, such as one that ends in a space or a period, or read one as a device name")
 )
 
 // ValidateFolder checks an output folder path the way the persisted options
 // and Prepare both require: it is not empty, is valid text, is absolute,
-// names a folder, its own name ends in neither a space nor a period, and no
-// folder name in its path ends in a period.
+// names a folder, and Windows resolves it as written.
 //
 // An absolute path that is only a volume name, such as \\?\C: or \\.\C:
 // without the root folder's separator, or a server without a share, such as
@@ -239,19 +235,22 @@ var (
 // unpaired surrogate, cannot be kept in the settings file, whose JSON
 // replaces such bytes with U+FFFD, and a U+FFFD replacement character marks
 // a path such a lossy conversion changed; either may name another folder
-// than the one chosen. Windows removes trailing spaces and periods from the
-// last name of a path it creates or opens, so for an output folder whose own
-// name ends in one, the folder Prepare creates and checks would not be the
-// folder its destinations lie in. From a name a longer path leads through it
-// can remove a trailing period, so a path through a folder name that ends in
-// a period may lead to another folder than the one named, but it keeps
-// trailing spaces, so a path may lead through an existing folder whose name
-// ends in a space. Windows would create such a folder without its space,
-// leaving a stray folder the rest of the path never reaches, so Prepare
-// plans into such a path only when the output folder already exists. An
-// extended-length path, marked \\?\ or \??\, is one Windows takes verbatim,
-// so every name in it keeps its spaces and periods and the rules do not
-// apply.
+// than the one chosen.
+//
+// Windows resolves every path it is not told to take verbatim before it
+// opens or creates anything, dropping trailing spaces and periods from the
+// last name, a single trailing period from a name a longer path leads
+// through, and the trailing characters of a share's name when nothing
+// follows it, and reading some names, such as NUL, as devices. A folder it
+// would resolve to another path is refused: the folder Prepare creates and
+// checks would not be the folder its destinations lie in, or they would lie
+// in another folder than the one named. The path is compared with Windows'
+// own resolution of it rather than with a model of its rules, so a path
+// through a name Windows keeps there, such as "Photos " or "v2..", is
+// accepted, and Prepare creates any missing folder in it under the name the
+// path gives. An extended-length path, marked \\?\ or \??\, is
+// one Windows takes verbatim, so every name in it is kept and the rule does
+// not apply.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -265,14 +264,8 @@ func ValidateFolder(folder string) error {
 	if namesRoot(clean) {
 		return ErrFolderRoot
 	}
-	if verbatim(clean) {
-		return nil
-	}
-	names := folderNames(clean)
-	for index, name := range names {
-		if strings.HasSuffix(name, ".") || index == len(names)-1 && strings.HasSuffix(name, " ") {
-			return ErrFolderName
-		}
+	if !verbatim(clean) && !resolvesAsWritten(clean) {
+		return ErrFolderName
 	}
 	return nil
 }
@@ -281,27 +274,6 @@ func ValidateFolder(folder string) error {
 // Windows takes verbatim.
 func verbatim(clean string) bool {
 	return strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`)
-}
-
-// folderNames is the names of the folders in a cleaned path after its
-// volume name.
-func folderNames(clean string) []string {
-	return pathNames(clean[len(filepath.VolumeName(clean)):])
-}
-
-// spacedName reports whether a folder name in a cleaned output folder path
-// that ValidateFolder accepts ends in a space, as only a name the path leads
-// through may, and Windows keeps it there.
-func spacedName(clean string) bool {
-	if verbatim(clean) {
-		return false
-	}
-	for _, name := range folderNames(clean) {
-		if strings.HasSuffix(name, " ") {
-			return true
-		}
-	}
-	return false
 }
 
 // pathNames splits a path, or the part of one after its volume name, into
@@ -348,8 +320,9 @@ func shareRoot(volume string) bool {
 
 // PathKey normalizes a full path for comparison. On Windows the path is
 // resolved as Windows resolves it, so spellings of one name, such as
-// \\?\C:\In\photo.png, C:/In/photo.png, and C:\In\photo.png followed by a
-// space, which Windows drops, share a key; a name Windows takes verbatim,
+// \\?\C:\In\photo.png, \??\C:\In\photo.png, \\.\C:\In\photo.png,
+// C:/In/photo.png, and C:\In\photo.png followed by a space, which Windows
+// drops, share a key; a name Windows takes verbatim,
 // such as \\?\C:\In\photo.png followed by a period, keeps its own. Windows
 // paths compare case-insensitively, so "photo.PNG" and "PHOTO.png" name the
 // same file. The source inventory deduplicates sources by it, and output
@@ -472,7 +445,7 @@ const (
 	// base name with the output format's extension.
 	ReasonNone Reason = iota
 	// ReasonExists means a file or folder already exists at the natural
-	// destination.
+	// destination, or Windows opens its name as a device.
 	ReasonExists
 	// ReasonDuplicate means an earlier source of the same job writes the
 	// natural destination, or replaces the same existing file.
@@ -719,18 +692,8 @@ func validateFile(path string) error {
 }
 
 // prepareFolder creates the output folder when it does not exist and checks
-// that the path names a folder (RSZ-030). A cleaned path with a folder name
-// that ends in a space is only checked: os.MkdirAll inspects and creates each
-// folder on the way by a path that ends at that folder's name, where Windows
-// removes the trailing space it keeps in the middle of a path, so it would
-// create a stray folder without the space, or take one for the folder named.
+// that the path names a folder (RSZ-030).
 func prepareFolder(files fileSystem, folder string) error {
-	if spacedName(folder) {
-		if _, err := files.Stat(folder); errors.Is(err, fs.ErrNotExist) {
-			return kindError(KindFolder, "create output folder", fmt.Errorf("%s: %w: %w", folder, ErrFolderNotCreatable, err))
-		}
-		return openFolder(files, folder)
-	}
 	if err := files.MkdirAll(folder); err != nil {
 		if fileInTheWay(files, folder) {
 			err = fmt.Errorf("%w: %w", ErrNotFolder, err)
@@ -776,6 +739,8 @@ func fileInTheWay(files fileSystem, folder string) bool {
 // fileSystem is the filesystem access planning needs, so tests can inject
 // failures the real filesystem cannot produce on demand.
 type fileSystem interface {
+	// MkdirAll creates a folder ValidateFolder accepts, and every missing
+	// folder that holds it, under the names the path gives them.
 	MkdirAll(path string) error
 	Stat(path string) (fs.FileInfo, error)
 	Lstat(path string) (fs.FileInfo, error)
@@ -824,7 +789,7 @@ type stamp struct {
 
 type osFiles struct{}
 
-func (osFiles) MkdirAll(path string) error             { return os.MkdirAll(path, 0o755) }
+func (osFiles) MkdirAll(path string) error             { return mkdirAll(path) }
 func (osFiles) Stat(path string) (fs.FileInfo, error)  { return os.Stat(path) }
 func (osFiles) Lstat(path string) (fs.FileInfo, error) { return os.Lstat(path) }
 func (osFiles) Identity(path string) (identity, error) { return identify(path) }
@@ -865,12 +830,15 @@ type listing struct {
 }
 
 type planner struct {
-	ctx       context.Context
-	files     fileSystem
-	folder    string
-	format    Format
-	collision Collision
-	sources   []Source
+	ctx    context.Context
+	files  fileSystem
+	folder string
+	// resolved is the output folder as resolvedPath gives it, and folderKey
+	// its path key.
+	resolved, folderKey string
+	format              Format
+	collision           Collision
+	sources             []Source
 	// listed holds the path of every source and protected path.
 	listed []string
 	// sourceKeys holds the path key of every listed path, so no destination
@@ -938,10 +906,13 @@ func newPlanner(ctx context.Context, request Request, folder string, files fileS
 	for _, path := range listed {
 		sourceKeys[PathKey(path)] = struct{}{}
 	}
+	resolved := resolvedPath(folder)
 	return &planner{
 		ctx:               ctx,
 		files:             files,
 		folder:            folder,
+		resolved:          resolved,
+		folderKey:         foldCase(resolved),
 		format:            request.Format,
 		collision:         request.Collision,
 		sources:           request.Sources,
@@ -1161,12 +1132,20 @@ func (p *planner) folderLost() error {
 // probe inspects a destination path without following a final link, so a
 // link is reported as an entry of its own rather than as its target. Only a
 // name missing from the output folder is free: a path whose folder cannot be
-// found, such as on a drive or share that has gone, cannot be checked.
+// found, such as on a drive or share that has gone, cannot be checked. A
+// name Windows resolves to anything but a file in the output folder, as
+// Windows 10 resolves NUL.png to the NUL device, is taken, as os.Lstat would
+// report the device, but is not inspected, so planning never opens a device.
 func (p *planner) probe(key, path string) probe {
 	if cached, ok := p.probes[key]; ok {
 		return cached
 	}
 	var found probe
+	if key != foldCase(filepath.Join(p.resolved, filepath.Base(path))) {
+		found = probe{exists: true, mode: fs.ModeDevice}
+		p.probes[key] = found
+		return found
+	}
 	info, err := p.files.Lstat(path)
 	switch {
 	case err == nil:
@@ -1340,7 +1319,7 @@ func (p *planner) mayBeUnverified(links uint32) bool {
 	if len(p.unverifiedFolders) == 0 {
 		return false
 	}
-	output := p.identity(PathKey(p.folder), p.folder)
+	output := p.identity(p.folderKey, p.folder)
 	if output.err != nil {
 		return true
 	}
@@ -1350,9 +1329,11 @@ func (p *planner) mayBeUnverified(links uint32) bool {
 	return links != 1
 }
 
-// stem is the source's base file name without its extension.
+// stem is the source's base file name without its extension, the name as
+// Windows resolves it, so a source listed as photo.png followed by a period
+// Windows drops, which is photo.png, gives photo rather than photo.png.
 func stem(path string) string {
-	base := filepath.Base(path)
+	base := filepath.Base(resolvedPath(path))
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 

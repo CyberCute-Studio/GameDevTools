@@ -203,12 +203,19 @@ func TestExtendedPath(t *testing.T) {
 		{`C:/short/./x.png`, `\\?\C:\short\x.png`},
 		{`C:\`, `\\?\C:\`},
 		{`\\server\share\x.png`, `\\?\UNC\server\share\x.png`},
-		{`\\.\C:\x.png`, `\\.\C:\x.png`},
+		// A device path is resolved, and then names what the extended-length
+		// path to the same name does.
+		{`\\.\C:\x.png`, `\\?\C:\x.png`},
+		{`\\.\C:\in\..\x.png.`, `\\?\C:\x.png`},
+		{`\\.\UNC\server\share\x.png`, `\\?\UNC\server\share\x.png`},
+		{`C:\in\NUL`, `\\?\NUL`},
 		{`short\x.png`, `short\x.png`},
 		{long, `\\?\` + long},
 		{share, `\\?\UNC\server\share\` + strings.Repeat(`folder\`, 40) + "x.png"},
 		{`\\?\` + long, `\\?\` + long},
-		{`\??\` + long, `\??\` + long},
+		// \??\ is the NT spelling of \\?\, which Windows takes alike.
+		{`\??\` + long, `\\?\` + long},
+		{`\??\C:\x.png.`, `\\?\C:\x.png.`},
 		{`//?/` + filepath.ToSlash(long), `//?/` + filepath.ToSlash(long)},
 		{filepath.ToSlash(long), `\\?\` + long},
 		{strings.Replace(long, `\x.png`, `\.\x.png`, 1), `\\?\` + long},
@@ -899,16 +906,23 @@ func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
 
 // TestPrepareReportsDeniedFolderCreation pins RSZ-030 with a real access
 // failure: an output folder whose parent refuses new folders is reported as
-// a permission failure of the folder.
+// a permission failure of the folder that could not be created, named as
+// the request spells it, though the folder is created through its
+// extended-length path.
 func TestPrepareReportsDeniedFolderCreation(t *testing.T) {
 	parent := t.TempDir()
 	setDACL(t, parent, "D:P(D;;0x4;;;WD)(A;OICI;FA;;;WD)") // deny FILE_ADD_SUBDIRECTORY
 	t.Cleanup(func() { setDACL(t, parent, "D:P(A;OICI;FA;;;WD)") })
-	_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, "Resized"), CollisionRename,
-		png(filepath.Join(t.TempDir(), "x.png"))))
-	assertKind(t, err, KindFolder)
-	if !errors.Is(err, fs.ErrPermission) {
-		t.Fatalf("error = %v, want a permission failure", err)
+	for _, out := range []string{filepath.Join(parent, "Resized"), filepath.Join(parent, "Resized", "deeper")} {
+		_, err := Prepare(context.Background(), jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("error = %v, want a permission failure", err)
+		}
+		var pathErr *fs.PathError
+		if !errors.As(err, &pathErr) || pathErr.Path != filepath.Join(parent, "Resized") {
+			t.Fatalf("error = %v, want one naming %s", err, filepath.Join(parent, "Resized"))
+		}
 	}
 }
 
@@ -947,16 +961,13 @@ func TestPrepareReportsInvalidFolderPaths(t *testing.T) {
 	}
 }
 
-// TestPrepareRefusesFolderNamesWindowsChanges: Windows can drop a trailing
-// period from a name a path leads through, so a path through such a name is
-// refused as invalid. It keeps a trailing space there, but drops it from a
-// folder it creates, so an output folder that does not exist under a name
-// ending in a space is refused as one that cannot be created, whether or not
-// that folder exists. Either way the request is refused before anything is
-// created, rather than leaving a stray folder under the shortened name.
+// TestPrepareRefusesFolderNamesWindowsChanges: Windows drops a single
+// trailing period from a name a path leads through, so a path through such a
+// name is refused before anything is created, rather than leaving a stray
+// folder under the shortened name.
 func TestPrepareRefusesFolderNamesWindowsChanges(t *testing.T) {
 	source := png(filepath.Join(t.TempDir(), "x.png"))
-	for _, name := range []string{"sub.", "sub..", "sub ."} {
+	for _, name := range []string{"sub.", "sub ."} {
 		parent := t.TempDir()
 		_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, name, "Resized"), CollisionRename, source))
 		assertKind(t, err, KindValidation)
@@ -967,68 +978,110 @@ func TestPrepareRefusesFolderNamesWindowsChanges(t *testing.T) {
 			t.Fatalf("%q: the parent holds %v (%v) after a refused request", name, entries, err)
 		}
 	}
-	for _, name := range []string{"sub ", "sub. "} {
-		for _, exists := range []bool{false, true} {
-			parent := t.TempDir()
-			if exists {
-				spacedFolder(t, filepath.Join(parent, name))
-			}
-			_, err := Prepare(context.Background(), jobRequest(filepath.Join(parent, name, "Resized"), CollisionRename, source))
-			assertKind(t, err, KindFolder)
-			if !errors.Is(err, ErrFolderNotCreatable) {
-				t.Fatalf("%q (exists %v): error = %v, want ErrFolderNotCreatable", name, exists, err)
-			}
-			want := map[bool]int{true: 1}[exists]
-			if entries, err := os.ReadDir(parent); err != nil || len(entries) != want {
-				t.Fatalf("%q (exists %v): the parent holds %v (%v) after a refused request", name, exists, entries, err)
-			}
-		}
-	}
 }
 
-// spacedFolder creates a folder whose name ends in a space, as a Mac or a
-// tool using extended-length paths can, which the ordinary path through it
-// reaches but cannot remove, so the test removes it.
-func spacedFolder(t *testing.T, path string) {
+// verbatimFolder creates a folder whose name ends in characters Windows drops
+// from the last name of a path, as a Mac or a tool using extended-length paths
+// can, which the ordinary path through it reaches but cannot remove, so the
+// test removes it.
+func verbatimFolder(t *testing.T, path string) {
 	t.Helper()
-	verbatimPath := `\\?\` + path
-	if err := os.MkdirAll(verbatimPath, 0o755); err != nil {
+	if err := os.MkdirAll(`\\?\`+path, 0o755); err != nil {
 		t.Fatalf("create %q: %v", path, err)
 	}
+	removeVerbatim(t, path)
+}
+
+// removeVerbatim removes the folder at path and everything in it, through its
+// extended-length path, when the test ends.
+func removeVerbatim(t *testing.T, path string) {
+	t.Helper()
 	t.Cleanup(func() {
-		if err := os.RemoveAll(verbatimPath); err != nil {
+		if err := os.RemoveAll(`\\?\` + path); err != nil {
 			t.Errorf("remove %q: %v", path, err)
 		}
 	})
 }
 
-// TestPrepareUsesExistingFoldersWhoseNamesEndInASpace: Windows keeps the
-// trailing space of a name a path leads through, so an existing output
-// folder inside a folder whose name ends in a space is checked and planned
-// into as named, and no stray folder without the space appears.
-func TestPrepareUsesExistingFoldersWhoseNamesEndInASpace(t *testing.T) {
-	parent := t.TempDir()
-	spaced := filepath.Join(parent, "Photos ")
-	spacedFolder(t, spaced)
-	out := filepath.Join(spaced, "Resized")
-	if err := os.Mkdir(`\\?\`+out, 0o755); err != nil {
-		t.Fatalf("create %q: %v", out, err)
+// TestPrepareCreatesFoldersUnderNamesWindowsKeeps pins RSZ-030 for a path
+// through a name Windows keeps there but drops from the last name of a path,
+// such as a trailing space or two trailing periods: whether neither folder,
+// only the one with that name, or both exist, the output folder is created
+// and planned into as named, the result lands in it, and no stray folder
+// under the shortened name appears.
+func TestPrepareCreatesFoldersUnderNamesWindowsKeeps(t *testing.T) {
+	for _, name := range []string{"Photos ", "Photos. ", "v2.."} {
+		for _, existing := range []int{0, 1, 2} {
+			parent := t.TempDir()
+			kept := filepath.Join(parent, name)
+			out := filepath.Join(kept, "Resized")
+			removeVerbatim(t, kept)
+			if existing >= 1 {
+				verbatimFolder(t, kept)
+			}
+			if existing == 2 {
+				verbatimFolder(t, out)
+			}
+			for _, policy := range policies {
+				plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
+				if plan.Folder != out {
+					t.Fatalf("%q: Folder = %q, want %q", name, plan.Folder, out)
+				}
+				assertItems(t, plan, []expect{{"x.png", ActionCreate, ReasonNone}})
+			}
+			plan := mustPrepare(t, jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
+			materialize(t, plan, "result")
+			if readFile(t, `\\?\`+filepath.Join(out, "x.png")) != "result result 0" {
+				t.Fatalf("%q (%d existing): the result is not in the folder named", name, existing)
+			}
+			entries, err := os.ReadDir(parent)
+			if err != nil || len(entries) != 1 || entries[0].Name() != name {
+				t.Fatalf("%q (%d existing): the parent holds %v (%v), want only the folder %q", name, existing, entries, err, name)
+			}
+		}
+	}
+}
+
+// TestPrepareTakesNamesWindowsOpensAsDevicesAsTaken: a destination name
+// Windows resolves to anything but a file in the output folder, as it
+// resolves NUL to the device, and Windows 10 NUL.png or COM1.jpg too, is
+// taken, as an existing entry's name is, without the planner opening the
+// device: Rename and Overwrite rename the result past it, and Skip skips it.
+// Planners never produce a name without an extension, so the test plans a
+// NUL destination directly.
+func TestPrepareTakesNamesWindowsOpensAsDevicesAsTaken(t *testing.T) {
+	want := map[Collision]expect{
+		CollisionRename:    {"NUL_2", ActionCreate, ReasonExists},
+		CollisionSkip:      {"NUL", ActionSkip, ReasonExists},
+		CollisionOverwrite: {"NUL_2", ActionCreate, ReasonExists},
 	}
 	for _, policy := range policies {
-		plan := mustPrepare(t, jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))))
-		if plan.Folder != out {
-			t.Fatalf("Folder = %q, want %q", plan.Folder, out)
+		out := t.TempDir()
+		var opened []string
+		record := func(path string) { opened = append(opened, path) }
+		files := faultyFiles{
+			lstat:    func(path string) (fs.FileInfo, error) { record(path); return os.Lstat(path) },
+			identity: func(path string) (identity, error) { record(path); return identify(path) },
+			entry:    func(path string) (entry, error) { record(path); return findEntry(path) },
 		}
-		assertItems(t, plan, []expect{{"x.png", ActionCreate, ReasonNone}})
-	}
-	plan := mustPrepare(t, jobRequest(out, CollisionRename, png(filepath.Join(t.TempDir(), "x.png"))))
-	materialize(t, plan, "result")
-	if readFile(t, `\\?\`+filepath.Join(out, "x.png")) != "result result 0" {
-		t.Fatal("the result is not in the folder whose name ends in a space")
-	}
-	entries, err := os.ReadDir(parent)
-	if err != nil || len(entries) != 1 || entries[0].Name() != "Photos " {
-		t.Fatalf("the parent holds %v (%v), want only the folder %q", entries, err, "Photos ")
+		p := newPlanner(context.Background(), jobRequest(out, policy, png(filepath.Join(t.TempDir(), "x.png"))), out, files)
+		device := filepath.Join(out, "NUL")
+		item := Item{Source: filepath.Join(t.TempDir(), "NUL"), Destination: device, DuplicateOf: -1}
+		resolved, err := p.natural(0, &item)
+		if err == nil && !resolved {
+			err = p.resolve(0, &item)
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", policy, err)
+		}
+		if got := (expect{filepath.Base(item.Destination), item.Action, item.Reason}); got != want[policy] {
+			t.Errorf("%s: item = %+v, want %+v (err: %v)", policy, got, want[policy], item.Err)
+		}
+		for _, path := range opened {
+			if PathKey(path) == PathKey(device) {
+				t.Errorf("%s: the planner opened %s", policy, path)
+			}
+		}
 	}
 }
 

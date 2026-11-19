@@ -45,8 +45,12 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 	// absolute; outside Windows paths have no volume name, and \\?\ is a
 	// relative name.
 	volumeErr := "rather than a folder"
+	// Windows resolves a path before it opens or creates anything, which may
+	// change a name in it; elsewhere every name is kept as written.
+	nameErr := "Windows would change a name"
 	if filepath.VolumeName(folder) == "" {
 		volumeErr = "absolute"
+		nameErr = ""
 	}
 	tests := []struct {
 		name    string
@@ -75,11 +79,14 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 		{name: "relative folder", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join("Resized", "out") }, wantErr: "absolute"},
 		{name: "folder with null character", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "\x00" }, wantErr: "not valid text"},
 		{name: "folder with replacement character", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "�" }, wantErr: "not valid text"},
-		{name: "folder ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + " " }, wantErr: "ends in a space or a period"},
-		{name: "folder ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "." }, wantErr: "ends in a space or a period"},
-		{name: "parent ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+".", "Resized") }, wantErr: "a folder name in its path ends in a period"},
-		// Windows keeps a trailing space on a name a path leads through.
+		{name: "folder ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + " " }, wantErr: nameErr},
+		{name: "folder ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "." }, wantErr: nameErr},
+		{name: "parent ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+".", "Resized") }, wantErr: nameErr},
+		{name: "folder named as a device", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder, "NUL") }, wantErr: nameErr},
+		// Windows keeps a trailing space, or two periods, on a name a path
+		// leads through.
 		{name: "parent ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+" ", "Resized") }},
+		{name: "parent ending in two periods", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+"..", "Resized") }},
 		{name: "volume without a folder", mutate: func(o *ResizeOptions) { o.OutputFolder = `\\?\` + filepath.VolumeName(folder) }, wantErr: volumeErr},
 	}
 	for _, test := range tests {
