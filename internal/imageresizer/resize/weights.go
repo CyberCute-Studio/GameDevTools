@@ -62,16 +62,7 @@ func newAxis(sourceLength, scaledLength, first, count int) *axis {
 	s, l := int64(sourceLength), int64(scaledLength)
 	denominator := 2 * max(s, l)
 	reach := filterRadius * denominator
-	// The filter covers an open interval 2·reach/(2l) source samples wide,
-	// so no output has more weights than that plus two, or than the source
-	// has samples. Allocating that bound up front keeps the table from
-	// growing — and briefly doubling — while it fills: it comes to at most
-	// 4·sourceLength + 2·count weights for a reduction and 6·count for an
-	// enlargement. The filter values of one output, kept so each is
-	// evaluated once, need at most the same bound. At MaxSourceDimension
-	// and preset.MaxDimension that is 16.125 MiB of weights, 8 MiB of
-	// values, and 256 KiB of starts and offsets: under 24.4 MiB an axis.
-	perOutput := min(s, 2*reach/(2*l)+2)
+	perOutput := weightsPerOutput(sourceLength, scaledLength)
 	a := &axis{
 		start:   make([]int, count),
 		offset:  make([]int, count+1),
@@ -128,6 +119,33 @@ func newAxis(sourceLength, scaledLength, first, count int) *axis {
 		a.widest = max(a.widest, trailing-leading)
 	}
 	return a
+}
+
+// weightsPerOutput bounds the weights of one output sample of an axis that
+// resamples sourceLength samples, scaled to scaledLength. In newAxis's terms
+// the filter covers an open interval 2·reach/(2l) source samples wide, so no
+// output has more weights than that plus two, or than the source has
+// samples. newAxis allocates that bound up front for every output, which
+// keeps the table from growing — and briefly doubling — while it fills: it
+// comes to at most 4·sourceLength + 2·count weights for a reduction and
+// 6·count for an enlargement. The filter values of one output, kept so each
+// is evaluated once, need at most the same bound. At MaxSourceDimension and
+// preset.MaxDimension that is 16.125 MiB of weights, 8 MiB of values, and
+// 256 KiB of starts and offsets: under 24.4 MiB an axis, as axisBytes
+// counts it.
+func weightsPerOutput(sourceLength, scaledLength int) int64 {
+	s, l := int64(sourceLength), int64(scaledLength)
+	reach := filterRadius * 2 * max(s, l)
+	return min(s, 2*reach/(2*l)+2)
+}
+
+// axisBytes is the memory newAxis allocates for count output samples of an
+// axis that resamples sourceLength samples, scaled to scaledLength: the
+// starts and offsets, the weight table at weightsPerOutput weights an
+// output, and the filter values of one output.
+func axisBytes(sourceLength, scaledLength, count int) int64 {
+	perOutput := weightsPerOutput(sourceLength, scaledLength)
+	return 8*int64(count) + 8*int64(count+1) + 4*int64(count)*perOutput + 8*perOutput
 }
 
 // catmullRom evaluates the Catmull-Rom cubic — the Keys cubic with

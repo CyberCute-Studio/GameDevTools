@@ -91,7 +91,8 @@ const (
 	// damaged, truncated, or empty.
 	KindCorrupt
 	// KindTooLarge means decoding the declared header would need more than
-	// MaxDecodedBytes of pixel memory.
+	// MaxDecodedBytes of pixel memory, or, for DecodeWithin, more than the
+	// allowance it was given (ErrOverAllowance).
 	KindTooLarge
 	// KindCanceled means the context ended before decoding finished.
 	KindCanceled
@@ -119,6 +120,11 @@ var ErrUnrecognized = errors.New("content is not PNG or JPEG image data")
 
 // ErrEmpty is the cause of a KindCorrupt error for an empty file.
 var ErrEmpty = errors.New("the file is empty")
+
+// ErrOverAllowance is the cause of the KindTooLarge error DecodeWithin
+// returns for a source whose decoding needs more pixel memory than the
+// caller set aside for it, though no more than MaxDecodedBytes.
+var ErrOverAllowance = errors.New("decoding the source needs more pixel memory than was set aside for it")
 
 // errFolder is the cause of a KindRead error for a path that names a folder.
 var errFolder = errors.New("the path is a folder, not a file")
@@ -178,7 +184,8 @@ type Info struct {
 	// JPEG's conversion to RGB that a segment after its first scan requests
 	// is counted only when it could breach the limit, which is when the
 	// limit settles whether the decoder makes it. A batch sizes how many
-	// sources it decodes at once by it (NFR-014).
+	// sources it decodes at once by it, and decodes each with DecodeWithin
+	// that allowance (NFR-014).
 	DecodedBytes uint64
 }
 
@@ -234,7 +241,7 @@ func heapAllocated() uint64 {
 // fails before the decoder allocates its pixels, skips the collection.
 func Inspect(ctx context.Context, path string) (Info, error) {
 	before := heapAllocated()
-	info, _, err := load(ctx, path, false)
+	info, _, err := load(ctx, path, false, MaxDecodedBytes)
 	if heapAllocated()-before >= releaseThreshold {
 		releaseMemory()
 	}
@@ -244,7 +251,22 @@ func Inspect(ctx context.Context, path string) (Info, error) {
 // Decode decodes the source and returns its pixels with the EXIF
 // orientation applied, so the image is visually upright (RSZ-018).
 func Decode(ctx context.Context, path string) (*Image, error) {
-	info, pixels, err := load(ctx, path, true)
+	return DecodeWithin(ctx, path, MaxDecodedBytes)
+}
+
+// DecodeWithin is Decode for a caller that has set aside only allowance
+// bytes of pixel memory for the source, as a batch that decodes several
+// sources at once sets aside each one's DecodedBytes (NFR-014). A source
+// whose decoding needs more, counted as DecodedBytes counts it, as one
+// rewritten since its content check may, fails from its declared header,
+// before any pixel memory is allocated, with a KindTooLarge error that
+// errors.Is reports as ErrOverAllowance, so the caller can set aside more
+// and decode it again. A source that needs more than MaxDecodedBytes fails as
+// Decode fails it, and an allowance of MaxDecodedBytes or more decodes as
+// Decode does. A source the content check measured, unchanged since, needs
+// exactly its DecodedBytes, so that allowance always admits it.
+func DecodeWithin(ctx context.Context, path string, allowance uint64) (*Image, error) {
+	info, pixels, err := load(ctx, path, true, allowance)
 	if err != nil {
 		return nil, err
 	}
@@ -274,9 +296,10 @@ type header struct {
 	png         pngLayout
 }
 
-// load opens the source read-only and decodes it. It applies the orientation
-// transform and returns the pixels only when keep asks for them.
-func load(ctx context.Context, path string, keep bool) (Info, image.Image, error) {
+// load opens the source read-only and decodes it within the allowance, as
+// DecodeWithin describes. It applies the orientation transform and returns
+// the pixels only when keep asks for them.
+func load(ctx context.Context, path string, keep bool, allowance uint64) (Info, image.Image, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return Info{}, nil, &Error{Kind: KindCanceled, Err: ctxErr}
 	}
@@ -292,12 +315,12 @@ func load(ctx context.Context, path string, keep bool) (Info, image.Image, error
 	} else if stat.IsDir() {
 		return Info{}, nil, &Error{Kind: KindRead, Err: errFolder}
 	}
-	return decodeSource(&sourceReader{ctx: ctx, file: file}, keep)
+	return decodeSource(&sourceReader{ctx: ctx, file: file}, keep, allowance)
 }
 
 // decodeSource identifies, checks, and decodes an open source; load
 // describes its results.
-func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Image, err error) {
+func decodeSource(source *sourceReader, keep bool, allowance uint64) (info Info, pixels image.Image, err error) {
 	format := FormatUnknown
 	// The standard library decoders are fuzzed, but a decoder panic on an
 	// unforeseen input must still be contained as this source's failure
@@ -383,6 +406,15 @@ func decodeSource(source *sourceReader, keep bool) (info Info, pixels image.Imag
 	// whose IHDR the scan could not read.
 	if err := checkLimit(format, width, height, need+upright); err != nil {
 		return Info{}, nil, err
+	}
+	if need+upright > allowance {
+		return Info{}, nil, &Error{
+			Kind:   KindTooLarge,
+			Format: format,
+			Width:  width,
+			Height: height,
+			Err:    fmt.Errorf("%w: %d × %d pixels need %d bytes, %d were set aside", ErrOverAllowance, width, height, need+upright, allowance),
+		}
 	}
 	if err := source.restart(buffered); err != nil {
 		return Info{}, nil, source.classify(format, err)

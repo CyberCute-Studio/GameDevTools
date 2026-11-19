@@ -175,6 +175,39 @@ func TestDecodeJPEGFixtures(t *testing.T) {
 	}
 }
 
+// TestDecodeWithinAnAllowance: a source the content check measured decodes
+// within the DecodedBytes it reported, while one rewritten since to need more
+// fails from its header with ErrOverAllowance, reporting its new dimensions,
+// and decodes once the decoder's own limit is set aside.
+func TestDecodeWithinAnAllowance(t *testing.T) {
+	for _, name := range []string{"baseline.jpeg", "progressive.jpeg", "cmyk.jpeg"} {
+		path := writeFile(t, name, readFixture(t, name))
+		info, err := Inspect(context.Background(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decoded, err := DecodeWithin(context.Background(), path, info.DecodedBytes); err != nil || decoded.Info != info {
+			t.Fatalf("%s within its own estimate: %+v, %v", name, decoded, err)
+		}
+	}
+	path := writeFile(t, "sprite.png", encodePNG(t, image.NewNRGBA(image.Rect(0, 0, 4, 4))))
+	checked, err := Inspect(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encodePNG(t, image.NewNRGBA(image.Rect(0, 0, 64, 32))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = DecodeWithin(context.Background(), path, checked.DecodedBytes)
+	over := requireKind(t, err, KindTooLarge, FormatPNG)
+	if !errors.Is(err, ErrOverAllowance) || over.Width != 64 || over.Height != 32 {
+		t.Fatalf("error = %v at %d × %d, want ErrOverAllowance at 64 × 32", err, over.Width, over.Height)
+	}
+	if decoded, err := DecodeWithin(context.Background(), path, MaxDecodedBytes); err != nil || decoded.Width != 64 || decoded.DecodedBytes != 64*32*4 {
+		t.Fatalf("within the decoder's limit: %+v, %v", decoded, err)
+	}
+}
+
 // TestProgressiveMatchesBaseline confirms the progressive fixture decodes to
 // the same picture as its baseline counterpart, within JPEG tolerance.
 func TestProgressiveMatchesBaseline(t *testing.T) {
@@ -500,17 +533,17 @@ func TestReadFailureDuringTheScanIsReported(t *testing.T) {
 	oriented := withSegments(encodeJPEG(t, image.NewGray(image.Rect(0, 0, 40, 30))), comment, comment, exifSegment(binary.BigEndian, uint32(OrientationRotate90), tiffTypeShort))
 	gray := bytes.Join([][]byte{pngHeader(20000, 20000, 8, 0), pngChunk("tEXt", make([]byte, 2*readBufferSize)), pngChunk("IDAT", nil)}, nil)
 
-	info, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(oriented)}}, false)
+	info, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(oriented)}}, false, MaxDecodedBytes)
 	if err != nil || info.Width != 30 || info.Height != 40 {
 		t.Fatalf("intact read = %+v, %v; want 30 × 40", info, err)
 	}
 	// Without image data the gray source is damaged, not too large.
-	_, _, err = decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(gray)}}, false)
+	_, _, err = decodeSource(&sourceReader{ctx: context.Background(), file: &scriptedFile{Reader: bytes.NewReader(gray)}}, false, MaxDecodedBytes)
 	requireKind(t, err, KindCorrupt, FormatPNG)
 
 	for format, content := range map[Format][]byte{FormatJPEG: oriented, FormatPNG: gray} {
 		file := &scriptedFile{Reader: bytes.NewReader(content), failing: true, failFrom: readBufferSize}
-		_, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: file}, false)
+		_, _, err := decodeSource(&sourceReader{ctx: context.Background(), file: file}, false, MaxDecodedBytes)
 		requireKind(t, err, KindRead, format)
 		if !errors.Is(err, errScriptedRead) {
 			t.Fatalf("%v: error = %v, want the read failure", format, err)
@@ -531,7 +564,7 @@ func TestCancellationAfterTheLastRead(t *testing.T) {
 			cancel()
 		}
 	}}
-	info, pixels, err := decodeSource(&sourceReader{ctx: ctx, file: file}, true)
+	info, pixels, err := decodeSource(&sourceReader{ctx: ctx, file: file}, true, MaxDecodedBytes)
 	requireKind(t, err, KindCanceled, FormatJPEG)
 	if pixels != nil || info != (Info{}) {
 		t.Fatalf("cancelled decode returned %+v with pixels %v", info, pixels != nil)

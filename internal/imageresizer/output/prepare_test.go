@@ -729,6 +729,34 @@ func TestPrepareReportsUnusableFolders(t *testing.T) {
 	})
 }
 
+// TestCheckFolderFindsAFolderThatHasGone: a plan's output folder that is
+// still there passes, while one removed since, or replaced by a file, fails
+// as Prepare fails a folder lost while it plans, and nothing is created.
+func TestCheckFolderFindsAFolderThatHasGone(t *testing.T) {
+	folder := filepath.Join(t.TempDir(), "out")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckFolder(folder); err != nil {
+		t.Fatalf("CheckFolder of a folder = %v", err)
+	}
+	if err := os.Remove(folder); err != nil {
+		t.Fatal(err)
+	}
+	err := CheckFolder(folder)
+	assertKind(t, err, KindFolder)
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("error = %v, want a missing folder", err)
+	}
+	if _, statErr := os.Stat(folder); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("CheckFolder created the folder: %v", statErr)
+	}
+	writeFile(t, folder, "file")
+	if err := CheckFolder(folder); !errors.Is(err, ErrNotFolder) {
+		t.Fatalf("CheckFolder of a file = %v, want ErrNotFolder", err)
+	}
+}
+
 // TestPrepareSameNameFromDifferentFolders pins RSZ-024 and AC-R08: sources
 // that would produce the same destination never share it. The first keeps
 // the name; Rename and Overwrite number the others deterministically, and

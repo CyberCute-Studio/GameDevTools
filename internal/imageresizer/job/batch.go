@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
@@ -22,23 +23,39 @@ const maxWorkers = 4
 
 // memoryBudget bounds the pixel memory the items in flight may need at once,
 // by each item's estimate (NFR-014). An item whose estimate alone exceeds it
-// starts only when no other item is in flight, so the memory a job holds
-// never exceeds the larger of the budget and the most a single item needs.
+// starts only when no other item is in flight. A source is decoded only
+// within its estimate, and the memory items drop is collected before their
+// share of the budget is handed on once they held collectThreshold, as Run
+// describes, so by the estimates the budget bounds the memory items hold,
+// garbage included, rather than only the memory they keep reachable, but for
+// less than collectThreshold that small items may leave to the collector.
 const memoryBudget = 1 << 30
+
+// collectThreshold is the memory an item must have held, or the items that
+// ended since the last collection must have held together, for the worker
+// that ends one to collect garbage before it reports the item done.
+const collectThreshold = 64 << 20
 
 // maxReplans bounds how often one item is planned again because another
 // program took its destination after planning, so a folder where names keep
 // being taken cannot keep the item going round forever.
 const maxReplans = 3
 
-// ErrUnexpected is the cause of an item's failure that no step reported as
-// its own, such as a panic outside the steps that contain their own
-// (NFR-021).
-var ErrUnexpected = errors.New("unexpected failure while processing the item")
+var (
+	// ErrUnexpected is the cause of an item's failure that no step reported
+	// as its own, such as a panic outside the steps that contain their own
+	// (NFR-021).
+	ErrUnexpected = errors.New("unexpected failure while processing the item")
+	// ErrUnchecked is the error of an item whose Input has no Err but no
+	// content format the job resizes either, as a source listed before its
+	// content check finished has.
+	ErrUnchecked = errors.New("the source's content has not been checked")
+)
 
 // State is where one item of a job stands (RSZ-043). Every item starts
 // Pending and ends Completed, Skipped, Failed, or Cancelled; an item the job
-// resizes is Processing in between.
+// resizes is Processing in between, and Pending again while it waits to
+// start over within more memory, as Run describes.
 type State uint8
 
 const (
@@ -97,9 +114,22 @@ type Input struct {
 	// Err is why the source cannot be resized, as the source list found
 	// when it checked the file: it is unsupported, corrupt, too large, or
 	// inaccessible. Such an item ends Failed with Err as its error (AC-R06),
-	// and its path is protected like every source's, so no result is ever
-	// written over it (RSZ-026).
+	// and so does one whose Err is nil but whose Info has no format the job
+	// resizes, with ErrUnchecked. Either path is protected like every
+	// source's, so no result is ever written over it (RSZ-026).
 	Err error
+}
+
+// failure is why the input cannot be resized, or nil: its Err, or
+// ErrUnchecked when its content check gave it no PNG or JPEG format.
+func (in Input) failure() error {
+	switch {
+	case in.Err != nil:
+		return in.Err
+	case in.Info.Format != decode.FormatPNG && in.Info.Format != decode.FormatJPEG:
+		return ErrUnchecked
+	}
+	return nil
 }
 
 // Request describes one job (RSZ-040).
@@ -125,9 +155,11 @@ type Request struct {
 type Status struct {
 	State State
 	// Destination is the file a Processing item writes or a Completed item
-	// saved; the destination a Skipped item left untouched; the destination a
-	// Cancelled or Failed item was planned to save, which is empty for an
-	// item the job could not plan, such as a source that cannot be resized.
+	// saved; the destination a Pending item that started already waits to
+	// write; the destination a Skipped item left untouched; the destination
+	// a Cancelled or Failed item was planned to save, which is empty for an
+	// item the job could not plan, such as a source that cannot be resized,
+	// or for every item of a job cancelled before it was planned.
 	Destination string
 	// Reason is why the item did not get its natural destination, as
 	// output.Reason describes: why a Completed item was saved under a
@@ -136,9 +168,14 @@ type Status struct {
 	Reason output.Reason
 	// Err is a Failed item's error: the failing step's own typed error, as
 	// Process returns it, the plan's error for an item it could not name,
-	// or the Input's Err. A Completed item carries one only when its result
-	// was saved but a file the error names was left behind, as output.Write
-	// describes. It is nil otherwise.
+	// the output folder's error once the folder has gone, or the Input's
+	// failure. An item of any other final state carries one only when a file
+	// the error names was left behind: a Completed item's result was saved
+	// but a file was left as output.Write describes, and a Skipped or
+	// Cancelled item's temporary file could not be removed, which
+	// output.Write joins to the error that ended the write. A Failed item's
+	// error includes such a file's too, and an item planned again carries
+	// those of its earlier attempts. It is nil otherwise.
 	Err error
 }
 
@@ -191,7 +228,8 @@ type Event struct {
 // Summary is a finished job's outcome (RSZ-046).
 type Summary struct {
 	// Folder is the output folder as the plan cleaned it, or empty when the
-	// job was cancelled before its destinations were planned.
+	// job was cancelled before its destinations were planned, when nothing
+	// was saved in it.
 	Folder string
 	// Items holds every input's final status, at its index in
 	// Request.Inputs.
@@ -200,12 +238,18 @@ type Summary struct {
 	Progress Progress
 }
 
+// processFunc processes one item, decoding its source within the allowance
+// of pixel memory the job set aside for it.
+type processFunc func(ctx context.Context, item output.Item, settings Settings, allowance uint64) (string, error)
+
 // config is how a job runs; tests substitute its parts.
 type config struct {
 	workers int
 	budget  uint64
 	prepare func(context.Context, output.Request) (output.Plan, error)
-	process func(context.Context, output.Item, Settings) (string, error)
+	process processFunc
+	// collect collects garbage, from the worker goroutines.
+	collect func()
 }
 
 func defaultConfig() config {
@@ -213,7 +257,8 @@ func defaultConfig() config {
 		workers: defaultWorkers(),
 		budget:  memoryBudget,
 		prepare: output.Prepare,
-		process: Process,
+		process: processWithin,
+		collect: runtime.GC,
 	}
 }
 
@@ -231,61 +276,86 @@ func defaultWorkers() int {
 // and the JPEG quality and background when any result is encoded as JPEG;
 // output.Prepare then checks the output folder, format, and collision
 // policy, the Overwrite confirmation, and that at least one input can be
-// resized, creates the output folder, and plans every destination as the
-// filesystem stands now, so re-running a job plans around the results of
-// earlier runs rather than assuming them (RSZ-049). A failure of any of
-// these fails the whole job: Run returns the step's own typed error — a
-// *resize.Error, an *encode.Error, or an *output.Error — with an empty
-// Summary, having processed nothing and reported no event.
+// resized, all before the output folder is created, then creates the
+// folder, and plans every destination as the filesystem stands now, so
+// re-running a job plans around the results of earlier runs rather than
+// assuming them (RSZ-049). A failure of any of these fails the whole job,
+// including an output folder that can no longer be reached while the plan
+// is made, after the folder was created: Run returns the step's own typed
+// error — a *resize.Error, an *encode.Error, or an *output.Error — with an
+// empty Summary, having processed nothing and reported no event.
 //
 // Every listed input is then an item. An input that cannot be resized ends
-// Failed with its Err, and so does an item the plan could not name; an item
-// whose destination exists ends Skipped under the Skip policy. The rest are
-// processed in order by Process, a few at a time: at most one fewer than the
-// processors the program may use, at most four, and only while the memory
-// the items in flight need by their estimates — the decoded source, as its
-// Input.Info reports it, the resized image, and the filter's working memory
-// — stays within a budget of 1 GiB (RSZ-050, NFR-014); an item that needs
-// more starts only when it would run alone. So the job never decodes every
-// source at once, and its pixel memory stays bounded; the garbage collector
-// reclaims what finished items drop at its own pace. A source that changed
-// since it was checked is decoded as it now is, so one that has gone, or
-// whose content is damaged now, fails then (RSZ-049).
+// Failed with its Err, or ErrUnchecked, and so does an item the plan could
+// not name; an item whose destination exists ends Skipped under the Skip
+// policy. The rest are processed in order by Process, a few at a time: at
+// most one fewer than the processors the program may use, at most four, and
+// only while the memory the items in flight need by their estimates — the
+// decoded source, as its Input.Info reports it, the resized image, and the
+// filter's working memory, as resize.WorkingBytes bounds it for the
+// source's dimensions — stays within a budget of 1 GiB (RSZ-050, NFR-014);
+// an item that needs more starts only when it would run alone. So the job
+// never decodes every source at once. A source that changed since it was
+// checked is decoded as it now is (RSZ-049), so one that has gone, or whose
+// content is damaged now, fails then; one that now needs more memory than
+// its estimate is not decoded beside the others, as decode.DecodeWithin
+// describes, but is reported Pending again and started over once it can
+// run alone with the decoder's own limit set aside. A JPEG's conversion to
+// RGB that a segment after its first scan requests is counted as
+// decode.Info.DecodedBytes counts it. Once an item that held 64 MiB or more
+// of the budget ends, or the items that ended since the last collection
+// held that much together, its worker collects garbage before the item's
+// share of the budget goes to another, so the memory finished items drop
+// does not pile up beside the memory the next ones take.
 //
 // One item's failure never stops the others (RSZ-044): each failure is
 // attached to its item as the failing step's own typed error, and a panic
 // that escapes Process is contained as that item's ErrUnexpected failure
-// (NFR-021). Under Skip, two sources with one destination are planned so
-// that only the first writes it (output.ActionDefer): when that item fails,
-// the next one is processed in its place, as output.Plan.Successor
-// describes, and once the file is written the rest end Skipped, as they do
-// when another program wrote a file at the name after planning (AC-R09).
-// Under Rename and Overwrite, an item whose destination another program took
-// after planning is planned again and saved under the first unused numbered
-// name instead, never replacing that file: Overwrite replaces only the files
-// that existed when the job was planned (RSZ-025, AC-R10).
+// (NFR-021). An output folder that has gone does stop them: once an item
+// fails to write and its output folder can no longer be reached, or is no
+// longer a folder, as output.CheckFolder finds, the items still waiting end
+// Failed with that folder's error rather than each after its source is
+// decoded and resized (UX-010). Under Skip, two sources with one destination
+// are planned so that only the first writes it (output.ActionDefer): when
+// that item fails, the next one is processed in its place, as
+// output.Plan.Successor describes, and once the file is written the rest end
+// Skipped, as they do when another program wrote a file at the name after
+// planning (AC-R09). Under Rename and Overwrite, an item planned to create a
+// name another program took after planning (output.ErrDestinationTaken) is
+// planned again and saved under the first unused numbered name instead,
+// never replacing that file: Overwrite replaces only the files that existed
+// when the job was planned (RSZ-025, AC-R10). It keeps the reason the plan
+// gave it for not having its natural destination; one that had it reports
+// the new plan's reason, output.ReasonExists while the file that took the
+// name is there. An item planned to replace a file that changed since
+// planning replaces nothing and ends Failed with
+// output.ErrDestinationChanged, as output.Write describes: the confirmation
+// was given for that file as it was, and the error is what says where the
+// file is when Write had moved it aside.
 //
 // Cancelling the context stops the job from starting further items, and the
 // items in flight stop at the next point at which Process observes it,
 // before their results take their names, so no partial file is left; an
 // item already renaming its result finishes and ends Completed. Items that
-// did not finish end Cancelled, completed results are kept, and Run returns
-// once no item is in flight (RSZ-045). A cancelled job is not a failure:
-// Run returns its Summary and a nil error. A context cancelled before Run
-// starts, or while the destinations are planned, cancels every item that
-// could be resized.
+// did not finish end Cancelled, including one whose name another program
+// took, which would have been planned again; completed results are kept,
+// and Run returns once no item is in flight (RSZ-045). A cancelled job is
+// not a failure: Run returns its Summary and a nil error. A context
+// cancelled before Run starts, or while the destinations are planned,
+// cancels every item that could be resized.
 //
 // observe, which may be nil, is told of every change of an item's state:
 // each item that is processed becomes Processing and then ends, while one
 // that is not ends directly, and an item ends exactly once; an item planned
 // again under a new name is reported Processing again with its new
-// destination. It is called on
-// the goroutine that called Run, one event at a time and in order, never
-// concurrently, and no item starts or ends while it runs, so it should only
-// hand the event on — a view queues it and posts it to the GUI thread
-// through the shell dispatcher (TECH-005). Each event carries the counts of
-// every state, so a consumer that falls behind can apply the latest event
-// of each item and the latest counts alone.
+// destination, and one started over within more memory is reported Pending
+// and then Processing again. It is called on the goroutine that called Run,
+// one event at a time and in order, never concurrently, and no item starts
+// or ends while it runs, so it should only hand the event on — a view queues
+// it and posts it to the GUI thread through the shell dispatcher (TECH-005).
+// Each event carries the counts of every state, so a consumer that falls
+// behind can apply the latest event of each item and the latest counts
+// alone.
 func Run(ctx context.Context, request Request, observe func(Event)) (Summary, error) {
 	return run(ctx, request, observe, defaultConfig())
 }
@@ -327,11 +397,13 @@ type finished struct {
 	plan int
 	path string
 	err  error
-	cost uint64
+	// lost is the output folder's error when the item failed to write and
+	// its worker found the folder gone.
+	lost error
 }
 
 // batch is one running job. Only the goroutine that runs it touches its
-// fields; worker goroutines report through done.
+// fields, except uncollected; worker goroutines report through done.
 type batch struct {
 	request Request
 	observe func(Event)
@@ -343,20 +415,35 @@ type batch struct {
 	planned []int
 	inputs  []int
 	plan    output.Plan
+	// folder is the plan's output folder, which workers check.
+	folder string
 
 	statuses []Status
 	progress Progress
 
 	// queue holds the plan indices of the items waiting to start, in order.
 	queue []int
-	// replans counts, by plan index, how often an item was planned again.
-	replans map[int]int
+	// The rest are kept by plan index. held is the memory an item in flight
+	// holds of the budget; worstCase marks an item whose source turned out
+	// to need more memory than its estimate, which is now given the most any
+	// source needs; replans counts how often an item was planned again; and
+	// leftovers are the errors of its earlier attempts that name a file left
+	// behind.
+	held      []uint64
+	worstCase []bool
+	replans   []int
+	leftovers []error
+	// lost is the output folder's error once a worker found it gone.
+	lost error
 	// inflight and reserved are the items being processed and the memory
-	// their estimates add up to.
+	// they hold.
 	inflight int
 	reserved uint64
-	done     chan finished
-	workers  sync.WaitGroup
+	// uncollected is the memory the items that ended since the last
+	// collection held, which the workers add to.
+	uncollected atomic.Uint64
+	done        chan finished
+	workers     sync.WaitGroup
 }
 
 func newBatch(request Request, observe func(Event), cfg config) *batch {
@@ -372,11 +459,15 @@ func newBatch(request Request, observe func(Event), cfg config) *batch {
 	}
 	for index, input := range request.Inputs {
 		b.planned[index] = -1
-		if input.Err == nil {
+		if input.failure() == nil {
 			b.planned[index] = len(b.inputs)
 			b.inputs = append(b.inputs, index)
 		}
 	}
+	b.held = make([]uint64, len(b.inputs))
+	b.worstCase = make([]bool, len(b.inputs))
+	b.replans = make([]int, len(b.inputs))
+	b.leftovers = make([]error, len(b.inputs))
 	return b
 }
 
@@ -430,7 +521,7 @@ func (b *batch) planRequest() output.Request {
 func (b *batch) cancelAll() {
 	for index, input := range b.request.Inputs {
 		if b.planned[index] < 0 {
-			b.set(index, Status{State: StateFailed, Err: input.Err})
+			b.set(index, Status{State: StateFailed, Err: input.failure()})
 			continue
 		}
 		b.set(index, Status{State: StateCancelled})
@@ -440,11 +531,11 @@ func (b *batch) cancelAll() {
 // execute ends the items the plan settles, then processes the rest until
 // none is waiting or in flight.
 func (b *batch) execute(ctx context.Context, plan output.Plan) {
-	b.ctx, b.plan = ctx, plan
+	b.ctx, b.plan, b.folder = ctx, plan, plan.Folder
 	for index, input := range b.request.Inputs {
 		p := b.planned[index]
 		if p < 0 {
-			b.set(index, Status{State: StateFailed, Err: input.Err})
+			b.set(index, Status{State: StateFailed, Err: input.failure()})
 			continue
 		}
 		item := plan.Items[p]
@@ -465,21 +556,20 @@ func (b *batch) execute(ctx context.Context, plan output.Plan) {
 	for {
 		b.start()
 		// Checked after start, so an item left waiting because the job was
-		// cancelled while it started the others is cancelled too.
-		if ctx.Err() != nil {
-			b.cancelQueued()
+		// cancelled while it started the others ends too, as do the items
+		// waiting once the output folder is lost.
+		switch {
+		case ctx.Err() != nil:
+			b.endQueued(Status{State: StateCancelled})
+		case b.lost != nil:
+			b.endQueued(Status{State: StateFailed, Err: b.lost})
 		}
 		if b.inflight == 0 {
 			return
 		}
 		select {
 		case result := <-b.done:
-			if b.restart(&result) {
-				continue
-			}
-			b.inflight--
-			b.reserved -= result.cost
-			b.end(result.plan, b.outcome(result))
+			b.settle(result)
 		case <-stop:
 			// The next pass cancels the waiting items; the ones in flight
 			// observe the context themselves.
@@ -493,7 +583,7 @@ func (b *batch) execute(ctx context.Context, plan output.Plan) {
 // nothing in flight it always starts one, so a waiting item never waits
 // forever.
 func (b *batch) start() {
-	for len(b.queue) > 0 && b.inflight < b.cfg.workers && b.ctx.Err() == nil {
+	for len(b.queue) > 0 && b.inflight < b.cfg.workers && b.ctx.Err() == nil && b.lost == nil {
 		p := b.queue[0]
 		cost := b.cost(p)
 		if b.inflight > 0 && b.reserved+cost > b.cfg.budget {
@@ -502,26 +592,54 @@ func (b *batch) start() {
 		b.queue = b.queue[1:]
 		b.inflight++
 		b.reserved += cost
-		item := b.plan.Items[p]
-		b.set(b.inputs[p], Status{State: StateProcessing, Destination: item.Destination, Reason: item.Reason})
-		b.workers.Add(1)
-		go b.work(p, item, cost)
+		b.held[p] = cost
+		b.run(p)
 	}
 }
 
-// work processes one item on its own goroutine. done has room for every
-// item in flight, so the send never blocks.
-func (b *batch) work(p int, item output.Item, cost uint64) {
+// run reports the item at p Processing and processes it on a worker of its
+// own, within the memory it holds.
+func (b *batch) run(p int) {
+	item := b.plan.Items[p]
+	b.set(b.inputs[p], Status{State: StateProcessing, Destination: item.Destination, Reason: item.Reason})
+	b.workers.Add(1)
+	go b.work(p, item, b.allowance(p), b.held[p])
+}
+
+// release frees the worker and the memory the item at p held.
+func (b *batch) release(p int) {
+	b.inflight--
+	b.reserved -= b.held[p]
+	b.held[p] = 0
+}
+
+// work processes one item on its own goroutine, decoding its source within
+// allowance. done has room for every item in flight, so the send never
+// blocks. An item that failed to write may have lost its output folder,
+// which the worker checks, off the coordinating goroutine. Before it reports
+// an item that held collectThreshold or more of the budget, or one that
+// brings what the items ended since the last collection held to that much,
+// it collects garbage, so the memory they dropped is free before their share
+// of the budget goes to another item.
+func (b *batch) work(p int, item output.Item, allowance, held uint64) {
 	defer b.workers.Done()
-	path, err := b.process(item)
-	b.done <- finished{plan: p, path: path, err: err, cost: cost}
+	path, err := b.process(item, allowance)
+	result := finished{plan: p, path: path, err: err}
+	if path == "" && writeFailed(err) {
+		result.lost = output.CheckFolder(b.folder)
+	}
+	if held >= collectThreshold || b.uncollected.Add(held) >= collectThreshold {
+		b.uncollected.Store(0)
+		b.cfg.collect()
+	}
+	b.done <- result
 }
 
 // process runs Process, containing a panic that escapes it as the item's
 // failure: a panic on a worker goroutine would end the whole program, not
 // one item (NFR-021). The steps contain their own panics; this guard is for
 // whatever escapes them.
-func (b *batch) process(item output.Item) (path string, err error) {
+func (b *batch) process(item output.Item, allowance uint64) (path string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			path, err = "", fmt.Errorf("%w: %v", ErrUnexpected, recovered)
@@ -530,42 +648,83 @@ func (b *batch) process(item output.Item) (path string, err error) {
 			}
 		}
 	}()
-	return b.cfg.process(b.ctx, item, b.request.Settings)
+	return b.cfg.process(b.ctx, item, b.request.Settings, allowance)
 }
 
-// restart plans an item again whose destination another program took after
-// planning, and processes it again under the name the new plan gives it, in
+// writeFailed reports whether err is output's failure to write a result,
+// which an output folder that has gone fails with.
+func writeFailed(err error) bool {
+	var outputErr *output.Error
+	return errors.As(err, &outputErr) && outputErr.Kind == output.KindWrite
+}
+
+// settle takes one processed item's result: it starts the item over when it
+// may still save its result — within the decoder's own limit when its
+// source needed more memory than its estimate, or under a new name when
+// another program took its destination — and ends it otherwise.
+func (b *batch) settle(result finished) {
+	p := result.plan
+	if result.lost != nil && b.lost == nil {
+		b.lost = result.lost
+	}
+	switch {
+	case !b.worstCase[p] && errors.Is(result.err, decode.ErrOverAllowance):
+		// Its source changed since it was checked. It waits until it can run
+		// alone, as cost now gives it the most any source needs.
+		b.release(p)
+		b.worstCase[p] = true
+		item := b.plan.Items[p]
+		b.set(b.inputs[p], Status{State: StatePending, Destination: item.Destination, Reason: item.Reason})
+		b.enqueue(p)
+		return
+	case b.ctx.Err() == nil && b.retryable(result):
+		if b.rename(&result) {
+			return
+		}
+	}
+	b.release(p)
+	b.end(p, b.outcome(result))
+}
+
+// retryable reports whether a processed item may still save its result
+// under a new name: another program took its destination after planning,
+// under Rename or Overwrite, the output folder is not lost, and the item was
+// planned again fewer than maxReplans times. Under Skip the existing file is
+// left untouched and the item ends Skipped instead, as outcome reports.
+func (b *batch) retryable(result finished) bool {
+	return result.path == "" && errors.Is(result.err, output.ErrDestinationTaken) &&
+		b.request.Collision != output.CollisionSkip && b.lost == nil && b.replans[result.plan] < maxReplans
+}
+
+// rename plans the item again whose destination another program took after
+// planning, and starts it again under the name the new plan gives it, in
 // the worker slot and memory it already holds. Under Rename the result takes
 // the first unused numbered name, as Rename does for a name taken at
 // planning (RSZ-025). Under Overwrite it does too: the user confirmed
 // replacing the files that existed when the job was planned, and a file
-// written since is none of them (AC-R10). Under Skip the existing file is
-// left untouched and the item ends Skipped instead, as outcome reports. It
-// reports false when the item is not restarted: it saved its result, failed
-// otherwise, was cancelled, or was planned again maxReplans times already;
-// when planning it again failed, result then carries that failure.
-func (b *batch) restart(result *finished) bool {
-	if result.path != "" || !errors.Is(result.err, output.ErrDestinationTaken) ||
-		b.request.Collision == output.CollisionSkip || b.ctx.Err() != nil || b.replans[result.plan] >= maxReplans {
-		return false
-	}
-	if b.replans == nil {
-		b.replans = make(map[int]int)
-	}
-	b.replans[result.plan]++
-	item, err := b.replan(result.plan)
+// written since is none of them (AC-R10). The item keeps the reason the plan
+// gave it, as Run describes, and the error of the attempt is kept when it
+// names a file left behind. It reports whether the item started again; when
+// it did not, result carries the error the item ends with: planning it again
+// failed, or the new plan names no file for it.
+func (b *batch) rename(result *finished) bool {
+	p := result.plan
+	b.leftovers[p] = join(b.leftovers[p], leftBehind(result.err))
+	b.replans[p]++
+	item, err := b.replan(p)
 	if err != nil {
 		result.err = err
 		return false
 	}
-	b.plan.Items[result.plan] = item
+	if reason := b.plan.Items[p].Reason; reason != output.ReasonNone {
+		item.Reason = reason
+	}
+	b.plan.Items[p] = item
 	if !item.Writes() {
 		result.err = item.Err
 		return false
 	}
-	b.set(b.inputs[result.plan], Status{State: StateProcessing, Destination: item.Destination, Reason: item.Reason})
-	b.workers.Add(1)
-	go b.work(result.plan, item, result.cost)
+	b.run(p)
 	return true
 }
 
@@ -574,6 +733,8 @@ func (b *batch) restart(result *finished) bool {
 // destination, so its new name is none of theirs. Under Rename nothing is
 // replaced, so planning reads no file identities, and it runs on the
 // coordinating goroutine, which keeps the destinations it avoids current.
+// Another item's destination reads to that plan as a listed path, which is
+// why the item keeps its own plan's reason.
 func (b *batch) replan(p int) (output.Item, error) {
 	index := b.inputs[p]
 	input := b.request.Inputs[index]
@@ -601,17 +762,32 @@ func (b *batch) replan(p int) (output.Item, error) {
 	return plan.Items[0], nil
 }
 
+// allowance is the pixel memory set aside for decoding the item at p's
+// source: the estimate its content check made, or the decoder's limit when
+// there is none, or once the source turned out to need more.
+func (b *batch) allowance(p int) uint64 {
+	decoded := b.request.Inputs[b.inputs[p]].Info.DecodedBytes
+	if b.worstCase[p] || decoded == 0 || decoded > decode.MaxDecodedBytes {
+		return decode.MaxDecodedBytes
+	}
+	return decoded
+}
+
 // cost is the memory an item may need while it is processed: its decoded
-// source, by the estimate its content check made, or the decoder's limit
-// when there is none; the resized image; and the filter's working memory.
-// The encoder works in the resized image's memory or streams from it.
+// source, within its allowance; the resized image; and the filter's working
+// memory, as resize.WorkingBytes bounds it for the source's checked
+// dimensions. A source that turned out to need more than its estimate may
+// differ from its check in every way, so it is given the most any source
+// needs: the decoder's limit, the resized image at 8 bytes a pixel, and
+// resize.MaxWorkingBytes. The encoder works in the resized image's memory or
+// streams from it.
 func (b *batch) cost(p int) uint64 {
 	info := b.request.Inputs[b.inputs[p]].Info
-	decoded := info.DecodedBytes
-	if decoded == 0 || decoded > decode.MaxDecodedBytes {
-		decoded = decode.MaxDecodedBytes
+	target := b.request.Settings.Target
+	if b.worstCase[p] {
+		return decode.MaxDecodedBytes + resultBytes(decode.FormatPNG, target) + resize.MaxWorkingBytes
 	}
-	return decoded + resultBytes(info.Format, b.request.Settings.Target) + resize.MaxWorkingBytes
+	return b.allowance(p) + resultBytes(info.Format, target) + resize.WorkingBytes(info.Width, info.Height, target)
 }
 
 // resultBytes bounds the resized image's memory. Every fitting mode gives at
@@ -628,23 +804,52 @@ func resultBytes(format decode.Format, target resize.Target) uint64 {
 
 // outcome is the status a processed item ends in. A saved result is
 // Completed whatever else happened. A failure the job's cancellation caused
-// is a cancellation. Under Skip, a destination another program took after
-// planning is an existing destination, which Skip leaves untouched.
+// is a cancellation, and so is a taken name the item would have been planned
+// again for. Under Skip, a destination another program took after planning
+// is an existing destination, which Skip leaves untouched. An error that
+// names a file left behind stays with the item whatever it ends in.
 func (b *batch) outcome(result finished) Status {
-	item := b.plan.Items[result.plan]
+	p := result.plan
+	item := b.plan.Items[p]
+	earlier := b.leftovers[p]
 	switch {
 	case result.err == nil || result.path != "":
 		destination := result.path
 		if destination == "" {
 			destination = item.Destination
 		}
-		return Status{State: StateCompleted, Destination: destination, Reason: item.Reason, Err: result.err}
-	case canceled(b.ctx, result.err):
-		return Status{State: StateCancelled, Destination: item.Destination, Reason: item.Reason}
+		return Status{State: StateCompleted, Destination: destination, Reason: item.Reason, Err: join(result.err, earlier)}
+	case canceled(b.ctx, result.err) || (b.ctx.Err() != nil && b.retryable(result)):
+		return Status{State: StateCancelled, Destination: item.Destination, Reason: item.Reason, Err: join(leftBehind(result.err), earlier)}
 	case b.request.Collision == output.CollisionSkip && errors.Is(result.err, output.ErrDestinationTaken):
-		return Status{State: StateSkipped, Destination: item.Destination, Reason: output.ReasonExists}
+		return Status{State: StateSkipped, Destination: item.Destination, Reason: output.ReasonExists, Err: join(leftBehind(result.err), earlier)}
 	}
-	return Status{State: StateFailed, Destination: item.Destination, Reason: item.Reason, Err: result.err}
+	return Status{State: StateFailed, Destination: item.Destination, Reason: item.Reason, Err: join(result.err, earlier)}
+}
+
+// leftBehind returns a failed write's error when it names a file left
+// behind, and nil otherwise. output.Write joins its failure to remove a
+// temporary file to the error that ended the write, by errors.Join, and
+// joins nothing else, and Process returns its error as it is, so the
+// failure of an item that saved nothing names a file left behind exactly
+// when it is such a join.
+func leftBehind(err error) error {
+	if _, joined := err.(interface{ Unwrap() []error }); joined {
+		return err
+	}
+	return nil
+}
+
+// join joins two errors, either of which may be nil, keeping a lone one as
+// it is.
+func join(first, second error) error {
+	switch {
+	case first == nil:
+		return second
+	case second == nil:
+		return first
+	}
+	return errors.Join(first, second)
 }
 
 // end ends the plan item at p, and settles the items deferred to the
@@ -700,14 +905,18 @@ func (b *batch) enqueue(p int) {
 	b.queue = slices.Insert(b.queue, at, p)
 }
 
-// cancelQueued ends every waiting item Cancelled, and with them the items
-// deferred to them.
-func (b *batch) cancelQueued() {
-	queued := b.queue
-	b.queue = nil
-	for _, p := range queued {
+// endQueued ends every waiting item in the given state, with its own
+// destination and reason: Cancelled once the job is cancelled, with the
+// items deferred to them, or Failed with the folder's error once the output
+// folder is lost, when the item deferred to one is promoted and then ended
+// in its turn.
+func (b *batch) endQueued(status Status) {
+	for len(b.queue) > 0 {
+		p := b.queue[0]
+		b.queue = b.queue[1:]
 		item := b.plan.Items[p]
-		b.end(p, Status{State: StateCancelled, Destination: item.Destination, Reason: item.Reason})
+		status.Destination, status.Reason = item.Destination, item.Reason
+		b.end(p, status)
 	}
 }
 

@@ -10,10 +10,11 @@
 // Run runs a whole job: it checks the request (RSZ-040), plans every
 // destination with output.Prepare, processes the items a few at a time
 // within a memory budget (RSZ-050, TECH-006, NFR-014), keeps one item's
-// failure from stopping the others (RSZ-044, NFR-021), stops starting items
-// once cancelled (RSZ-045), reports each item's state as it changes
-// (RSZ-042, RSZ-043), and returns every item's outcome with the counts of
-// each (RSZ-046).
+// failure from stopping the others (RSZ-044, NFR-021) while failing the
+// waiting items at once when the output folder has gone (UX-010), stops
+// starting items once cancelled (RSZ-045), reports each item's state as it
+// changes (RSZ-042, RSZ-043), and returns every item's outcome with the
+// counts of each (RSZ-046).
 //
 // Functions are safe to call from any goroutine and never touch the GUI;
 // callers run them off the GUI thread and deliver results through the shell
@@ -76,6 +77,14 @@ func (s Settings) encodeOptions(format decode.Format) encode.Options {
 // output.Write, a destination returned alongside an error means the result
 // was saved but a file the error names was left behind.
 func Process(ctx context.Context, item output.Item, settings Settings) (string, error) {
+	return processWithin(ctx, item, settings, decode.MaxDecodedBytes)
+}
+
+// processWithin is Process decoding the source within the allowance of pixel
+// memory the job set aside for it, as decode.DecodeWithin describes: a
+// source that needs more fails with decode.ErrOverAllowance before its pixels
+// are allocated.
+func processWithin(ctx context.Context, item output.Item, settings Settings, allowance uint64) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", &output.Error{Kind: output.KindCanceled, Op: "process item", Err: err}
 	}
@@ -89,7 +98,7 @@ func Process(ctx context.Context, item output.Item, settings Settings) (string, 
 	if err := options.Validate(); err != nil {
 		return "", err
 	}
-	resized, err := resizeSource(ctx, item.Source, settings.Target)
+	resized, err := resizeSource(ctx, item.Source, settings.Target, allowance)
 	if err != nil {
 		return "", err
 	}
@@ -98,10 +107,10 @@ func Process(ctx context.Context, item output.Item, settings Settings) (string, 
 	})
 }
 
-// resizeSource decodes the source and resizes it. The decoded source is no
-// longer reachable once it returns.
-func resizeSource(ctx context.Context, path string, target resize.Target) (image.Image, error) {
-	source, err := decode.Decode(ctx, path)
+// resizeSource decodes the source within the allowance and resizes it. The
+// decoded source is no longer reachable once it returns.
+func resizeSource(ctx context.Context, path string, target resize.Target, allowance uint64) (image.Image, error) {
+	source, err := decode.DecodeWithin(ctx, path, allowance)
 	if err != nil {
 		return nil, err
 	}

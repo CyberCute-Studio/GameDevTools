@@ -100,8 +100,8 @@ func (r *recorder) states(index int) []State {
 // check verifies the event stream against the summary: events never
 // overlap, every item ends exactly once — straight from Pending or after
 // being Processing, which it is reported again only under a new destination
-// — in the status the summary gives it, and every event's counts are those
-// of the states reported so far.
+// or after it was Pending again — in the status the summary gives it, and
+// every event's counts are those of the states reported so far.
 func (r *recorder) check(t *testing.T, summary Summary) {
 	t.Helper()
 	if r.overlap.Load() {
@@ -123,8 +123,8 @@ func (r *recorder) check(t *testing.T, summary Summary) {
 			t.Fatalf("item %d: %v after it ended %v", event.Index, next, previous)
 		case next == StateProcessing && previous == StateProcessing && event.Status.Destination == reported[event.Index].Destination:
 			t.Fatalf("item %d: processing again at %q", event.Index, event.Status.Destination)
-		case next == StatePending:
-			t.Fatalf("item %d: reported pending", event.Index)
+		case next == StatePending && previous != StateProcessing:
+			t.Fatalf("item %d: reported pending after %v", event.Index, previous)
 		}
 		replay[event.Index] = next
 		reported[event.Index] = event.Status
@@ -406,7 +406,7 @@ func TestRunGivesUpOnANameTakenAgainAndAgain(t *testing.T) {
 	inputs := []Input{listed(t, "sprite.png", 1)}
 	cfg := testConfig(1)
 	var destinations []string
-	cfg.process = func(_ context.Context, item output.Item, _ Settings) (string, error) {
+	cfg.process = func(_ context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
 		destinations = append(destinations, filepath.Base(item.Destination))
 		if err := os.WriteFile(item.Destination, []byte("another program's"), 0o644); err != nil {
 			t.Fatal(err)
@@ -503,7 +503,7 @@ func TestRunFailsAnInvalidJobBeforeAnything(t *testing.T) {
 		tc.change(&request)
 		var events recorder
 		cfg := testConfig(4)
-		cfg.process = func(context.Context, output.Item, Settings) (string, error) {
+		cfg.process = func(context.Context, output.Item, Settings, uint64) (string, error) {
 			t.Errorf("%s: an item was processed", tc.name)
 			return "", nil
 		}
@@ -571,7 +571,7 @@ func TestRunCancelledWhilePlanning(t *testing.T) {
 		cancel()
 		return output.Prepare(planCtx, request)
 	}
-	cfg.process = func(context.Context, output.Item, Settings) (string, error) {
+	cfg.process = func(context.Context, output.Item, Settings, uint64) (string, error) {
 		t.Error("an item was processed")
 		return "", nil
 	}
@@ -600,7 +600,7 @@ func TestRunCancellationKeepsCompletedResults(t *testing.T) {
 	defer cancel()
 	var processed atomic.Int32
 	cfg := testConfig(1)
-	cfg.process = func(ctx context.Context, item output.Item, settings Settings) (string, error) {
+	cfg.process = func(ctx context.Context, item output.Item, settings Settings, _ uint64) (string, error) {
 		processed.Add(1)
 		return Process(ctx, item, settings)
 	}
@@ -647,7 +647,7 @@ func TestRunWaitsForItemsInFlight(t *testing.T) {
 	running.Add(2)
 	var returned atomic.Int32
 	cfg := testConfig(2)
-	cfg.process = func(ctx context.Context, item output.Item, _ Settings) (string, error) {
+	cfg.process = func(ctx context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
 		defer returned.Add(1)
 		running.Done()
 		<-ctx.Done()
@@ -688,7 +688,7 @@ func TestRunCancelsTheSuccessorOfAFailureAfterCancellation(t *testing.T) {
 	defer cancel()
 	cfg := testConfig(2)
 	calls := 0
-	cfg.process = func(context.Context, output.Item, Settings) (string, error) {
+	cfg.process = func(context.Context, output.Item, Settings, uint64) (string, error) {
 		calls++
 		cancel()
 		return "", &output.Error{Kind: output.KindWrite, Op: "write result", Err: fs.ErrPermission}
@@ -715,7 +715,7 @@ func TestRunIsolatesItemFailures(t *testing.T) {
 	}
 	out := t.TempDir()
 	cfg := testConfig(2)
-	cfg.process = func(ctx context.Context, item output.Item, settings Settings) (string, error) {
+	cfg.process = func(ctx context.Context, item output.Item, settings Settings, _ uint64) (string, error) {
 		switch filepath.Base(item.Source) {
 		case "panics.png":
 			panic("boom")
@@ -755,7 +755,7 @@ func TestRunReportsASavedResultsLeftoverFile(t *testing.T) {
 	inputs := []Input{listed(t, "sprite.png", 1)}
 	leftover := &output.Error{Kind: output.KindWrite, Op: "remove temporary file", Err: fs.ErrPermission}
 	cfg := testConfig(1)
-	cfg.process = func(_ context.Context, item output.Item, _ Settings) (string, error) {
+	cfg.process = func(_ context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
 		return item.Destination, leftover
 	}
 	out := t.TempDir()
@@ -766,6 +766,309 @@ func TestRunReportsASavedResultsLeftoverFile(t *testing.T) {
 	if status := requireStatus(t, summary, 0, StateCompleted, filepath.Join(out, "sprite.png"), output.ReasonNone); status.Err != leftover {
 		t.Fatalf("error = %v, want the leftover file's", status.Err)
 	}
+}
+
+// TestRunReportsATemporaryFileLeftBehindWhateverTheItemEndsIn: a write that
+// could not remove its temporary file joins that failure to the error that
+// ended it, which stays with the item when it ends Cancelled or Skipped, and
+// when it is planned again and saved under a new name, while an item that
+// stopped cleanly carries no error.
+func TestRunReportsATemporaryFileLeftBehindWhateverTheItemEndsIn(t *testing.T) {
+	removal := &output.Error{Kind: output.KindWrite, Op: "remove temporary file", Err: fs.ErrPermission}
+	taken := &output.Error{Kind: output.KindChanged, Op: "save result", Err: output.ErrDestinationTaken}
+	requireLeftover := func(t *testing.T, status Status) {
+		t.Helper()
+		var outputErr *output.Error
+		if !errors.Is(status.Err, removal) || !errors.As(status.Err, &outputErr) {
+			t.Fatalf("%v item error = %v, want it to name the temporary file left behind", status.State, status.Err)
+		}
+	}
+
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		cfg := testConfig(2)
+		cfg.process = func(ctx context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
+			cancel()
+			stopped := &output.Error{Kind: output.KindCanceled, Op: "write result", Err: ctx.Err()}
+			if filepath.Base(item.Source) == "clean.png" {
+				return "", stopped
+			}
+			return "", errors.Join(stopped, removal)
+		}
+		inputs := []Input{listed(t, "leaves.png", 1), listed(t, "clean.png", 1)}
+		summary, err := run(ctx, newRequest(inputs, t.TempDir(), output.CollisionRename), nil, cfg)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if summary.Items[0].State != StateCancelled || summary.Items[1].State != StateCancelled {
+			t.Fatalf("items = %+v, want both cancelled", summary.Items)
+		}
+		requireLeftover(t, summary.Items[0])
+		if summary.Items[1].Err != nil {
+			t.Fatalf("a cleanly cancelled item carries %v", summary.Items[1].Err)
+		}
+	})
+
+	t.Run("skipped", func(t *testing.T) {
+		cfg := testConfig(1)
+		cfg.process = func(context.Context, output.Item, Settings, uint64) (string, error) {
+			return "", errors.Join(taken, removal)
+		}
+		out := t.TempDir()
+		summary, err := run(context.Background(), newRequest([]Input{listed(t, "sprite.png", 1)}, out, output.CollisionSkip), nil, cfg)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		requireLeftover(t, requireStatus(t, summary, 0, StateSkipped, filepath.Join(out, "sprite.png"), output.ReasonExists))
+	})
+
+	t.Run("planned again", func(t *testing.T) {
+		cfg := testConfig(1)
+		cfg.process = func(_ context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
+			if filepath.Base(item.Destination) == "sprite.png" {
+				if err := os.WriteFile(item.Destination, []byte("another program's"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return "", errors.Join(taken, removal)
+			}
+			return item.Destination, nil
+		}
+		out := t.TempDir()
+		var events recorder
+		summary, err := run(context.Background(), newRequest([]Input{listed(t, "sprite.png", 1)}, out, output.CollisionRename), events.observe, cfg)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		events.check(t, summary)
+		requireLeftover(t, requireStatus(t, summary, 0, StateCompleted, filepath.Join(out, "sprite_2.png"), output.ReasonExists))
+	})
+}
+
+// TestRunKeepsTheReasonOfAnItemPlannedAgain: a duplicate renamed at planning
+// and planned again after another program took its numbered name is still
+// reported as a duplicate, not as a source, though its natural name is now
+// protected as another item's destination.
+func TestRunKeepsTheReasonOfAnItemPlannedAgain(t *testing.T) {
+	inputs := []Input{listed(t, "sprite.png", 1), listed(t, "sprite.png", 1)}
+	out := t.TempDir()
+	cfg := testConfig(1)
+	cfg.process = func(_ context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
+		if filepath.Base(item.Destination) == "sprite_2.png" {
+			if err := os.WriteFile(item.Destination, []byte("another program's"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return "", &output.Error{Kind: output.KindChanged, Op: "save result", Err: output.ErrDestinationTaken}
+		}
+		return item.Destination, nil
+	}
+	var events recorder
+	summary, err := run(context.Background(), newRequest(inputs, out, output.CollisionRename), events.observe, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events.check(t, summary)
+	requireStatus(t, summary, 0, StateCompleted, filepath.Join(out, "sprite.png"), output.ReasonNone)
+	requireStatus(t, summary, 1, StateCompleted, filepath.Join(out, "sprite_3.png"), output.ReasonDuplicate)
+}
+
+// TestRunStartsOverASourceThatGrewSinceItsCheck pins NFR-014 for a source
+// rewritten after its content check: it is not decoded within the estimate it
+// no longer fits, but reported Pending again and processed again alone,
+// within the decoder's own limit, and its result reflects the source as it
+// now is (RSZ-049).
+func TestRunStartsOverASourceThatGrewSinceItsCheck(t *testing.T) {
+	grown := inspected(t, writeSource(t, "grown.png", encodePNG(t, quadrants(4, 4))))
+	if err := os.WriteFile(grown.Path, encodePNG(t, quadrants(64, 32)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputs := []Input{
+		grown,
+		inspected(t, writeSource(t, "beside.png", encodePNG(t, halfTransparent()))),
+		inspected(t, writeSource(t, "after.png", encodePNG(t, halfTransparent()))),
+	}
+	out := t.TempDir()
+	cfg := testConfig(2)
+	cfg.budget = memoryBudget
+	var mu sync.Mutex
+	running := 0
+	var allowances []uint64
+	cfg.process = func(ctx context.Context, item output.Item, settings Settings, allowance uint64) (string, error) {
+		mu.Lock()
+		running++
+		if filepath.Base(item.Source) == "grown.png" {
+			allowances = append(allowances, allowance)
+			if len(allowances) == 2 && running != 1 {
+				t.Errorf("the grown source ran again beside %d other items", running-1)
+			}
+		}
+		mu.Unlock()
+		defer func() {
+			mu.Lock()
+			running--
+			mu.Unlock()
+		}()
+		return processWithin(ctx, item, settings, allowance)
+	}
+	var events recorder
+	summary, err := run(context.Background(), newRequest(inputs, out, output.CollisionRename), events.observe, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events.check(t, summary)
+	for index, name := range []string{"grown.png", "beside.png", "after.png"} {
+		requireStatus(t, summary, index, StateCompleted, filepath.Join(out, name), output.ReasonNone)
+	}
+	if want := []uint64{grown.Info.DecodedBytes, decode.MaxDecodedBytes}; !slices.Equal(allowances, want) {
+		t.Fatalf("the grown source was decoded within %v, want %v", allowances, want)
+	}
+	if got := events.states(0); !slices.Equal(got, []State{StateProcessing, StatePending, StateProcessing, StateCompleted}) {
+		t.Fatalf("the grown source went through %v", got)
+	}
+	if result := decodeResult(t, filepath.Join(out, "grown.png")); result.Width != 16 || result.Height != 8 {
+		t.Fatalf("the grown source's result is %+v, want its new shape", result.Info)
+	}
+}
+
+// TestRunCancelsANameTakenOnceCancelled: an item whose name another program
+// took, which would have been planned again, ends Cancelled once the job is
+// cancelled rather than Failed (RSZ-045).
+func TestRunCancelsANameTakenOnceCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := testConfig(1)
+	calls := 0
+	cfg.process = func(context.Context, output.Item, Settings, uint64) (string, error) {
+		calls++
+		cancel()
+		return "", &output.Error{Kind: output.KindChanged, Op: "save result", Err: output.ErrDestinationTaken}
+	}
+	out := t.TempDir()
+	var events recorder
+	summary, err := run(ctx, newRequest([]Input{listed(t, "sprite.png", 1)}, out, output.CollisionRename), events.observe, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events.check(t, summary)
+	if status := requireStatus(t, summary, 0, StateCancelled, filepath.Join(out, "sprite.png"), output.ReasonNone); status.Err != nil || calls != 1 {
+		t.Fatalf("item = %+v after %d calls, want cancelled without an error after one", status, calls)
+	}
+}
+
+// TestRunFailsTheRestOnceTheOutputFolderIsLost pins UX-010: once an item
+// fails to write because the output folder has gone, the items still
+// waiting, including a Skip duplicate promoted in the failed item's place,
+// end Failed with the folder's error without being decoded, while a write
+// failure in a folder that is still there fails only its own item.
+func TestRunFailsTheRestOnceTheOutputFolderIsLost(t *testing.T) {
+	inputs := []Input{listed(t, "shared.png", 1), listed(t, "shared.png", 1), listed(t, "other.png", 1)}
+	out := filepath.Join(t.TempDir(), "out")
+	cfg := testConfig(1)
+	calls := 0
+	cfg.process = func(_ context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
+		calls++
+		if err := os.RemoveAll(out); err != nil {
+			t.Fatal(err)
+		}
+		return "", &output.Error{Kind: output.KindWrite, Op: "create temporary file", Err: &fs.PathError{Op: "open", Path: item.Destination, Err: fs.ErrNotExist}}
+	}
+	var events recorder
+	summary, err := run(context.Background(), newRequest(inputs, out, output.CollisionSkip), events.observe, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events.check(t, summary)
+	if calls != 1 {
+		t.Fatalf("%d items were processed, want only the one that found the folder gone", calls)
+	}
+	first := requireStatus(t, summary, 0, StateFailed, filepath.Join(out, "shared.png"), output.ReasonNone)
+	var outputErr *output.Error
+	if !errors.As(first.Err, &outputErr) || outputErr.Kind != output.KindWrite {
+		t.Fatalf("the item that failed to write carries %v, want its own write failure", first.Err)
+	}
+	for index, name := range map[int]string{1: "shared.png", 2: "other.png"} {
+		status := requireStatus(t, summary, index, StateFailed, filepath.Join(out, name), output.ReasonNone)
+		if !errors.As(status.Err, &outputErr) || outputErr.Kind != output.KindFolder || !errors.Is(status.Err, fs.ErrNotExist) {
+			t.Fatalf("item %d carries %v, want the lost folder's error", index, status.Err)
+		}
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("the lost output folder was created again: %v", statErr)
+	}
+}
+
+// TestRunCollectsBeforeHandingOnMemory pins NFR-014 for the memory finished
+// items drop: once an item that held 64 MiB or more of the budget ends, or
+// the small items that ended since the last collection held that much
+// together, garbage is collected before the next item can start in that
+// memory.
+func TestRunCollectsBeforeHandingOnMemory(t *testing.T) {
+	// Each item holds its decoded estimate and a few kilobytes more.
+	target := resize.Target{Width: 16, Height: 16, Mode: preset.ResizeFit}
+	inputs := []Input{
+		listed(t, "large1.png", 100<<20),
+		listed(t, "large2.png", 100<<20),
+		listed(t, "small1.png", 30<<20),
+		listed(t, "small2.png", 30<<20),
+		listed(t, "small3.png", 30<<20),
+	}
+	// The items run one at a time, so each next one starts in the memory the
+	// last one held.
+	cfg := testConfig(1)
+	var mu sync.Mutex
+	var steps []string
+	note := func(step string) {
+		mu.Lock()
+		steps = append(steps, step)
+		mu.Unlock()
+	}
+	cfg.collect = func() { note("collect") }
+	cfg.process = func(_ context.Context, item output.Item, _ Settings, _ uint64) (string, error) {
+		name := filepath.Base(item.Source)
+		note("start " + name)
+		note("end " + name)
+		return item.Destination, nil
+	}
+	request := newRequest(inputs, t.TempDir(), output.CollisionRename)
+	request.Settings.Target = target
+	summary, err := run(context.Background(), request, nil, cfg)
+	if err != nil || summary.Progress.Completed != len(inputs) {
+		t.Fatalf("Run: %+v, %v", summary.Progress, err)
+	}
+	want := []string{
+		"start large1.png", "end large1.png", "collect",
+		"start large2.png", "end large2.png", "collect",
+		"start small1.png", "end small1.png",
+		"start small2.png", "end small2.png",
+		"start small3.png", "end small3.png", "collect",
+	}
+	if !slices.Equal(steps, want) {
+		t.Fatalf("steps = %q, want %q", steps, want)
+	}
+}
+
+// TestRunFailsAnUncheckedSourceAlone pins RSZ-044 for an input listed
+// without an error or a checked format, as one whose check has not finished:
+// it ends Failed with ErrUnchecked, its path stays protected, and the other
+// items are resized as usual.
+func TestRunFailsAnUncheckedSourceAlone(t *testing.T) {
+	out := t.TempDir()
+	unchecked := Input{Path: filepath.Join(out, "sprite.png")}
+	if err := os.WriteFile(unchecked.Path, []byte("still being checked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	valid := inspected(t, writeSource(t, "sprite.png", encodePNG(t, halfTransparent())))
+	var events recorder
+	summary, err := run(context.Background(), newRequest([]Input{unchecked, valid}, out, output.CollisionRename), events.observe, testConfig(2))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events.check(t, summary)
+	if status := requireStatus(t, summary, 0, StateFailed, "", output.ReasonNone); !errors.Is(status.Err, ErrUnchecked) {
+		t.Fatalf("unchecked source error = %v, want ErrUnchecked", status.Err)
+	}
+	requireStatus(t, summary, 1, StateCompleted, filepath.Join(out, "sprite_2.png"), output.ReasonSource)
+	requireContent(t, unchecked.Path, []byte("still being checked"))
 }
 
 // load tracks the fake items in flight: how many, and the memory their
@@ -810,8 +1113,9 @@ func (l *load) leave(cost uint64) {
 func TestRunBoundsWorkersAndMemory(t *testing.T) {
 	target := resize.Target{Width: 8, Height: 8, Mode: preset.ResizeFit}
 	// The estimate counts the decoded source, the resized image at 8 bytes
-	// a pixel for a PNG source, and the filter's working memory.
-	cost := func(decoded uint64) uint64 { return decoded + 8*8*8 + resize.MaxWorkingBytes }
+	// a pixel for a PNG source, and the filter's working memory for the
+	// source's 1 × 1 pixels.
+	cost := func(decoded uint64) uint64 { return decoded + 8*8*8 + resize.WorkingBytes(1, 1, target) }
 	const small = 1 << 20
 	cases := []struct {
 		name        string
@@ -837,8 +1141,11 @@ func TestRunBoundsWorkersAndMemory(t *testing.T) {
 		var tracked load
 		cfg := testConfig(tc.workers)
 		cfg.budget = tc.budget
-		cfg.process = func(_ context.Context, item output.Item, _ Settings) (string, error) {
+		cfg.process = func(_ context.Context, item output.Item, _ Settings, allowance uint64) (string, error) {
 			cost := costs[item.Source]
+			if want := cost - 8*8*8 - resize.WorkingBytes(1, 1, target); allowance != want {
+				t.Errorf("%s: %s decoded within %d bytes, want its estimate, %d", tc.name, filepath.Base(item.Source), allowance, want)
+			}
 			tracked.enter(cost, cost > tc.budget)
 			time.Sleep(20 * time.Millisecond)
 			tracked.leave(cost)
@@ -878,10 +1185,25 @@ func TestRunBudgetsAJPEGsResultAtFourBytesAPixel(t *testing.T) {
 	if got := resultBytes(decode.FormatPNG, target); got != 8*100*50 {
 		t.Fatalf("PNG result estimate = %d", got)
 	}
-	// An input without an estimate is costed at the decoder's limit.
-	b := newBatch(Request{Inputs: []Input{{Info: decode.Info{Format: decode.FormatPNG}}}, Settings: Settings{Target: target}}, nil, testConfig(1))
+	// An input without an estimate is costed at the decoder's limit and the
+	// most working memory any source needs, one with its dimensions at the
+	// working memory those need, and one whose source turned out to need more
+	// than its estimate at the most any source needs.
+	inputs := []Input{
+		{Info: decode.Info{Format: decode.FormatPNG}},
+		{Info: decode.Info{Format: decode.FormatJPEG, Width: 4000, Height: 3000, DecodedBytes: 18 << 20}},
+	}
+	b := newBatch(Request{Inputs: inputs, Settings: Settings{Target: target}}, nil, testConfig(1))
 	if got, want := b.cost(0), uint64(decode.MaxDecodedBytes)+8*100*50+resize.MaxWorkingBytes; got != want {
 		t.Fatalf("cost without an estimate = %d, want %d", got, want)
+	}
+	working := resize.WorkingBytes(4000, 3000, target)
+	if got, want := b.cost(1), uint64(18<<20)+4*100*50+working; got != want || working >= resize.MaxWorkingBytes {
+		t.Fatalf("cost with an estimate = %d, want %d with %d bytes of working memory", got, want, working)
+	}
+	b.worstCase[1] = true
+	if got, want := b.cost(1), uint64(decode.MaxDecodedBytes)+8*100*50+resize.MaxWorkingBytes; got != want || b.allowance(1) != decode.MaxDecodedBytes {
+		t.Fatalf("cost of a source that grew = %d within %d, want %d within the decoder's limit", got, b.allowance(1), want)
 	}
 }
 

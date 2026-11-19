@@ -44,13 +44,13 @@
 // time, keeping no more working rows than a fixed budget holds, so the
 // working memory — weight tables and rows together — stays under
 // MaxWorkingBytes, 128 MiB, in the worst case and is a few megabytes for
-// typical sources. Resize reads
-// the source but never retains or modifies it, and callers run it off the
-// GUI thread (TECH-005); a context cancels it between source rows, and
-// before it allocates the output. A panic during a resize, such as one a
-// malformed source image's own methods raise, is returned as that resize's
-// error, an unexpected failure (KindFailed), rather than unwinding into the
-// caller (NFR-021).
+// typical sources, within the bound WorkingBytes gives for a source's
+// dimensions. Resize reads the source but never retains or modifies it, and
+// callers run it off the GUI thread (TECH-005); a context cancels it between
+// source rows, and before it allocates the output. A panic during a resize,
+// such as one a malformed source image's own methods raise, is returned as
+// that resize's error, an unexpected failure (KindFailed), rather than
+// unwinding into the caller (NFR-021).
 package resize
 
 import (
@@ -71,9 +71,33 @@ const MaxSourceDimension = 1 << 20
 
 // MaxWorkingBytes bounds the working memory Resize needs beyond the output
 // image: the weight tables of both axes, the scratch that builds them, and
-// the working rows, whatever the source's shape and the target. A batch adds
-// it to each item's memory need (NFR-014).
+// the working rows, whatever the source's shape and the target. WorkingBytes
+// bounds it for one source's dimensions.
 const MaxWorkingBytes = 128 << 20
+
+// workingOverhead covers what Resize allocates beyond the weight tables and
+// the working rows WorkingBytes counts: the row readers and writer, and the
+// small values that describe the resize.
+const workingOverhead = 64 << 10
+
+// WorkingBytes bounds the working memory Resize needs beyond the output
+// image for a source of the given upright dimensions, of any kind of pixels:
+// the weight tables of both axes, the scratch that builds them, the working
+// rows of whichever order the filter takes, and an eighth more for the
+// allocator's rounding. It never exceeds MaxWorkingBytes, which it returns
+// for dimensions or a target Plan refuses. It is a few megabytes for typical
+// sources; a batch adds it to each item's memory need (NFR-014).
+func WorkingBytes(sourceWidth, sourceHeight int, target Target) uint64 {
+	geometry, err := Plan(sourceWidth, sourceHeight, target)
+	if err != nil {
+		return MaxWorkingBytes
+	}
+	working := axisBytes(sourceWidth, geometry.ScaledWidth, geometry.Width) +
+		axisBytes(sourceHeight, geometry.ScaledHeight, geometry.Height) +
+		rowBytes(sourceWidth, sourceHeight, geometry)
+	working += working/8 + workingOverhead
+	return min(uint64(working), MaxWorkingBytes)
+}
 
 // A scaled axis and its crop offset reach 2^34 pixels, which only a 64-bit
 // int holds, so the package fails to compile where int is narrower rather
