@@ -41,6 +41,13 @@ func TestDefaultOptions(t *testing.T) {
 func TestResizeOptionsValidateBoundaries(t *testing.T) {
 	folder := testFolder(t)
 	valid := DefaultOptions(folder)
+	// A path that names only a volume says so, rather than that it is not
+	// absolute; outside Windows paths have no volume name, and \\?\ is a
+	// relative name.
+	volumeErr := "rather than a folder"
+	if filepath.VolumeName(folder) == "" {
+		volumeErr = "absolute"
+	}
 	tests := []struct {
 		name    string
 		mutate  func(*ResizeOptions)
@@ -71,7 +78,7 @@ func TestResizeOptionsValidateBoundaries(t *testing.T) {
 		{name: "folder ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + " " }, wantErr: "ends in a space or a period"},
 		{name: "folder ending in a period", mutate: func(o *ResizeOptions) { o.OutputFolder = folder + "." }, wantErr: "ends in a space or a period"},
 		{name: "parent ending in a space", mutate: func(o *ResizeOptions) { o.OutputFolder = filepath.Join(folder+" ", "Resized") }, wantErr: "ends in a space or a period"},
-		{name: "volume without a folder", mutate: func(o *ResizeOptions) { o.OutputFolder = `\\?\` + filepath.VolumeName(folder) }, wantErr: "absolute"},
+		{name: "volume without a folder", mutate: func(o *ResizeOptions) { o.OutputFolder = `\\?\` + filepath.VolumeName(folder) }, wantErr: volumeErr},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

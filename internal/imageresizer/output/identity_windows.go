@@ -56,8 +56,9 @@ func identify(path string) (fileID, uint32, error) {
 // fileMissing reports whether a file could not be opened because no entry
 // has its name in its folder. A path whose folder cannot be found is not
 // missing: a drive, share, or link it leads through may be gone while the
-// file remains, reachable by another path.
-func fileMissing(err error) bool {
+// file remains, reachable by another path. On Windows the error alone tells,
+// so the filesystem is not consulted.
+func fileMissing(_ fileSystem, err error) bool {
 	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND)
 }
 
@@ -73,9 +74,9 @@ const reparseTagNameSurrogate = 0x20000000
 // the entry itself, not what a link leads to, and opens nothing, so it never
 // makes OneDrive download a file.
 func findEntry(path string) (entry, error) {
-	name, err := windows.UTF16PtrFromString(extendedPath(path))
+	name, err := windowsPath("find", path)
 	if err != nil {
-		return entry{}, &fs.PathError{Op: "find", Path: path, Err: err}
+		return entry{}, err
 	}
 	var data windows.Win32finddata
 	handle, err := windows.FindFirstFile(name, &data)
@@ -95,15 +96,27 @@ func findEntry(path string) (entry, error) {
 
 // open opens the path without requesting access to its contents.
 func open(path string, flags uint32) (windows.Handle, error) {
-	name, err := windows.UTF16PtrFromString(extendedPath(path))
+	name, err := windowsPath("open", path)
 	if err != nil {
-		return 0, &fs.PathError{Op: "open", Path: path, Err: err}
+		return 0, err
 	}
 	handle, err := windows.CreateFile(name, 0, shareAll, nil, windows.OPEN_EXISTING, flags, 0)
 	if err != nil {
 		return 0, &fs.PathError{Op: "open", Path: path, Err: err}
 	}
 	return handle, nil
+}
+
+// windowsPath is the path as every Windows call the planner makes takes it:
+// resolved and marked extended-length by extendedPath, so the file found or
+// opened is the one os.Lstat and the decoder reach. A path that cannot be
+// converted fails as op's failure.
+func windowsPath(op, path string) (*uint16, error) {
+	name, err := windows.UTF16PtrFromString(extendedPath(path))
+	if err != nil {
+		return nil, &fs.PathError{Op: op, Path: path, Err: err}
+	}
+	return name, nil
 }
 
 // extendedPath resolves an absolute path with GetFullPathName, which drops

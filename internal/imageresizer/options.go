@@ -133,8 +133,10 @@ func folderMessage(err error) error {
 		return nil
 	case errors.Is(err, output.ErrFolderEmpty):
 		return errors.New(ui.OutputFolderRequired)
-	case errors.Is(err, output.ErrFolderNotAbsolute), errors.Is(err, output.ErrFolderRoot):
+	case errors.Is(err, output.ErrFolderNotAbsolute):
 		return errors.New(ui.OutputFolderNotAbsolute)
+	case errors.Is(err, output.ErrFolderRoot):
+		return errors.New(ui.OutputFolderRootInvalid)
 	case errors.Is(err, output.ErrFolderName):
 		return errors.New(ui.OutputFolderNameInvalid)
 	default:
@@ -156,7 +158,7 @@ func NewOptionsManager(store *OptionsStore, value *settings.Settings) (*OptionsM
 	if value == nil {
 		return nil, errors.New("settings value is required")
 	}
-	options, replaced, err := store.load(*value)
+	options, replaced, err := store.Load(*value)
 	if err != nil {
 		return nil, err
 	}

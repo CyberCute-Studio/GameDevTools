@@ -45,6 +45,52 @@ func TestPrepareFailsWhenTheFolderGoes(t *testing.T) {
 	}
 }
 
+// detachedFolder is an output folder that exists only in the planner's
+// filesystem, and in which no name has an entry.
+type detachedFolder struct {
+	osFiles
+	folder string
+	info   fs.FileInfo
+}
+
+func (d detachedFolder) MkdirAll(string) error { return nil }
+
+func (d detachedFolder) Stat(path string) (fs.FileInfo, error) {
+	if path == d.folder {
+		return d.info, nil
+	}
+	return nil, &fs.PathError{Op: "stat", Path: path, Err: fs.ErrNotExist}
+}
+
+func (d detachedFolder) Lstat(path string) (fs.FileInfo, error) {
+	return nil, &fs.PathError{Op: "lstat", Path: path, Err: fs.ErrNotExist}
+}
+
+// TestPrepareAsksItsFilesWhetherANameIsMissing: whether the folder of a
+// missing name still exists is answered by the planner's filesystem, as
+// every other check is, not by the disk, so a name missing from a folder
+// that filesystem holds is free.
+func TestPrepareAsksItsFilesWhetherANameIsMissing(t *testing.T) {
+	info, err := os.Stat(t.TempDir())
+	if err != nil {
+		t.Fatalf("stat a folder: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "absent", "out")
+	source := Source{Path: filepath.Join(t.TempDir(), "x.png"), Format: decode.FormatPNG}
+	plan, err := prepare(context.Background(), Request{
+		Sources:   []Source{source},
+		Folder:    out,
+		Format:    FormatKeepSource,
+		Collision: CollisionRename,
+	}, detachedFolder{folder: out, info: info})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if item := plan.Items[0]; item.Action != ActionCreate || item.Destination != filepath.Join(out, "x.png") {
+		t.Fatalf("item = %v %s (%v), want to create x.png", item.Action, item.Destination, item.Err)
+	}
+}
+
 // TestPrepareNeverReplacesWithoutIdentity pins the fallback outside
 // Windows: no file identity can be read, so a confirmed Overwrite never
 // proves an existing file is not a source and renames the result instead.

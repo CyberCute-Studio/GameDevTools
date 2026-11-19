@@ -42,15 +42,11 @@ func NewOptionsStore(store *settings.Store, defaultFolder string) (*OptionsStore
 	return options, nil
 }
 
-func (s *OptionsStore) Load(value settings.Settings) (ResizeOptions, error) {
-	options, _, err := s.load(value)
-	return options, err
-}
-
-// load is Load that also returns the stored output folder the default
-// folder replaced, one only earlier builds accepted, or "" when it replaced
-// none, so the caller can warn about it.
-func (s *OptionsStore) load(value settings.Settings) (ResizeOptions, string, error) {
+// Load returns the stored resize options, or the defaults when none are
+// stored, and the stored output folder the default folder replaced, one only
+// earlier builds accepted, or "" when it replaced none, so the caller can
+// warn about it.
+func (s *OptionsStore) Load(value settings.Settings) (ResizeOptions, string, error) {
 	options := DefaultOptions(s.defaultFolder)
 	stored, exists, legacyFolder, err := decodeOptions(value.Modules[string(moduleID)])
 	if err != nil {
@@ -142,10 +138,10 @@ func decodeOptions(section json.RawMessage) (stored storedOptions, exists, legac
 	case errors.Is(err, output.ErrFolderName), errors.Is(err, output.ErrFolderRoot):
 		// Builds before output planning accepted any absolute folder path
 		// in valid text, including one with a folder name that ends in a
-		// space or a period and one that names only a volume, which jobs
-		// now refuse. Such a folder gives way to the default folder on
-		// load, with a warning, rather than the whole settings file failing
-		// validation and every module losing its settings.
+		// space or a period and one that names only a volume or a server,
+		// which jobs now refuse. Such a folder gives way to the default
+		// folder on load, with a warning, rather than the whole settings
+		// file failing validation and every module losing its settings.
 		legacyFolder = true
 	default:
 		return storedOptions{}, false, false, fmt.Errorf("validate stored resize options: %w", folderMessage(err))

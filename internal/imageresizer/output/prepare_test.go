@@ -211,6 +211,25 @@ func TestValidateFolder(t *testing.T) {
 		{`\\.\NUL`, ErrFolderRoot},
 		{`\\server`, ErrFolderRoot},
 		{`\\?\`, ErrFolderRoot},
+		// A share is a folder however it is spelled, and a server without a
+		// share is none. filepath.VolumeName ends \\?\UNC and \??\UNC before
+		// the server, and takes the server and share into \\.\UNC's.
+		{`\\?\UNC\server\share`, nil},
+		{`\??\UNC\server\share`, nil},
+		{`//?/unc/server/share`, nil},
+		{`\\.\UNC\server\share`, nil},
+		{`\\.\unc\server\share\Resized`, nil},
+		{`//./UNC/server/share`, nil},
+		{`\\?\UNC\server`, ErrFolderRoot},
+		{`\\?\UNC\server\`, ErrFolderRoot},
+		{`\??\UNC\server`, ErrFolderRoot},
+		{`//?/unc/server`, ErrFolderRoot},
+		{`\\?\UNC`, ErrFolderRoot},
+		{`\\.\UNC\server`, ErrFolderRoot},
+		{`\\.\UNC\server\`, ErrFolderRoot},
+		{`\\.\UNC\`, ErrFolderRoot},
+		{`\\.\UNC`, ErrFolderRoot},
+		{`\\.\UNC\server\share\Art.`, ErrFolderName},
 		{`C:`, ErrFolderNotAbsolute},
 		{`C:\Art.\Resized`, ErrFolderName},
 		{`C:\Art \Resized`, ErrFolderName},
@@ -384,6 +403,10 @@ func TestPrepareRejectsInvalidRequests(t *testing.T) {
 		// A volume without its root folder's separator is no folder, and
 		// joining a file name to it gives \\?\C:x.png.
 		{name: "extended-length volume", mutate: func(r *Request) { r.Folder = `\\?\` + filepath.VolumeName(in) }, want: ErrFolderRoot},
+		// A server without a share is no folder either, however it is
+		// spelled; it is refused here rather than failing as a folder that
+		// cannot be created.
+		{name: "extended-length server", mutate: func(r *Request) { r.Folder = `\\?\UNC\server` }, want: ErrFolderRoot},
 		{name: "unknown policy", mutate: func(r *Request) { r.Collision = "delete" }},
 		{name: "empty policy", mutate: func(r *Request) { r.Collision = "" }},
 		{name: "unknown format", mutate: func(r *Request) { r.Format = "gif" }},
@@ -876,6 +899,35 @@ func TestPrepareTreatsStoredFilesAsFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPrepareListsEachDestinationOnce: items of a confirmed Overwrite job
+// that share a natural destination it does not replace, here a file the name
+// reaches only as another entry's name, list the entry once, as they read
+// its type and identity once, rather than once per item, which on a share
+// is a round trip each.
+func TestPrepareListsEachDestinationOnce(t *testing.T) {
+	out := t.TempDir()
+	writeFile(t, filepath.Join(out, "x.png"), "earlier")
+	listings := 0
+	files := faultyFiles{entry: func(path string) (entry, error) {
+		listings++
+		return entry{name: "x-long-name.png", file: true}, nil
+	}}
+	var sources []Source
+	var want []expect
+	for index := 0; index < 5; index++ {
+		sources = append(sources, png(filepath.Join(t.TempDir(), "x.png")))
+		want = append(want, expect{fmt.Sprintf("x_%d.png", index+2), ActionCreate, ReasonExists})
+	}
+	plan, err := prepare(context.Background(), jobRequest(out, CollisionOverwrite, sources...), files)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	assertItems(t, plan, want)
+	if listings != 1 {
+		t.Fatalf("listed the shared destination %d times, want once", listings)
 	}
 }
 

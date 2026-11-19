@@ -219,11 +219,12 @@ var (
 // names a folder, and no folder name in it ends in a space or a period.
 //
 // An absolute path that is only a volume name, such as \\?\C: or \\.\C:
-// without the root folder's separator, or \\server without a share, names a
-// volume, device, or server rather than a folder: no folder can be created
-// or opened there, and filepath.Join puts a file name straight after it,
-// giving \\?\C:x.png, so its destinations would not lie in it. A share,
-// \\server\share, is its own root folder.
+// without the root folder's separator, or a server without a share, such as
+// \\server or \\?\UNC\server, names a volume, device, or server rather than
+// a folder: no folder can be created or opened there, and filepath.Join puts
+// a file name straight after it, giving \\?\C:x.png, so its destinations
+// would not lie in it. A share is its own root folder, however it is
+// spelled: \\server\share, \\?\UNC\server\share, or \\.\UNC\server\share.
 //
 // A path that is not valid UTF-8, as Go holds a Windows name with an
 // unpaired surrogate, cannot be kept in the settings file, whose JSON
@@ -248,16 +249,13 @@ func ValidateFolder(folder string) error {
 		return ErrFolderNotAbsolute
 	}
 	clean := filepath.Clean(folder)
-	if volume := filepath.VolumeName(clean); len(volume) == len(clean) && !shareRoot(volume) {
+	if namesRoot(clean) {
 		return ErrFolderRoot
 	}
 	if strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\??\`) {
 		return nil
 	}
-	names := strings.FieldsFunc(clean[len(filepath.VolumeName(clean)):], func(character rune) bool {
-		return character == '\\' || character == '/'
-	})
-	for _, name := range names {
+	for _, name := range pathNames(clean[len(filepath.VolumeName(clean)):]) {
 		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
 			return ErrFolderName
 		}
@@ -265,16 +263,46 @@ func ValidateFolder(folder string) error {
 	return nil
 }
 
+// pathNames splits a path, or the part of one after its volume name, into
+// its names.
+func pathNames(path string) []string {
+	return strings.FieldsFunc(path, func(character rune) bool {
+		return character == '\\' || character == '/'
+	})
+}
+
+// namesRoot reports whether a cleaned absolute path names only a drive,
+// volume, device, or server rather than a folder on it: whether nothing but
+// its volume name is left, and that volume name is no share. For the
+// extended-length UNC prefixes, \\?\UNC and \??\UNC, filepath.VolumeName
+// stops before the server and share, which it takes into the volume name of
+// \\server\share and \\.\UNC\server\share, so for those the path's first
+// two names must be the server and the share.
+func namesRoot(clean string) bool {
+	volume := filepath.VolumeName(clean)
+	if strings.EqualFold(volume, `\\?\UNC`) || strings.EqualFold(volume, `\??\UNC`) {
+		return len(pathNames(clean[len(volume):])) < 2
+	}
+	return len(volume) == len(clean) && !shareRoot(volume)
+}
+
 // shareRoot reports whether a volume name, as filepath.VolumeName gives it
-// for a cleaned path, names a share, \\server\share, which is a folder,
-// rather than a drive (C:), a server without a share (\\server), or the
-// first element of a device path (\\?\C:, \\.\NUL), which are not.
+// for a cleaned path, names a share, \\server\share or \\.\UNC\server\share,
+// which is a folder, rather than a drive (C:), a server without a share
+// (\\server, \\.\UNC\server), or the first element of a device path (\\?\C:,
+// \\.\NUL), which are not.
 func shareRoot(volume string) bool {
 	if len(volume) < 2 || !os.IsPathSeparator(volume[0]) || !os.IsPathSeparator(volume[1]) {
 		return false
 	}
-	server, share, found := strings.Cut(volume[2:], string(filepath.Separator))
-	return found && share != "" && server != "." && server != "?"
+	unc := volume[2:]
+	const device = `.\UNC`
+	if len(unc) >= len(device) && strings.EqualFold(unc[:len(device)], device) &&
+		(len(unc) == len(device) || os.IsPathSeparator(unc[len(device)])) {
+		unc = unc[min(len(unc), len(device)+1):]
+	}
+	server, share, found := strings.Cut(unc, string(filepath.Separator))
+	return found && server != "" && share != "" && server != "." && server != "?"
 }
 
 // PathKey normalizes a full path for comparison. Windows paths compare
@@ -739,6 +767,12 @@ type identified struct {
 	err   error
 }
 
+// listing is the cached result of listing one path's entry in its folder.
+type listing struct {
+	entry entry
+	err   error
+}
+
 type planner struct {
 	ctx       context.Context
 	files     fileSystem
@@ -756,6 +790,9 @@ type planner struct {
 	claimed map[string]int
 	// probes caches destination inspections by path key.
 	probes map[string]probe
+	// listings caches folder listings by path key, so items that share a
+	// natural destination Overwrite does not replace list it once.
+	listings map[string]listing
 	// identities caches identities by path key: those of existing
 	// destinations, so items with one natural destination read it once, and
 	// those of the output folder and the folders holding unreadable listed
@@ -816,6 +853,7 @@ func newPlanner(ctx context.Context, request Request, folder string, files fileS
 		sourceKeys:        sourceKeys,
 		claimed:           make(map[string]int, len(request.Sources)),
 		probes:            make(map[string]probe, len(request.Sources)),
+		listings:          make(map[string]listing),
 		identities:        make(map[string]identified),
 		sourceIDs:         make(map[fileID]struct{}),
 		unverifiedFolders: make(map[fileID]struct{}),
@@ -1037,7 +1075,7 @@ func (p *planner) probe(key, path string) probe {
 	switch {
 	case err == nil:
 		found = probe{exists: true, mode: info.Mode()}
-	case !fileMissing(err):
+	case !fileMissing(p.files, err):
 		found.err = err
 	}
 	p.probes[key] = found
@@ -1052,12 +1090,20 @@ func (p *planner) probe(key, path string) probe {
 // its name where it stands, like any other, and only the listing tells it
 // from a junction or another link. An entry of any other type, such as a
 // folder or a symbolic link, is returned as no file without being listed.
-// This is the one place that decides which entries are files.
+// This is the one place that decides which entries are files. Each path is
+// listed once per plan.
 func (p *planner) listFile(path string, mode fs.FileMode) (entry, error) {
 	if kind := mode.Type(); kind != 0 && kind != fs.ModeIrregular {
 		return entry{}, nil
 	}
-	return p.files.Entry(path)
+	key := PathKey(path)
+	if cached, ok := p.listings[key]; ok {
+		return cached.entry, cached.err
+	}
+	var found listing
+	found.entry, found.err = p.files.Entry(path)
+	p.listings[key] = found
+	return found.entry, found.err
 }
 
 // ownFile decides whether the existing entry at a natural destination, of
@@ -1131,7 +1177,7 @@ func (p *planner) isSource(id fileID) (bool, error) {
 			switch {
 			case err == nil:
 				p.sourceIDs[sourceID] = struct{}{}
-			case fileMissing(err):
+			case fileMissing(p.files, err):
 				// No file has the name in its folder any more, so none can
 				// be overwritten through it; the path stays protected by its
 				// key.

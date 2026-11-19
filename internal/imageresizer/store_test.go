@@ -20,7 +20,7 @@ func TestOptionsStoreDefaultsWithoutSection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	options, err := optionsStore.Load(settings.Default())
+	options, _, err := optionsStore.Load(settings.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestOptionsStoreDefaultsWithoutSection(t *testing.T) {
 
 	value := settings.Default()
 	value.Modules[string(shell.ModuleImageResizer)] = json.RawMessage(`{"presets":{"version":1,"custom":[]}}`)
-	options, err = optionsStore.Load(value)
+	options, _, err = optionsStore.Load(value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +78,12 @@ func TestOptionsStoreRoundTripAndPresetCoexistence(t *testing.T) {
 	if len(loaded.Warnings) != 0 {
 		t.Fatalf("restart warnings = %v", loaded.Warnings)
 	}
-	restored, err := restartedOptions.Load(loaded.Settings)
+	restored, replaced, err := restartedOptions.Load(loaded.Settings)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored != options {
-		t.Fatalf("restored options = %+v, want %+v", restored, options)
+	if restored != options || replaced != "" {
+		t.Fatalf("restored options = %+v, replaced folder %q, want %+v and none", restored, replaced, options)
 	}
 
 	restartedRepository, err := preset.NewRepository(shell.ModuleImageResizer, restartedStore)
@@ -101,7 +101,7 @@ func TestOptionsStoreRoundTripAndPresetCoexistence(t *testing.T) {
 	if err := restartedRepository.Save(&loaded.Settings, library); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := restartedOptions.Load(loaded.Settings)
+	reloaded, _, err := restartedOptions.Load(loaded.Settings)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,8 @@ func TestOptionsStoreValidSection(t *testing.T) {
 
 // TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault: earlier builds
 // saved an output folder whose path has a name ending in a space or a
-// period, or that names only a volume, which output planning now refuses.
+// period, or that names only a volume or a server, which output planning
+// now refuses.
 // Loading such a file keeps every other setting, the preset library
 // included, and only the folder falls back to the default, rather than the
 // whole file being reset as invalid; the options manager reports the folder
@@ -177,7 +178,7 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	folder := testFolder(t)
 	legacyFolders := []string{folder + ".", filepath.Join(folder+" ", "Resized")}
 	if volume := filepath.VolumeName(folder); volume != "" {
-		legacyFolders = append(legacyFolders, `\\?\`+volume)
+		legacyFolders = append(legacyFolders, `\\?\`+volume, `\\?\UNC\server`)
 	}
 	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")
@@ -242,14 +243,14 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 		if len(loaded.Warnings) != 0 {
 			t.Fatalf("%q: load warnings = %v", saved, loaded.Warnings)
 		}
-		restored, err := restartedOptions.Load(loaded.Settings)
+		restored, replaced, err := restartedOptions.Load(loaded.Settings)
 		if err != nil {
 			t.Fatalf("%q: %v", saved, err)
 		}
 		want := options
 		want.OutputFolder = defaultFolder
-		if restored != want {
-			t.Fatalf("%q: restored options = %+v, want %+v", saved, restored, want)
+		if restored != want || replaced != saved {
+			t.Fatalf("%q: restored options = %+v, replaced folder %q, want %+v", saved, restored, replaced, want)
 		}
 		manager, err := NewOptionsManager(restartedOptions, &loaded.Settings)
 		if err != nil {
@@ -311,7 +312,7 @@ func TestMalformedResizeOptionsRecoverThroughStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options, err := optionsStore.Load(loaded.Settings)
+	options, _, err := optionsStore.Load(loaded.Settings)
 	if err != nil {
 		t.Fatal(err)
 	}

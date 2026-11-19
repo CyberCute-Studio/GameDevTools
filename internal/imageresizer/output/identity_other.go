@@ -25,14 +25,14 @@ func identify(string) (fileID, uint32, error) {
 // fileMissing reports whether a file could not be opened because no entry
 // has its name in its folder, as on Windows. The error alone cannot tell, as
 // a path whose folder is gone fails with the same ENOENT, so the path's
-// folder must still be one: a name in an output folder removed while a plan
-// is made is not free.
-func fileMissing(err error) bool {
+// folder must still be one, as the planner's filesystem reports it: a name
+// in an output folder removed while a plan is made is not free.
+func fileMissing(files fileSystem, err error) bool {
 	var pathErr *fs.PathError
 	if !errors.Is(err, fs.ErrNotExist) || !errors.As(err, &pathErr) {
 		return false
 	}
-	info, statErr := os.Stat(filepath.Dir(pathErr.Path))
+	info, statErr := files.Stat(filepath.Dir(pathErr.Path))
 	return statErr == nil && info.IsDir()
 }
 
