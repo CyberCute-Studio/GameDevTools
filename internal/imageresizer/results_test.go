@@ -412,26 +412,66 @@ func TestJobMailboxCoalescesEventsAndEndsLast(t *testing.T) {
 	}
 }
 
-// TestCancelUncheckedCancelsOnlyFailedInputs pins that a job cancelled while
-// it checked inputs again reports Cancelled the inputs it had not checked
-// yet, which it ended Failed with their earlier reasons, and moves their
-// counts, leaving every other item as it ended.
-func TestCancelUncheckedCancelsOnlyFailedInputs(t *testing.T) {
-	stale := &sourceError{status: StatusCorrupt, detail: "damaged"}
-	summary := job.Summary{
-		Items: []job.Status{
-			{State: job.StateFailed, Err: stale},
-			{State: job.StateCancelled},
-			{State: job.StateFailed, Err: stale},
-		},
-		Progress: job.Progress{Total: 3, Failed: 2, Cancelled: 1},
+// TestInventoryCancelledSummaryEndsItemsAsTheJobWould pins the outcome the
+// view makes up for a job cancelled while it checked images again, or one it
+// let go (RSZ-045): an item keeps the final state the job reported, one in
+// flight is Cancelled with errReleased, one the job cannot resize is Failed
+// with why — the list's reason, or job.ErrUnchecked — unless it was to be
+// checked again and was not, and every other item, one no longer listed
+// included, is Cancelled; the counts follow the items.
+func TestInventoryCancelledSummaryEndsItemsAsTheJobWould(t *testing.T) {
+	directory := t.TempDir()
+	inventory := NewInventory()
+	summary := inventory.Add([]string{
+		writeSource(t, directory, "ready.png"),
+		writeSource(t, directory, "done.png"),
+		writeSource(t, directory, "flight.png"),
+		writeSource(t, directory, "notes.txt"),
+		writeSource(t, directory, "unchecked.png"),
+		writeSource(t, directory, "broken.png"),
+		writeSource(t, directory, "checking.png"),
+	})
+	info := decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3}
+	corrupt := &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}
+	for index, check := range summary.Inspect[:5] {
+		result := InspectionResult{ID: check.ID, Info: info}
+		if index >= 3 {
+			result = InspectionResult{ID: check.ID, Err: corrupt}
+		}
+		inventory.Resolve(result)
 	}
-	cancelUnchecked(&summary, []int{1, 2, 7})
-	if summary.Items[0].State != job.StateFailed || summary.Items[1] != (job.Status{State: job.StateCancelled}) || summary.Items[2] != (job.Status{State: job.StateCancelled}) {
-		t.Fatalf("items = %+v", summary.Items)
+	_, ids := inventory.JobInputs()
+	for _, id := range ids {
+		inventory.SetResult(id, job.Status{State: job.StatePending})
 	}
-	if summary.Progress != (job.Progress{Total: 3, Failed: 1, Cancelled: 2}) {
-		t.Fatalf("progress = %+v", summary.Progress)
+	completed := job.Status{State: job.StateCompleted, Destination: `C:\Out\done.png`}
+	inventory.SetResult(ids[1], completed)
+	inventory.SetResult(ids[2], job.Status{State: job.StateProcessing, Destination: `C:\Out\flight.png`})
+	ids = append(ids, 1<<40)
+
+	got := inventory.cancelledSummary(ids, []int{4}, `C:\Out`)
+	if got.Folder != `C:\Out` || len(got.Items) != len(ids) {
+		t.Fatalf("summary = %+v", got)
+	}
+	cancelled := job.Status{State: job.StateCancelled}
+	if got.Items[0] != cancelled || got.Items[1] != completed || got.Items[4] != cancelled || got.Items[7] != cancelled {
+		t.Fatalf("ready, completed, unchecked, and unlisted items = %+v", got.Items)
+	}
+	if flight := got.Items[2]; flight.State != job.StateCancelled || flight.Destination != `C:\Out\flight.png` || !errors.Is(flight.Err, errReleased) {
+		t.Fatalf("item in flight = %+v", flight)
+	}
+	var source *sourceError
+	if unsupported := got.Items[3]; unsupported.State != job.StateFailed || !errors.As(unsupported.Err, &source) || source.status != StatusUnsupported {
+		t.Fatalf("unsupported item = %+v", unsupported)
+	}
+	if broken := got.Items[5]; broken.State != job.StateFailed || !errors.As(broken.Err, &source) || source.status != StatusCorrupt {
+		t.Fatalf("item still damaged = %+v", broken)
+	}
+	if checking := got.Items[6]; checking.State != job.StateFailed || !errors.Is(checking.Err, job.ErrUnchecked) {
+		t.Fatalf("item still being checked = %+v", checking)
+	}
+	if got.Progress != (job.Progress{Total: 8, Completed: 1, Failed: 3, Cancelled: 4}) {
+		t.Fatalf("progress = %+v", got.Progress)
 	}
 }
 

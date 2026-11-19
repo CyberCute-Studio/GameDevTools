@@ -32,11 +32,25 @@ func (e *sourceError) Error() string {
 	return e.detail
 }
 
+// unusable is why a job cannot resize the item, as job.Run ends such an
+// input Failed: nil for a Ready item, job.ErrUnchecked for one still being
+// checked, and the list's own reason for any other.
+func (s SourceItem) unusable() error {
+	switch s.Status {
+	case StatusReady:
+		return nil
+	case StatusChecking:
+		return job.ErrUnchecked
+	}
+	return &sourceError{status: s.Status, detail: s.Detail}
+}
+
 // errReleased marks an item that was still in flight when the view let its
-// cancelled job go, because a read or write of it was not responding and so
-// could not observe the cancellation. It is the item's Cancelled status's
-// Err, which resultDetail explains, and names no file left behind.
-var errReleased = errors.New("a read or write of the image was not responding when the job was let go")
+// cancelled job go, as it had not reached its next cancellation check within
+// the release delay — a read or write of it may not be responding. It is the
+// item's Cancelled status's Err, which resultDetail explains, and names no
+// file left behind.
+var errReleased = errors.New("the image had not stopped when its cancelled job was let go")
 
 // SetResult records what the running job reported for the item with the
 // given ID and returns its index; ok is false when no listed item has the
@@ -89,7 +103,7 @@ func (v *Inventory) JobInputs() ([]job.Input, []uint64) {
 			inputs[index].Info = item.Info
 		case StatusChecking:
 		default:
-			inputs[index].Err = &sourceError{status: item.Status, detail: item.Detail}
+			inputs[index].Err = item.unusable()
 		}
 	}
 	return inputs, ids
@@ -406,21 +420,48 @@ func leftFile(status job.Status) bool {
 	return status.State.Final()
 }
 
-// cancelUnchecked ends Cancelled, in the summary of a job cancelled while it
-// checked its inputs again, the inputs, by index, it had not checked again
-// yet (Inventory.Recheckable). The job, cancelled before it planned, ended
-// them Failed with the reasons their earlier checks gave, which no longer say
-// whether they can be used; like every input the cancellation kept the job
-// from processing, they are Cancelled (RSZ-045), so the summary reads as
-// cancelled.
-func cancelUnchecked(summary *job.Summary, unchecked []int) {
+// cancelledSummary is the summary of a cancelled job that ended without an
+// outcome of job.Run's — one cancelled while it checked its inputs again,
+// which then planned and processed nothing, or one the view let go — for its
+// items' IDs by input index, as the inventory shows them once the content
+// checks the job made again are applied. It ends each item as job.Run ends
+// it for a cancelled job: an item keeps the final state the job reported for
+// it, and one still in flight is Cancelled with errReleased; one the job
+// cannot resize ends Failed with why, as JobInputs hands it on, but for an
+// input listed in unchecked — the job was to check it again (Recheckable)
+// and did not, so its earlier reason no longer says whether it can be used;
+// and every other item is Cancelled (RSZ-045).
+func (v *Inventory) cancelledSummary(ids []uint64, unchecked []int, folder string) job.Summary {
+	stale := make(map[int]bool, len(unchecked))
 	for _, index := range unchecked {
-		if index < len(summary.Items) && summary.Items[index].State == job.StateFailed {
-			summary.Items[index] = job.Status{State: job.StateCancelled}
-			summary.Progress.Failed--
+		stale[index] = true
+	}
+	summary := job.Summary{Folder: folder, Items: make([]job.Status, len(ids)), Progress: job.Progress{Total: len(ids)}}
+	for index, id := range ids {
+		status := job.Status{State: job.StateCancelled}
+		if at, ok := v.IndexOf(id); ok {
+			switch item := v.items[at]; {
+			case item.InJob && item.Result.State.Final():
+				status = item.Result
+			case item.InJob && item.Result.State == job.StateProcessing:
+				status.Destination, status.Err = item.Result.Destination, errReleased
+			case item.Status != StatusReady && !stale[index]:
+				status = job.Status{State: job.StateFailed, Err: item.unusable()}
+			}
+		}
+		summary.Items[index] = status
+		switch status.State {
+		case job.StateCompleted:
+			summary.Progress.Completed++
+		case job.StateSkipped:
+			summary.Progress.Skipped++
+		case job.StateFailed:
+			summary.Progress.Failed++
+		default:
 			summary.Progress.Cancelled++
 		}
 	}
+	return summary
 }
 
 // progressMessage is the running job's progress (RSZ-042): how many of its
@@ -453,13 +494,16 @@ func widestProgress(total int, longest string) string {
 	return message
 }
 
-// jobFinish is a job's outcome: what job.Run returned. released marks the
-// outcome the view made up itself for a cancelled job it let go, as
-// releaseJob describes.
+// jobFinish is a job's outcome: what job.Run returned, or which job's
+// summary the view makes up itself, as cancelledSummary describes. unplanned
+// marks a job cancelled while it checked its inputs again, which then ran no
+// job.Run, and released a cancelled job the view let go, as releaseJob
+// describes.
 type jobFinish struct {
-	summary  job.Summary
-	err      error
-	released bool
+	summary   job.Summary
+	err       error
+	unplanned bool
+	released  bool
 }
 
 // jobMailbox hands a running job's events, and then its outcome, from the

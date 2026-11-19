@@ -88,9 +88,13 @@ type NativeView struct {
 	// releaseDelay is how long a cancelled job may take to stop before the
 	// view lets it go, jobReleaseDelay; tests shorten it.
 	releaseDelay time.Duration
-	// outputFolder is the folder Open Output Folder opens: the latest job's,
-	// once it saved a result, or empty.
+	// outputFolder is the folder Open Output Folder opens: the latest job's
+	// that saved a result, once it saved one, or empty.
 	outputFolder string
+	// jobsStarted counts the jobs the view started, so a failure to open the
+	// output folder that arrives once another job has started is not shown
+	// over that job's progress or result.
+	jobsStarted uint64
 
 	jobStatus    *ui.StatusArea
 	cancelButton *ui.Button
@@ -762,7 +766,7 @@ func (n *NativeView) deliverInspection(result InspectionResult) {
 	if n.dispatcher == nil || !n.results.put(result) {
 		return
 	}
-	n.postDrain(n.applyInspections, n.destroyed)
+	n.postDrain(n.applyInspections)
 }
 
 // postDrain posts a mailbox's drain task. A refused post — the GUI thread's
@@ -770,13 +774,13 @@ func (n *NativeView) deliverInspection(result InspectionResult) {
 // may come to post it again: the drain task stays outstanding meanwhile, as
 // drainSlot describes, so the retry carries everything queued in the
 // meantime, and what the mailbox holds would otherwise never reach the view,
-// leaving items Checking, or a job unfinished, for good. Once stopped reports
-// that the view is destroyed a post can only fail, so the retries stop.
-func (n *NativeView) postDrain(drain func(), stopped func() bool) {
-	if err := n.dispatcher.Post(drain); err == nil || stopped() {
+// leaving items Checking, or a job unfinished, for good. Once the view is
+// destroyed a post can only fail, so the retries stop.
+func (n *NativeView) postDrain(drain func()) {
+	if err := n.dispatcher.Post(drain); err == nil || n.destroyed() {
 		return
 	}
-	time.AfterFunc(postRetryDelay, func() { n.postDrain(drain, stopped) })
+	time.AfterFunc(postRetryDelay, func() { n.postDrain(drain) })
 }
 
 // applyInspections resolves the delivered content checks into their items on

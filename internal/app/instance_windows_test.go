@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -58,6 +59,10 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 	if err != nil || already {
 		t.Fatalf("acquireInstance() = %v, %v", already, err)
 	}
+	// The closing instance exits once, by the goroutine below or, should the
+	// test stop first, by the cleanup.
+	exit := sync.OnceFunc(func() { procCloseHandle.Call(closing) })
+	t.Cleanup(exit)
 
 	if handle, activated, err := claimInstance(name, noWindow, 100*time.Millisecond); err != nil || !activated || handle != 0 {
 		t.Fatalf("claim while held = (%d, %v, %v), want to give up as activated", handle, activated, err)
@@ -65,7 +70,7 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		procCloseHandle.Call(closing)
+		exit()
 	}()
 	handle, activated, err := claimInstance(name, noWindow, 5*time.Second)
 	if err != nil || activated || handle == 0 {
