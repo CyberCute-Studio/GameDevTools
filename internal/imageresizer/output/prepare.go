@@ -204,6 +204,11 @@ var (
 	// an item whose output file name would exceed what Windows file systems
 	// accept.
 	ErrNameTooLong = fmt.Errorf("the output file name would be longer than %d characters", maxNameLength)
+	// ErrNameStream is the cause of the KindDestination error attached to an
+	// item whose source name holds a colon, as a path to a file's stream
+	// does, so its output file name would name a stream of another file in
+	// the output folder, which may be a listed original.
+	ErrNameStream = errors.New("the output file name would contain a colon, which Windows reads as naming a stream of another file")
 	// ErrNoUnusedName is the cause of the KindDestination error attached to
 	// an item for which the Rename search found no unused name: every
 	// numbered name it may take was already used, by this item's search or
@@ -311,6 +316,20 @@ func namesRoot(clean string) bool {
 	return len(volume) == len(clean) && !shareRoot(volume)
 }
 
+// namesVolume reports whether a path, as resolvedPath gives it, names a
+// drive, volume, or share root, or a volume, device, or server itself:
+// whether nothing is left of it but its volume name, or for the
+// extended-length UNC prefix, its server and share. However such a path is
+// reached, it names no file in a folder.
+func namesVolume(resolved string) bool {
+	volume := filepath.VolumeName(resolved)
+	names := len(pathNames(resolved[len(volume):]))
+	if strings.EqualFold(volume, `\\?\UNC`) {
+		return names <= 2
+	}
+	return names == 0
+}
+
 // shareRoot reports whether a volume name, as filepath.VolumeName gives it
 // for a cleaned path, names a share, \\server\share or \\.\UNC\server\share,
 // which is a folder, rather than a drive (C:), a server without a share
@@ -390,9 +409,10 @@ type Request struct {
 	// exactly as Sources are, so no result is ever planned onto a listed
 	// original, whether or not the job resizes it (RSZ-026, NFR-020). A path
 	// is only compared, never named after, so any absolute path is accepted,
-	// including a folder or a drive root the source list holds as
-	// inaccessible; one whose identity cannot be read where it stands stops
-	// an Overwrite job from replacing any file it may be.
+	// including a folder or a drive or share root the source list holds as
+	// inaccessible, which is no file, whether or not it can be read. A file
+	// whose identity cannot be read where it stands stops an Overwrite job
+	// from replacing any file it may be.
 	Protected []string
 	// Folder is the absolute path of the output folder.
 	Folder string
@@ -873,8 +893,8 @@ type planner struct {
 	format              Format
 	collision           Collision
 	sources             []Source
-	// listed holds the path of every source and protected path.
-	listed []string
+	// listed holds every source and protected path.
+	listed []listedPath
 	// sourceKeys holds the path key of every listed path, so no destination
 	// is ever planned onto one, whether or not it still exists.
 	sourceKeys map[string]struct{}
@@ -930,15 +950,26 @@ type planner struct {
 	unchecked int
 }
 
+// listedPath is one source or protected path, as given and as resolvedPath
+// gives it, with its path key.
+type listedPath struct {
+	path, resolved, key string
+}
+
 func newPlanner(ctx context.Context, request Request, folder string, files fileSystem) *planner {
-	listed := make([]string, 0, len(request.Sources)+len(request.Protected))
-	for _, source := range request.Sources {
-		listed = append(listed, source.Path)
+	listed := make([]listedPath, 0, len(request.Sources)+len(request.Protected))
+	sourceKeys := make(map[string]struct{}, cap(listed))
+	add := func(path string) {
+		resolved := resolvedPath(path)
+		key := foldCase(resolved)
+		listed = append(listed, listedPath{path: path, resolved: resolved, key: key})
+		sourceKeys[key] = struct{}{}
 	}
-	listed = append(listed, request.Protected...)
-	sourceKeys := make(map[string]struct{}, len(listed))
-	for _, path := range listed {
-		sourceKeys[PathKey(path)] = struct{}{}
+	for _, source := range request.Sources {
+		add(source.Path)
+	}
+	for _, path := range request.Protected {
+		add(path)
 	}
 	resolved := resolvedPath(folder)
 	return &planner{
@@ -1024,6 +1055,13 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 	name := filepath.Base(item.Destination)
 	if tooLong(name) {
 		p.fail(item, "name output file", fmt.Errorf("%s: %w", name, ErrNameTooLong))
+		return true, nil
+	}
+	if namesStream(item.Destination) {
+		// The output folder holds no colon, so the name does. Its path key
+		// is no listed path's, though writing it would add a stream to the
+		// file before the colon, and every numbered name would too.
+		p.fail(item, "name output file", fmt.Errorf("%s: %w", name, ErrNameStream))
 		return true, nil
 	}
 	key := PathKey(item.Destination)
@@ -1281,21 +1319,21 @@ func (p *planner) identity(key, path string) identified {
 // ReasonUnverified rather than ReasonSource, which renames it all the same.
 func (p *planner) listedAs(id fileID) (Reason, error) {
 	if !p.loaded {
-		for _, path := range p.listed {
+		for _, listed := range p.listed {
 			if err := p.ctx.Err(); err != nil {
 				return ReasonNone, kindError(KindCanceled, "plan outputs", err)
 			}
-			listed, err := p.files.Identity(path)
+			found, err := p.files.Identity(listed.path)
 			switch {
 			case err == nil:
-				p.sourceIDs[listed.id] = struct{}{}
-				p.sourceFiles[listed.id.anyVolume()] = struct{}{}
+				p.sourceIDs[found.id] = struct{}{}
+				p.sourceFiles[found.id.anyVolume()] = struct{}{}
 			case fileMissing(p.files, err):
 				// No file has the name in its folder any more, so none can
 				// be overwritten through it; the path stays protected by its
 				// key.
 			default:
-				p.unreadable(path)
+				p.unreadable(listed)
 			}
 			if p.unverified {
 				break
@@ -1313,26 +1351,38 @@ func (p *planner) listedAs(id fileID) (Reason, error) {
 }
 
 // unreadable records a listed path that may exist but whose identity could
-// not be read, such as a file the user may not open. When the path names a
-// file, one that is no link, in a folder whose identity can be read, the
-// file has its name in that folder; otherwise, such as for a drive, share,
-// or link that can no longer be reached, the file may be any existing file.
-func (p *planner) unreadable(path string) {
-	info, err := p.files.Lstat(path)
+// not be read, such as a file the user may not open. A drive, volume, or
+// share root, which names a folder however it is reached, and a folder that
+// is no link are no file, so no existing file can be one, and an unreachable
+// root is not inspected. When the path names a file, one that is no link,
+// in a folder whose identity can be read, the file has its name in that
+// folder; otherwise, such as for a file whose folder, drive, or share, or a
+// link it leads through, can no longer be reached, the file may be any
+// existing file.
+func (p *planner) unreadable(listed listedPath) {
+	if namesVolume(listed.resolved) {
+		return
+	}
+	info, err := p.files.Lstat(listed.path)
 	if err != nil {
 		p.unverified = true
+		return
+	}
+	if info.IsDir() {
+		// os.Lstat reports a link to a folder, a junction included, as no
+		// folder.
 		return
 	}
 	if info.Mode().Type() != 0 {
 		// A regular file is a file without listing it; any other entry is
 		// one only when its folder lists it as one.
-		listed, err := p.listFile(PathKey(path), path, info.Mode())
-		if err != nil || !listed.file {
+		found, err := p.listFile(listed.key, listed.path, info.Mode())
+		if err != nil || !found.file {
 			p.unverified = true
 			return
 		}
 	}
-	folder := filepath.Dir(path)
+	folder := filepath.Dir(listed.path)
 	found := p.identity(PathKey(folder), folder)
 	if found.err != nil {
 		p.unverified = true

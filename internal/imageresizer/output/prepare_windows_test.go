@@ -240,6 +240,34 @@ func TestExtendedPath(t *testing.T) {
 	}
 }
 
+// TestNamesVolume: a drive, volume, or share root, or a volume, device, or
+// server itself, is no file in a folder, in every spelling; anything on it
+// may be.
+func TestNamesVolume(t *testing.T) {
+	for path, want := range map[string]bool{
+		`C:\`:                          true,
+		`C:/`:                          true,
+		`\\?\C:\`:                      true,
+		`\??\C:\`:                      true,
+		`\\.\C:\`:                      true,
+		`\\?\C:`:                       true,
+		`\\server\share`:               true,
+		`\\server\share\`:              true,
+		`\\?\UNC\server\share`:         true,
+		`\\.\UNC\server\share\`:        true,
+		`\\?\UNC\server`:               true,
+		`C:\In`:                        false,
+		`C:\In\x.png`:                  false,
+		`\\server\share\x.png`:         false,
+		`\\?\UNC\server\share\x.png`:   false,
+		`\\?\Volume{0}\Pictures\x.png`: false,
+	} {
+		if got := namesVolume(resolvedPath(path)); got != want {
+			t.Errorf("namesVolume(resolvedPath(%q)) = %v, want %v", path, got, want)
+		}
+	}
+}
+
 // TestFindEntry: the folder lists a plain file, and a file whose reparse
 // point is no link, as files, and a folder or a junction as neither, each
 // under its own name, even when the path reaches it through its 8.3 short
@@ -859,6 +887,83 @@ func TestPrepareRenamesOnlyWhereAnUnreadableListedFileMayBe(t *testing.T) {
 		protected := filepath.Join(t.TempDir(), "gone.png")
 		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
 	})
+
+	// A folder the source list could not read is no file, wherever it is,
+	// so no existing file can be it.
+	t.Run("inaccessible folder", func(t *testing.T) {
+		protected := filepath.Join(t.TempDir(), "denied")
+		denyFolder(t, protected)
+		assertItems(t, plan(t, outputFolder(t), osFiles{}, protected), replaced)
+	})
+
+	t.Run("inaccessible folder in the output folder", func(t *testing.T) {
+		out := outputFolder(t)
+		protected := filepath.Join(out, "denied")
+		denyFolder(t, protected)
+		assertItems(t, plan(t, out, osFiles{}, protected), replaced)
+	})
+
+	// A drive or share root names a folder however it is reached, so one
+	// that cannot be reached is no file either.
+	t.Run("share root that cannot be reached", func(t *testing.T) {
+		protected := `\\unreachable.invalid\photos`
+		files := faultyFiles{
+			identity: func(path string) (identity, error) {
+				if strings.HasPrefix(path, `\\unreachable.invalid`) {
+					return identity{}, &fs.PathError{Op: "open", Path: path, Err: windows.ERROR_BAD_NETPATH}
+				}
+				return identify(path)
+			},
+			lstat: func(path string) (fs.FileInfo, error) {
+				if strings.HasPrefix(path, `\\unreachable.invalid`) {
+					return nil, &fs.PathError{Op: "lstat", Path: path, Err: windows.ERROR_BAD_NETPATH}
+				}
+				return os.Lstat(path)
+			},
+		}
+		assertItems(t, plan(t, outputFolder(t), files, protected), replaced)
+	})
+}
+
+// denyFolder creates a folder with a protected, empty DACL, as a folder
+// copied from another account can carry, so its identity cannot be read
+// while its parent still lists it.
+func denyFolder(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, path, "D:P")
+	t.Cleanup(func() { setDACL(t, path, "D:P(A;OICI;FA;;;WD)") })
+	if _, err := identify(path); err == nil {
+		t.Fatalf("the identity of %s can be read despite its empty DACL", path)
+	}
+	if info, err := os.Lstat(path); err != nil || !info.IsDir() {
+		t.Fatalf("Lstat(%s) = %v, %v, want a folder", path, info, err)
+	}
+}
+
+// TestPrepareFailsStreamNames pins RSZ-026 for a source whose name holds a
+// colon, as a path to a file's stream does: its destination would be a
+// stream of another file in the output folder, which may be a listed
+// original, so the item fails rather than add a stream to that file.
+func TestPrepareFailsStreamNames(t *testing.T) {
+	for _, policy := range policies {
+		out := t.TempDir()
+		original := filepath.Join(out, "photo.png")
+		writeFile(t, original, "listed original")
+		request := jobRequest(out, policy, png(filepath.Join(t.TempDir(), "photo.png:thumb.png")))
+		request.Protected = []string{original}
+		plan := mustPrepare(t, request)
+		assertItems(t, plan, []expect{{"photo.png:thumb.png", ActionFail, ReasonNone}})
+		if err := plan.Items[0].Err; !errors.Is(err, ErrNameStream) || !strings.Contains(err.Error(), "photo.png:thumb.png") {
+			t.Fatalf("%s: error = %v, want ErrNameStream naming the name", policy, err)
+		}
+		materialize(t, plan, "result")
+		if _, err := os.Lstat(original + ":thumb.png"); err == nil {
+			t.Fatalf("%s added a stream to %s", policy, original)
+		}
+	}
 }
 
 // TestPrepareReadsEachIdentityOnce: a confirmed Overwrite job reads each

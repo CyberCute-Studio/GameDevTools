@@ -12,7 +12,8 @@ import (
 
 // DefaultOutputFolder resolves the per-user Pictures folder and appends the
 // resized-image output directory used when the user has not chosen a folder
-// (RSZ-021).
+// (RSZ-021). A folder the output folder rules refuse is returned as an error,
+// as a Pictures folder that cannot be located is.
 func DefaultOutputFolder() (string, error) {
 	pictures, err := windows.KnownFolderPath(windows.FOLDERID_Pictures, 0)
 	if err != nil || pictures == "" {
@@ -25,5 +26,5 @@ func DefaultOutputFolder() (string, error) {
 		}
 		pictures = filepath.Join(home, "Pictures")
 	}
-	return filepath.Join(pictures, "GameDevTools", "Resized"), nil
+	return defaultFolderIn(pictures)
 }

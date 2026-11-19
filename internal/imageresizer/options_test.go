@@ -4,9 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 )
 
@@ -35,6 +37,30 @@ func TestDefaultOptions(t *testing.T) {
 	}
 	if err := options.Validate(); err != nil {
 		t.Fatalf("default options are invalid: %v", err)
+	}
+}
+
+// TestDefaultFolderIn: the default output folder lies under the Pictures
+// folder, and a Pictures folder that gives one the output folder rules
+// refuse leaves no default, as one that cannot be located does, rather than
+// a default every job would refuse.
+func TestDefaultFolderIn(t *testing.T) {
+	pictures := t.TempDir()
+	folder, err := defaultFolderIn(pictures)
+	if want := filepath.Join(pictures, "GameDevTools", "Resized"); err != nil || folder != want {
+		t.Fatalf("defaultFolderIn(%q) = %q, %v, want %q", pictures, folder, err, want)
+	}
+	refused := map[string]error{"Pictures": output.ErrFolderNotAbsolute}
+	if runtime.GOOS == "windows" {
+		// Windows drops the period that ends a name a longer path leads
+		// through.
+		refused[pictures+"."] = output.ErrFolderName
+	}
+	for pictures, want := range refused {
+		folder, err := defaultFolderIn(pictures)
+		if folder != "" || !errors.Is(err, want) || !strings.Contains(err.Error(), pictures) {
+			t.Errorf("defaultFolderIn(%q) = %q, %v, want an error naming the folder with %v", pictures, folder, err, want)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package imageresizer
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -117,6 +118,19 @@ func ParseBackground(input string) (string, error) {
 		}
 	}
 	return "#" + strings.ToUpper(value[1:]), nil
+}
+
+// defaultFolderIn is the default output folder under the Pictures folder
+// (RSZ-021), or why it cannot be used when the output planner's folder rules
+// refuse it, as for a Pictures folder whose path holds a name Windows would
+// change. A default no job could plan into is then reported as unavailable,
+// as one that cannot be resolved is, rather than selected.
+func defaultFolderIn(pictures string) (string, error) {
+	folder := filepath.Join(pictures, "GameDevTools", "Resized")
+	if err := output.ValidateFolder(folder); err != nil {
+		return "", fmt.Errorf("%s: %w", folder, err)
+	}
+	return folder, nil
 }
 
 // validateOutputFolder applies the output planner's folder rules, so a

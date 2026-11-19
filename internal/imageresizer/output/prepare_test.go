@@ -1157,8 +1157,10 @@ func TestPrepareAcceptsProtectedFoldersAndRoots(t *testing.T) {
 	for _, protected := range []string{root, in, filepath.Join(in, ".."), in + string(filepath.Separator) + "."} {
 		assertItems(t, overwrite(t, protected), []expect{{"x.png", ActionReplace, ReasonNone}})
 	}
+	// A root names a folder however it is reached, so one that cannot be
+	// reached is no file an existing destination may be.
 	if drive, ok := missingDrive(t); ok {
-		assertItems(t, overwrite(t, drive), []expect{{"x_2.png", ActionCreate, ReasonUnverified}})
+		assertItems(t, overwrite(t, drive), []expect{{"x.png", ActionReplace, ReasonNone}})
 	}
 }
 
