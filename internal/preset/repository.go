@@ -274,6 +274,27 @@ func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Pres
 	return section, nil
 }
 
+// LibrarySection returns a module settings section that holds only the
+// section's preset library — its custom presets and the module's selected
+// preset — as stored, or nil when the section holds none. Restoring the
+// default settings keeps it and resets the rest of the section (SET-005):
+// custom presets are deleted only by their explicit Delete.
+func LibrarySection(section json.RawMessage) (json.RawMessage, error) {
+	fields, err := decodeSectionFields(section)
+	if err != nil {
+		return nil, err
+	}
+	library, exists := fields[sectionKey]
+	if !exists {
+		return nil, nil
+	}
+	kept, err := json.Marshal(map[string]json.RawMessage{sectionKey: library})
+	if err != nil {
+		return nil, fmt.Errorf("encode module preset section: %w", err)
+	}
+	return kept, nil
+}
+
 func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, error) {
 	if len(section) == 0 {
 		return make(map[string]json.RawMessage), nil

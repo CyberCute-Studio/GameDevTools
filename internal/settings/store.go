@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -15,6 +16,26 @@ import (
 )
 
 const CurrentVersion = 1
+
+// staleTemporaryAge is how old a temporary settings file must be before Load
+// removes it as one an interrupted save left behind. A save keeps its
+// temporary file only for the moments between creating it and renaming it
+// over the settings file, so a file this old belongs to no save in flight,
+// even one by an instance in another of the user's sessions, which shares
+// the per-user settings directory.
+const staleTemporaryAge = time.Minute
+
+// ErrNotRestored reports that Restore wrote nothing: the restored settings
+// were invalid, or the current settings file could not be read or backed up.
+var ErrNotRestored = errors.New("the default settings were not restored")
+
+// notRestored is why Restore wrote nothing, marked as ErrNotRestored without
+// repeating that in its text, which the caller's message says already.
+type notRestored struct{ err error }
+
+func (e notRestored) Error() string { return e.err.Error() }
+
+func (e notRestored) Unwrap() []error { return []error{ErrNotRestored, e.err} }
 
 type Paths struct {
 	ConfigFile string
@@ -59,6 +80,8 @@ type Store struct {
 	validators map[string][]ModuleValidator
 	blocked    error
 	now        func() time.Time
+	// readBack reads a backup back to verify it; tests substitute it.
+	readBack func(string) ([]byte, error)
 }
 
 func LocalPaths() (Paths, error) {
@@ -96,6 +119,7 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 		migrations: make(map[int]Migration),
 		validators: make(map[string][]ModuleValidator),
 		now:        time.Now,
+		readBack:   os.ReadFile,
 	}
 	for _, migration := range migrations {
 		if migration != nil {
@@ -123,6 +147,7 @@ func (s *Store) Load() LoadResult {
 		result.Warnings = append(result.Warnings, ui.SettingsPathUnavailable)
 		return result
 	}
+	s.removeStaleTemporaries()
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return result
@@ -165,6 +190,71 @@ func (s *Store) Load() LoadResult {
 
 func (s *Store) Save(value Settings) error {
 	return s.save(value)
+}
+
+// Restore replaces the settings file with value, the application's settings
+// restored to their defaults (SET-005). The file's current bytes are first
+// copied to settings.json.reset-<timestamp>, as backup copies them, so the
+// settings it replaces stay recoverable, and Restore returns the copy's
+// path, or "" when there was no file to copy. When value would not save, or
+// the file cannot be read or copied, nothing is written and the error wraps
+// ErrNotRestored. Once the copy exists, a store whose saving Load disabled,
+// because it could not read or back up the original, saves again: the
+// original is preserved now, and the restore is the user's explicit request
+// to replace it. A write that fails after the copy is returned as Save
+// returns it, leaving the original in place beside its copy, as is the
+// failure without a settings path, where there is no file to copy.
+func (s *Store) Restore(value Settings) (string, error) {
+	if err := validate(value); err != nil {
+		return "", notRestored{err}
+	}
+	if err := s.validateModules(value); err != nil {
+		return "", notRestored{err}
+	}
+	if s.path == "" {
+		// There is no file to replace: the session takes the restored
+		// settings in memory, and the write fails as every save does.
+		return "", s.save(value)
+	}
+	backup := ""
+	data, err := os.ReadFile(s.path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return "", notRestored{fmt.Errorf("read the current settings: %w", err)}
+	default:
+		if backup, err = s.backup(data, "reset"); err != nil {
+			return "", notRestored{fmt.Errorf("back up the current settings: %w", err)}
+		}
+	}
+	s.blocked = nil
+	return backup, s.save(value)
+}
+
+// removeStaleTemporaries removes the temporary files that saves interrupted
+// before their rename — by a crash, a forced exit, or the end of the
+// Windows session — left in the settings directory, so they do not pile up
+// there across launches. Only regular files named as save creates them, and
+// older than staleTemporaryAge, are removed; a failure leaves the file for
+// the next launch.
+func (s *Store) removeStaleTemporaries() {
+	directory := filepath.Dir(s.path)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return
+	}
+	cutoff := s.now().Add(-staleTemporaryAge)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.Type().IsRegular() || !strings.HasPrefix(name, ".settings-") || !strings.HasSuffix(name, ".tmp") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(directory, name))
+	}
 }
 
 func (s *Store) save(value Settings) error {
@@ -311,6 +401,10 @@ func validate(value Settings) error {
 	return nil
 }
 
+// backup copies data, the settings file's bytes, to a new file beside it
+// named for the reason and the time, and reads the copy back, so a copy the
+// disk did not keep intact is reported as a failure rather than trusted
+// while the original is replaced (SET-006).
 func (s *Store) backup(data []byte, reason string) (string, error) {
 	directory := filepath.Dir(s.path)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -342,6 +436,15 @@ func (s *Store) backup(data []byte, reason string) (string, error) {
 		if err := file.Close(); err != nil {
 			os.Remove(path)
 			return "", err
+		}
+		copied, err := s.readBack(path)
+		if err != nil {
+			os.Remove(path)
+			return "", fmt.Errorf("verify backup %s: %w", path, err)
+		}
+		if !bytes.Equal(copied, data) {
+			os.Remove(path)
+			return "", fmt.Errorf("verify backup %s: the copy differs from the original", path)
 		}
 		return path, nil
 	}

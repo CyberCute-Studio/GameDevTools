@@ -14,7 +14,6 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
-	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/execute"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
@@ -69,26 +68,10 @@ func newAuditShell(t *testing.T) *auditShell {
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
 	dir := t.TempDir()
-	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(dir, "settings.json")})
-	preset.RegisterValidators(store)
-	captureStore, err := screenshot.NewOptionsStore(store, filepath.Join(dir, "Screenshots"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resizeStore, err := imageresizer.NewOptionsStore(store, filepath.Join(dir, "Resized"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	value := settings.Default()
-	screenshotPresets, err := preset.NewRepository(core.ModuleScreenshot, store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resizerPresets, err := preset.NewRepository(core.ModuleImageResizer, store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	capture, err := screenshot.NewOptionsManager(captureStore, &value)
+	state, err := openSession(settings.Paths{ConfigFile: filepath.Join(dir, "settings.json")}, nil, defaultFolders{
+		screenshot: filepath.Join(dir, "Screenshots"),
+		resizer:    filepath.Join(dir, "Resized"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,30 +81,16 @@ func newAuditShell(t *testing.T) *auditShell {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := capture.SetShortcut(shortcut); err != nil {
-		t.Fatal(err)
-	}
-	resize, err := imageresizer.NewOptionsManager(resizeStore, &value)
-	if err != nil {
+	if err := state.capture.SetShortcut(shortcut); err != nil {
 		t.Fatal(err)
 	}
 	monitor := display.NewMonitor()
 	executor := execute.NewService(monitor)
-	screenshotModule, err := screenshot.New(screenshotPresets, capture, &value, monitor, executor.FullDisplay, executor.Rectangle, overlay.NewController(monitor))
+	navigator, err := newNavigator(state, monitor, executor.FullDisplay, executor.Rectangle, overlay.NewController(monitor))
 	if err != nil {
 		t.Fatal(err)
 	}
-	resizerModule, err := imageresizer.New(resizerPresets, resize, &value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	navigator := core.NewNavigator()
-	for _, module := range []core.Module{screenshotModule, resizerModule, settings.New()} {
-		if err := navigator.Register(module); err != nil {
-			t.Fatal(err)
-		}
-	}
-	shell, err := newNativeShell(navigator, store, &value, nil, monitor, "")
+	shell, err := newNativeShell(navigator, state.store, state.value, nil, monitor, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +107,7 @@ func newAuditShell(t *testing.T) *auditShell {
 		shell.waitForBackgroundWork()
 	})
 	procShowWindow.Call(uintptr(shell.hwnd), swShowNoActivate)
-	return &auditShell{nativeShell: shell, capture: capture, resize: resize}
+	return &auditShell{nativeShell: shell, capture: state.capture, resize: state.resize}
 }
 
 // selectModule switches to the module as clicking its navigation button
@@ -343,6 +312,7 @@ var expectedTabOrder = map[core.ModuleID][]string{
 	},
 	core.ModuleSettings: {
 		"Button Settings",
+		"Button Restore Default Settings",
 	},
 }
 
@@ -761,8 +731,9 @@ func (a *auditShell) controlInView(control windows.Handle) bool {
 // note once the window appears (announceNotices): a startup warning is set
 // while the window is still hidden, where its announcement goes unheard,
 // and its unchanged text would never be announced again. An empty note
-// announces nothing, and neither does the placeholder note, which belongs
-// to the Settings view and would otherwise be announced on every visit.
+// announces nothing, as switching between the modules shows; the Settings
+// view, a placeholder until QLT-02, now has its own controls and an empty
+// note too (TestShellShowsAPlaceholderNoteQuietly covers a placeholder).
 func TestShellAnnouncesStartupNoticeOnceShown(t *testing.T) {
 	shell := newAuditShell(t)
 	shell.selectModule(t, core.ModuleSettings)
@@ -773,20 +744,43 @@ func TestShellAnnouncesStartupNoticeOnceShown(t *testing.T) {
 	t.Cleanup(watch.Stop)
 
 	shell.announceNotices()
-	if got := shell.note.Text(); got != ui.PlaceholderNote {
-		t.Fatalf("the Settings view's note = %q, want the placeholder note", got)
+	if got := shell.note.Text(); got != "" {
+		t.Fatalf("the Settings view's note = %q, want none", got)
 	}
 	shell.selectModule(t, core.ModuleScreenshot)
 	shell.selectModule(t, core.ModuleSettings)
 	shell.selectModule(t, core.ModuleScreenshot)
 	if got := watch.Count(shell.note.Handle()); got != 0 {
-		t.Fatalf("the placeholder note and an empty note raised %d announcements", got)
+		t.Fatalf("an empty note raised %d announcements", got)
 	}
 	shell.notice = "The settings file was recovered."
 	shell.updateView()
 	shell.announceNotices()
 	if got := watch.Count(shell.note.Handle()); got != 2 {
 		t.Fatalf("note announcements after the warning was set and the window appeared = %d, want 2", got)
+	}
+}
+
+// TestShellShowsAPlaceholderNoteQuietly pins that the placeholder note of a
+// module without a native view belongs to its view, as its title and
+// description do, and is shown without an announcement (updateView): it
+// would otherwise be announced on every visit to the module.
+func TestShellShowsAPlaceholderNoteQuietly(t *testing.T) {
+	shell := newCommandTestShell(t, nil)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	shell.updateView()
+	shell.announceNotices()
+	shell.updateView()
+	if got := shell.note.Text(); got != ui.PlaceholderNote {
+		t.Fatalf("a placeholder module's note = %q, want the placeholder note", got)
+	}
+	if got := watch.Count(shell.note.Handle()); got != 0 {
+		t.Fatalf("the placeholder note raised %d announcements", got)
 	}
 }
 

@@ -79,6 +79,20 @@ const (
 	SettingsCloseTitle            = "GameDevTools — Settings not saved"
 	SettingsCloseConfirmation     = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
 
+	// The Settings view's restore of the default settings (SET-005).
+	SettingsRestoreDescription  = "Restore Default Settings returns the global shortcut, the capture and resize options, and both output folders to their defaults. Custom presets, each module's selected preset, the images in the resize list, and saved images are kept; a preset is deleted only with Delete in its module. The current settings file is backed up first, in the same folder."
+	RestoreDefaultsAction       = "&Restore Default Settings"
+	RestoreDefaultsTitle        = "GameDevTools — Restore default settings"
+	RestoreDefaultsConfirmation = "Restore the default settings?\n\nThe global shortcut, the capture and resize options, and both output folders return to their defaults. Custom presets, each module's selected preset, and saved images are kept.\n\nThe current settings file is backed up first."
+	SettingsRestored            = "Default settings restored. The previous settings were backed up to %s."
+	SettingsRestoredNoBackup    = "Default settings restored."
+	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
+	SettingsRestoreSaveFailed   = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings."
+	// SettingsRestoreFollowUp joins what a module still needs after the
+	// restore, such as a default shortcut another application holds, to the
+	// restore's outcome.
+	SettingsRestoreFollowUp = " %s"
+
 	PresetNameRequired         = "Preset name is required. Enter a name."
 	PresetNameInvalid          = "Preset name cannot contain a null character. Remove it and enter a valid name."
 	PresetDimensionRange       = "%s must be between 1 and 16,384 pixels. Enter a whole number in that range."
@@ -134,6 +148,10 @@ const (
 	BrowseFolderDialogTitle    = "Choose the screenshot output folder"
 	FilenamePatternLabel       = "Filename pattern"
 	OutputFolderUnavailable    = "The default Pictures output folder is unavailable: %v. Choose an output folder before capturing."
+	// CaptureDefaultFolderUnknown is the reason OutputFolderUnavailable
+	// gives once the default settings are restored without a default
+	// folder, whose reason only startup knows.
+	CaptureDefaultFolderUnknown = "its location is unknown"
 
 	CaptureModeInvalid      = "Capture mode must be Free Rectangle, Preset Rectangle, or Full Display."
 	ImageFormatInvalid      = "Screenshot save format must be PNG or JPEG."
@@ -330,6 +348,8 @@ const (
 	ResizeOverwriteTitle    = "GameDevTools — Replace existing files"
 	ResizeOverwriteConfirm  = "Resized images will replace existing files with the same names in %s.\n\nSource images are never overwritten, and an image whose existing file cannot be confirmed safe to replace is saved under a numbered name instead.\n\nReplace existing files?"
 	ResizeOpenFolderFailed  = "The output folder could not be opened: %v"
+	ResizeCloseTitle        = "GameDevTools — Resize job running"
+	ResizeCloseConfirmation = "A resize job is running. Close anyway?\n\nClosing cancels the job: images already resized are kept, and the remaining images are not resized."
 
 	ResizeStatePending    = "Pending"
 	ResizeStateProcessing = "Processing…"

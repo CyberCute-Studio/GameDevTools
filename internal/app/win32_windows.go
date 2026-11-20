@@ -10,22 +10,24 @@ import (
 )
 
 const (
-	wmDestroy        = 0x0002
-	wmSize           = 0x0005
-	wmActivate       = 0x0006
-	wmSetFocus       = 0x0007
-	wmGetDlgCode     = 0x0087
-	wmClose          = 0x0010
-	wmCommand        = 0x0111
-	wmHotkey         = 0x0312
-	wmVScroll        = 0x0115
-	wmCtlColorStatic = 0x0138
-	wmSetFont        = 0x0030
-	wmMouseWheel     = 0x020a
-	wmTimer          = 0x0113
-	wmDisplayChange  = 0x007e
-	wmDPIChanged     = 0x02e0
-	wmDropFiles      = 0x0233
+	wmDestroy         = 0x0002
+	wmSize            = 0x0005
+	wmActivate        = 0x0006
+	wmSetFocus        = 0x0007
+	wmGetDlgCode      = 0x0087
+	wmClose           = 0x0010
+	wmQueryEndSession = 0x0011
+	wmEndSession      = 0x0016
+	wmCommand         = 0x0111
+	wmHotkey          = 0x0312
+	wmVScroll         = 0x0115
+	wmCtlColorStatic  = 0x0138
+	wmSetFont         = 0x0030
+	wmMouseWheel      = 0x020a
+	wmTimer           = 0x0113
+	wmDisplayChange   = 0x007e
+	wmDPIChanged      = 0x02e0
+	wmDropFiles       = 0x0233
 	// The shell's own messages are in the WM_APP range, as the capture
 	// toolbar's are. The dialog manager, which the shell's message loop runs,
 	// sends the window DM_GETDEFID (WM_USER) as it handles Tab, Enter, the

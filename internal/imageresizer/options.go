@@ -321,6 +321,20 @@ func (m *OptionsManager) SetOutputFolder(folder string) error {
 	return m.save()
 }
 
+// Reload replaces the options with those the shared settings value stores,
+// or the defaults where it stores none, as restoring the default settings
+// leaves them (SET-005), and forgets a stored folder the default folder
+// replaced at startup unless the value still stores it. Nothing is saved:
+// the restore saved the value.
+func (m *OptionsManager) Reload() error {
+	options, replaced, err := m.store.Load(*m.settings)
+	if err != nil {
+		return err
+	}
+	m.options, m.replaced = options, replaced
+	return nil
+}
+
 func (m *OptionsManager) save() error {
 	if err := m.store.Save(m.settings, m.options); err != nil {
 		return fmt.Errorf("%w: %w", ErrPersistence, err)

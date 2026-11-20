@@ -845,6 +845,13 @@ func (n *NativeView) commitQuality() {
 }
 
 func (n *NativeView) refresh() {
+	n.refreshOptions()
+	n.status.Clear()
+}
+
+// refreshOptions shows the capture options in their controls, clearing the
+// quality field's message.
+func (n *NativeView) refreshOptions() {
 	options := n.options.Options()
 	n.refreshMode()
 	formatIndex := 0
@@ -856,7 +863,43 @@ func (n *NativeView) refresh() {
 	n.quality.Edit.SetText(strconv.Itoa(options.JPEGQuality))
 	n.quality.Error.SetText("")
 	n.folder.SetText(options.OutputFolder)
-	n.status.Clear()
+}
+
+// NativeRestoreDefaults shows the capture options the restored default
+// settings hold (SET-005) and registers their global shortcut in place of
+// the one registered. A default shortcut another application holds is
+// reported as a startup conflict is, beside the field and in the status
+// area, and the combination the settings no longer name is released rather
+// than left registered behind a field that shows another. The status area
+// keeps its notice, such as the last capture's result, unless it shows a
+// shortcut failure the restore replaced. What the user still has to do — a
+// shortcut to choose, or an output folder when the default one is unknown —
+// is returned for the Settings view to report with the restore's outcome;
+// the selected preset and the preset form are not touched (APP-004).
+func (n *NativeView) NativeRestoreDefaults() string {
+	if err := n.options.Reload(); err != nil {
+		message := fmt.Sprintf(ui.OptionsOperationFailed, err)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)
+		return message
+	}
+	n.refreshOptions()
+	options := n.options.Options()
+	n.shortcut.Edit.SetText(options.Shortcut.String())
+	n.shortcut.Error.SetText("")
+	if n.status.Revision() == n.shortcutNotice {
+		n.status.Clear()
+	}
+	if n.hotkeys != nil {
+		if err := n.hotkeys.Apply(options.Shortcut); err != nil {
+			n.hotkeys.Release()
+			n.presentShortcutFailure(err)
+			return ui.FormatError(ui.ErrorShortcutRegistration, err)
+		}
+	}
+	if options.OutputFolder == "" {
+		return fmt.Sprintf(ui.OutputFolderUnavailable, errors.New(ui.CaptureDefaultFolderUnknown))
+	}
+	return ""
 }
 
 func (n *NativeView) refreshMode() {

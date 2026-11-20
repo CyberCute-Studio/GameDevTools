@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "shell": {
+    "selectedModule": "image-resizer",
+    "window": {
+      "x": -1600,
+      "y": 80,
+      "width": 1280,
+      "height": 800,
+      "maximized": false,
+      "hasPosition": true
+    }
+  },
+  "modules": {
+    "image-resizer": {
+      "presets": {
+        "version": 1,
+        "custom": [
+          {
+            "id": "custom.3be1e7a9e3714e8223ef5b47eccb8305",
+            "name": "Icon",
+            "width": 512,
+            "height": 512,
+            "resizeMode": "crop-to-fill"
+          }
+        ],
+        "selectedPresetId": "custom.3be1e7a9e3714e8223ef5b47eccb8305"
+      },
+      "resize": {
+        "version": 1,
+        "format": "jpeg",
+        "collision": "skip",
+        "jpegQuality": 80,
+        "background": "#202020",
+        "outputFolder": "D:\\Art\\Resized"
+      }
+    },
+    "screenshot": {
+      "capture": {
+        "version": 1,
+        "mode": "preset-rectangle",
+        "format": "jpeg",
+        "jpegQuality": 85,
+        "outputFolder": "D:\\Captures",
+        "shortcut": "Ctrl+Shift+F9"
+      },
+      "presets": {
+        "version": 1,
+        "custom": [
+          {
+            "id": "custom.33f0b221cb634be10931a495460d4730",
+            "name": "Store thumbnail",
+            "width": 640,
+            "height": 480
+          }
+        ],
+        "selectedPresetId": "builtin.screenshot.full-hd"
+      }
+    }
+  }
+}

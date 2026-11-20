@@ -666,6 +666,14 @@ func (n *NativeView) commitBackground() {
 }
 
 func (n *NativeView) refresh() {
+	n.refreshOptions()
+	n.refreshModeDescription()
+	n.status.Clear()
+}
+
+// refreshOptions shows the resize options in their controls, clearing the
+// JPEG fields' messages.
+func (n *NativeView) refreshOptions() {
 	options := n.options.Options()
 	n.refreshFormat()
 	n.quality.Edit.SetText(strconv.Itoa(options.JPEGQuality))
@@ -674,8 +682,33 @@ func (n *NativeView) refresh() {
 	n.background.Error.SetText("")
 	n.folder.SetText(options.OutputFolder)
 	n.refreshCollision()
-	n.refreshModeDescription()
-	n.status.Clear()
+}
+
+// NativeRestoreDefaults shows the resize options the restored default
+// settings hold (SET-005). The source list, its status, a running job and
+// its progress, the selected preset, and the preset form are kept (APP-004):
+// a job runs on the options it started with. When no default output folder
+// is known, the folder warning is returned for the Settings view to report
+// with the restore's outcome, as there is then no folder to resize into.
+func (n *NativeView) NativeRestoreDefaults() string {
+	if err := n.options.Reload(); err != nil {
+		message := fmt.Sprintf(ui.ResizeOperationFailed, err)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)
+		return message
+	}
+	n.refreshOptions()
+	return n.options.FolderWarning(nil)
+}
+
+// NativeCloseConfirmation returns the question closing the application asks
+// first while a resize job runs, as closing cancels it, or "" for the
+// message when no job runs or the user already cancelled it, and nothing
+// that has not been asked for would be lost.
+func (n *NativeView) NativeCloseConfirmation() (title, message string) {
+	if n.active == nil || n.active.cancelling {
+		return "", ""
+	}
+	return ui.ResizeCloseTitle, ui.ResizeCloseConfirmation
 }
 
 func (n *NativeView) refreshFormat() {
