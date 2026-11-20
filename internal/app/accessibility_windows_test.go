@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -61,14 +62,30 @@ type auditShell struct {
 	*nativeShell
 	capture *screenshot.OptionsManager
 	resize  *imageresizer.OptionsManager
+	// path is the settings file the window was opened on, in its own
+	// temporary folder, which also holds the default output folders.
+	path string
 }
 
 func newAuditShell(t *testing.T) *auditShell {
 	t.Helper()
+	return newAuditShellOn(t, nil)
+}
+
+// newAuditShellOn builds the audit's main window on a settings file that
+// holds data, or on no settings file when data is nil.
+func newAuditShellOn(t *testing.T, data []byte) *auditShell {
+	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
 	dir := t.TempDir()
-	state, err := openSession(settings.Paths{ConfigFile: filepath.Join(dir, "settings.json")}, nil, defaultFolders{
+	path := filepath.Join(dir, "settings.json")
+	if data != nil {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := openSession(settings.Paths{ConfigFile: path}, nil, defaultFolders{
 		screenshot: filepath.Join(dir, "Screenshots"),
 		resizer:    filepath.Join(dir, "Resized"),
 	})
@@ -107,7 +124,45 @@ func newAuditShell(t *testing.T) *auditShell {
 		shell.waitForBackgroundWork()
 	})
 	procShowWindow.Call(uintptr(shell.hwnd), swShowNoActivate)
-	return &auditShell{nativeShell: shell, capture: state.capture, resize: state.resize}
+	return &auditShell{nativeShell: shell, capture: state.capture, resize: state.resize, path: path}
+}
+
+// control returns the visible control the description names, as describe
+// gives it, in the module shown.
+func (a *auditShell) control(t *testing.T, want string) windows.Handle {
+	t.Helper()
+	for _, child := range a.children() {
+		if visible, _, _ := procIsWindowVisible.Call(uintptr(child)); visible == 0 {
+			continue
+		}
+		if a.describe(t, []windows.Handle{child})[0] == want {
+			return child
+		}
+	}
+	t.Fatalf("no visible control is %q", want)
+	return 0
+}
+
+// pump dispatches the messages waiting for the window's thread, as the
+// message loop does, until done reports true, failing after timeout.
+func (a *auditShell) pump(t *testing.T, timeout time.Duration, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out pumping the window's messages")
+		}
+		var message msg
+		for {
+			available, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&message)), 0, 0, 0, pmRemove)
+			if available == 0 {
+				break
+			}
+			procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
+			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // selectModule switches to the module as clicking its navigation button

@@ -1,0 +1,298 @@
+//go:build windows
+
+package app
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"image"
+	"image/png"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
+	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+)
+
+const (
+	lbGetText    = 0x0189
+	lbGetTextLen = 0x018a
+)
+
+// restoreProbe stands in for the Screenshot view's restore
+// (nativeDefaultsRestorer), counting the shell's requests. The real view
+// registers the default global shortcut, Ctrl+Alt+S, which is machine-wide
+// and must not be taken from the developer while the tests run;
+// TestNativeViewRestoreDefaultsShowsAndRegistersTheDefaults covers the view
+// with a fake registrar.
+type restoreProbe struct {
+	nativeView
+	calls *int
+}
+
+func (p restoreProbe) NativeRestoreDefaults() string {
+	*p.calls++
+	return ""
+}
+
+// probeScreenshotRestore puts a restoreProbe in place of the Screenshot view
+// for the test.
+func probeScreenshotRestore(t *testing.T, shell *auditShell) *int {
+	t.Helper()
+	calls := 0
+	screenshotView := shell.nativeViews[core.ModuleScreenshot]
+	shell.nativeViews[core.ModuleScreenshot] = restoreProbe{nativeView: screenshotView, calls: &calls}
+	t.Cleanup(func() { shell.nativeViews[core.ModuleScreenshot] = screenshotView })
+	return &calls
+}
+
+// listRows returns the rows of a list box.
+func listRows(list windows.Handle) []string {
+	count, _, _ := procSendMessageW.Call(uintptr(list), lbGetCount, 0, 0)
+	rows := make([]string, 0, int(count))
+	for index := uintptr(0); index < count; index++ {
+		length, _, _ := procSendMessageW.Call(uintptr(list), lbGetTextLen, index, 0)
+		buffer := make([]uint16, length+1)
+		procSendMessageW.Call(uintptr(list), lbGetText, index, uintptr(unsafe.Pointer(&buffer[0])))
+		rows = append(rows, windows.UTF16ToString(buffer))
+	}
+	return rows
+}
+
+// writePNG writes a width × height PNG with a gradient, so a resize has
+// work to do, and returns its path.
+func writePNG(t *testing.T, path string, width, height int) string {
+	t.Helper()
+	picture := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := range height {
+		for x := range width {
+			offset := picture.PixOffset(x, y)
+			picture.Pix[offset], picture.Pix[offset+1], picture.Pix[offset+2], picture.Pix[offset+3] = uint8(x), uint8(y), uint8(x+y), 255
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, picture); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// addSources drops the paths on the Image Resizer view, as Explorer does,
+// and waits until every row has been checked.
+func addSources(t *testing.T, shell *auditShell, paths ...string) windows.Handle {
+	t.Helper()
+	shell.selectModule(t, core.ModuleImageResizer)
+	shell.nativeViews[core.ModuleImageResizer].(nativeDropTarget).NativeDropFiles(paths)
+	list := shell.control(t, "ListBox Source images")
+	shell.pump(t, 30*time.Second, func() bool {
+		rows := listRows(list)
+		if len(rows) != len(paths) {
+			return false
+		}
+		for _, row := range rows {
+			if !strings.HasSuffix(row, " px — "+ui.SourceStatusReady) {
+				return false
+			}
+		}
+		return true
+	})
+	return list
+}
+
+// TestRestoreDefaultsKeepsPresetsImagesAndTheSession pins Restore Default
+// Settings on the real main window (SET-005, APP-004): the settings file is
+// backed up byte for byte and replaced by the defaults, which keep both
+// preset libraries with their selected presets and the window placement and
+// current module, and a restart loads them; the session takes the default
+// options, while the unsaved edits in both preset forms, the images in the
+// resize list, and every saved and source image are kept.
+func TestRestoreDefaultsKeepsPresetsImagesAndTheSession(t *testing.T) {
+	shell := newAuditShellOn(t, readFixture(t, "rsz-01"))
+	calls := probeScreenshotRestore(t, shell)
+	directory := filepath.Dir(shell.path)
+	images := map[string][]byte{}
+	for _, path := range []string{
+		writePNG(t, filepath.Join(directory, "Sources", "photo.png"), 32, 24),
+		writePNG(t, filepath.Join(directory, "Screenshots", "Screenshot_20261120_120000000.png"), 8, 8),
+		writePNG(t, filepath.Join(directory, "Resized", "photo.png"), 8, 6),
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		images[path] = data
+	}
+	list := addSources(t, shell, filepath.Join(directory, "Sources", "photo.png"))
+	setWindowText(shell.control(t, "Edit Name"), "Unsaved resize preset")
+	shell.selectModule(t, core.ModuleScreenshot)
+	setWindowText(shell.control(t, "Edit Name"), "Unsaved capture preset")
+	shell.selectModule(t, core.ModuleSettings)
+	window := shell.settings.Shell
+	before := reopenSession(t, shell.path)
+	captureBefore, resizeBefore := libraries(t, before)
+	original, err := os.ReadFile(shell.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	notice := shell.restoreDefaults()
+	backups, err := filepath.Glob(shell.path + ".reset-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v, err = %v, want one", backups, err)
+	}
+	if want := (ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.SettingsRestored, backups[0])}); notice != want {
+		t.Fatalf("outcome = %+v, want %+v", notice, want)
+	}
+	if copied, err := os.ReadFile(backups[0]); err != nil || !bytes.Equal(copied, original) {
+		t.Fatalf("backup differs from the replaced file: err = %v", err)
+	}
+	if *calls != 1 {
+		t.Fatalf("the Screenshot view was asked %d time(s) to show the defaults, want 1", *calls)
+	}
+	if shell.settings.Shell != window {
+		t.Fatalf("shell settings after the restore = %+v, want %+v kept", shell.settings.Shell, window)
+	}
+
+	restarted := reopenSession(t, shell.path)
+	if len(restarted.warnings) != 0 {
+		t.Fatalf("restart warnings = %v", restarted.warnings)
+	}
+	if restarted.value.Shell != window {
+		t.Fatalf("shell settings after a restart = %+v, want %+v", restarted.value.Shell, window)
+	}
+	var stored map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(mustJSON(t, restarted.value.Modules), &stored); err != nil {
+		t.Fatal(err)
+	}
+	for module, section := range stored {
+		if len(section) != 1 || section["presets"] == nil {
+			t.Fatalf("%s section after the restore = %s, want only its presets", module, mustJSON(t, section))
+		}
+	}
+	captureAfter, resizeAfter := libraries(t, restarted)
+	for name, pair := range map[string][2][]string{
+		"Screenshot":    {presetSummary(captureBefore.Custom(), captureBefore.SelectedID()), presetSummary(captureAfter.Custom(), captureAfter.SelectedID())},
+		"Image Resizer": {presetSummary(resizeBefore.Custom(), resizeBefore.SelectedID()), presetSummary(resizeAfter.Custom(), resizeAfter.SelectedID())},
+	} {
+		if strings.Join(pair[0], "\n") != strings.Join(pair[1], "\n") {
+			t.Fatalf("%s presets after the restore = %q, want %q", name, pair[1], pair[0])
+		}
+	}
+	if got, want := restarted.resize.Options(), imageresizer.DefaultOptions(filepath.Join(directory, "Resized")); got != want {
+		t.Fatalf("resize options after a restart = %+v, want the defaults", got)
+	}
+	if got, want := shell.resize.Options(), imageresizer.DefaultOptions(filepath.Join(directory, "Resized")); got != want {
+		t.Fatalf("resize options in the session = %+v, want the defaults", got)
+	}
+
+	shell.selectModule(t, core.ModuleImageResizer)
+	if got := windowText(shell.control(t, "Edit Output folder")); got != filepath.Join(directory, "Resized") {
+		t.Fatalf("resize folder shown = %q, want the default", got)
+	}
+	if got := windowText(shell.control(t, "Edit Name")); got != "Unsaved resize preset" {
+		t.Fatalf("Image Resizer preset name after the restore = %q, want the unsaved edit kept", got)
+	}
+	if rows := listRows(list); len(rows) != 1 || !strings.HasPrefix(rows[0], "photo.png") {
+		t.Fatalf("resize list after the restore = %q, want the image kept", rows)
+	}
+	shell.selectModule(t, core.ModuleScreenshot)
+	if got := windowText(shell.control(t, "Edit Name")); got != "Unsaved capture preset" {
+		t.Fatalf("Screenshot preset name after the restore = %q, want the unsaved edit kept", got)
+	}
+	for path, data := range images {
+		if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, data) {
+			t.Fatalf("image %s changed: err = %v", path, err)
+		}
+	}
+}
+
+// TestRestoreDefaultsChangesNothingWithoutABackup pins that a settings file
+// the restore cannot back up is left as it is and so is the session: the
+// outcome says that nothing was changed.
+func TestRestoreDefaultsChangesNothingWithoutABackup(t *testing.T) {
+	shell := newAuditShellOn(t, readFixture(t, "rsz-01"))
+	calls := probeScreenshotRestore(t, shell)
+	before := string(mustJSON(t, *shell.settings))
+	options := shell.resize.Options()
+	if err := os.Remove(shell.path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(shell.path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := shell.restoreDefaults()
+	if notice.Kind != ui.NoticeError || !strings.HasPrefix(notice.Message, "Default settings were not restored: read the current settings") {
+		t.Fatalf("outcome = %+v, want the restore refused", notice)
+	}
+	if got := string(mustJSON(t, *shell.settings)); got != before {
+		t.Fatalf("session settings changed:\n%s\nwant:\n%s", got, before)
+	}
+	if got := shell.resize.Options(); got != options || *calls != 0 {
+		t.Fatalf("resize options = %+v and %d view restore(s), want them unchanged", got, *calls)
+	}
+}
+
+// TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails pins SET-004
+// for the restore: once the file is backed up, a write that fails leaves
+// the file as it was and the session restored, with a warning that says so.
+func TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails(t *testing.T) {
+	shell := newAuditShellOn(t, readFixture(t, "rsz-01"))
+	calls := probeScreenshotRestore(t, shell)
+	original, err := os.ReadFile(shell.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shell.path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(shell.path, 0o600) })
+
+	notice := shell.restoreDefaults()
+	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") {
+		t.Fatalf("outcome = %+v, want the write failure", notice)
+	}
+	if current, err := os.ReadFile(shell.path); err != nil || !bytes.Equal(current, original) {
+		t.Fatalf("settings file changed: err = %v", err)
+	}
+	if backups, _ := filepath.Glob(shell.path + ".reset-*"); len(backups) != 1 {
+		t.Fatalf("backups = %v, want one", backups)
+	}
+	if got, want := shell.resize.Options(), imageresizer.DefaultOptions(filepath.Join(filepath.Dir(shell.path), "Resized")); got != want || *calls != 1 {
+		t.Fatalf("resize options = %+v and %d view restore(s), want the defaults and one", got, *calls)
+	}
+}
+
+// presetSummary lists a library's selected preset and its custom presets,
+// for comparing two libraries.
+func presetSummary(custom []preset.Preset, selected string) []string {
+	summary := []string{"selected " + selected}
+	for _, candidate := range custom {
+		summary = append(summary, fmt.Sprintf("%s %s %dx%d %s", candidate.ID, candidate.Name, candidate.Width, candidate.Height, candidate.ResizeMode))
+	}
+	return summary
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
