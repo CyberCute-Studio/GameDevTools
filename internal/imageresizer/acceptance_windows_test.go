@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -40,6 +41,12 @@ func folderCreation(t *testing.T, folder string) (deny, restore func() error) {
 	original, _, err := descriptor.DACL()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if original == nil {
+		// A NULL access control list grants everyone everything; one holding
+		// only the denying entry would grant nothing, so the folder could not
+		// even be read, rather than refuse only new files.
+		t.Fatalf("%s has no access control list, which AC-R14 changes: run it with an NTFS temporary folder", folder)
 	}
 	control, _, err := descriptor.Control()
 	if err != nil {
@@ -87,9 +94,10 @@ func folderCreation(t *testing.T, folder string) (deny, restore func() error) {
 // folder accepts files again, every item that starts is saved.
 func TestAcceptanceR14WriteFailure(t *testing.T) {
 	sources := t.TempDir()
+	content := fixtureJPEG(t, fixtureQuadrants(320, 240))
 	var paths []string
 	for index := range 12 {
-		paths = append(paths, writeFixture(t, sources, fmt.Sprintf("photo-%02d.jpg", index), fixtureJPEG(t, fixtureQuadrants(320, 240))))
+		paths = append(paths, writeFixture(t, sources, fmt.Sprintf("photo-%02d.jpg", index), content))
 	}
 	out := t.TempDir()
 	deny, restore := folderCreation(t, out)
@@ -129,11 +137,13 @@ func TestAcceptanceR14WriteFailure(t *testing.T) {
 	}
 
 	failed := 0
+	var saved []string
 	for index, status := range result.summary.Items {
 		item := result.item(index)
 		switch status.State {
 		case job.StateCompleted:
 			requireSize(t, status.Destination, decodeOutput(t, status.Destination), 16, 12)
+			saved = append(saved, filepath.Base(status.Destination))
 		case job.StateFailed:
 			failed++
 			var outputErr *output.Error
@@ -161,6 +171,8 @@ func TestAcceptanceR14WriteFailure(t *testing.T) {
 	if got := result.summary.Progress; got.Failed != failed || got.Completed != len(paths)-failed {
 		t.Fatalf("summary counts = %+v, want %d failed", got, failed)
 	}
-	requireNoWriteLeftovers(t, out)
+	// The folder holds the saved results alone: no partial final file under
+	// another name, and no temporary or moved-aside file of a write.
+	requireNames(t, out, saved...)
 	requireSize(t, savedBefore, decodeOutput(t, savedBefore), 16, 12)
 }

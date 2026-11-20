@@ -156,6 +156,24 @@ func (c *ComboBox) Selected() int {
 	return int(int32(index))
 }
 
+// Count returns the number of items in the combo box's list.
+func (c *ComboBox) Count() int {
+	count, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetCount, 0, 0)
+	return int(int32(count))
+}
+
+// ItemText returns the text of the item at index, or "" for an index out of
+// range.
+func (c *ComboBox) ItemText(index int) string {
+	length, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetLBTextLen, uintptr(index), 0)
+	if int32(length) <= 0 {
+		return ""
+	}
+	buffer := make([]uint16, int(length)+1)
+	procSendMessageW.Call(uintptr(c.hwnd), cbGetLBText, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])))
+	return windows.UTF16ToString(buffer)
+}
+
 type TextInput struct {
 	Label *Label
 	Edit  Control

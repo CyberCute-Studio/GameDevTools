@@ -28,29 +28,39 @@ import (
 // which needs Windows' access control lists, in acceptance_windows_test.go —
 // end to end, as the view runs a job once Start Resize is pressed, but
 // without the window:
-// the fixtures are written to disk, added to a source list, and checked with
-// decode.Inspect, as the view's background content checks do; the request is
-// built from the validated options and the preset; and job.Run resizes every
-// listed source with the real decoder, resizer, encoder, and writer. The
-// results are decoded back from disk, and every item's final status is
-// applied to the list, so the rows and details the view would show are
-// checked too. Each test is named after its scenario, so
+// the fixtures are written to disk, added to a source list, and checked by
+// the content check the view's inspector runs (decode.Inspect behind its
+// panic guard); the request is built from the validated options and the
+// preset by the view's own newJobStart, and the sources whose check failed
+// are checked again first by the view's own recheckInputs; and job.Run
+// resizes every listed source with the real decoder, resizer, encoder, and
+// writer. The results are decoded back from disk, and every item's final
+// status is applied to the list, so the rows and details the view would show
+// are checked too. Each test is named after its scenario, so
 // `go test -run TestAcceptance ./internal/imageresizer` runs the whole suite;
 // docs/image-resizer-verification.md maps each scenario to these tests and to
 // the unit tests behind them.
 
 // acceptanceResult is a finished acceptance job: the source list with every
-// item's final status applied, as the view's rows show them, and the job's
-// summary.
+// item's final status applied, as the view's rows show them, the job's
+// summary, and the indexes of the sources it checked again before it
+// started.
 type acceptanceResult struct {
 	inventory *Inventory
 	summary   job.Summary
+	rechecked []int
 }
 
 // item returns the listed source at index, with its job result.
 func (r acceptanceResult) item(index int) SourceItem {
 	return r.inventory.Item(index)
 }
+
+// acceptanceCheck is the content check the view's inspector runs for every
+// added file and its jobs run again for the sources whose check failed:
+// decode.Inspect, behind the inspector's panic guard. The suite queues
+// nothing on it, so it starts no goroutine.
+var acceptanceCheck = NewInspector(decode.Inspect, nil).check
 
 // listSources adds the paths to a new source list and checks each supported
 // file's content, as the view does when files are added.
@@ -62,7 +72,7 @@ func listSources(t *testing.T, paths []string) *Inventory {
 		if item.Status != StatusChecking {
 			continue
 		}
-		info, err := decode.Inspect(context.Background(), item.Path)
+		info, err := acceptanceCheck(context.Background(), item.Path)
 		if _, ok := inventory.Resolve(InspectionResult{ID: item.ID, Info: info, Err: err}); !ok {
 			t.Fatalf("the content check of %s was not applied", item.Path)
 		}
@@ -71,9 +81,12 @@ func listSources(t *testing.T, paths []string) *Inventory {
 }
 
 // startAcceptance runs a job over the listed sources with the options and
-// the preset's target, building the request as the view's Start Resize does
-// once the user confirmed an Overwrite job, or declined to when confirmed is
-// false, and applies every item's final status to the list.
+// the preset's target as the view's Start Resize does once the user
+// confirmed an Overwrite job, or declined to when confirmed is false: the
+// request is built by the view's newJobStart, and the sources whose check
+// failed are checked again by the view's recheckInputs, their checks applied
+// to the list, before job.Run. Every item's final status is then applied to
+// the list.
 func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, options ResizeOptions, confirmed bool, target resize.Target, observe func(job.Event)) (acceptanceResult, error) {
 	t.Helper()
 	if err := target.Validate(); err != nil {
@@ -86,19 +99,20 @@ func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, op
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs, ids := inventory.JobInputs()
-	summary, err := job.Run(ctx, job.Request{
-		Inputs:           inputs,
-		Folder:           options.OutputFolder,
-		Format:           options.Format,
-		Collision:        options.Collision,
-		ConfirmOverwrite: confirmed,
-		Settings:         job.Settings{Target: target, JPEGQuality: options.JPEGQuality, Background: background},
-	}, observe)
-	for index, status := range summary.Items {
-		inventory.SetResult(ids[index], status)
+	start := inventory.newJobStart(options, target, background, confirmed)
+	applied := func(result InspectionResult) {
+		if _, ok := inventory.Recheck(result); !ok {
+			t.Errorf("the check of item %d made again was not applied", result.ID)
+		}
 	}
-	return acceptanceResult{inventory: inventory, summary: summary}, err
+	if !recheckInputs(ctx, start.rechecks, start.ids, start.request.Inputs, acceptanceCheck, applied) {
+		t.Fatal("the job was cancelled while it checked its sources again")
+	}
+	summary, err := job.Run(ctx, start.request, observe)
+	for index, status := range summary.Items {
+		inventory.SetResult(start.ids[index], status)
+	}
+	return acceptanceResult{inventory: inventory, summary: summary, rechecked: start.rechecks}, err
 }
 
 // runAcceptance lists the sources and runs one job over them, which must
@@ -220,23 +234,14 @@ func folderNames(t *testing.T, folder string) []string {
 }
 
 // requireNames checks a folder holds exactly the named entries, which also
-// proves it holds no temporary or moved-aside file of a write.
+// proves it holds no temporary or moved-aside file of a write. It sorts a
+// copy of want, so a caller's slice keeps its order.
 func requireNames(t *testing.T, folder string, want ...string) {
 	t.Helper()
+	want = slices.Clone(want)
 	slices.Sort(want)
 	if got := folderNames(t, folder); !slices.Equal(got, want) {
 		t.Fatalf("%s holds %q, want %q", folder, got, want)
-	}
-}
-
-// requireNoWriteLeftovers checks a folder holds no temporary or moved-aside
-// file of a write.
-func requireNoWriteLeftovers(t *testing.T, folder string) {
-	t.Helper()
-	for _, name := range folderNames(t, folder) {
-		if strings.HasPrefix(name, ".gamedevtools-") {
-			t.Fatalf("%s holds %s, a write's temporary or moved-aside file", folder, name)
-		}
 	}
 }
 
@@ -246,7 +251,7 @@ func requireNoWriteLeftovers(t *testing.T, folder string) {
 // columns and the ten-pixel stripes are five pixels wide across and ten
 // down. The view discloses the distortion for every Stretch preset before a
 // job can start, which TestNativeViewModeDescriptionFollowsPresetSelection
-// pins in the window, from this copy.
+// pins in the window.
 func TestAcceptanceR01Stretch(t *testing.T) {
 	source := writeFixture(t, t.TempDir(), "marks.png", fixturePNG(t, fixtureCropMarks()))
 	out := filepath.Join(t.TempDir(), "Resized")
@@ -261,9 +266,6 @@ func TestAcceptanceR01Stretch(t *testing.T) {
 	requirePixel(t, "stretched", img.Pixels, 448, 150, fixtureBlue, 4)
 	requirePixel(t, "stretched", img.Pixels, 256, 150, fixtureBlack, 24)
 	requirePixel(t, "stretched", img.Pixels, 200, 256, fixtureBlack, 4)
-	if description := fmt.Sprintf(ui.ResizeModeStretchDescription, 512, 512); !strings.Contains(description, "distorted") {
-		t.Fatalf("the Stretch description %q does not disclose distortion", description)
-	}
 }
 
 // TestAcceptanceR02FitLandscape pins AC-R02 for a PNG and a JPEG source: a
@@ -420,8 +422,13 @@ func TestAcceptanceR06MixedBatch(t *testing.T) {
 
 	requireItem(t, result, 0, job.StateCompleted, filepath.Join(out, "sprite.png"))
 	requireItem(t, result, 1, job.StateCompleted, filepath.Join(out, "photo.jpg"))
-	// The list could not use either, so the job plans no destination for
+	// The corrupt PNG is checked again before the job, as the view's job
+	// does (RSZ-049), and is still damaged; the GIF's name refuses it, so it
+	// is not. The list could use neither, so the job plans no destination for
 	// them.
+	if !slices.Equal(result.rechecked, []int{2}) {
+		t.Fatalf("the job checked items %v again, want only the corrupt PNG", result.rechecked)
+	}
 	requireItem(t, result, 2, job.StateFailed, "")
 	requireItem(t, result, 3, job.StateFailed, "")
 	wantRows := []string{
@@ -700,9 +707,10 @@ func TestAcceptanceR12EXIFOrientation(t *testing.T) {
 // window staying usable — is TestNativeViewStaysResponsiveDuringARealJob's.
 func TestAcceptanceR13Cancellation(t *testing.T) {
 	sources := t.TempDir()
+	content := fixtureJPEG(t, fixtureQuadrants(640, 480))
 	var paths []string
 	for index := range 12 {
-		paths = append(paths, writeFixture(t, sources, fmt.Sprintf("photo-%02d.jpg", index), fixtureJPEG(t, fixtureQuadrants(640, 480))))
+		paths = append(paths, writeFixture(t, sources, fmt.Sprintf("photo-%02d.jpg", index), content))
 	}
 	out := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())

@@ -31,6 +31,9 @@ const (
 	cbResetContent      = 0x014b
 	cbGetCurSel         = 0x0147
 	cbSetCurSel         = 0x014e
+	cbGetCount          = 0x0146
+	cbGetLBText         = 0x0148
+	cbGetLBTextLen      = 0x0149
 	cbnSelChange        = 1
 
 	wsVScroll           = 0x00200000

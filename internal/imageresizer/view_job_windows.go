@@ -52,15 +52,6 @@ const jobReleaseDelay = 5 * time.Second
 // jobRunner runs a resize job as job.Run does; tests substitute it.
 type jobRunner func(context.Context, job.Request, func(job.Event)) (job.Summary, error)
 
-// jobStart is a job ready to start: its request, the inventory IDs of its
-// items by input index, and the indexes of the inputs it checks again first
-// (Inventory.Recheckable).
-type jobStart struct {
-	request  job.Request
-	ids      []uint64
-	rechecks []int
-}
-
 // activeJob is a job the view started, as the GUI thread tracks it, but for
 // events and done, which the job's goroutine uses too, and ids and rechecks,
 // which it reads and nothing changes.
@@ -198,24 +189,7 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 			return refuse(ui.ErrorValidation, refusal)
 		}
 	}
-	inputs, ids := n.inventory.JobInputs()
-	rechecks := n.inventory.Recheckable()
-	return jobStart{
-		request: job.Request{
-			Inputs:           inputs,
-			Folder:           options.OutputFolder,
-			Format:           options.Format,
-			Collision:        options.Collision,
-			ConfirmOverwrite: confirmed,
-			Settings: job.Settings{
-				Target:      target,
-				JPEGQuality: options.JPEGQuality,
-				Background:  background,
-			},
-		},
-		ids:      ids,
-		rechecks: rechecks,
-	}, true
+	return n.inventory.newJobStart(options, target, background, confirmed), true
 }
 
 // listRefusal explains why the source list cannot start a job — an image is
@@ -370,30 +344,17 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 }
 
 // recheck checks again, on the job's goroutine and before the job starts,
-// the content of the inputs whose check had failed, as Recheckable lists
-// them, so the job takes each as it now is (RSZ-049): one that has since
-// become readable, or was replaced by a valid image, is resized, and one
-// that still cannot be used fails with its current reason. The list's
-// content checks are idle meanwhile, as no image is being checked when a job
-// starts and none can be added while it runs, so this decodes one source at
-// a time as they do (NFR-014) — but for a check of a job the view let go,
-// which the list's checks of images added since may run beside. Each check
-// made goes to the job's mailbox, which the view applies to the list with
-// the job's events, or when the job ends, however it ends (applyRechecks).
-// It reports whether it checked every one: once the job is cancelled the
-// rest are not checked.
+// the content of the inputs whose check had failed, as recheckInputs
+// describes (RSZ-049). The list's content checks are idle meanwhile, as no
+// image is being checked when a job starts and none can be added while it
+// runs, so this decodes one source at a time as they do (NFR-014) — but for
+// a check of a job the view let go, which the list's checks of images added
+// since may run beside. Each check made goes to the job's mailbox, which the
+// view applies to the list with the job's events, or when the job ends,
+// however it ends (applyRechecks). It reports whether it checked every one:
+// once the job is cancelled the rest are not checked.
 func recheck(ctx context.Context, active *activeJob, inputs []job.Input, check inspectFunc) bool {
-	for _, index := range active.rechecks {
-		input := &inputs[index]
-		info, err := check(ctx, input.Path)
-		if ctx.Err() != nil {
-			return false
-		}
-		result := InspectionResult{ID: active.ids[index], Info: info, Err: err}
-		active.events.recheck(result)
-		*input = recheckedInput(input.Path, result)
-	}
-	return true
+	return recheckInputs(ctx, active.rechecks, active.ids, inputs, check, active.events.recheck)
 }
 
 // postJobEvents posts the drain task for the job's queued events, retried

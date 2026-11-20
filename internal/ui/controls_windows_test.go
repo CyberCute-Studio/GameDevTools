@@ -213,6 +213,38 @@ func newTestParent(t *testing.T) windows.Handle {
 	return windows.Handle(hwnd)
 }
 
+// TestComboBoxReadsBackItsItems pins that a combo box reports how many items
+// its list holds and the text of each, and "" for an index out of range.
+func TestComboBoxReadsBackItsItems(t *testing.T) {
+	parent := newTestParent(t)
+	combo, err := NewComboBox(parent, 76)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := combo.Count(); got != 0 {
+		t.Fatalf("empty combo box count = %d", got)
+	}
+	want := []string{"HD — 1280 × 720 px (built-in)", "Capture 640 — 640 × 480 px", ""}
+	for _, text := range want {
+		combo.Add(text)
+	}
+	if got := combo.Count(); got != len(want) {
+		t.Fatalf("count = %d, want %d", got, len(want))
+	}
+	for index, text := range want {
+		if got := combo.ItemText(index); got != text {
+			t.Fatalf("item %d = %q, want %q", index, got, text)
+		}
+	}
+	if got := combo.ItemText(len(want)); got != "" {
+		t.Fatalf("item out of range = %q", got)
+	}
+	combo.Reset()
+	if got := combo.Count(); got != 0 {
+		t.Fatalf("count after reset = %d", got)
+	}
+}
+
 // TestListBoxSetItemTextKeepsSelectionAndScroll pins that rewriting one row
 // in place — as background status updates do — preserves the selection of
 // that row and of the others, the extended-selection anchor, the caret, and

@@ -2,8 +2,10 @@ package imageresizer
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"io/fs"
 	"slices"
 	"sync"
@@ -144,6 +146,65 @@ func recheckedInput(path string, result InspectionResult) job.Input {
 	}
 	status, detail := failureStatus(result.Err)
 	return job.Input{Path: path, Err: &sourceError{status: status, detail: detail}}
+}
+
+// jobStart is a job ready to start: its request, the inventory IDs of its
+// items by input index, and the indexes of the inputs it checks again first
+// (Inventory.Recheckable).
+type jobStart struct {
+	request  job.Request
+	ids      []uint64
+	rechecks []int
+}
+
+// newJobStart builds the job Start Resize starts for every listed item
+// (RSZ-040), once the preset's target, the options, and their background
+// color have been validated and an Overwrite job confirmed or not: each item
+// is an input, as JobInputs lists them, and the items whose content check
+// failed are checked again first, as Recheckable lists them. The view builds
+// every job with it, and the acceptance suite its jobs, so both run the
+// request the user's Start Resize runs.
+func (v *Inventory) newJobStart(options ResizeOptions, target resize.Target, background color.RGBA, confirmed bool) jobStart {
+	inputs, ids := v.JobInputs()
+	return jobStart{
+		request: job.Request{
+			Inputs:           inputs,
+			Folder:           options.OutputFolder,
+			Format:           options.Format,
+			Collision:        options.Collision,
+			ConfirmOverwrite: confirmed,
+			Settings: job.Settings{
+				Target:      target,
+				JPEGQuality: options.JPEGQuality,
+				Background:  background,
+			},
+		},
+		ids:      ids,
+		rechecks: v.Recheckable(),
+	}
+}
+
+// recheckInputs checks again, before a job starts, the content of its inputs
+// whose check had failed, at the indexes rechecks lists, as Recheckable
+// lists them, so the job takes each as it now is (RSZ-049): one that has
+// since become readable, or was replaced by a valid image, is resized, and
+// one that still cannot be used fails with its current reason. Each check
+// made replaces its input in inputs and is handed to report, with the item's
+// ID from ids, for the source list to apply (Inventory.Recheck). It reports
+// whether it checked every one: once ctx is cancelled the rest are not
+// checked.
+func recheckInputs(ctx context.Context, rechecks []int, ids []uint64, inputs []job.Input, check inspectFunc, report func(InspectionResult)) bool {
+	for _, index := range rechecks {
+		input := &inputs[index]
+		info, err := check(ctx, input.Path)
+		if ctx.Err() != nil {
+			return false
+		}
+		result := InspectionResult{ID: ids[index], Info: info, Err: err}
+		report(result)
+		*input = recheckedInput(input.Path, result)
+	}
+	return true
 }
 
 // stateLabel is the source-list status of an item in a job state

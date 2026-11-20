@@ -477,19 +477,21 @@ func windowRect(t *testing.T, hwnd windows.Handle) windows.Rect {
 // TestNativeViewStaysResponsiveDuringARealJob pins AC-A04 and the GUI's
 // part of AC-R13 with a real job: the view's own job.Run resizes real files,
 // and is held partway, once its first result is saved, inside the observer
-// that hands its events to the GUI thread. Meanwhile the GUI thread, which
-// the job never runs on, moves the window, reviews every image's state, and
-// cancels the job through Cancel Resize. Released, the job starts no further
-// image; the saved results stay valid, the rest end Cancelled with nothing
-// left in the output folder for them, and the view is ready for the next
-// job.
+// that hands its events to the GUI thread. The job runs on a thread of its
+// own, never the GUI thread, which is what keeps the window responsive
+// (TECH-005), and the test checks that it does; meanwhile the GUI thread
+// moves the window, reviews every image's state, and cancels the job through
+// Cancel Resize. Released, the job starts no further image; the saved
+// results stay valid, the rest end Cancelled with nothing left in the output
+// folder for them, and the view is ready for the next job.
 func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
+	content := fixtureJPEG(t, fixtureQuadrants(800, 600))
 	var paths []string
 	for index := range 8 {
-		paths = append(paths, writeViewFile(t, directory, fmt.Sprintf("photo-%d.jpg", index), fixtureJPEG(t, fixtureQuadrants(800, 600))))
+		paths = append(paths, writeViewFile(t, directory, fmt.Sprintf("photo-%d.jpg", index), content))
 	}
 	view.NativeDropFiles(paths)
 	settle(t, view, dispatcher)
@@ -499,10 +501,23 @@ func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
 	var releaseOnce sync.Once
 	t.Cleanup(func() { waitJobDone(t, view) })
 	// Registered after waitJobDone, so it runs first: a test that fails while
-	// the job is held lets it go before waiting for it.
-	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	// the job is held cancels the job and lets it go before waiting for it,
+	// so the job stops rather than resizing the remaining images.
+	t.Cleanup(func() {
+		if view.active != nil {
+			view.active.cancel()
+		}
+		releaseOnce.Do(func() { close(release) })
+	})
+	// The test's goroutine is locked to the GUI thread, which runs nothing
+	// else, so the job's goroutine runs on the GUI thread only if the view
+	// runs the job there itself. Such a job is not held — the GUI thread
+	// would wait on itself — so the test fails rather than hangs.
+	guiThread := windows.GetCurrentThreadId()
+	var jobThread atomic.Uint32
 	var lateStarts atomic.Int32
 	view.run = func(ctx context.Context, request job.Request, observe func(job.Event)) (job.Summary, error) {
+		jobThread.Store(windows.GetCurrentThreadId())
 		started := make(map[int]bool)
 		holding := true
 		return job.Run(ctx, request, func(event job.Event) {
@@ -516,7 +531,9 @@ func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
 			if event.Status.State == job.StateCompleted && holding {
 				holding = false
 				close(held)
-				<-release
+				if windows.GetCurrentThreadId() != guiThread {
+					<-release
+				}
 			}
 		})
 	}
@@ -529,6 +546,9 @@ func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
 	case <-held:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the job saved no result")
+	}
+	if jobThread.Load() == guiThread {
+		t.Fatal("the job ran on the GUI thread")
 	}
 	for len(dispatcher.tasks) > 0 {
 		dispatcher.runNext(t)

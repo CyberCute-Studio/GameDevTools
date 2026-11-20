@@ -24,12 +24,14 @@ import (
 // within 1024 × 1024. "Mixed" follows what a camera or phone produces: 40
 // landscape 4000 × 3000 pictures, 30 stored as portrait 3000 × 4000, and 30
 // stored as landscape with an EXIF orientation that makes them upright
-// portraits, 6 or 8 in turn, all 4:2:0 at quality 90 as the standard
-// library encodes color, with photo-like content of gradients, texture, and
-// noise, so their entropy-coded data costs about what a photograph's does
-// to decode. Seven distinct pictures are encoded, four landscape and three
-// portrait, and copied under 100 names, since decoding a copy costs what
-// decoding the original does.
+// portraits — the last three of every ten sources, tagged 8, 6, and 8, so 20
+// are tagged 8 and 10 are tagged 6, which costs the same to turn upright —
+// all 4:2:0 at quality 90 as the standard library encodes color, with
+// photo-like content of gradients, texture, and noise, so their
+// entropy-coded data costs about what a photograph's does to decode. Seven
+// distinct pictures are encoded, four landscape and three portrait, and
+// copied under 100 names, since decoding a copy costs what decoding the
+// original does.
 const (
 	referenceSources = 100
 	referenceLong    = 4000
@@ -86,7 +88,11 @@ func encodeReference(b *testing.B, img image.Image) []byte {
 // referenceInputs writes the reference sources into a new folder and lists
 // each as the source list does once its content check succeeds, returning
 // the inputs, the bytes the sources take on disk, and the memory decoding
-// every source at once would take by their checks' estimates.
+// every source at once would take by their checks' estimates. A check's
+// description depends only on the file's content, so each of the 15
+// distinct contents — the seven pictures, and four landscapes under each of
+// two orientations — is checked once and its description given to its
+// copies.
 func referenceInputs(b *testing.B) ([]Input, uint64, uint64) {
 	b.Helper()
 	var landscapes, portraits [][]byte
@@ -96,30 +102,45 @@ func referenceInputs(b *testing.B) ([]Input, uint64, uint64) {
 	for seed := range uint32(3) {
 		portraits = append(portraits, encodeReference(b, referencePicture(referenceShort, referenceLong, seed+4)))
 	}
+	// picture names a distinct content: which pictures, which of them, and
+	// the orientation it is tagged with, or 0 for none.
+	type picture struct {
+		portrait    bool
+		index       int
+		orientation uint16
+	}
+	checked := make(map[picture]decode.Info)
 	folder := b.TempDir()
 	inputs := make([]Input, 0, referenceSources)
 	var onDisk, decodeAll uint64
 	for index := range referenceSources {
 		var content []byte
+		var source picture
 		switch {
 		case index%10 < 4:
-			content = landscapes[index%len(landscapes)]
+			source = picture{index: index % len(landscapes)}
+			content = landscapes[source.index]
 		case index%10 < 7:
-			content = portraits[index%len(portraits)]
+			source = picture{portrait: true, index: index % len(portraits)}
+			content = portraits[source.index]
 		default:
-			orientation := uint16(6)
+			source = picture{index: index % len(landscapes), orientation: 6}
 			if index%2 == 1 {
-				orientation = 8
+				source.orientation = 8
 			}
-			content = withOrientation(landscapes[index%len(landscapes)], orientation)
+			content = withOrientation(landscapes[source.index], source.orientation)
 		}
 		path := filepath.Join(folder, fmt.Sprintf("photo-%03d.jpg", index))
 		if err := os.WriteFile(path, content, 0o644); err != nil {
 			b.Fatal(err)
 		}
-		info, err := decode.Inspect(context.Background(), path)
-		if err != nil {
-			b.Fatalf("inspect %s: %v", path, err)
+		info, exists := checked[source]
+		if !exists {
+			var err error
+			if info, err = decode.Inspect(context.Background(), path); err != nil {
+				b.Fatalf("inspect %s: %v", path, err)
+			}
+			checked[source] = info
 		}
 		inputs = append(inputs, Input{Path: path, Info: info})
 		onDisk += uint64(len(content))
@@ -186,10 +207,12 @@ const mebibyte = 1 << 20
 // budget — content checks excluded, as the source list makes them when
 // files are added — so ms/op is the duration NFR-013 bounds at two
 // minutes. It also records NFR-014's memory observations: the peak heap and
-// runtime footprint while the job runs, beside what decoding every source at
-// once would take by their estimates, and fails if the heap ever outgrew the
-// job's 1 GiB budget. The sources take 370 MiB of disk; generating them takes
-// about 20 seconds before the timer starts.
+// runtime footprint the sampler saw while the job ran, beside what decoding
+// every source at once would take by their estimates, and fails if a sample
+// found the heap beyond the job's 1 GiB budget. The sampler reads every
+// millisecond, so a peak that rose and was collected between two reads would
+// go unseen. The sources take 370 MiB of disk; generating them takes about
+// four seconds before the timer starts.
 func BenchmarkRun100Mixed12MegapixelJPEGsFit1024(b *testing.B) {
 	inputs, onDisk, decodeAll := referenceInputs(b)
 	request := Request{
