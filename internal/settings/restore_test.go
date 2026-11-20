@@ -298,15 +298,19 @@ func TestStoreBackupThatFailsVerificationBlocksSaving(t *testing.T) {
 
 // TestStoreLoadRemovesStaleTemporaryFiles pins the cleanup after an
 // interrupted save: Load removes the temporary files a save left behind
-// once they are older than any save in flight, and nothing else.
+// once they are older than any save in flight, and nothing else. A file
+// minutes old is kept, as the time of a file on a redirected settings
+// directory comes from its server's clock, which can be minutes off this
+// computer's, so it can belong to a save another session is making now.
 func TestStoreLoadRemovesStaleTemporaryFiles(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "settings.json")
 	stale := filepath.Join(directory, ".settings-123.tmp")
 	fresh := filepath.Join(directory, ".settings-456.tmp")
+	skewed := filepath.Join(directory, ".settings-654.tmp")
 	unrelated := filepath.Join(directory, ".settings-789.txt")
 	folder := filepath.Join(directory, ".settings-folder.tmp")
-	for _, file := range []string{stale, fresh, unrelated} {
+	for _, file := range []string{stale, fresh, skewed, unrelated} {
 		if err := os.WriteFile(file, []byte("{"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -314,11 +318,15 @@ func TestStoreLoadRemovesStaleTemporaryFiles(t *testing.T) {
 	if err := os.Mkdir(folder, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	old := time.Now().Add(-time.Hour)
+	old := time.Now().Add(-2 * staleTemporaryAge)
 	for _, entry := range []string{stale, unrelated, folder} {
 		if err := os.Chtimes(entry, old, old); err != nil {
 			t.Fatal(err)
 		}
+	}
+	minutesAgo := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(skewed, minutesAgo, minutesAgo); err != nil {
+		t.Fatal(err)
 	}
 
 	if warnings := NewStore(Paths{ConfigFile: path}).Load().Warnings; len(warnings) != 0 {
@@ -327,7 +335,7 @@ func TestStoreLoadRemovesStaleTemporaryFiles(t *testing.T) {
 	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale temporary file remains: %v", err)
 	}
-	for _, kept := range []string{fresh, unrelated, folder} {
+	for _, kept := range []string{fresh, skewed, unrelated, folder} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Fatalf("%s was removed: %v", filepath.Base(kept), err)
 		}

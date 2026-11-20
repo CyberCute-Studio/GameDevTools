@@ -690,18 +690,25 @@ func (n *NativeView) refreshOptions() {
 // a job runs on the options and preset it started with. The preset library
 // is shown again only when the restore kept another than the one shown, as
 // when the session never loaded the settings file it replaced
-// (preset.NativeManager.Reload). When no default output folder is known, the
-// folder warning is returned for the Settings view to report with the
-// restore's outcome, as there is then no folder to resize into.
+// (preset.NativeManager.Reload), and the fitting mode's description then
+// describes the preset it selects (RSZ-016). A library or options that could
+// not be shown are returned for the Settings view to report with the
+// restore's outcome; an output folder that has no default is left to the
+// shell's note, which gives the reason startup found.
 func (n *NativeView) NativeRestoreDefaults() string {
-	n.presets.Reload()
+	var followUps []string
+	if err := n.presets.Reload(); err != nil {
+		followUps = append(followUps, fmt.Sprintf(ui.PresetOperationFailed, err))
+	}
+	n.refreshModeDescription()
 	if err := n.options.Reload(); err != nil {
 		message := fmt.Sprintf(ui.ResizeOperationFailed, err)
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)
-		return message
+		followUps = append(followUps, message)
+	} else {
+		n.refreshOptions()
 	}
-	n.refreshOptions()
-	return n.options.FolderWarning(nil)
+	return strings.Join(followUps, " ")
 }
 
 // NativeCloseConfirmation returns the question closing the application asks

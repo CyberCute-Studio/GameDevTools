@@ -143,13 +143,17 @@ func TestNativeViewRestoreDefaultsShowsThePresetsTheRestoreKept(t *testing.T) {
 }
 
 // TestNativeViewRestoreDefaultsWithoutADefaultFolder pins that a restore
-// with no default output folder known returns the folder warning for the
-// Settings view to report.
+// with no default output folder known shows no folder and leaves the
+// warning to the shell's note, which gives the reason startup found, rather
+// than returning it again without one.
 func TestNativeViewRestoreDefaultsWithoutADefaultFolder(t *testing.T) {
 	view, _ := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
 	view.options.store.defaultFolder = ""
 	delete(view.options.settings.Modules, string(moduleID))
-	if followUp := view.NativeRestoreDefaults(); !strings.Contains(followUp, ui.CaptureDefaultFolderUnknown) {
-		t.Fatalf("follow-up = %q, want the folder warning", followUp)
+	if followUp := view.NativeRestoreDefaults(); followUp != "" {
+		t.Fatalf("follow-up = %q, want none", followUp)
+	}
+	if got := view.folder.Text(); got != "" {
+		t.Fatalf("folder shown = %q, want none", got)
 	}
 }

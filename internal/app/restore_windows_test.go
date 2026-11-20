@@ -5,6 +5,7 @@ package app
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/png"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -34,9 +36,11 @@ const (
 // registers the default global shortcut, Ctrl+Alt+S, which is machine-wide
 // and must not be taken from the developer while the tests run;
 // TestNativeViewRestoreDefaultsShowsAndRegistersTheDefaults covers the view
-// with a fake registrar.
+// with a fake registrar. Every other hook is the view's own, as the probe
+// embeds it, so a test that also closes the shell, sends the global
+// shortcut, or announces a notice reaches the real view.
 type restoreProbe struct {
-	nativeView
+	*screenshot.NativeView
 	calls *int
 }
 
@@ -45,13 +49,23 @@ func (p restoreProbe) NativeRestoreDefaults() string {
 	return ""
 }
 
+// The probe offers every hook the Screenshot view does but the restore.
+var (
+	_ nativeView            = restoreProbe{}
+	_ nativeActionHandler   = restoreProbe{}
+	_ nativeHotkeyHandler   = restoreProbe{}
+	_ nativeShutdown        = restoreProbe{}
+	_ nativeMessageFilter   = restoreProbe{}
+	_ nativeNoticeAnnouncer = restoreProbe{}
+)
+
 // probeScreenshotRestore puts a restoreProbe in place of the Screenshot view
 // for the test.
 func probeScreenshotRestore(t *testing.T, shell *auditShell) *int {
 	t.Helper()
 	calls := 0
 	screenshotView := shell.nativeViews[core.ModuleScreenshot]
-	shell.nativeViews[core.ModuleScreenshot] = restoreProbe{nativeView: screenshotView, calls: &calls}
+	shell.nativeViews[core.ModuleScreenshot] = restoreProbe{NativeView: screenshotView.(*screenshot.NativeView), calls: &calls}
 	t.Cleanup(func() { shell.nativeViews[core.ModuleScreenshot] = screenshotView })
 	return &calls
 }
@@ -170,8 +184,8 @@ func TestRestoreDefaultsKeepsPresetsImagesAndTheSession(t *testing.T) {
 	}
 
 	restarted := reopenSession(t, shell.path)
-	if len(restarted.warnings) != 0 {
-		t.Fatalf("restart warnings = %v", restarted.warnings)
+	if len(restarted.warnings()) != 0 {
+		t.Fatalf("restart warnings = %v", restarted.warnings())
 	}
 	if restarted.value.Shell != window {
 		t.Fatalf("shell settings after a restart = %+v, want %+v", restarted.value.Shell, window)
@@ -251,7 +265,9 @@ func TestRestoreDefaultsChangesNothingWithoutABackup(t *testing.T) {
 
 // TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails pins SET-004
 // for the restore: once the file is backed up, a write that fails leaves
-// the file as it was and the session restored, with a warning that says so.
+// the file as it was and the session restored, with a warning that says so
+// and names the backup, as saving works again and the next save that
+// succeeds replaces the file.
 func TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails(t *testing.T) {
 	shell := newAuditShellOn(t, readFixture(t, "rsz-01"))
 	calls := probeScreenshotRestore(t, shell)
@@ -265,17 +281,43 @@ func TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(shell.path, 0o600) })
 
 	notice := shell.restoreDefaults()
-	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") {
-		t.Fatalf("outcome = %+v, want the write failure", notice)
+	backups, _ := filepath.Glob(shell.path + ".reset-*")
+	if len(backups) != 1 {
+		t.Fatalf("backups = %v, want one", backups)
+	}
+	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") || !strings.HasSuffix(notice.Message, "backed up to "+backups[0]+".") {
+		t.Fatalf("outcome = %+v, want the write failure naming the backup %s", notice, backups[0])
 	}
 	if current, err := os.ReadFile(shell.path); err != nil || !bytes.Equal(current, original) {
 		t.Fatalf("settings file changed: err = %v", err)
 	}
-	if backups, _ := filepath.Glob(shell.path + ".reset-*"); len(backups) != 1 {
-		t.Fatalf("backups = %v, want one", backups)
-	}
 	if got, want := shell.resize.Options(), imageresizer.DefaultOptions(filepath.Join(filepath.Dir(shell.path), "Resized")); got != want || *calls != 1 {
 		t.Fatalf("resize options = %+v and %d view restore(s), want the defaults and one", got, *calls)
+	}
+}
+
+// TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails pins the outcome
+// of a restore that finds no settings file and cannot write one: the
+// defaults are in use for the session, and the outcome says that nothing
+// was backed up rather than that a settings file still holds the previous
+// settings, as there is none.
+func TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails(t *testing.T) {
+	shell, _ := newExitTestShell(t, &exitRecordingView{})
+	blocker := filepath.Join(t.TempDir(), "not a folder")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shell.store = settings.NewStore(settings.Paths{ConfigFile: filepath.Join(blocker, "settings.json")})
+
+	notice := shell.restoreDefaults()
+	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") || !strings.HasSuffix(notice.Message, "There was no settings file to back up.") {
+		t.Fatalf("outcome = %+v, want the write failure without a settings file", notice)
+	}
+	if strings.Contains(notice.Message, "still holds") {
+		t.Fatalf("outcome = %q names a settings file there is not", notice.Message)
+	}
+	if got := shell.note.Text(); !strings.Contains(got, "Settings could not be saved") {
+		t.Fatalf("note after the restore = %q, want the failed write's warning", got)
 	}
 }
 
@@ -300,8 +342,10 @@ func holdOpen(t *testing.T, path string) func() {
 // saving disabled, because the settings file could not be read: once the
 // file can be read, the restore backs it up and keeps the preset libraries
 // it stores, with their selected presets, not the defaults the session
-// started from, and the session's modules show them; the shell's note no
-// longer warns that saving is disabled; and a restart loads the presets.
+// started from, and with them the presets the session created, which could
+// not be saved, as a custom preset is deleted only by its Delete; the
+// session's modules show them; the shell's note no longer warns that saving
+// is disabled; and a restart loads the presets.
 func TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead(t *testing.T) {
 	data := readFixture(t, "rsz-01")
 	shell := newAuditShellWhile(t, data, holdOpen)
@@ -314,6 +358,28 @@ func TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead(t *testing.
 		t.Fatal(err)
 	}
 	captureWant, resizeWant := libraries(t, reopenSession(t, stored))
+
+	// A preset the user creates in the session, which cannot be saved.
+	shell.selectModule(t, core.ModuleImageResizer)
+	setWindowText(shell.control(t, "Edit Name"), "Session banner")
+	setWindowText(shell.control(t, "Edit Width (px)"), "300")
+	setWindowText(shell.control(t, "Edit Height (px)"), "200")
+	procSetFocus.Call(uintptr(shell.navButtons[core.ModuleImageResizer].Handle()))
+	shell.tabTo(t, "Button Create Preset")
+	shell.press(wmKeyDown, vkReturn)
+	repository, err := preset.NewRepository(core.ModuleImageResizer, settings.NewStore(settings.Paths{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionLibrary, err := repository.Load(*shell.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := sessionLibrary.Custom()
+	if len(created) != 1 || created[0].Name != "Session banner" || created[0].Width != 300 || created[0].Height != 200 {
+		t.Fatalf("session presets after Create Preset = %+v, want the one created", created)
+	}
+	shell.selectModule(t, core.ModuleSettings)
 
 	notice := shell.restoreDefaults()
 	backups, err := filepath.Glob(shell.path + ".reset-*")
@@ -335,16 +401,16 @@ func TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead(t *testing.
 	}
 
 	restarted := reopenSession(t, shell.path)
-	if len(restarted.warnings) != 0 {
-		t.Fatalf("restart warnings = %v", restarted.warnings)
+	if len(restarted.warnings()) != 0 {
+		t.Fatalf("restart warnings = %v", restarted.warnings())
 	}
 	captureAfter, resizeAfter := libraries(t, restarted)
 	for name, pair := range map[string][2][]string{
 		"Screenshot":    {presetSummary(captureWant.Custom(), captureWant.SelectedID()), presetSummary(captureAfter.Custom(), captureAfter.SelectedID())},
-		"Image Resizer": {presetSummary(resizeWant.Custom(), resizeWant.SelectedID()), presetSummary(resizeAfter.Custom(), resizeAfter.SelectedID())},
+		"Image Resizer": {presetSummary(append(resizeWant.Custom(), created...), resizeWant.SelectedID()), presetSummary(resizeAfter.Custom(), resizeAfter.SelectedID())},
 	} {
 		if strings.Join(pair[0], "\n") != strings.Join(pair[1], "\n") {
-			t.Fatalf("%s presets after the restore = %q, want the file's %q", name, pair[1], pair[0])
+			t.Fatalf("%s presets after the restore = %q, want the file's and the session's %q", name, pair[1], pair[0])
 		}
 	}
 }
@@ -382,7 +448,8 @@ func TestRestoreDefaultsClearsAFailedSaveWarning(t *testing.T) {
 func TestRestoreDefaultsWithoutASettingsPath(t *testing.T) {
 	shell, _ := newExitTestShell(t, &exitRecordingView{})
 	shell.store = settings.NewStore(settings.Paths{})
-	shell.startupNotice = fmt.Sprintf(ui.LocalSettingsUnavailable, "no per-user configuration directory")
+	shell.startup = startupWarnings{settingsFile: []string{fmt.Sprintf(ui.LocalSettingsUnavailable, "no per-user configuration directory")}}
+	shell.startupNotice = shell.startup.text()
 	shell.notice = shell.startupNotice
 	shell.settings.Shell.Window.Maximized = true
 
@@ -395,6 +462,38 @@ func TestRestoreDefaultsWithoutASettingsPath(t *testing.T) {
 	}
 	if shell.notice != shell.startupNotice || !strings.Contains(shell.startupNotice, "Local settings are unavailable") {
 		t.Fatalf("note after the restore = %q, want the startup warning kept", shell.notice)
+	}
+}
+
+// TestRestoreDefaultsReportsAFolderWithoutADefaultOnce pins how a restore
+// reports an output folder that has no default, as when Windows cannot
+// resolve the Pictures folder: the restored options select no folder, and
+// the shell's note says so with the reason startup found, as at startup,
+// while the outcome does not say it again with another reason.
+func TestRestoreDefaultsReportsAFolderWithoutADefaultOnce(t *testing.T) {
+	reason := errors.New("the Pictures folder cannot be found")
+	shell := newAuditShellFrom(t, readFixture(t, "rsz-01"), nil, func(dir string) defaultFolders {
+		return defaultFolders{screenshot: filepath.Join(dir, "Screenshots"), resizerErr: reason}
+	})
+	probeScreenshotRestore(t, shell)
+	if got := shell.note.Text(); got != "" {
+		t.Fatalf("note at startup = %q, want none, as the file stores a resize folder", got)
+	}
+
+	notice := shell.restoreDefaults()
+	backups, _ := filepath.Glob(shell.path + ".reset-*")
+	if len(backups) != 1 {
+		t.Fatalf("backups = %v, want one", backups)
+	}
+	if want := (ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.SettingsRestored, backups[0])}); notice != want {
+		t.Fatalf("outcome = %+v, want %+v, the folder left to the note", notice, want)
+	}
+	if got := shell.resize.Options().OutputFolder; got != "" {
+		t.Fatalf("resize folder after the restore = %q, want none", got)
+	}
+	want := ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.ResizeFolderUnavailable, reason)}.Text()
+	if got := shell.note.Text(); got != want {
+		t.Fatalf("note after the restore = %q, want %q", got, want)
 	}
 }
 

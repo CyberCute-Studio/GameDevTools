@@ -28,6 +28,11 @@ type Repository struct {
 	store  *settings.Store
 }
 
+// RegisterValidators registers both modules' preset library validators with
+// the store, for a store that loads its file before, or without, building a
+// repository for each module, as the module tests' restarted stores do. The
+// application builds both repositories before it loads the file, and
+// NewRepository registers each one's validator.
 func RegisterValidators(store *settings.Store) {
 	for _, module := range []shell.ModuleID{shell.ModuleScreenshot, shell.ModuleImageResizer} {
 		store.RegisterModuleValidator(string(module), validatorFor(module))
@@ -293,6 +298,58 @@ func LibrarySection(section json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("encode module preset section: %w", err)
 	}
 	return kept, nil
+}
+
+// KeptSection returns what restoring the default settings keeps of replaced,
+// the module's section in the settings the restore replaces (SET-005): only
+// its preset library, with its selected preset, as LibrarySection returns
+// it, joined by the custom presets of session, the module's section in the
+// running session's settings, that replaced does not hold, or nil when
+// neither holds a library. The two differ when the
+// session started from the defaults because the settings file could not be
+// read and the restore keeps the file's presets: the presets the session
+// created meanwhile, which could not be saved, are kept with them, as a
+// custom preset is deleted only by its explicit Delete. One whose name a
+// kept preset already uses is kept under the name Duplicate would give a
+// copy of it; the selected preset stays replaced's.
+func KeptSection(module shell.ModuleID, replaced, session json.RawMessage) (json.RawMessage, error) {
+	kept, err := LibrarySection(replaced)
+	if err != nil {
+		return nil, err
+	}
+	running, err := decodeSection(module, session)
+	if err != nil {
+		return nil, fmt.Errorf("decode the session's presets: %w", err)
+	}
+	if len(running.Custom) == 0 {
+		return kept, nil
+	}
+	stored, err := decodeSection(module, replaced)
+	if err != nil {
+		return nil, err
+	}
+	library, err := NewLibrary(module, stored.Custom)
+	if err != nil {
+		return nil, err
+	}
+	selected := stored.SelectedID
+	if selected == "" {
+		selected = library.SelectedID()
+	}
+	added := false
+	for _, candidate := range running.Custom {
+		if _, exists := library.Get(candidate.ID); exists {
+			continue
+		}
+		if err := library.adopt(candidate); err != nil {
+			return nil, fmt.Errorf("keep the session's preset %q: %w", candidate.Name, err)
+		}
+		added = true
+	}
+	if !added {
+		return kept, nil
+	}
+	return encodeSection(module, nil, library.custom, selected)
 }
 
 func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, error) {

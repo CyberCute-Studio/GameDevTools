@@ -5,7 +5,7 @@ package app
 import (
 	"fmt"
 	"runtime"
-	"strings"
+	"slices"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
@@ -73,18 +73,14 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
+	startup := state.startupWarnings()
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
-	// The warnings the settings do not decide, which still apply once the
-	// default settings are restored.
-	var unsettled []string
 	if loggerErr != nil {
-		warning := fmt.Sprintf(ui.LoggingUnavailable, loggerErr)
-		state.warnings = append(state.warnings, warning)
-		unsettled = append(unsettled, warning)
+		startup.other = append(startup.other, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
 	} else {
 		defer logger.Close()
 	}
-	if len(state.warnings) > 0 && logger != nil {
+	if len(state.warnings()) > 0 && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}
 	monitor := display.NewMonitor()
@@ -93,7 +89,7 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	return runShell(navigator, state.store, state.value, logger, monitor, strings.Join(state.warnings, "\n"), state.restoredNotice(unsettled))
+	return runShell(navigator, state.store, state.value, logger, monitor, startup)
 }
 
 // defaultFolders are the output folders the modules select by default, and
@@ -111,9 +107,12 @@ type defaultFolders struct {
 // gave, the preset repositories and options managers built on them, and the
 // default output folders they were built with.
 type session struct {
-	store             *settings.Store
-	value             *settings.Settings
-	warnings          []string
+	store *settings.Store
+	value *settings.Settings
+	// settingsWarnings are the warnings about the settings file loading the
+	// settings gave: that it could not be located, read, or decoded, or
+	// that its recovery is incomplete.
+	settingsWarnings  []string
 	screenshotPresets *preset.Repository
 	resizerPresets    *preset.Repository
 	capture           *screenshot.OptionsManager
@@ -128,8 +127,8 @@ type session struct {
 // preset repositories register the preset libraries', and the options
 // stores the capture and resize options' — so malformed preset, capture, or
 // resize data follows the store's backup and recovery like the rest of the
-// file (PRESET-008, SET-006). The warnings include an output folder that
-// could not be resolved, so the user is asked to choose one (folderWarnings).
+// file (PRESET-008, SET-006). Its warnings include an output folder that
+// could not be resolved, so the user is asked to choose one (warnings).
 func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*session, error) {
 	store := settings.NewStore(paths)
 	state := &session{store: store, folders: folders}
@@ -154,15 +153,29 @@ func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*
 	} else {
 		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.LocalSettingsUnavailable, pathErr))
 	}
-	state.value, state.warnings = &loaded.Settings, loaded.Warnings
+	state.value, state.settingsWarnings = &loaded.Settings, loaded.Warnings
 	if state.capture, err = screenshot.NewOptionsManager(captureStore, state.value); err != nil {
 		return nil, err
 	}
 	if state.resize, err = imageresizer.NewOptionsManager(resizeStore, state.value); err != nil {
 		return nil, err
 	}
-	state.warnings = append(state.warnings, state.folderWarnings()...)
 	return state, nil
+}
+
+// warnings returns the warnings the session gives as the options now hold
+// them: the settings file's, and then the output folders' (folderWarnings).
+func (state *session) warnings() []string {
+	return append(slices.Clone(state.settingsWarnings), state.folderWarnings()...)
+}
+
+// startupWarnings returns the session's warnings for the shell's note, kept
+// by what decides whether each still applies once the default settings are
+// restored: the settings file's, which the restore settles once it has
+// backed the file up, and the output folders', which follow the options the
+// restore gives.
+func (state *session) startupWarnings() startupWarnings {
+	return startupWarnings{settingsFile: state.settingsWarnings, folders: state.folderWarnings}
 }
 
 // folderWarnings returns the warnings the output folders give as the
@@ -179,18 +192,6 @@ func (state *session) folderWarnings() []string {
 		warnings = append(warnings, warning)
 	}
 	return warnings
-}
-
-// restoredNotice returns the shell's startup notice once the default
-// settings are restored with the settings file backed up (settleNotice):
-// the output folders' warnings the restored options give, and unsettled,
-// the startup warnings the settings do not decide, such as diagnostic
-// logging being unavailable. The warnings about the file the session
-// started from no longer apply then.
-func (state *session) restoredNotice(unsettled []string) func() string {
-	return func() string {
-		return strings.Join(append(state.folderWarnings(), unsettled...), "\n")
-	}
 }
 
 // newNavigator builds the Screenshot, Image Resizer, and Settings modules on

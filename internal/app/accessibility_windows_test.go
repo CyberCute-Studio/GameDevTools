@@ -87,6 +87,15 @@ func newAuditShellOn(t *testing.T, data []byte) *auditShell {
 // startup warnings, and takes the restored ones, as runNative gives them.
 func newAuditShellWhile(t *testing.T, data []byte, hold func(t *testing.T, path string) (release func())) *auditShell {
 	t.Helper()
+	return newAuditShellFrom(t, data, hold, nil)
+}
+
+// newAuditShellFrom builds the audit's main window as newAuditShellWhile
+// does, with folders, when it is not nil, giving the default output folders
+// startup resolves, and why one could not be, from the window's own
+// temporary folder.
+func newAuditShellFrom(t *testing.T, data []byte, hold func(t *testing.T, path string) (release func()), folders func(dir string) defaultFolders) *auditShell {
+	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
 	dir := t.TempDir()
@@ -100,10 +109,14 @@ func newAuditShellWhile(t *testing.T, data []byte, hold func(t *testing.T, path 
 	if hold != nil {
 		release = hold(t, path)
 	}
-	state, err := openSession(settings.Paths{ConfigFile: path}, nil, defaultFolders{
+	defaults := defaultFolders{
 		screenshot: filepath.Join(dir, "Screenshots"),
 		resizer:    filepath.Join(dir, "Resized"),
-	})
+	}
+	if folders != nil {
+		defaults = folders(dir)
+	}
+	state, err := openSession(settings.Paths{ConfigFile: path}, nil, defaults)
 	release()
 	if err != nil {
 		t.Fatal(err)
@@ -124,11 +137,10 @@ func newAuditShellWhile(t *testing.T, data []byte, hold func(t *testing.T, path 
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell, err := newNativeShell(navigator, state.store, state.value, nil, monitor, strings.Join(state.warnings, "\n"))
+	shell, err := newNativeShell(navigator, state.store, state.value, nil, monitor, state.startupWarnings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell.restoredNotice = state.restoredNotice(nil)
 	t.Cleanup(func() {
 		procDestroyWindow.Call(uintptr(shell.hwnd))
 		// WM_DESTROY posts the quit message a real message loop ends on;

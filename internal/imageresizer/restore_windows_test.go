@@ -111,16 +111,37 @@ func TestNativeViewRestoreDefaultsKeepsTheListAndTheJob(t *testing.T) {
 
 // TestNativeViewRestoreDefaultsWithoutADefaultFolder pins that a restore
 // with no default output folder known, as when the Pictures folder cannot
-// be resolved, returns the folder warning for the Settings view to report.
+// be resolved, shows no folder and leaves the warning to the shell's note,
+// which gives the reason startup found, rather than returning it again
+// without one.
 func TestNativeViewRestoreDefaultsWithoutADefaultFolder(t *testing.T) {
 	view, _ := newSourcesTestView(t)
 	view.options.store.defaultFolder = ""
 	delete(view.options.settings.Modules, string(moduleID))
-	followUp := view.NativeRestoreDefaults()
-	if followUp == "" || !strings.Contains(followUp, ui.ResizeDefaultFolderUnknown) {
-		t.Fatalf("follow-up without a default folder = %q, want the folder warning", followUp)
+	if followUp := view.NativeRestoreDefaults(); followUp != "" {
+		t.Fatalf("follow-up without a default folder = %q, want none", followUp)
 	}
 	if got := view.folder.Text(); got != "" {
 		t.Fatalf("folder shown = %q, want none", got)
+	}
+}
+
+// TestNativeViewRestoreDefaultsDescribesTheKeptPresetsFittingMode pins that
+// the fitting mode's description (RSZ-016) follows a preset library the
+// restore kept that is not the one shown — the settings file's, kept when
+// the session never loaded it — so it describes, with the Stretch
+// distortion warning, the preset the next job uses.
+func TestNativeViewRestoreDefaultsDescribesTheKeptPresetsFittingMode(t *testing.T) {
+	view, _ := newSourcesTestView(t)
+	if got := view.modeDescription.Text(); strings.HasPrefix(got, "Stretch") {
+		t.Fatalf("description before the restore = %q, want the built-in's", got)
+	}
+	const id = "custom.0123456789abcdef0123456789abcdef"
+	view.options.settings.Modules[string(moduleID)] = []byte(`{"presets":{"version":1,"custom":[{"id":"` + id + `","name":"Banner","width":512,"height":128,"resizeMode":"stretch"}],"selectedPresetId":"` + id + `"}}`)
+	if followUp := view.NativeRestoreDefaults(); followUp != "" {
+		t.Fatalf("follow-up = %q, want none", followUp)
+	}
+	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Stretch (512 × 128 px):") || !strings.Contains(got, "distorted") {
+		t.Fatalf("description after the restore = %q, want the kept Stretch preset's", got)
 	}
 }

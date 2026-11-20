@@ -627,9 +627,9 @@ func (n *NativeView) jobCommand(id int32, notification uint16) bool {
 }
 
 // NativeShutdown waits, within JobShutdownWait, for the jobs NativeDestroy
-// cancelled, and any the view let go, to stop. The shell calls it only after
-// the message loop has ended and the window is destroyed, so no job's
-// goroutine waits on the GUI thread here; their final dispatcher posts fail
+// cancelled, and any the view let go, to stop. The shell calls it only once
+// the window is destroyed, on a goroutine of its own, so no job's goroutine
+// waits on the GUI thread here; their final dispatcher posts fail
 // harmlessly. When the wait runs out, the goroutine waiting for the jobs is
 // left to the process's exit. Content checks are not waited for: a check
 // only reads its source, so nothing is lost when the process exits around

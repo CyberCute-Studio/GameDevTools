@@ -319,16 +319,19 @@ func (n *NativeManager) NativeDestroy() {
 // as when the session started from the defaults because the settings file
 // could not be read and the restore kept the file's presets. A library that
 // did not change is left as it is shown, with the form's unsaved edits
-// (APP-004). A library that cannot be loaded is reported in the status area.
-func (n *NativeManager) Reload() {
+// (APP-004). A library that cannot be loaded is reported in the status area
+// and returned, for the restore's outcome to report too, as the status area
+// is hidden while the Settings view is shown.
+func (n *NativeManager) Reload() error {
 	changed, err := n.manager.Reload()
 	if err != nil {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.PresetOperationFailed, err)}, 0)
-		return
+		return err
 	}
 	if changed {
 		n.refresh()
 	}
+	return nil
 }
 
 func (n *NativeManager) refresh() {

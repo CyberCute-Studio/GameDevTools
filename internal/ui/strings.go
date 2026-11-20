@@ -87,8 +87,11 @@ const (
 	SettingsRestored            = "Default settings restored. The previous settings were backed up to %s."
 	SettingsRestoredNoBackup    = "Default settings restored."
 	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
-	SettingsRestoreSaveFailed   = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings."
-	SettingsRestoreInMemory     = "Default settings are in use for this session, but they cannot be saved: %v. Changes will remain in memory for this session."
+	SettingsRestoreSaveFailed   = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
+	// SettingsRestoreSaveFailedNoFile is the restore's failed write when
+	// there was no settings file to back up or keep.
+	SettingsRestoreSaveFailedNoFile = "Default settings are in use for this session, but they could not be saved: %v. There was no settings file to back up."
+	SettingsRestoreInMemory         = "Default settings are in use for this session, but they cannot be saved: %v. Changes will remain in memory for this session."
 	// SettingsRestoreFollowUp joins what a module still needs after the
 	// restore, such as a default shortcut another application holds, to the
 	// restore's outcome.
@@ -149,10 +152,6 @@ const (
 	BrowseFolderDialogTitle    = "Choose the screenshot output folder"
 	FilenamePatternLabel       = "Filename pattern"
 	OutputFolderUnavailable    = "The default Pictures output folder is unavailable: %v. Choose an output folder before capturing."
-	// CaptureDefaultFolderUnknown is the reason OutputFolderUnavailable
-	// gives once the default settings are restored without a default
-	// folder, whose reason only startup knows.
-	CaptureDefaultFolderUnknown = "its location is unknown"
 
 	CaptureModeInvalid      = "Capture mode must be Free Rectangle, Preset Rectangle, or Full Display."
 	ImageFormatInvalid      = "Screenshot save format must be PNG or JPEG."

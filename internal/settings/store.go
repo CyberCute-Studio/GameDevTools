@@ -22,8 +22,12 @@ const CurrentVersion = 1
 // temporary file only for the moments between creating it and renaming it
 // over the settings file, so a file this old belongs to no save in flight,
 // even one by an instance in another of the user's sessions, which shares
-// the per-user settings directory.
-const staleTemporaryAge = time.Minute
+// the per-user settings directory. The age is a day rather than moments
+// because it compares the file's time, which the file's server sets when
+// the directory is redirected to a network share, with this computer's
+// clock, and the two can differ by minutes; a file an interrupted save left
+// holds only settings and waits harmlessly until then.
+const staleTemporaryAge = 24 * time.Hour
 
 // ErrNotRestored reports that Restore wrote nothing: the restored settings
 // could not be made or were invalid, or the current settings file could not

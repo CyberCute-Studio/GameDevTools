@@ -189,11 +189,11 @@ func TestOpenSessionUpgradesEverySettingsFormat(t *testing.T) {
 			state, path := openFixtureSession(t, data)
 			directory := filepath.Dir(path)
 			if fixture.legacyFolder == "" {
-				if len(state.warnings) != 0 {
-					t.Fatalf("load warnings = %v, want none", state.warnings)
+				if len(state.warnings()) != 0 {
+					t.Fatalf("load warnings = %v, want none", state.warnings())
 				}
-			} else if len(state.warnings) != 1 || !strings.Contains(state.warnings[0], fixture.legacyFolder) {
-				t.Fatalf("load warnings = %v, want one naming %s", state.warnings, fixture.legacyFolder)
+			} else if len(state.warnings()) != 1 || !strings.Contains(state.warnings()[0], fixture.legacyFolder) {
+				t.Fatalf("load warnings = %v, want one naming %s", state.warnings(), fixture.legacyFolder)
 			}
 			if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, data) {
 				t.Fatalf("loading rewrote the settings file: err = %v", err)
@@ -211,8 +211,8 @@ func TestOpenSessionUpgradesEverySettingsFormat(t *testing.T) {
 				t.Fatal(err)
 			}
 			restarted := reopenSession(t, path)
-			if len(restarted.warnings) != len(state.warnings) {
-				t.Fatalf("restart warnings = %v, want %v", restarted.warnings, state.warnings)
+			if len(restarted.warnings()) != len(state.warnings()) {
+				t.Fatalf("restart warnings = %v, want %v", restarted.warnings(), state.warnings())
 			}
 			checkFixtureSession(t, fixture, restarted, directory)
 
@@ -220,8 +220,8 @@ func TestOpenSessionUpgradesEverySettingsFormat(t *testing.T) {
 				if err := restarted.resize.SetJPEGQuality(80); err != nil {
 					t.Fatal(err)
 				}
-				if again := reopenSession(t, path); len(again.warnings) != 0 {
-					t.Fatalf("warnings once the resize options were saved = %v, want none", again.warnings)
+				if again := reopenSession(t, path); len(again.warnings()) != 0 {
+					t.Fatalf("warnings once the resize options were saved = %v, want none", again.warnings())
 				}
 			}
 		})
@@ -293,8 +293,8 @@ func TestOpenSessionRecoversFromMalformedSettings(t *testing.T) {
 			if err != nil || len(backups) != 1 {
 				t.Fatalf("backups = %v, err = %v, want one", backups, err)
 			}
-			if len(state.warnings) != 1 || !strings.Contains(state.warnings[0], backups[0]) {
-				t.Fatalf("load warnings = %v, want one naming the backup %s", state.warnings, backups[0])
+			if len(state.warnings()) != 1 || !strings.Contains(state.warnings()[0], backups[0]) {
+				t.Fatalf("load warnings = %v, want one naming the backup %s", state.warnings(), backups[0])
 			}
 			if copied, err := os.ReadFile(backups[0]); err != nil || string(copied) != test.data {
 				t.Fatalf("backup differs from the malformed file: err = %v", err)
@@ -310,8 +310,8 @@ func TestOpenSessionRecoversFromMalformedSettings(t *testing.T) {
 			if got, want := state.resize.Options(), imageresizer.DefaultOptions(filepath.Join(directory, "Resized")); got != want {
 				t.Fatalf("resize options after recovery = %+v, want the defaults", got)
 			}
-			if restarted := reopenSession(t, path); len(restarted.warnings) != 0 {
-				t.Fatalf("restart warnings = %v, want none", restarted.warnings)
+			if restarted := reopenSession(t, path); len(restarted.warnings()) != 0 {
+				t.Fatalf("restart warnings = %v, want none", restarted.warnings())
 			}
 			for image, data := range images {
 				if current, err := os.ReadFile(image); err != nil || !bytes.Equal(current, data) {

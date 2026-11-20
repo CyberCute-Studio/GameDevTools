@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -204,6 +205,63 @@ func TestEndSessionSavesAndStopsWithoutAsking(t *testing.T) {
 	}
 }
 
+// TestEndSessionIsNotHeldUpByWorkThatDoesNotStop pins the bound on the end
+// of the Windows session's wait (endSessionWait): background work that has
+// not finished by then, such as a capture whose outputs a drive that does
+// not respond holds, does not keep WM_ENDSESSION from returning, so Windows
+// never lists the application as holding up the session's end, and the
+// message loop's end, should the process outlive the message, waits for
+// that work and does not start a second wait.
+func TestEndSessionIsNotHeldUpByWorkThatDoesNotStop(t *testing.T) {
+	previous := endSessionWait
+	endSessionWait = 200 * time.Millisecond
+	t.Cleanup(func() { endSessionWait = previous })
+	view := &shutdownRecordingView{started: make(chan struct{}), release: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(view.release) }) }
+	// Without the bound the message would wait until this lets the work go.
+	timer := time.AfterFunc(5*time.Second, release)
+	t.Cleanup(func() {
+		timer.Stop()
+		release()
+	})
+	shell, path := newExitTestShell(t, view)
+
+	start := time.Now()
+	procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
+	if elapsed := time.Since(start); elapsed >= 2*time.Second {
+		t.Fatalf("WM_ENDSESSION returned after %v, want it within the bound of %v", elapsed, endSessionWait)
+	}
+	select {
+	case <-view.started:
+	default:
+		t.Fatal("the end of the session did not wait for the work")
+	}
+	if isWindow(shell.hwnd) {
+		t.Fatal("the end of the session left the window")
+	}
+	if window := savedWindow(t, path); !window.HasPosition {
+		t.Fatalf("saved window = %+v, want the window's placement", window)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		shell.waitForBackgroundWork()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("the message loop's end did not wait for the work still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the message loop's end did not return once the work finished")
+	}
+}
+
 // TestCloseQuestionEndedBySessionEnd pins that a close question the end of
 // the Windows session interrupts, by destroying the window under it, does
 // nothing more once answered: closing neither saves the settings again nor
@@ -358,8 +416,8 @@ func TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut(t *testing.T) {
 					t.Fatal("the global shortcut is still registered after the exit")
 				}
 				restarted := reopenSession(t, shell.path)
-				if len(restarted.warnings) != 0 || !restarted.value.Shell.Window.HasPosition || restarted.value.Shell.SelectedModule != string(core.ModuleScreenshot) {
-					t.Fatalf("settings after the exit: warnings %v, shell %+v", restarted.warnings, restarted.value.Shell)
+				if len(restarted.warnings()) != 0 || !restarted.value.Shell.Window.HasPosition || restarted.value.Shell.SelectedModule != string(core.ModuleScreenshot) {
+					t.Fatalf("settings after the exit: warnings %v, shell %+v", restarted.warnings(), restarted.value.Shell)
 				}
 				if restarted.capture.Options().Mode != mode {
 					t.Fatalf("capture mode after a restart = %v, want %v", restarted.capture.Options().Mode, mode)
@@ -435,8 +493,8 @@ func TestExitDuringAResizeJob(t *testing.T) {
 				}
 				checkResults(t, output)
 				restarted := reopenSession(t, shell.path)
-				if len(restarted.warnings) != 0 || !restarted.value.Shell.Window.HasPosition || restarted.value.Shell.SelectedModule != string(core.ModuleImageResizer) {
-					t.Fatalf("settings after the exit: warnings %v, shell %+v", restarted.warnings, restarted.value.Shell)
+				if len(restarted.warnings()) != 0 || !restarted.value.Shell.Window.HasPosition || restarted.value.Shell.SelectedModule != string(core.ModuleImageResizer) {
+					t.Fatalf("settings after the exit: warnings %v, shell %+v", restarted.warnings(), restarted.value.Shell)
 				}
 			}
 			for source, data := range originals {

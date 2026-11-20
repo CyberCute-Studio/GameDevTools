@@ -220,11 +220,8 @@ func (l *Library) Duplicate(id string) (Preset, error) {
 	candidate := source
 	candidate.ID = newID
 	candidate.BuiltIn = false
-	for suffix := 1; ; suffix++ {
-		candidate.Name = source.Name + " copy"
-		if suffix > 1 {
-			candidate.Name = fmt.Sprintf("%s copy %d", source.Name, suffix)
-		}
+	for copies := 1; ; copies++ {
+		candidate.Name = copyName(source.Name, copies)
 		if err := l.checkUnique(candidate, ""); err == nil {
 			break
 		} else if !errors.Is(err, ErrDuplicateName) {
@@ -233,6 +230,35 @@ func (l *Library) Duplicate(id string) (Preset, error) {
 	}
 	l.custom = append(l.custom, candidate)
 	return candidate, nil
+}
+
+// adopt adds candidate, a valid custom preset of another library of the
+// module, under its own name, or, when a preset here already uses that
+// name, under the name Duplicate would give a copy of it.
+func (l *Library) adopt(candidate Preset) error {
+	name := candidate.Name
+	for copies := 0; ; copies++ {
+		if copies > 0 {
+			candidate.Name = copyName(name, copies)
+		}
+		err := l.checkUnique(candidate, "")
+		if err == nil {
+			l.custom = append(l.custom, candidate)
+			return nil
+		}
+		if !errors.Is(err, ErrDuplicateName) {
+			return err
+		}
+	}
+}
+
+// copyName names the copy of a preset named name that is the given one, from
+// 1, as Duplicate names copies: "name copy", then "name copy 2", and so on.
+func copyName(name string, copies int) string {
+	if copies == 1 {
+		return name + " copy"
+	}
+	return fmt.Sprintf("%s copy %d", name, copies)
 }
 
 func (l *Library) Delete(id string) error {

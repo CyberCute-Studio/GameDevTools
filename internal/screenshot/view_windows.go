@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -515,11 +516,11 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 }
 
 // NativeShutdown blocks until an in-flight capture has finished delivering
-// its outputs. The shell calls it only after the message loop has ended and
-// the window is destroyed, so the worker never waits on the GUI thread here;
+// its outputs. The shell calls it only once the window is destroyed, on a
+// goroutine of its own, so the worker never waits on the GUI thread here;
 // its final dispatcher post fails harmlessly against the destroyed window.
-// NativeDestroy has already shut down any overlay session; Shutdown here is
-// the idempotent backstop.
+// NativeDestroy has already shut down any overlay session, so Shutdown here,
+// the idempotent backstop, finds none to close.
 func (n *NativeView) NativeShutdown() {
 	n.pending.Wait()
 	if n.sessions != nil {
@@ -873,18 +874,23 @@ func (n *NativeView) refreshOptions() {
 // than left registered behind a field that shows another. The status area
 // keeps its notice, such as the last capture's result, unless it shows a
 // shortcut failure the restore replaced. What the user still has to do — a
-// shortcut to choose, or an output folder when the default one is unknown —
-// is returned for the Settings view to report with the restore's outcome.
-// The preset library is shown again only when the restore kept another than
-// the one shown, as when the session never loaded the settings file it
-// replaced (preset.NativeManager.Reload); otherwise the selected preset and
-// the preset form's unsaved edits are not touched (APP-004).
+// shortcut to choose — or a library or options that could not be shown is
+// returned for the Settings view to report with the restore's outcome; an
+// output folder that has no default is left to the shell's note, which
+// gives the reason startup found. The preset library is shown again only
+// when the restore kept another than the one shown, as when the session
+// never loaded the settings file it replaced (preset.NativeManager.Reload);
+// otherwise the selected preset and the preset form's unsaved edits are not
+// touched (APP-004).
 func (n *NativeView) NativeRestoreDefaults() string {
-	n.presets.Reload()
+	var followUps []string
+	if err := n.presets.Reload(); err != nil {
+		followUps = append(followUps, fmt.Sprintf(ui.PresetOperationFailed, err))
+	}
 	if err := n.options.Reload(); err != nil {
 		message := fmt.Sprintf(ui.OptionsOperationFailed, err)
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)
-		return message
+		return strings.Join(append(followUps, message), " ")
 	}
 	n.refreshOptions()
 	options := n.options.Options()
@@ -897,13 +903,10 @@ func (n *NativeView) NativeRestoreDefaults() string {
 		if err := n.hotkeys.Apply(options.Shortcut); err != nil {
 			n.hotkeys.Release()
 			n.presentShortcutFailure(err)
-			return ui.FormatError(ui.ErrorShortcutRegistration, err)
+			followUps = append(followUps, ui.FormatError(ui.ErrorShortcutRegistration, err))
 		}
 	}
-	if options.OutputFolder == "" {
-		return fmt.Sprintf(ui.OutputFolderUnavailable, errors.New(ui.CaptureDefaultFolderUnknown))
-	}
-	return ""
+	return strings.Join(followUps, " ")
 }
 
 func (n *NativeView) refreshMode() {
