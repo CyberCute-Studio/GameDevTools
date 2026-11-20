@@ -15,6 +15,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/resize"
+	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -157,13 +158,48 @@ type jobStart struct {
 	rechecks []int
 }
 
+// The checks and the request below are Start Resize's, shared by the view
+// and the acceptance suite (RSZ-09), so the suite checks and builds every job
+// as the user's Start Resize does; what stays in the view is what needs the
+// window — committing the JPEG fields' text and confirming an Overwrite job.
+
+// jobRefusal explains why the source list cannot start a job — an image is
+// still being checked, or none is Ready or to be checked again — or is empty
+// when it can. Start Resize asks it before it builds a job, and again once an
+// Overwrite job is confirmed, as the confirmation's modal loop may change the
+// list.
+func (v *Inventory) jobRefusal() string {
+	if checking := v.Checking(); checking > 0 {
+		return fmt.Sprintf(ui.ResizeJobChecking, checking)
+	}
+	if v.Ready() == 0 && len(v.Recheckable()) == 0 {
+		return ui.ResizeJobNoImages
+	}
+	return ""
+}
+
+// jobTarget is the size and fitting mode a job resizes to under the selected
+// preset, and why the preset cannot be used when it cannot.
+func jobTarget(selected preset.Preset) (resize.Target, error) {
+	target := resize.Target{Width: selected.Width, Height: selected.Height, Mode: selected.ResizeMode}
+	return target, target.Validate()
+}
+
+// jobBackground checks the options a job starts with, once the JPEG fields'
+// text is applied, and returns the background color JPEG results are
+// flattened against. Start Resize refuses the job with either error.
+func jobBackground(options ResizeOptions) (color.RGBA, error) {
+	if err := options.Validate(); err != nil {
+		return color.RGBA{}, err
+	}
+	return BackgroundColor(options.Background)
+}
+
 // newJobStart builds the job Start Resize starts for every listed item
-// (RSZ-040), once the preset's target, the options, and their background
-// color have been validated and an Overwrite job confirmed or not: each item
-// is an input, as JobInputs lists them, and the items whose content check
-// failed are checked again first, as Recheckable lists them. The view builds
-// every job with it, and the acceptance suite its jobs, so both run the
-// request the user's Start Resize runs.
+// (RSZ-040), once jobRefusal, jobTarget, and jobBackground have let it start
+// and an Overwrite job has been confirmed or not: each item is an input, as
+// JobInputs lists them, and the items whose content check failed are checked
+// again first, as Recheckable lists them.
 func (v *Inventory) newJobStart(options ResizeOptions, target resize.Target, background color.RGBA, confirmed bool) jobStart {
 	inputs, ids := v.JobInputs()
 	return jobStart{

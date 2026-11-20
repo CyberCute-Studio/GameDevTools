@@ -111,10 +111,10 @@ func TestNativeViewResizesEveryReadyImageEndToEnd(t *testing.T) {
 		return nil
 	}
 	view.NativeDropFiles([]string{
-		writeViewFile(t, directory, "photo.png", encodeTestPNG(t, 8, 6)),
-		writeViewFile(t, directory, "shot.jpg", encodeTestJPEG(t, 6, 8)),
-		writeViewFile(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
-		writeViewFile(t, directory, "notes.txt", []byte("text")),
+		writeFixture(t, directory, "photo.png", encodeTestPNG(t, 8, 6)),
+		writeFixture(t, directory, "shot.jpg", encodeTestJPEG(t, 6, 8)),
+		writeFixture(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
+		writeFixture(t, directory, "notes.txt", []byte("text")),
 	})
 	settle(t, view, dispatcher)
 	if enabled(view.cancelButton) || enabled(view.openButton) {
@@ -224,7 +224,7 @@ func TestNativeViewRerunsPlanAroundEarlierResults(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	view.NativeDropFiles([]string{writeViewFile(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
+	view.NativeDropFiles([]string{writeFixture(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
 	settle(t, view, dispatcher)
 	view.NativeAction()
 	drainJob(t, view, dispatcher)
@@ -270,8 +270,8 @@ func TestNativeViewOverwriteNeedsConfirmation(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	existing := writeViewFile(t, folder, "photo.png", encodeTestPNG(t, 2, 2))
-	view.NativeDropFiles([]string{writeViewFile(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
+	existing := writeFixture(t, folder, "photo.png", encodeTestPNG(t, 2, 2))
+	view.NativeDropFiles([]string{writeFixture(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
 	settle(t, view, dispatcher)
 	if err := view.options.SetCollision(CollisionOverwrite); err != nil {
 		t.Fatal(err)
@@ -491,7 +491,7 @@ func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
 	content := fixtureJPEG(t, fixtureQuadrants(800, 600))
 	var paths []string
 	for index := range 8 {
-		paths = append(paths, writeViewFile(t, directory, fmt.Sprintf("photo-%d.jpg", index), content))
+		paths = append(paths, writeFixture(t, directory, fmt.Sprintf("photo-%d.jpg", index), content))
 	}
 	view.NativeDropFiles(paths)
 	settle(t, view, dispatcher)
@@ -759,7 +759,7 @@ func TestNativeViewRefusesJobsThatCannotStart(t *testing.T) {
 func TestNativeViewReportsAJobThatCannotStart(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
-	blocker := writeViewFile(t, t.TempDir(), "blocker", []byte("a file"))
+	blocker := writeFixture(t, t.TempDir(), "blocker", []byte("a file"))
 	if err := view.options.SetOutputFolder(filepath.Join(blocker, "Resized")); err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +794,7 @@ func TestNativeViewKeepsOfferingTheLatestResults(t *testing.T) {
 		t.Fatal("Open Output Folder was not offered for the saved result")
 	}
 
-	blocker := writeViewFile(t, t.TempDir(), "blocker", []byte("a file"))
+	blocker := writeFixture(t, t.TempDir(), "blocker", []byte("a file"))
 	if err := view.options.SetOutputFolder(filepath.Join(blocker, "Resized")); err != nil {
 		t.Fatal(err)
 	}
@@ -926,9 +926,9 @@ func TestNativeViewChecksFailedImagesAgainBeforeAJob(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	fixed := writeViewFile(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
+	fixed := writeFixture(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
 	missing := filepath.Join(directory, "missing.png")
-	view.NativeDropFiles([]string{fixed, missing, writeViewFile(t, directory, "notes.txt", []byte("text"))})
+	view.NativeDropFiles([]string{fixed, missing, writeFixture(t, directory, "notes.txt", []byte("text"))})
 	settle(t, view, dispatcher)
 	before := []string{"fixed.png — Damaged or incomplete", "missing.png — Cannot be read", "notes.txt — Unsupported format"}
 	if got := listContents(view.list); strings.Join(got, "\n") != strings.Join(before, "\n") {
@@ -944,8 +944,8 @@ func TestNativeViewChecksFailedImagesAgainBeforeAJob(t *testing.T) {
 		t.Fatalf("rows after the refused job = %q, want %q", got, before)
 	}
 
-	writeViewFile(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
-	writeViewFile(t, directory, "missing.png", encodeTestPNG(t, 6, 8))
+	writeFixture(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
+	writeFixture(t, directory, "missing.png", encodeTestPNG(t, 6, 8))
 	view.NativeAction()
 	drainJob(t, view, dispatcher)
 	after := []string{"fixed.png — 8 × 6 px — Completed", "missing.png — 6 × 8 px — Completed", "notes.txt — Failed"}
@@ -1031,10 +1031,10 @@ func (r *stuckRunner) run(ctx context.Context, request job.Request, observe func
 func TestNativeViewLetsGoOfAJobThatDoesNotStop(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
-	fixed := writeViewFile(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
+	fixed := writeFixture(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
 	view.NativeDropFiles([]string{writeViewSource(t, directory, "stuck.png"), writeViewSource(t, directory, "waiting.png"), fixed})
 	settle(t, view, dispatcher)
-	writeViewFile(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
+	writeFixture(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
 	runner := &stuckRunner{started: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(runner.release) }) }
@@ -1107,8 +1107,8 @@ func TestNativeViewLetsGoOfAJobStuckCheckingAgain(t *testing.T) {
 	directory := sourceDir(t, view)
 	view.NativeDropFiles([]string{
 		writeViewSource(t, directory, "ready.png"),
-		writeViewFile(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
-		writeViewFile(t, directory, "notes.txt", []byte("text")),
+		writeFixture(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
+		writeFixture(t, directory, "notes.txt", []byte("text")),
 	})
 	settle(t, view, dispatcher)
 	// The check made again blocks without observing the cancellation, as a

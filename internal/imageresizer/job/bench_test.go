@@ -89,10 +89,11 @@ func encodeReference(b *testing.B, img image.Image) []byte {
 // each as the source list does once its content check succeeds, returning
 // the inputs, the bytes the sources take on disk, and the memory decoding
 // every source at once would take by their checks' estimates. A check's
-// description depends only on the file's content, so each of the 15
-// distinct contents — the seven pictures, and four landscapes under each of
-// two orientations — is checked once and its description given to its
-// copies.
+// description depends only on the file's content, so each of the 11
+// distinct contents — the seven pictures, and the four landscapes tagged
+// with an orientation: the sources tagged 6 take landscapes 0 and 2, as
+// their index is even, and those tagged 8 landscapes 1 and 3 — is checked
+// once and its description given to its copies.
 func referenceInputs(b *testing.B) ([]Input, uint64, uint64) {
 	b.Helper()
 	var landscapes, portraits [][]byte

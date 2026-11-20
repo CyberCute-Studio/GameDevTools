@@ -156,14 +156,16 @@ func (c *ComboBox) Selected() int {
 	return int(int32(index))
 }
 
-// Count returns the number of items in the combo box's list.
+// Count returns the number of items in the combo box's list, or 0 when the
+// control reports that it cannot count them (CB_ERR), so a caller can size a
+// slice by it.
 func (c *ComboBox) Count() int {
 	count, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetCount, 0, 0)
-	return int(int32(count))
+	return max(0, int(int32(count)))
 }
 
 // ItemText returns the text of the item at index, or "" for an index out of
-// range.
+// range or an item that cannot be read.
 func (c *ComboBox) ItemText(index int) string {
 	length, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetLBTextLen, uintptr(index), 0)
 	if int32(length) <= 0 {

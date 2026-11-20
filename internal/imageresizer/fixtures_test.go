@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/jpeg"
 	"image/png"
 	"os"
@@ -29,10 +28,22 @@ var (
 	fixtureMagenta = color.NRGBA{R: 0xff, B: 0xff, A: 0xff}
 )
 
+// fixturePaint sets every pixel of the rectangle to exactly c. It sets them
+// one by one rather than through draw.Draw, which premultiplies a uniform
+// color by its alpha and so would store a fully transparent color as
+// transparent black.
+func fixturePaint(img *image.NRGBA, r image.Rectangle, c color.NRGBA) {
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			img.SetNRGBA(x, y, c)
+		}
+	}
+}
+
 // fixtureFill is a width × height picture of one color.
 func fixtureFill(width, height int, c color.NRGBA) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
-	draw.Draw(img, img.Bounds(), image.NewUniform(c), image.Point{}, draw.Src)
+	fixturePaint(img, img.Bounds(), c)
 	return img
 }
 
@@ -42,9 +53,9 @@ func fixtureFill(width, height int, c color.NRGBA) *image.NRGBA {
 func fixtureQuadrants(width, height int) *image.NRGBA {
 	img := fixtureFill(width, height, fixtureWhite)
 	halfWidth, halfHeight := width/2, height/2
-	draw.Draw(img, image.Rect(0, 0, halfWidth, halfHeight), image.NewUniform(fixtureRed), image.Point{}, draw.Src)
-	draw.Draw(img, image.Rect(halfWidth, 0, width, halfHeight), image.NewUniform(fixtureGreen), image.Point{}, draw.Src)
-	draw.Draw(img, image.Rect(0, halfHeight, halfWidth, height), image.NewUniform(fixtureBlue), image.Point{}, draw.Src)
+	fixturePaint(img, image.Rect(0, 0, halfWidth, halfHeight), fixtureRed)
+	fixturePaint(img, image.Rect(halfWidth, 0, width, halfHeight), fixtureGreen)
+	fixturePaint(img, image.Rect(0, halfHeight, halfWidth, height), fixtureBlue)
 	return img
 }
 
@@ -58,24 +69,26 @@ func fixtureQuadrants(width, height int) *image.NRGBA {
 // those at x 495 and y 245 on column and row 256.
 func fixtureCropMarks() *image.NRGBA {
 	img := fixtureFill(1000, 500, fixtureGreen)
-	draw.Draw(img, image.Rect(0, 0, 250, 500), image.NewUniform(fixtureRed), image.Point{}, draw.Src)
-	draw.Draw(img, image.Rect(750, 0, 1000, 500), image.NewUniform(fixtureBlue), image.Point{}, draw.Src)
+	fixturePaint(img, image.Rect(0, 0, 250, 500), fixtureRed)
+	fixturePaint(img, image.Rect(750, 0, 1000, 500), fixtureBlue)
 	for _, x := range []int{300, 495} {
-		draw.Draw(img, image.Rect(x, 0, x+10, 500), image.NewUniform(fixtureBlack), image.Point{}, draw.Src)
+		fixturePaint(img, image.Rect(x, 0, x+10, 500), fixtureBlack)
 	}
 	for _, y := range []int{50, 245} {
-		draw.Draw(img, image.Rect(250, y, 750, y+10), image.NewUniform(fixtureBlack), image.Point{}, draw.Src)
+		fixturePaint(img, image.Rect(250, y, 750, y+10), fixtureBlack)
 	}
 	return img
 }
 
-// fixtureTranslucent is the AC-R11 source: a 90 × 30 PNG whose left third
-// is fully transparent green, whose middle third is red at half opacity
-// (alpha 128), and whose right third is opaque blue.
+// fixtureTranslucent is the AC-R06 and AC-R11 source: a 90 × 30 PNG whose
+// left third is fully transparent green — green stored under alpha 0, which
+// a resizer that lets invisible pixels lend their color would show — whose
+// middle third is red at half opacity (alpha 128), and whose right third is
+// opaque blue. No visible pixel holds any green.
 func fixtureTranslucent() *image.NRGBA {
 	img := fixtureFill(90, 30, color.NRGBA{G: 0xff})
-	draw.Draw(img, image.Rect(30, 0, 60, 30), image.NewUniform(color.NRGBA{R: 0xff, A: 0x80}), image.Point{}, draw.Src)
-	draw.Draw(img, image.Rect(60, 0, 90, 30), image.NewUniform(fixtureBlue), image.Point{}, draw.Src)
+	fixturePaint(img, image.Rect(30, 0, 60, 30), color.NRGBA{R: 0xff, A: 0x80})
+	fixturePaint(img, image.Rect(60, 0, 90, 30), fixtureBlue)
 	return img
 }
 

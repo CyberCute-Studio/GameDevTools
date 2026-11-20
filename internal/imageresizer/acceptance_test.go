@@ -18,7 +18,6 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
-	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/resize"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -30,9 +29,10 @@ import (
 // without the window:
 // the fixtures are written to disk, added to a source list, and checked by
 // the content check the view's inspector runs (decode.Inspect behind its
-// panic guard); the request is built from the validated options and the
-// preset by the view's own newJobStart, and the sources whose check failed
-// are checked again first by the view's own recheckInputs; and job.Run
+// panic guard); the list, the preset, and the options are checked by Start
+// Resize's own checks (jobRefusal, jobTarget, jobBackground), the request is
+// built by its own newJobStart, and the sources whose check failed are
+// checked again first by its own recheckInputs; and job.Run
 // resizes every listed source with the real decoder, resizer, encoder, and
 // writer. The results are decoded back from disk, and every item's final
 // status is applied to the list, so the rows and details the view would show
@@ -80,24 +80,26 @@ func listSources(t *testing.T, paths []string) *Inventory {
 	return inventory
 }
 
-// startAcceptance runs a job over the listed sources with the options and
-// the preset's target as the view's Start Resize does once the user
-// confirmed an Overwrite job, or declined to when confirmed is false: the
-// request is built by the view's newJobStart, and the sources whose check
-// failed are checked again by the view's recheckInputs, their checks applied
-// to the list, before job.Run. Every item's final status is then applied to
-// the list.
-func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, options ResizeOptions, confirmed bool, target resize.Target, observe func(job.Event)) (acceptanceResult, error) {
+// startAcceptance runs a job over the listed sources under the selected
+// preset with the options, as the view's Start Resize does once the user
+// confirmed an Overwrite job, or declined to when confirmed is false: Start
+// Resize's own checks of the list, the preset, and the options (jobRefusal,
+// jobTarget, jobBackground) must let the job start, the request is built by
+// its newJobStart, and the sources whose check failed are checked again by
+// its recheckInputs, their checks applied to the list, before job.Run. Every
+// item's final status is then applied to the list.
+func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, options ResizeOptions, confirmed bool, selected preset.Preset, observe func(job.Event)) (acceptanceResult, error) {
 	t.Helper()
-	if err := target.Validate(); err != nil {
-		t.Fatalf("preset %+v: %v", target, err)
+	if refusal := inventory.jobRefusal(); refusal != "" {
+		t.Fatalf("Start Resize refuses the list: %s", refusal)
 	}
-	if err := options.Validate(); err != nil {
-		t.Fatalf("options %+v: %v", options, err)
-	}
-	background, err := BackgroundColor(options.Background)
+	target, err := jobTarget(selected)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Start Resize refuses the preset %+v: %v", selected, err)
+	}
+	background, err := jobBackground(options)
+	if err != nil {
+		t.Fatalf("Start Resize refuses the options %+v: %v", options, err)
 	}
 	start := inventory.newJobStart(options, target, background, confirmed)
 	applied := func(result InspectionResult) {
@@ -117,9 +119,9 @@ func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, op
 
 // runAcceptance lists the sources and runs one job over them, which must
 // not fail as a whole.
-func runAcceptance(t *testing.T, ctx context.Context, sources []string, options ResizeOptions, target resize.Target, observe func(job.Event)) acceptanceResult {
+func runAcceptance(t *testing.T, ctx context.Context, sources []string, options ResizeOptions, selected preset.Preset, observe func(job.Event)) acceptanceResult {
 	t.Helper()
-	result, err := startAcceptance(t, ctx, listSources(t, sources), options, options.Collision == CollisionOverwrite, target, observe)
+	result, err := startAcceptance(t, ctx, listSources(t, sources), options, options.Collision == CollisionOverwrite, selected, observe)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -132,8 +134,10 @@ func acceptanceOptions(folder string, format OutputFormat, collision CollisionPo
 	return options
 }
 
-func target(width, height int, mode preset.ResizeMode) resize.Target {
-	return resize.Target{Width: width, Height: height, Mode: mode}
+// acceptancePreset is a custom Image Resizer preset of the size and fitting
+// mode, as the user selects one before Start Resize.
+func acceptancePreset(width, height int, mode preset.ResizeMode) preset.Preset {
+	return preset.Preset{ID: "acceptance", Name: "Acceptance", Width: width, Height: height, ResizeMode: mode}
 }
 
 // requireItem checks an item's final state and destination, and returns its
@@ -255,7 +259,7 @@ func requireNames(t *testing.T, folder string, want ...string) {
 func TestAcceptanceR01Stretch(t *testing.T) {
 	source := writeFixture(t, t.TempDir(), "marks.png", fixturePNG(t, fixtureCropMarks()))
 	out := filepath.Join(t.TempDir(), "Resized")
-	result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(512, 512, preset.ResizeStretch), nil)
+	result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(512, 512, preset.ResizeStretch), nil)
 
 	path := filepath.Join(out, "marks.png")
 	requireItem(t, result, 0, job.StateCompleted, path)
@@ -281,7 +285,7 @@ func TestAcceptanceR02FitLandscape(t *testing.T) {
 		writeFixture(t, sources, "marks.jpg", fixtureJPEG(t, marks)),
 	}
 	out := t.TempDir()
-	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(512, 512, preset.ResizeFit), nil)
+	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(512, 512, preset.ResizeFit), nil)
 
 	for index, name := range []string{"marks.png", "marks.jpg"} {
 		path := filepath.Join(out, name)
@@ -326,7 +330,7 @@ func TestAcceptanceR03FitPortraitAndRounding(t *testing.T) {
 		}
 		paths = append(paths, writeFixture(t, sources, name, content))
 	}
-	for _, fit := range []resize.Target{target(512, 512, preset.ResizeFit), target(1024, 768, preset.ResizeFit)} {
+	for _, fit := range []preset.Preset{acceptancePreset(512, 512, preset.ResizeFit), acceptancePreset(1024, 768, preset.ResizeFit)} {
 		out := t.TempDir()
 		result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), fit, nil)
 		for index, size := range sizes {
@@ -337,11 +341,11 @@ func TestAcceptanceR03FitPortraitAndRounding(t *testing.T) {
 			exactWidth, exactHeight := float64(size.width)*scale, float64(size.height)*scale
 			switch {
 			case img.Width < 1 || img.Height < 1 || img.Width > fit.Width || img.Height > fit.Height:
-				t.Fatalf("%v: %d × %d result %d × %d does not fit within the target or is empty", fit, size.width, size.height, img.Width, img.Height)
+				t.Fatalf("Fit %d × %d: %d × %d result %d × %d does not fit within the target or is empty", fit.Width, fit.Height, size.width, size.height, img.Width, img.Height)
 			case img.Width != fit.Width && img.Height != fit.Height:
-				t.Fatalf("%v: %d × %d result %d × %d fills neither side of the target", fit, size.width, size.height, img.Width, img.Height)
+				t.Fatalf("Fit %d × %d: %d × %d result %d × %d fills neither side of the target", fit.Width, fit.Height, size.width, size.height, img.Width, img.Height)
 			case math.Abs(float64(img.Width)-exactWidth) > 1 || math.Abs(float64(img.Height)-exactHeight) > 1:
-				t.Fatalf("%v: %d × %d result %d × %d is more than a pixel from the exact %.2f × %.2f", fit, size.width, size.height, img.Width, img.Height, exactWidth, exactHeight)
+				t.Fatalf("Fit %d × %d: %d × %d result %d × %d is more than a pixel from the exact %.2f × %.2f", fit.Width, fit.Height, size.width, size.height, img.Width, img.Height, exactWidth, exactHeight)
 			}
 		}
 	}
@@ -357,7 +361,7 @@ func TestAcceptanceR03FitPortraitAndRounding(t *testing.T) {
 func TestAcceptanceR04CropToFill(t *testing.T) {
 	source := writeFixture(t, t.TempDir(), "marks.png", fixturePNG(t, fixtureCropMarks()))
 	out := t.TempDir()
-	result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(512, 512, preset.ResizeCropToFill), nil)
+	result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(512, 512, preset.ResizeCropToFill), nil)
 
 	path := filepath.Join(out, "marks.png")
 	requireItem(t, result, 0, job.StateCompleted, path)
@@ -390,7 +394,7 @@ func TestAcceptanceR05Upscaling(t *testing.T) {
 		{preset.ResizeCropToFill, 512, 512},
 	} {
 		out := t.TempDir()
-		result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(512, 512, tc.mode), nil)
+		result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(512, 512, tc.mode), nil)
 		path := filepath.Join(out, "small.png")
 		requireItem(t, result, 0, job.StateCompleted, path)
 		img := decodeOutput(t, path)
@@ -418,7 +422,7 @@ func TestAcceptanceR06MixedBatch(t *testing.T) {
 	}
 	before := snapshot(t, paths...)
 	out := t.TempDir()
-	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(32, 32, preset.ResizeFit), nil)
+	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(32, 32, preset.ResizeFit), nil)
 
 	requireItem(t, result, 0, job.StateCompleted, filepath.Join(out, "sprite.png"))
 	requireItem(t, result, 1, job.StateCompleted, filepath.Join(out, "photo.jpg"))
@@ -472,7 +476,7 @@ func TestAcceptanceR07OriginalsPreserved(t *testing.T) {
 				writeFixture(t, folder, "shot.jpg", fixtureJPEG(t, fixtureQuadrants(30, 40))),
 			}
 			before := snapshot(t, paths...)
-			result := runAcceptance(t, context.Background(), paths, acceptanceOptions(folder, FormatKeepSource, policy), target(16, 16, preset.ResizeFit), nil)
+			result := runAcceptance(t, context.Background(), paths, acceptanceOptions(folder, FormatKeepSource, policy), acceptancePreset(16, 16, preset.ResizeFit), nil)
 
 			if policy == CollisionSkip {
 				for index, path := range paths {
@@ -518,7 +522,7 @@ func TestAcceptanceR08RenameCollisions(t *testing.T) {
 	var results [][]byte
 	for range 2 {
 		out := t.TempDir()
-		result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(16, 16, preset.ResizeFit), nil)
+		result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(16, 16, preset.ResizeFit), nil)
 		requireItem(t, result, 0, job.StateCompleted, filepath.Join(out, "sprite.png"))
 		if status := requireItem(t, result, 1, job.StateCompleted, filepath.Join(out, "sprite_2.png")); status.Reason != output.ReasonDuplicate {
 			t.Fatalf("the second source was renamed for %v, want ReasonDuplicate", status.Reason)
@@ -559,7 +563,7 @@ func TestAcceptanceR09SkipCollisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := snapshot(t, append([]string{existing}, paths...)...)
-	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionSkip), target(16, 16, preset.ResizeFit), nil)
+	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionSkip), acceptancePreset(16, 16, preset.ResizeFit), nil)
 
 	if status := requireItem(t, result, 0, job.StateSkipped, existing); status.Reason != output.ReasonExists {
 		t.Fatalf("skipped for %v, want ReasonExists", status.Reason)
@@ -605,7 +609,7 @@ func TestAcceptanceR10ConfirmedOverwrite(t *testing.T) {
 	options := acceptanceOptions(out, FormatKeepSource, CollisionOverwrite)
 
 	inventory := listSources(t, paths)
-	_, err := startAcceptance(t, context.Background(), inventory, options, false, target(16, 16, preset.ResizeFit), nil)
+	_, err := startAcceptance(t, context.Background(), inventory, options, false, acceptancePreset(16, 16, preset.ResizeFit), nil)
 	var outputErr *output.Error
 	if !errors.As(err, &outputErr) || outputErr.Kind != output.KindConfirmation {
 		t.Fatalf("an unconfirmed Overwrite job = %v, want a confirmation failure", err)
@@ -613,7 +617,7 @@ func TestAcceptanceR10ConfirmedOverwrite(t *testing.T) {
 	requireUnchanged(t, destinationsBefore)
 	requireUnchanged(t, othersBefore)
 
-	result, err := startAcceptance(t, context.Background(), inventory, options, true, target(16, 16, preset.ResizeFit), nil)
+	result, err := startAcceptance(t, context.Background(), inventory, options, true, acceptancePreset(16, 16, preset.ResizeFit), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -631,12 +635,19 @@ func TestAcceptanceR10ConfirmedOverwrite(t *testing.T) {
 // TestAcceptanceR11PNGAlpha pins AC-R11: a PNG with transparency resized to
 // PNG keeps its alpha — transparent, half-transparent, and opaque where the
 // source is — and resized to JPEG is flattened against the selected
-// background color in proportion to each pixel's alpha.
+// background color in proportion to each pixel's alpha. The green the
+// source stores under its transparent third lends no color: no visible pixel
+// of the PNG result holds any, at the edge with the half-transparent third
+// either.
 func TestAcceptanceR11PNGAlpha(t *testing.T) {
-	source := writeFixture(t, t.TempDir(), "translucent.png", fixturePNG(t, fixtureTranslucent()))
+	translucent := fixtureTranslucent()
+	if hidden := translucent.NRGBAAt(0, 0); hidden != (color.NRGBA{G: 0xff}) {
+		t.Fatalf("the transparent third stores %v, want green under alpha 0", hidden)
+	}
+	source := writeFixture(t, t.TempDir(), "translucent.png", fixturePNG(t, translucent))
 
 	pngOut := t.TempDir()
-	result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(pngOut, FormatPNG, CollisionRename), target(512, 512, preset.ResizeFit), nil)
+	result := runAcceptance(t, context.Background(), []string{source}, acceptanceOptions(pngOut, FormatPNG, CollisionRename), acceptancePreset(512, 512, preset.ResizeFit), nil)
 	path := filepath.Join(pngOut, "translucent.png")
 	requireItem(t, result, 0, job.StateCompleted, path)
 	img := decodeOutput(t, path)
@@ -649,11 +660,19 @@ func TestAcceptanceR11PNGAlpha(t *testing.T) {
 	}
 	requirePixel(t, "PNG", img.Pixels, 256, 85, color.NRGBA{R: 0xff, A: 0x80}, 3)
 	requirePixel(t, "PNG", img.Pixels, 426, 85, fixtureBlue, 2)
+	bounds := img.Pixels.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if pixel := color.NRGBAModel.Convert(img.Pixels.At(x, y)).(color.NRGBA); pixel.A > 0 && pixel.G > 2 {
+				t.Fatalf("PNG pixel (%d, %d) = %v shows the green stored under the transparent third", x, y, pixel)
+			}
+		}
+	}
 
 	jpegOut := t.TempDir()
 	options := acceptanceOptions(jpegOut, FormatJPEG, CollisionRename)
 	options.Background = "#3366CC"
-	result = runAcceptance(t, context.Background(), []string{source}, options, target(512, 512, preset.ResizeFit), nil)
+	result = runAcceptance(t, context.Background(), []string{source}, options, acceptancePreset(512, 512, preset.ResizeFit), nil)
 	path = filepath.Join(jpegOut, "translucent.jpg")
 	requireItem(t, result, 0, job.StateCompleted, path)
 	img = decodeOutput(t, path)
@@ -682,7 +701,7 @@ func TestAcceptanceR12EXIFOrientation(t *testing.T) {
 		paths = append(paths, writeFixture(t, sources, fmt.Sprintf("orientation-%d.jpg", orientation), content))
 	}
 	out := t.TempDir()
-	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(192, 192, preset.ResizeFit), nil)
+	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(192, 192, preset.ResizeFit), nil)
 
 	for index, source := range paths {
 		item := result.item(index)
@@ -730,7 +749,7 @@ func TestAcceptanceR13Cancellation(t *testing.T) {
 			cancel()
 		}
 	}
-	result := runAcceptance(t, ctx, paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(16, 16, preset.ResizeFit), observe)
+	result := runAcceptance(t, ctx, paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(16, 16, preset.ResizeFit), observe)
 
 	if len(lateStarts) != 0 {
 		t.Fatalf("items %v started after the job was cancelled", lateStarts)

@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/jpeg"
-	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,37 +84,24 @@ func settle(t *testing.T, view *NativeView, dispatcher *queuedDispatcher) {
 	}
 }
 
+// encodeTestPNG is a blank width × height PNG, encoded as every fixture is
+// (fixturePNG).
 func encodeTestPNG(t *testing.T, width, height int) []byte {
 	t.Helper()
-	var buffer bytes.Buffer
-	if err := png.Encode(&buffer, image.NewNRGBA(image.Rect(0, 0, width, height))); err != nil {
-		t.Fatal(err)
-	}
-	return buffer.Bytes()
+	return fixturePNG(t, image.NewNRGBA(image.Rect(0, 0, width, height)))
 }
 
+// encodeTestJPEG is a blank width × height grayscale JPEG, encoded as every
+// fixture is (fixtureJPEG).
 func encodeTestJPEG(t *testing.T, width, height int) []byte {
 	t.Helper()
-	var buffer bytes.Buffer
-	if err := jpeg.Encode(&buffer, image.NewGray(image.Rect(0, 0, width, height)), nil); err != nil {
-		t.Fatal(err)
-	}
-	return buffer.Bytes()
-}
-
-func writeViewFile(t *testing.T, directory, name string, content []byte) string {
-	t.Helper()
-	path := filepath.Join(directory, name)
-	if err := os.WriteFile(path, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return fixtureJPEG(t, image.NewGray(image.Rect(0, 0, width, height)))
 }
 
 // writeViewSource writes a valid 4 × 3 PNG, whatever the extension.
 func writeViewSource(t *testing.T, directory, name string) string {
 	t.Helper()
-	return writeViewFile(t, directory, name, encodeTestPNG(t, 4, 3))
+	return writeFixture(t, directory, name, encodeTestPNG(t, 4, 3))
 }
 
 func listContents(list *ui.ListBox) []string {
@@ -197,7 +182,7 @@ func TestNativeViewDropFilesAndFolder(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	first := writeViewSource(t, directory, "one.png")
-	writeViewFile(t, directory, "two.JPG", encodeTestJPEG(t, 8, 6))
+	writeFixture(t, directory, "two.JPG", encodeTestJPEG(t, 8, 6))
 	writeViewSource(t, directory, "skipped.bmp")
 	nested := filepath.Join(directory, "nested")
 	if err := os.Mkdir(nested, 0o700); err != nil {
@@ -229,11 +214,11 @@ func TestNativeViewIdentifiesContentProblems(t *testing.T) {
 	directory := sourceDir(t, view)
 	valid := encodeTestPNG(t, 20, 10)
 	paths := []string{
-		writeViewFile(t, directory, "text.png", []byte("not an image")),
-		writeViewFile(t, directory, "truncated.png", valid[:len(valid)/2]),
-		writeViewFile(t, directory, "renamed.png", encodeTestJPEG(t, 12, 9)),
-		writeViewFile(t, directory, "portrait.jpg", withOrientation(encodeTestJPEG(t, 40, 30), 6)),
-		writeViewFile(t, directory, "empty.jpeg", nil),
+		writeFixture(t, directory, "text.png", []byte("not an image")),
+		writeFixture(t, directory, "truncated.png", valid[:len(valid)/2]),
+		writeFixture(t, directory, "renamed.png", encodeTestJPEG(t, 12, 9)),
+		writeFixture(t, directory, "portrait.jpg", withOrientation(encodeTestJPEG(t, 40, 30), 6)),
+		writeFixture(t, directory, "empty.jpeg", nil),
 	}
 	view.NativeDropFiles(paths)
 	settle(t, view, dispatcher)

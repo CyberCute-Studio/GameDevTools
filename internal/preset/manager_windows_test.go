@@ -123,6 +123,11 @@ func listedTexts(manager *NativeManager) []string {
 // Resizer lists — before or after a restart — until one is created there
 // separately, which then stands on its own: deleting the Screenshot preset
 // leaves it, in the open window and in the stored settings a restart reads.
+// A manager's list changes only when a command in it rebuilds the list from
+// its library, so the open Image Resizer list is read after the user selects
+// a preset in it, which saves its library and rebuilds the list; the restart
+// after each such save shows it kept the other module's presets as they
+// were.
 func TestNativeManagerScreenshotPresetAbsentFromImageResizer(t *testing.T) {
 	parent := newPresetTestParent(t)
 	path := filepath.Join(t.TempDir(), "settings.json")
@@ -152,6 +157,7 @@ func TestNativeManagerScreenshotPresetAbsentFromImageResizer(t *testing.T) {
 	if !slices.Contains(listedTexts(screenshot), row) {
 		t.Fatalf("the Screenshot list %q does not show %q", listedTexts(screenshot), row)
 	}
+	selectNativePreset(t, resizer, resizer.manager.library.SelectedID())
 	if got := listedTexts(resizer); !slices.Equal(got, resizerRows) {
 		t.Fatalf("the open Image Resizer list became %q, was %q", got, resizerRows)
 	}
@@ -176,8 +182,10 @@ func TestNativeManagerScreenshotPresetAbsentFromImageResizer(t *testing.T) {
 	if slices.Contains(listedTexts(restartedScreenshot), row) {
 		t.Fatal("the Screenshot preset was not deleted")
 	}
-	if !slices.Contains(listedTexts(restartedResizer), row) {
-		t.Fatal("deleting the Screenshot preset removed the open Image Resizer list's own")
+	resizerCreated := restartedResizer.manager.library.Custom()[0]
+	selectNativePreset(t, restartedResizer, resizerCreated.ID)
+	if got := listedTexts(restartedResizer); !slices.Contains(got, row) || len(got) != len(resizerRows)+1 {
+		t.Fatalf("deleting the Screenshot preset changed the open Image Resizer list to %q", got)
 	}
 
 	finalScreenshot, finalResizer := restart()

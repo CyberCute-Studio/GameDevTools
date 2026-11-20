@@ -128,7 +128,7 @@ func TestAcceptanceR14WriteFailure(t *testing.T) {
 			}
 		}
 	}
-	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), target(16, 16, preset.ResizeFit), observe)
+	result := runAcceptance(t, context.Background(), paths, acceptanceOptions(out, FormatKeepSource, CollisionRename), acceptancePreset(16, 16, preset.ResizeFit), observe)
 	if denyErr != nil || restoreErr != nil {
 		t.Fatalf("changing the folder's security failed: %v, %v", denyErr, restoreErr)
 	}
