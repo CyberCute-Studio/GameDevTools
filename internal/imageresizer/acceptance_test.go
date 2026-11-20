@@ -58,9 +58,9 @@ func (r acceptanceResult) item(index int) SourceItem {
 
 // acceptanceCheck is the content check the view's inspector runs for every
 // added file and its jobs run again for the sources whose check failed:
-// decode.Inspect, behind the inspector's panic guard. The suite queues
-// nothing on it, so it starts no goroutine.
-var acceptanceCheck = NewInspector(decode.Inspect, nil).check
+// decode.Inspect, behind the inspector's panic guard (Inspector.check), which
+// needs no queue, worker, or context of an inspector.
+var acceptanceCheck = (&Inspector{inspect: decode.Inspect}).check
 
 // listSources adds the paths to a new source list and checks each supported
 // file's content, as the view does when files are added.

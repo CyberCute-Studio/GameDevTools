@@ -165,7 +165,12 @@ func (c *ComboBox) Count() int {
 }
 
 // ItemText returns the text of the item at index, or "" for an index out of
-// range or an item that cannot be read.
+// range or an item that cannot be read. Call it on the thread that owns the
+// combo box, as every control is driven: CB_GETLBTEXT takes no buffer size,
+// so the buffer is sized by CB_GETLBTEXTLEN, and on the owning thread
+// nothing can change the item between the two messages, which go straight
+// to its window procedure; from another thread a change dispatched between
+// them could overrun the buffer.
 func (c *ComboBox) ItemText(index int) string {
 	length, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetLBTextLen, uintptr(index), 0)
 	if int32(length) <= 0 {

@@ -32,6 +32,13 @@ const fileAddFile = 0x2
 // readable; restore puts back the folder's own access control list, and runs
 // at the end of the test too. Both may run on another goroutine, such as a
 // job's observer, so they report failures rather than failing the test.
+//
+// Both change the folder's own access control list through a handle to it
+// (SetKernelObjectSecurity), which leaves the files in it alone.
+// SetNamedSecurityInfo would also rewrite the inherited entries of every
+// file in the folder, opening each while the job's workers create, rename,
+// and delete them. The folder's inheritance flags are kept, and its
+// inherited entries with them (SE_DACL_AUTO_INHERIT_REQ).
 func folderCreation(t *testing.T, folder string) (deny, restore func() error) {
 	t.Helper()
 	descriptor, err := windows.GetNamedSecurityInfo(folder, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
@@ -69,12 +76,30 @@ func folderCreation(t *testing.T, folder string) (deny, restore func() error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protection := windows.SECURITY_INFORMATION(windows.UNPROTECTED_DACL_SECURITY_INFORMATION)
-	if control&windows.SE_DACL_PROTECTED != 0 {
-		protection = windows.PROTECTED_DACL_SECURITY_INFORMATION
+	name, err := windows.UTF16PtrFromString(folder)
+	if err != nil {
+		t.Fatal(err)
 	}
+	const inheritance = windows.SE_DACL_AUTO_INHERIT_REQ | windows.SE_DACL_AUTO_INHERITED | windows.SE_DACL_PROTECTED
 	set := func(dacl *windows.ACL) error {
-		return windows.SetNamedSecurityInfo(folder, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|protection, nil, nil, dacl, nil)
+		descriptor, err := windows.NewSecurityDescriptor()
+		if err != nil {
+			return err
+		}
+		if err := descriptor.SetDACL(dacl, true, false); err != nil {
+			return err
+		}
+		if err := descriptor.SetControl(inheritance, control&inheritance|windows.SE_DACL_AUTO_INHERIT_REQ); err != nil {
+			return err
+		}
+		handle, err := windows.CreateFile(name, windows.READ_CONTROL|windows.WRITE_DAC,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
+			windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+		if err != nil {
+			return err
+		}
+		defer windows.CloseHandle(handle)
+		return windows.SetKernelObjectSecurity(handle, windows.DACL_SECURITY_INFORMATION, descriptor)
 	}
 	deny = func() error { return set(denied) }
 	restore = func() error { return set(original) }

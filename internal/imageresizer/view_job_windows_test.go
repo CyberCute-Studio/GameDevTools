@@ -81,14 +81,19 @@ func imageSize(t *testing.T, path string) (int, int) {
 	return config.Width, config.Height
 }
 
-// expectedSize is the output size of a source under the selected preset.
+// expectedSize is the output size of a source under the selected preset, at
+// the target Start Resize takes from it (jobTarget).
 func expectedSize(t *testing.T, view *NativeView, width, height int) (int, int) {
 	t.Helper()
 	selected, exists := view.presets.SelectedPreset()
 	if !exists {
 		t.Fatal("no preset is selected")
 	}
-	geometry, err := resize.Plan(width, height, resize.Target{Width: selected.Width, Height: selected.Height, Mode: selected.ResizeMode})
+	target, err := jobTarget(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geometry, err := resize.Plan(width, height, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,6 +562,12 @@ func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
 		t.Fatalf("progress while the job runs = %q", got)
 	}
 
+	// The test's window is hidden and this thread owns it, so moving it is a
+	// direct call that succeeds whatever the job does: it shows the GUI
+	// thread is free to act while the job is held, as returning from Start
+	// Resize and applying the job's progress do, not that a message loop
+	// keeps up with a drag. What keeps the window responsive is the thread
+	// check above: the job never runs on the GUI thread.
 	before := windowRect(t, view.parent)
 	const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
 	if result, _, err := procSetWindowPos.Call(uintptr(view.parent), 0, uintptr(before.Left+37), uintptr(before.Top+23), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate); result == 0 {

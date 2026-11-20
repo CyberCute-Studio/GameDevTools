@@ -227,10 +227,13 @@ func (v *Inventory) newJobStart(options ResizeOptions, target resize.Target, bac
 // one that still cannot be used fails with its current reason. Each check
 // made replaces its input in inputs and is handed to report, with the item's
 // ID from ids, for the source list to apply (Inventory.Recheck). It reports
-// whether it checked every one: once ctx is cancelled the rest are not
-// checked.
+// whether it checked every one: once ctx is cancelled no further check
+// starts, and a check it interrupted is neither reported nor applied.
 func recheckInputs(ctx context.Context, rechecks []int, ids []uint64, inputs []job.Input, check inspectFunc, report func(InspectionResult)) bool {
 	for _, index := range rechecks {
+		if ctx.Err() != nil {
+			return false
+		}
 		input := &inputs[index]
 		info, err := check(ctx, input.Path)
 		if ctx.Err() != nil {
