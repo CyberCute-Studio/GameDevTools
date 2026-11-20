@@ -251,7 +251,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Validate the combined application against shared UX, reliability, privacy, compatibility, and performance requirements.
 
 28. **QLT-01 — Complete accessibility, keyboard, contrast, and localization-readiness audit**
-    - **Status:** In Progress | **PR:** TBD | **Depends on:** SCR-11, RSZ-09
+    - **Status:** In Progress | **PR:** [#28](https://github.com/CyberCute-Studio/GameDevTools/pull/28) | **Depends on:** SCR-11, RSZ-09
     - **Requirements:** UX-001, UX-002, UX-003, UX-004, UX-005, UX-006, UX-007, UX-008, UX-009, UX-010, AC-A03, SCR-015.
     - **Deliver:** Full keyboard navigation audit, visible-focus fixes, contrast checks, screen-reader/accessibility metadata supported by the selected stack, non-color-only status review, high-contrast/theme behavior decision, and centralized-string cleanup.
     - **Verify:** Exercise every main-window workflow keyboard-only, inspect contrast and focus, test supported Windows theme/high-contrast modes, and document any platform accessibility limitation with an approved resolution.
