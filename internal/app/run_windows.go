@@ -5,7 +5,6 @@ package app
 import (
 	"fmt"
 	"runtime"
-	"slices"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
@@ -74,13 +73,14 @@ func runNative() error {
 		return err
 	}
 	startup := state.startupWarnings()
+	warned := startup.text() != ""
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
 		startup.other = append(startup.other, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
 	} else {
 		defer logger.Close()
 	}
-	if len(state.warnings()) > 0 && logger != nil {
+	if warned && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}
 	monitor := display.NewMonitor()
@@ -128,7 +128,8 @@ type session struct {
 // stores the capture and resize options' — so malformed preset, capture, or
 // resize data follows the store's backup and recovery like the rest of the
 // file (PRESET-008, SET-006). Its warnings include an output folder that
-// could not be resolved, so the user is asked to choose one (warnings).
+// could not be resolved, so the user is asked to choose one
+// (startupWarnings).
 func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*session, error) {
 	store := settings.NewStore(paths)
 	state := &session{store: store, folders: folders}
@@ -161,12 +162,6 @@ func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*
 		return nil, err
 	}
 	return state, nil
-}
-
-// warnings returns the warnings the session gives as the options now hold
-// them: the settings file's, and then the output folders' (folderWarnings).
-func (state *session) warnings() []string {
-	return append(slices.Clone(state.settingsWarnings), state.folderWarnings()...)
 }
 
 // startupWarnings returns the session's warnings for the shell's note, kept

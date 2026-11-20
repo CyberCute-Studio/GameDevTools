@@ -600,6 +600,14 @@ func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
 	return &StatusArea{Label: label, parent: parent}, nil
 }
 
+// Height returns the status area's height at width, as a view lays it out:
+// its notice's, as measure measures text, and room for two lines while the
+// notice is shorter or there is none, so the controls below it move only
+// for a longer notice. scale scales a 96-DPI length to the window's DPI.
+func (s *StatusArea) Height(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
+	return max(scale(48), measure(s.Text(), width))
+}
+
 // Show replaces the notice and announces it to a screen reader — even when
 // its text equals the notice it replaces, as an identical result is still a
 // new one — and, with a positive timeout, clears it once the timeout

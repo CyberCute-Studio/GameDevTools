@@ -127,6 +127,37 @@ func TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp(t *testing.T) {
 	}
 }
 
+// TestStoreRestoreKeepsSavingDisabledForAnOriginalItCannotFind pins that a
+// store whose saving Load disabled to protect a file it could not read saves
+// again only once the restore has copied that file: an original the restore
+// finds missing cannot be told from one a network share that is down
+// reports missing, so the restore changes nothing, and saving stays
+// disabled rather than letting a later save replace a file that has no
+// copy.
+func TestStoreRestoreKeepsSavingDisabledForAnOriginalItCannotFind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(Paths{ConfigFile: path})
+	if warnings := store.Load().Warnings; len(warnings) != 1 || !strings.Contains(warnings[0], "saving is disabled") {
+		t.Fatalf("load warnings = %v, want the file unread and saving disabled", warnings)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, backup, err := store.Restore(Default(), restoreTo(Default())); !errors.Is(err, ErrNotRestored) || backup != "" {
+		t.Fatalf("Restore() = %q, %v, want ErrNotRestored without a backup", backup, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the restore wrote a settings file: %v", err)
+	}
+	if err := store.Save(Default()); err == nil {
+		t.Fatal("Save() succeeded after a restore that copied nothing")
+	}
+}
+
 // TestStoreRestoreDerivesFromAFileTheSessionNeverLoaded pins that a session
 // Load started from the defaults, as it could not read the settings file,
 // restores from the file's settings once the file can be read, not from the

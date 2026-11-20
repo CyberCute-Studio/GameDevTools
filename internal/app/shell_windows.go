@@ -92,7 +92,7 @@ type nativeShell struct {
 	confirm func(windows.Handle, string, string) bool
 	// startup holds the warnings the startup notice is made of, by what
 	// decides whether each still applies once the default settings are
-	// restored (settleNotice).
+	// restored (settleNotice) or the settings are saved (writeSettings).
 	startup startupWarnings
 	// backgroundWork is closed once every module view's background work has
 	// finished (stopBackgroundWork); it is nil until the shell first waits
@@ -114,7 +114,8 @@ type startupWarnings struct {
 	// up, or finds none to back up, settles.
 	settingsFile []string
 	// folders returns the output folders' warnings as the options now hold
-	// them, which a restore can change; nil returns none.
+	// them, which a restore or the choice of a folder can change; nil
+	// returns none.
 	folders func() []string
 	// other are the warnings the settings do not decide, such as diagnostic
 	// logging being unavailable, which still apply once they are restored.
@@ -882,35 +883,39 @@ func (s *nativeShell) layout() {
 // delivering its outputs, finish before the process exits, as the message
 // loop ends (stopBackgroundWork). Each module bounds its own wait, a
 // cancelled resize job's by imageresizer.JobShutdownWait, but for a capture,
-// which is waited for until its outputs are delivered. After the end of the
-// Windows session it waits only for what endSession's wait left running.
+// which is waited for until its outputs are delivered; the modules' waits
+// run at once, so the longest of them is the whole wait. After the end of
+// the Windows session it waits only for what endSession's wait left running.
 func (s *nativeShell) waitForBackgroundWork() {
 	<-s.stopBackgroundWork()
 }
 
 // stopBackgroundWork starts waiting, once, for every module view's
-// background work to finish (nativeShutdown), on a goroutine of its own, so
-// a caller can stop waiting before it has (endSession), and returns the
-// channel closed once it has. The shell starts it only once the window is
+// background work to finish (nativeShutdown), each view's on a goroutine of
+// its own, so one view's wait does not hold another's up and a caller can
+// stop waiting before they have (endSession), and returns the channel
+// closed once they all have. The shell starts it only once the window is
 // destroyed — after the message loop ended, or inside WM_ENDSESSION — so the
 // work never waits on the GUI thread, its completion posts fail harmlessly
 // against the destroyed window, and no module view has a window left to
 // close: the window's destruction closed any capture session (NativeDestroy).
 func (s *nativeShell) stopBackgroundWork() <-chan struct{} {
 	if s.backgroundWork == nil {
-		var shutdowns []nativeShutdown
+		var stopped sync.WaitGroup
 		for _, native := range s.nativeViews {
 			if shutdown, ok := native.(nativeShutdown); ok {
-				shutdowns = append(shutdowns, shutdown)
+				stopped.Add(1)
+				go func() {
+					defer stopped.Done()
+					shutdown.NativeShutdown()
+				}()
 			}
 		}
 		done := make(chan struct{})
 		s.backgroundWork = done
 		go func() {
-			defer close(done)
-			for _, shutdown := range shutdowns {
-				shutdown.NativeShutdown()
-			}
+			stopped.Wait()
+			close(done)
 		}()
 	}
 	return s.backgroundWork
@@ -1139,7 +1144,23 @@ func (s *nativeShell) scale(value int32) int32 {
 	return int32((int64(value)*int64(s.dpi) + 48) / 96)
 }
 
+// saveSettings saves the settings, with the window's placement when
+// captureWindow (writeSettings), and shows the note it leaves.
 func (s *nativeShell) saveSettings(captureWindow bool) error {
+	err := s.writeSettings(captureWindow)
+	s.updateView()
+	s.layout()
+	return err
+}
+
+// writeSettings saves the settings, with the window's current module and,
+// when captureWindow, its placement, and sets the note to the outcome
+// without showing it: the warning of a failed save, or the startup warnings
+// that still apply, the output folders' as the options now give them, so
+// one the user has since resolved, such as by choosing an output folder, is
+// gone. The end of the Windows session calls it directly, as the window it
+// would show the note in is destroyed at once (endSession).
+func (s *nativeShell) writeSettings(captureWindow bool) error {
 	value := *s.settings
 	value.Shell.SelectedModule = string(s.navigator.Current().ID())
 	if captureWindow {
@@ -1165,10 +1186,9 @@ func (s *nativeShell) saveSettings(captureWindow bool) error {
 		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
 		s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
 	} else {
+		s.startupNotice = s.startup.text()
 		s.notice = s.startupNotice
 	}
-	s.updateView()
-	s.layout()
 	return err
 }
 
@@ -1227,25 +1247,23 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 		return ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SettingsRestoreFailed, err)}
 	}
 	*s.settings = restored
-	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: ui.SettingsRestoredNoBackup}
-	pathless := errors.Is(err, settings.ErrPathUnavailable)
-	switch {
-	case pathless:
+	if err != nil {
 		s.logEvent(diagnostics.LevelError, "settings.restore", "write-failed")
+	} else {
+		s.logEvent(diagnostics.LevelInfo, "settings.restore", "restored")
+	}
+	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: ui.SettingsRestoredNoBackup}
+	switch {
+	case errors.Is(err, settings.ErrPathUnavailable):
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreInMemory, err)}
 	case err != nil && backup != "":
-		s.logEvent(diagnostics.LevelError, "settings.restore", "write-failed")
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreSaveFailed, err, backup)}
 	case err != nil:
 		// There was no settings file, so none holds the previous settings
 		// and nothing was backed up.
-		s.logEvent(diagnostics.LevelError, "settings.restore", "write-failed")
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreSaveFailedNoFile, err)}
 	case backup != "":
-		s.logEvent(diagnostics.LevelInfo, "settings.restore", "restored")
 		notice.Message = fmt.Sprintf(ui.SettingsRestored, backup)
-	default:
-		s.logEvent(diagnostics.LevelInfo, "settings.restore", "restored")
 	}
 	for _, module := range s.navigator.Modules() {
 		restorer, ok := s.nativeViews[module.ID()].(nativeDefaultsRestorer)
@@ -1257,35 +1275,31 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 			notice.Message += fmt.Sprintf(ui.SettingsRestoreFollowUp, followUp)
 		}
 	}
-	if pathless {
-		// The warning that the settings path is unavailable still applies,
-		// and the outcome already says the restored settings cannot be
-		// saved.
-		s.settleNotice(false, nil)
-	} else {
-		s.settleNotice(true, err)
-	}
+	s.settleNotice(err)
 	return notice
 }
 
 // settleNotice brings the shell's note up to date once the default settings
-// are restored and the module views show them. When settled — the settings
-// file was backed up, or there was none to back up — the warnings about the
-// file the session started from, such as saving disabled to protect it or
-// settings recovered from it, no longer apply; a session without a settings
-// path keeps its warning about that, which still does. The startup notice
-// becomes the warnings that apply, the output folders' as the restored
-// options give them included (startupWarnings) — no default folder known, as
-// at startup, with the reason startup gave, rather than a stored folder the
-// default one replaced — and the note shows it, or err, the restore's failed
+// are restored and the module views show them, err being the restore's
+// failed write, if any. The settings file was then backed up, or there was
+// none to back up, so the warnings about the file the session started from,
+// such as saving disabled to protect it or settings recovered from it, no
+// longer apply — but for a session without a settings path
+// (settings.ErrPathUnavailable), whose warning about that still does, and
+// whose outcome already says the restored settings cannot be saved. The
+// startup notice becomes the warnings that apply, the output folders' as the
+// restored options give them included (startupWarnings) — no default folder
+// known, as at startup, with the reason startup gave, rather than a stored
+// folder the default one replaced — and the note shows it, or the failed
 // write, as every failed save does (SET-004).
-func (s *nativeShell) settleNotice(settled bool, err error) {
-	if settled {
+func (s *nativeShell) settleNotice(err error) {
+	pathless := errors.Is(err, settings.ErrPathUnavailable)
+	if !pathless {
 		s.startup.settingsFile = nil
 	}
 	s.startupNotice = s.startup.text()
 	s.notice = s.startupNotice
-	if err != nil {
+	if err != nil && !pathless {
 		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
 	}
 	s.updateView()
@@ -1332,7 +1346,8 @@ func (s *nativeShell) ask(title, message string) bool {
 // process as soon as WM_ENDSESSION returns, so nothing is left to the end of
 // the message loop. Nothing is asked: the settings are saved with the
 // window's placement, a failure only logged, as no one is left to read a
-// warning; the window is destroyed, which releases the global shortcut,
+// warning, and the window, which is destroyed next, is not laid out again
+// (writeSettings); the window is destroyed, which releases the global shortcut,
 // closes any capture overlay, cancels a running resize job, and stops
 // accepting work (NFR-022, AC-A05), as closing does; and the background
 // work is waited for, as at the end of the message loop, so a cancelled
@@ -1345,7 +1360,7 @@ func (s *nativeShell) ask(title, message string) bool {
 func (s *nativeShell) endSession() {
 	deadline := time.NewTimer(endSessionWait)
 	defer deadline.Stop()
-	_ = s.saveSettings(true)
+	_ = s.writeSettings(true)
 	s.logEvent(diagnostics.LevelInfo, "app.end-session", "stopped")
 	procDestroyWindow.Call(uintptr(s.hwnd))
 	select {

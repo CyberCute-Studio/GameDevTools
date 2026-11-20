@@ -76,6 +76,11 @@ type NativeView struct {
 	// NativeAnnounceNotice compares to tell whether a later notice replaced
 	// it.
 	shortcutNotice uint64
+	// optionsNotice is the status area's revision once presentResult last
+	// showed an option change's outcome there, such as an output folder
+	// saved, which the restore of the default settings clears while it is
+	// still shown, as the option it reports is replaced.
+	optionsNotice uint64
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -337,7 +342,7 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 	height += shortcut.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
-	statusHeight := max(scale(48), measure(n.status.Text(), width-scale(120)-scale(8)))
+	statusHeight := n.status.Height(width-scale(120)-scale(8), scale, measure)
 	return height + statusHeight + scale(16), quality, shortcut, statusHeight
 }
 
@@ -873,7 +878,8 @@ func (n *NativeView) refreshOptions() {
 // area, and the combination the settings no longer name is released rather
 // than left registered behind a field that shows another. The status area
 // keeps its notice, such as the last capture's result, unless it shows a
-// shortcut failure the restore replaced. What the user still has to do — a
+// shortcut failure, or an option change's outcome, about a setting the
+// restore replaced. What the user still has to do — a
 // shortcut to choose — or a library or options that could not be shown is
 // returned for the Settings view to report with the restore's outcome; an
 // output folder that has no default is left to the shell's note, which
@@ -896,7 +902,7 @@ func (n *NativeView) NativeRestoreDefaults() string {
 	options := n.options.Options()
 	n.shortcut.Edit.SetText(options.Shortcut.String())
 	n.shortcut.Error.SetText("")
-	if n.status.Revision() == n.shortcutNotice {
+	if revision := n.status.Revision(); revision == n.shortcutNotice || revision == n.optionsNotice {
 		n.status.Clear()
 	}
 	if n.hotkeys != nil {
@@ -928,16 +934,18 @@ func (n *NativeView) refreshFormat() {
 	n.pattern.SetText(options.FilenameExample())
 }
 
+// presentResult shows an option change's outcome in the status area and
+// records it as the option notice (optionsNotice).
 func (n *NativeView) presentResult(err error, success string) {
-	if err == nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: success}, 0)
-		return
+	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: success}
+	switch {
+	case errors.Is(err, ErrPersistence):
+		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.OptionsSaveFailed, err)}
+	case err != nil:
+		notice = ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}
 	}
-	if errors.Is(err, ErrPersistence) {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.OptionsSaveFailed, err)}, 0)
-		return
-	}
-	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}, 0)
+	_ = n.status.Show(notice, 0)
+	n.optionsNotice = n.status.Revision()
 }
 
 func captureModeLabel(mode CaptureMode) string {

@@ -91,3 +91,23 @@ func TestKeptSectionAddsTheSessionsOwnPresets(t *testing.T) {
 		t.Fatalf("KeptSection without a library = %s, %v, want nothing kept", kept, err)
 	}
 }
+
+// TestKeptSectionKeepsAnotherBuildsModuleAsStored pins that the section of a
+// module this build has no presets for — one a newer build added, which
+// loading the settings accepts — keeps its library exactly as stored, in a
+// format only that build can decode, rather than failing the restore of the
+// default settings for every module (SET-005).
+func TestKeptSectionKeepsAnotherBuildsModuleAsStored(t *testing.T) {
+	library := `{"version":2,"custom":[{"id":"custom.0123456789abcdef0123456789abcdef","name":"Sprite","width":64,"height":64,"layer":"top"}]}`
+	section := json.RawMessage(`{"canvas":{"zoom":2},"presets":` + library + `}`)
+	for _, session := range []json.RawMessage{section, nil} {
+		kept, err := KeptSection("editor", section, session)
+		if err != nil {
+			t.Fatalf("KeptSection with session %s: %v", session, err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(kept, &fields); err != nil || len(fields) != 1 || string(fields[sectionKey]) != library {
+			t.Fatalf("kept section with session %s = %s, want only the stored library %s", session, kept, library)
+		}
+	}
+}

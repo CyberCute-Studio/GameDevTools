@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -107,6 +109,39 @@ func TestNativeViewRestoreDefaultsKeepsTheListAndTheJob(t *testing.T) {
 	view.jobCommand(jobCommandBase+cancelResizeCommand, 0)
 	drainJob(t, view, dispatcher)
 	waitJobDone(t, view)
+}
+
+// TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice pins that the
+// outcome of an option change the status area still shows — an output
+// folder saved — does not stay beside the default folder the restore shows
+// in its place, while a later notice, such as the source list's, is kept.
+func TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	chosen := filepath.Join(t.TempDir(), "Other")
+	view.browse = func(windows.Handle, string) (string, bool, error) { return chosen, true, nil }
+	view.NativeCommand(optionsCommandBase+browseCommand, 0)
+	if got := view.status.Text(); !strings.Contains(got, chosen) {
+		t.Fatalf("status after the folder was chosen = %q, want it saved", got)
+	}
+
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status after the restore = %q, want the replaced folder's notice cleared", got)
+	}
+
+	view.NativeCommand(optionsCommandBase+browseCommand, 0)
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "photo.png")})
+	settle(t, view, dispatcher)
+	kept := view.status.Text()
+	if kept == "" || strings.Contains(kept, chosen) {
+		t.Fatalf("status after the drop = %q, want the source list's notice", kept)
+	}
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != kept {
+		t.Fatalf("status after the restore = %q, want the source list's notice %q kept", got, kept)
+	}
 }
 
 // TestNativeViewRestoreDefaultsWithoutADefaultFolder pins that a restore

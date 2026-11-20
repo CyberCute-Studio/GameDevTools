@@ -311,11 +311,18 @@ func LibrarySection(section json.RawMessage) (json.RawMessage, error) {
 // created meanwhile, which could not be saved, are kept with them, as a
 // custom preset is deleted only by its explicit Delete. One whose name a
 // kept preset already uses is kept under the name Duplicate would give a
-// copy of it; the selected preset stays replaced's.
+// copy of it; the selected preset stays replaced's. A section session holds
+// as replaced does adds nothing, and neither does the section of a module
+// this build has no presets for, such as one a newer build added, whose
+// library is kept as stored: no session of this build creates presets in
+// it, and only that build can decode them.
 func KeptSection(module shell.ModuleID, replaced, session json.RawMessage) (json.RawMessage, error) {
 	kept, err := LibrarySection(replaced)
 	if err != nil {
 		return nil, err
+	}
+	if _, err := BuiltIns(module); err != nil || bytes.Equal(replaced, session) {
+		return kept, nil
 	}
 	running, err := decodeSection(module, session)
 	if err != nil {

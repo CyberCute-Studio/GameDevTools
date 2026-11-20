@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,6 +73,13 @@ func reopenSession(t *testing.T, path string) *session {
 		t.Fatal(err)
 	}
 	return state
+}
+
+// warnings returns the warnings the session gives as the options now hold
+// them, as the shell's note lists them at startup (startupWarnings): the
+// settings file's, and then the output folders'.
+func (state *session) warnings() []string {
+	return append(slices.Clone(state.settingsWarnings), state.folderWarnings()...)
 }
 
 func readFixture(t *testing.T, name string) []byte {

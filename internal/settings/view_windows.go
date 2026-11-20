@@ -83,9 +83,9 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 
 // heights measures the description and the status area at width, the
 // status area keeping room for two lines while it is empty, as the other
-// modules' status areas do.
+// modules' status areas do (ui.StatusArea.Height).
 func (n *NativeView) heights(width int32, scale func(int32) int32, measure func(string, int32) int32) (int32, int32) {
-	return max(scale(20), measure(ui.SettingsRestoreDescription, width)), max(scale(48), measure(n.status.Text(), width))
+	return max(scale(20), measure(ui.SettingsRestoreDescription, width)), n.status.Height(width, scale, measure)
 }
 
 func (n *NativeView) NativeCommand(id int32, notification uint16) bool {

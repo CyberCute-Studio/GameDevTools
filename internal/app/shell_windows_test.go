@@ -367,6 +367,51 @@ func TestWaitForBackgroundWorkWaitsForNativeShutdown(t *testing.T) {
 	}
 }
 
+// TestWaitForBackgroundWorkWaitsForEveryViewAtOnce pins that the shutdown
+// waits for every module view's background work at the same time, so a
+// capture still delivering its outputs does not hold up the start of a
+// cancelled job's bounded wait, and the exit takes the longest of the waits
+// rather than their sum; it returns only once every view's work finished.
+func TestWaitForBackgroundWorkWaitsForEveryViewAtOnce(t *testing.T) {
+	views := []*shutdownRecordingView{
+		{started: make(chan struct{}), release: make(chan struct{})},
+		{started: make(chan struct{}), release: make(chan struct{})},
+	}
+	releases := make([]func(), len(views))
+	for index, view := range views {
+		var once sync.Once
+		releases[index] = func() { once.Do(func() { close(view.release) }) }
+		t.Cleanup(releases[index])
+	}
+	shell := newCommandTestShell(t, views[0])
+	shell.nativeViews[core.ModuleImageResizer] = views[1]
+
+	done := make(chan struct{})
+	go func() {
+		shell.waitForBackgroundWork()
+		close(done)
+	}()
+	for index, view := range views {
+		select {
+		case <-view.started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("view %d's wait did not start while the other's was still running", index)
+		}
+	}
+	releases[0]()
+	select {
+	case <-done:
+		t.Fatal("waitForBackgroundWork returned while a view's work was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releases[1]()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForBackgroundWork did not return once every view's work finished")
+	}
+}
+
 func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	t.Helper()
 	runtime.LockOSThread()

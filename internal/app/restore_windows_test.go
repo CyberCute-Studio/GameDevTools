@@ -263,6 +263,41 @@ func TestRestoreDefaultsChangesNothingWithoutABackup(t *testing.T) {
 	}
 }
 
+// TestRestoreDefaultsKeepsAnotherBuildsModuleAsStored pins that a settings
+// file a newer build wrote, with a module this build does not know whose
+// section holds a preset library — which loading the settings accepts — can
+// still be restored: that library is kept exactly as stored, as every
+// module's is, the rest of its section is reset, and a restart loads the
+// file without a warning.
+func TestRestoreDefaultsKeepsAnotherBuildsModuleAsStored(t *testing.T) {
+	var stored settings.Settings
+	if err := json.Unmarshal(readFixture(t, "rsz-01"), &stored); err != nil {
+		t.Fatal(err)
+	}
+	library := `{"version":2,"custom":[{"id":"custom.0123456789abcdef0123456789abcdef","name":"Sprite","width":64,"height":64,"layer":"top"}]}`
+	stored.Modules["editor"] = json.RawMessage(`{"canvas":{"zoom":2},"presets":` + library + `}`)
+	shell := newAuditShellOn(t, mustJSON(t, stored))
+	probeScreenshotRestore(t, shell)
+	if got := shell.note.Text(); got != "" {
+		t.Fatalf("note at startup = %q, want the file loaded without a warning", got)
+	}
+
+	if notice := shell.restoreDefaults(); notice.Kind != ui.NoticeSuccess {
+		t.Fatalf("outcome = %+v, want the restore written", notice)
+	}
+	restarted := reopenSession(t, shell.path)
+	if len(restarted.warnings()) != 0 {
+		t.Fatalf("restart warnings = %v", restarted.warnings())
+	}
+	var section bytes.Buffer
+	if err := json.Compact(&section, restarted.value.Modules["editor"]); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := section.String(), `{"presets":`+library+`}`; got != want {
+		t.Fatalf("editor section after the restore = %s, want only its library as stored %s", got, want)
+	}
+}
+
 // TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails pins SET-004
 // for the restore: once the file is backed up, a write that fails leaves
 // the file as it was and the session restored, with a warning that says so
@@ -469,7 +504,8 @@ func TestRestoreDefaultsWithoutASettingsPath(t *testing.T) {
 // reports an output folder that has no default, as when Windows cannot
 // resolve the Pictures folder: the restored options select no folder, and
 // the shell's note says so with the reason startup found, as at startup,
-// while the outcome does not say it again with another reason.
+// while the outcome does not say it again with another reason. Once the
+// user chooses a folder, the next save drops the warning from the note.
 func TestRestoreDefaultsReportsAFolderWithoutADefaultOnce(t *testing.T) {
 	reason := errors.New("the Pictures folder cannot be found")
 	shell := newAuditShellFrom(t, readFixture(t, "rsz-01"), nil, func(dir string) defaultFolders {
@@ -494,6 +530,14 @@ func TestRestoreDefaultsReportsAFolderWithoutADefaultOnce(t *testing.T) {
 	want := ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.ResizeFolderUnavailable, reason)}.Text()
 	if got := shell.note.Text(); got != want {
 		t.Fatalf("note after the restore = %q, want %q", got, want)
+	}
+
+	if err := shell.resize.SetOutputFolder(filepath.Join(filepath.Dir(shell.path), "Chosen")); err != nil {
+		t.Fatal(err)
+	}
+	shell.selectModule(t, core.ModuleScreenshot)
+	if got := shell.note.Text(); got != "" {
+		t.Fatalf("note once a folder was chosen and the settings saved = %q, want the warning gone", got)
 	}
 }
 

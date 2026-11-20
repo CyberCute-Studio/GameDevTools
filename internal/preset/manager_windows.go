@@ -213,7 +213,7 @@ func (n *NativeManager) metrics(width int32, scale func(int32) int32, measure fu
 	dimensionMetrics := baseMetrics
 	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.width.Error.Text(), dimensionWidth))
 	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.height.Error.Text(), dimensionWidth))
-	statusHeight := max(scale(48), measure(n.status.Text(), width))
+	statusHeight := n.status.Height(width, scale, measure)
 	return nameMetrics, dimensionMetrics, statusHeight
 }
 

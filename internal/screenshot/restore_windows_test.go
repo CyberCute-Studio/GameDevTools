@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -125,6 +127,35 @@ func TestNativeViewRestoreDefaultsClearsAStaleShortcutFailure(t *testing.T) {
 	}
 	if got := view.shortcut.Error.Text(); got != "" {
 		t.Fatalf("field message = %q, want the resolved failure cleared", got)
+	}
+}
+
+// TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice pins that the
+// outcome of an option change the status area still shows — an output
+// folder saved — does not stay beside the default folder the restore shows
+// in its place, while a later notice, such as a capture's result, is kept.
+func TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice(t *testing.T) {
+	view, _ := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
+	chosen := filepath.Join(t.TempDir(), "Other")
+	view.browse = func(windows.Handle, string) (string, bool, error) { return chosen, true, nil }
+	view.NativeCommand(optionsCommandBase+browseCommand, 0)
+	if got := view.status.Text(); !strings.Contains(got, chosen) {
+		t.Fatalf("status after the folder was chosen = %q, want it saved", got)
+	}
+
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status after the restore = %q, want the replaced folder's notice cleared", got)
+	}
+
+	view.NativeCommand(optionsCommandBase+browseCommand, 0)
+	result := ui.Notice{Kind: ui.NoticeSuccess, Message: "Display captured."}
+	_ = view.status.Show(result, 0)
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != result.Text() {
+		t.Fatalf("status after the restore = %q, want the later capture's result kept", got)
 	}
 }
 

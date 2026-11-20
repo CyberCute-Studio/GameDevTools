@@ -224,10 +224,15 @@ func (s *Store) Save(value Settings) error {
 // nothing is written and the error wraps ErrNotRestored. Once the copy
 // exists, a store whose saving Load disabled, because it could not read or
 // back up the original, saves again: the original is preserved now, and the
-// restore is the user's explicit request to replace it. A write that fails
-// after the copy is returned as Save returns it, leaving the original in
-// place beside its copy, as is the failure without a settings path,
-// ErrPathUnavailable, where there is no file to copy.
+// restore is the user's explicit request to replace it. It saves again only
+// then: an original such a store cannot find now is treated as one it
+// cannot read, as a file the disk cannot reach for the moment, such as one
+// on a network share that is down, is reported missing too, and the restore
+// would otherwise let a later save replace it with no copy made. A write
+// that fails after the copy is returned as Save returns
+// it, leaving the original in place beside its copy, as is the failure
+// without a settings path, ErrPathUnavailable, where there is no file to
+// copy.
 func (s *Store) Restore(current Settings, reset func(replaced Settings) (Settings, error)) (Settings, string, error) {
 	replaced := current
 	var data []byte
@@ -236,6 +241,8 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		var err error
 		data, err = os.ReadFile(s.path)
 		switch {
+		case errors.Is(err, os.ErrNotExist) && s.blocked != nil:
+			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
 		case errors.Is(err, os.ErrNotExist):
 		case err != nil:
 			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}

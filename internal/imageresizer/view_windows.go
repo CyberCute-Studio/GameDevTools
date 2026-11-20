@@ -73,6 +73,11 @@ type NativeView struct {
 	// the source list cannot change, or Start Resize run, while a job runs,
 	// which finishJob clears while the area still shows it, or 0.
 	busyNotice uint64
+	// optionsNotice is the status area's revision once presentResult last
+	// showed an option change's outcome there, such as an output folder
+	// saved, which the restore of the default settings clears while it is
+	// still shown, as the option it reports is replaced, or 0.
+	optionsNotice uint64
 
 	// run runs a resize job, confirm asks for an Overwrite job's
 	// confirmation, and openFolder opens the output folder on request; tests
@@ -408,7 +413,7 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 	height += scale(24) + radioRows*scale(26) + scale(4)
 	height += max(scale(20), measure(n.collisionNote.Text(), width)) + scale(12)
 	height += scale(24) + max(scale(20), measure(n.naming.Text(), width)) + scale(12)
-	statusHeight := max(scale(48), measure(n.status.Text(), width))
+	statusHeight := n.status.Height(width, scale, measure)
 	return height + statusHeight, quality, background, statusHeight
 }
 
@@ -687,7 +692,9 @@ func (n *NativeView) refreshOptions() {
 // NativeRestoreDefaults shows the resize options the restored default
 // settings hold (SET-005). The source list, its status, a running job and
 // its progress, the selected preset, and the preset form are kept (APP-004):
-// a job runs on the options and preset it started with. The preset library
+// a job runs on the options and preset it started with. The status area
+// keeps its notice, such as the source list's, unless it shows an option
+// change's outcome about a setting the restore replaced. The preset library
 // is shown again only when the restore kept another than the one shown, as
 // when the session never loaded the settings file it replaced
 // (preset.NativeManager.Reload), and the fitting mode's description then
@@ -707,6 +714,9 @@ func (n *NativeView) NativeRestoreDefaults() string {
 		followUps = append(followUps, message)
 	} else {
 		n.refreshOptions()
+		if n.optionsNotice != 0 && n.status.Revision() == n.optionsNotice {
+			n.status.Clear()
+		}
 	}
 	return strings.Join(followUps, " ")
 }
@@ -1061,16 +1071,18 @@ func (n *NativeView) showSourceSelection(announce bool) {
 	n.clearButton.Enable(idle && n.inventory.Len() > 0)
 }
 
+// presentResult shows an option change's outcome in the status area and
+// records it as the option notice (optionsNotice).
 func (n *NativeView) presentResult(err error, success string) {
-	if err == nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: success}, 0)
-		return
+	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: success}
+	switch {
+	case errors.Is(err, ErrPersistence):
+		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.ResizeOptionsSaveFailed, err)}
+	case err != nil:
+		notice = ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.ResizeOperationFailed, err)}
 	}
-	if errors.Is(err, ErrPersistence) {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.ResizeOptionsSaveFailed, err)}, 0)
-		return
-	}
-	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.ResizeOperationFailed, err)}, 0)
+	_ = n.status.Show(notice, 0)
+	n.optionsNotice = n.status.Revision()
 }
 
 func resizeFormatLabel(format OutputFormat) string {
