@@ -119,7 +119,7 @@ func TestNativeViewDefaultsAndCollisionSelection(t *testing.T) {
 	if got := view.collisionNote.Text(); !strings.HasPrefix(got, "Rename (default):") {
 		t.Fatalf("collision description = %q", got)
 	}
-	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Fit (16 × 16):") {
+	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Fit (16 × 16 px):") {
 		t.Fatalf("fitting-mode description = %q", got)
 	}
 	if got := view.naming.Text(); !strings.Contains(got, "keeps its source file's name") {
@@ -291,7 +291,7 @@ func TestNativeViewModeDescriptionFollowsPresetSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	view.refreshModeDescription()
-	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Stretch (640 × 480):") || !strings.Contains(got, "distorted") {
+	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Stretch (640 × 480 px):") || !strings.Contains(got, "distorted") {
 		t.Fatalf("stretch description = %q", got)
 	}
 
@@ -301,7 +301,7 @@ func TestNativeViewModeDescriptionFollowsPresetSelection(t *testing.T) {
 	// The manager-level update changes the selected preset outside the view's
 	// command flow; a preset-namespace command refreshes the description.
 	view.NativeCommand(presetNameCommandID, ui.NotificationEditChange)
-	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Crop to Fill (640 × 480):") || !strings.Contains(got, "trimmed edges") {
+	if got := view.modeDescription.Text(); !strings.HasPrefix(got, "Crop to Fill (640 × 480 px):") || !strings.Contains(got, "trimmed edges") {
 		t.Fatalf("crop description = %q", got)
 	}
 }

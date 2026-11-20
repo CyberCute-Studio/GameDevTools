@@ -14,18 +14,20 @@ type Notice struct {
 	Message string
 }
 
+// Text returns the notice with its severity spelled out, so a result never
+// depends on color alone (UX-005).
 func (n Notice) Text() string {
 	if n.Message == "" {
 		return ""
 	}
-	label := "Information"
+	label := NoticeInfoLabel
 	switch n.Kind {
 	case NoticeSuccess:
-		label = "Success"
+		label = NoticeSuccessLabel
 	case NoticeWarning:
-		label = "Warning"
+		label = NoticeWarningLabel
 	case NoticeError:
-		label = "Error"
+		label = NoticeErrorLabel
 	}
-	return label + ": " + n.Message
+	return label + LabelSeparator + n.Message
 }

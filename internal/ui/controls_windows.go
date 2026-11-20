@@ -67,10 +67,52 @@ func (c Control) HasFocus() bool {
 
 type Label struct {
 	Control
+
+	// live is whether the label is a UI Automation live region, as
+	// NewLiveLabel describes.
+	live bool
 }
 
 func NewLabel(parent windows.Handle, text string) (*Label, error) {
 	return newLabel(parent, text, ssNoPrefix)
+}
+
+// NewLiveLabel creates a label for text that changes to report what
+// happened — a result, a validation message, the reason an item cannot be
+// used — and marks it as a polite UI Automation live region, so a screen
+// reader announces each new text once it finishes what it is reading,
+// without moving the keyboard focus. Static text is otherwise read only when
+// the user navigates to it, so a result shown only there would go unheard.
+// Marking is best effort: a label that cannot be marked, where the
+// accessibility services are unavailable, still shows its text.
+func NewLiveLabel(parent windows.Handle, text string) (*Label, error) {
+	label, err := newLabel(parent, text, ssNoPrefix)
+	if err != nil {
+		return nil, err
+	}
+	label.live = markLive(label.hwnd) == nil
+	return label, nil
+}
+
+// SetText replaces the label's text. A live label announces text that
+// changed, so setting the same text again, as a relayout or a validation
+// on every keystroke does, is not announced twice; clearing it is not
+// announced.
+func (l *Label) SetText(text string) {
+	changed := l.live && text != "" && text != l.Text()
+	l.Control.SetText(text)
+	if changed {
+		l.Announce()
+	}
+}
+
+// Announce asks a screen reader to read a live label's current text now,
+// whether or not it changed — as when the window that shows it appears, or
+// a refused edit is refused again. It does nothing for other labels.
+func (l *Label) Announce() {
+	if l.live {
+		announceLiveRegion(l.hwnd)
+	}
 }
 
 func NewMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
@@ -86,7 +128,7 @@ func newLabel(parent windows.Handle, text string, style uintptr) (*Label, error)
 	if err != nil {
 		return nil, err
 	}
-	return &Label{Control{hwnd: hwnd}}, nil
+	return &Label{Control: Control{hwnd: hwnd}}, nil
 }
 
 type ButtonOptions struct {
@@ -99,8 +141,14 @@ type ButtonOptions struct {
 
 type Button struct {
 	Control
+
+	radio bool
 }
 
+// NewButton creates a push button, or with Radio an automatic radio button.
+// A radio group is the run of radio buttons from one created with Group to
+// the next control created with Group. Its first button is the group's tab
+// stop until SetChecked checks one, as SetChecked describes.
 func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Button, error) {
 	style := uintptr(wsChild | wsVisible | wsTabStop | bsNotify)
 	if options.Primary {
@@ -108,6 +156,9 @@ func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Butt
 	}
 	if options.Radio {
 		style |= bsAutoRadioButton
+		if !options.Group {
+			style &^= wsTabStop
+		}
 	}
 	if options.Group {
 		style |= wsGroup
@@ -119,12 +170,31 @@ func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Butt
 	if err != nil {
 		return nil, err
 	}
-	return &Button{Control{hwnd: hwnd}}, nil
+	return &Button{Control: Control{hwnd: hwnd}, radio: options.Radio}, nil
 }
 
-// SetChecked checks or unchecks a radio button or check box.
+// SetChecked checks or unchecks a radio button or check box. A radio button
+// is a tab stop exactly while it is checked, so Tab enters its group at the
+// selected button and leaves at the next control, while the arrow keys move
+// the selection within the group (UX-006). The dialog manager stops Tab at
+// every tab stop, and a radio button that gains the focus unchecked reports
+// a click (BN_CLICKED), so in a group whose every button were a tab stop,
+// tabbing through would select each button in turn — switching modules in
+// the navigation, or the capture mode — and a group label's mnemonic, which
+// focuses the next tab stop, would select the group's first button. Call it
+// for every button of a group, as refreshing a group's selection does.
 func (b *Button) SetChecked(checked bool) {
 	procSendMessageW.Call(uintptr(b.hwnd), bmSetCheck, boolPointer(checked), 0)
+	if b.radio {
+		style, _, _ := procGetWindowLongPtrW.Call(uintptr(b.hwnd), gwlStyle)
+		next := style &^ wsTabStop
+		if checked {
+			next |= wsTabStop
+		}
+		if next != style {
+			procSetWindowLongPtrW.Call(uintptr(b.hwnd), gwlStyle, next)
+		}
+	}
 }
 
 type ComboBox struct {
@@ -212,7 +282,7 @@ func NewTextInput(parent windows.Handle, field string, id int32) (*TextInput, er
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
-	validation, err := NewLabel(parent, "")
+	validation, err := NewLiveLabel(parent, "")
 	if err != nil {
 		procDestroyWindow.Call(uintptr(edit))
 		procDestroyWindow.Call(uintptr(label.Handle()))
@@ -276,7 +346,7 @@ type DimensionInput struct {
 }
 
 func NewDimensionInput(parent windows.Handle, field string, id int32) (*DimensionInput, error) {
-	label, err := newMnemonicLabel(parent, field+" (px)")
+	label, err := newMnemonicLabel(parent, field+DimensionUnitSuffix)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +355,7 @@ func NewDimensionInput(parent windows.Handle, field string, id int32) (*Dimensio
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
-	validation, err := NewLabel(parent, "")
+	validation, err := NewLiveLabel(parent, "")
 	if err != nil {
 		procDestroyWindow.Call(uintptr(edit))
 		procDestroyWindow.Call(uintptr(label.Handle()))
@@ -480,28 +550,36 @@ type StatusArea struct {
 	revision uint64
 }
 
-// Revision identifies the notice on display: it changes whenever Show or
-// Clear replaces the notice, including when a timed notice expires, even if
-// the new text equals the old. A caller that records the revision after
-// showing its notice can later tell whether that notice is still the one
-// shown.
+// Revision identifies the notice on display: it changes whenever Show,
+// Update, or Clear replaces the notice, including when a timed notice
+// expires, even if the new text equals the old. A caller that records the
+// revision after showing its notice can later tell whether that notice is
+// still the one shown.
 func (s *StatusArea) Revision() uint64 {
 	return s.revision
 }
 
+// NewStatusArea creates the status area on a live label (NewLiveLabel), so
+// a screen reader announces every notice Show presents.
 func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
-	label, err := NewLabel(parent, "")
+	label, err := NewLiveLabel(parent, "")
 	if err != nil {
 		return nil, err
 	}
 	return &StatusArea{Label: label, parent: parent}, nil
 }
 
+// Show replaces the notice and announces it to a screen reader — even when
+// its text equals the notice it replaces, as an identical result is still a
+// new one — and, with a positive timeout, clears it once the timeout
+// passes.
 func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
-	s.stopTimer()
-	s.revision++
-	s.SetText(notice.Text())
-	if notice.Text() == "" || timeout <= 0 {
+	s.Update(notice)
+	if notice.Text() == "" {
+		return nil
+	}
+	s.Announce()
+	if timeout <= 0 {
 		return nil
 	}
 	milliseconds := timeout.Milliseconds()
@@ -523,10 +601,20 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 	return nil
 }
 
+// Update replaces the notice as Show does without a timeout, but does not
+// announce it: for progress that changes faster than a screen reader could
+// read it, such as a resize job's count for every image, whose start and
+// end are announced through Show instead.
+func (s *StatusArea) Update(notice Notice) {
+	s.stopTimer()
+	s.revision++
+	s.Control.SetText(notice.Text())
+}
+
 func (s *StatusArea) Clear() {
 	s.stopTimer()
 	s.revision++
-	s.SetText("")
+	s.Control.SetText("")
 }
 
 func (s *StatusArea) HandleTimer(id uintptr) bool {

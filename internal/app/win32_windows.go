@@ -12,6 +12,9 @@ import (
 const (
 	wmDestroy        = 0x0002
 	wmSize           = 0x0005
+	wmActivate       = 0x0006
+	wmSetFocus       = 0x0007
+	wmGetDlgCode     = 0x0087
 	wmClose          = 0x0010
 	wmCommand        = 0x0111
 	wmHotkey         = 0x0312
@@ -30,12 +33,17 @@ const (
 	wsOverlappedWindow = 0x00cf0000
 	wsVScroll          = 0x00200000
 
-	bmSetCheck  = 0x00f1
+	bmGetCheck  = 0x00f0
 	bstChecked  = 1
 	bnSetFocus  = 6
 	enSetFocus  = 0x0100
 	cbnSetFocus = 3
 	lbnSetFocus = 4
+
+	// waInactive is WM_ACTIVATE's code for a window being deactivated, and
+	// dlgcRadioButton the WM_GETDLGCODE flag of a radio button.
+	waInactive      = 0
+	dlgcRadioButton = 0x0040
 
 	sbVert          = 1
 	sbLineUp        = 0
@@ -116,6 +124,10 @@ var (
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
 	procSetFocus                      = user32.NewProc("SetFocus")
+	procGetFocus                      = user32.NewProc("GetFocus")
+	procIsChild                       = user32.NewProc("IsChild")
+	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
+	procIsWindowEnabled               = user32.NewProc("IsWindowEnabled")
 	procGetNextDlgTabItem             = user32.NewProc("GetNextDlgTabItem")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")

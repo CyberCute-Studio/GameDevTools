@@ -513,7 +513,7 @@ func (n *NativeView) NativeShutdown() {
 // rectangle and the main-window restore to startRectangleCapture.
 func (n *NativeView) beginOverlay() {
 	if n.sessions == nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New("the overlay service is unavailable"))}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New(ui.OverlayServiceUnavailable))}, 0)
 		return
 	}
 	mode := overlay.ModeFreeRectangle
@@ -556,7 +556,7 @@ func (n *NativeView) beginOverlay() {
 func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) {
 	if n.captureRectangle == nil {
 		restore()
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New("the capture service is unavailable"))}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New(ui.CaptureServiceUnavailable))}, 0)
 		return
 	}
 	options := n.options.Options()
@@ -666,7 +666,7 @@ func (n *NativeView) refreshDisplays() {
 	}
 	previous := n.selectedDeviceName()
 	if n.displays == nil {
-		n.displayErr = errors.New("the display service is unavailable")
+		n.displayErr = errors.New(ui.DisplayServiceUnavailable)
 		n.displayList = nil
 		n.displayCombo.Reset()
 		return

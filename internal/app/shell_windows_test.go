@@ -403,7 +403,7 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 		navigator:   navigator,
 		hwnd:        windows.Handle(hwnd),
 		dpi:         96,
-		navButtons:  make(map[core.ModuleID]windows.Handle),
+		navButtons:  make(map[core.ModuleID]*ui.Button),
 		navIDs:      make(map[uint16]core.ModuleID),
 		nativeViews: make(map[core.ModuleID]nativeView),
 		action:      action,
@@ -558,8 +558,6 @@ func TestShellWindowProcScrollsFocusedListIntoView(t *testing.T) {
 		t.Fatal("list focus did not scroll the control into view")
 	}
 }
-
-var procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
 
 type actionTestView struct{}
 

@@ -172,10 +172,14 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 		return err
 	}
 	var err error
-	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
+	// The hint is created ahead of the label, though laid out below it, so
+	// the label directly precedes the list: Windows names a list box after
+	// the static text just before it, which a screen reader announces with
+	// the list, and the label's mnemonic focuses the next tab stop.
+	if n.sourceHint, err = ui.NewLabel(parent, ui.SourceImagesHint); err != nil {
 		return err
 	}
-	if n.sourceHint, err = ui.NewLabel(parent, ui.SourceImagesHint); err != nil {
+	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
 		return err
 	}
 	if n.list, err = ui.NewListBox(parent, sources+sourceListCommand); err != nil {
@@ -187,7 +191,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.path, err = ui.NewReadOnlyText(parent, sources+sourcePathCommand); err != nil {
 		return err
 	}
-	if n.pathDetail, err = ui.NewLabel(parent, ""); err != nil {
+	// The detail line says why the selected image cannot be used or how its
+	// resize ended, which its row abbreviates, so a screen reader announces
+	// it as the selection moves.
+	if n.pathDetail, err = ui.NewLiveLabel(parent, ""); err != nil {
 		return err
 	}
 	if n.addButton, err = ui.NewButton(parent, ui.AddImagesAction, ui.ButtonOptions{ID: sources + addImagesCommand, Group: true}); err != nil {

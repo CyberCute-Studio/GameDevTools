@@ -177,6 +177,19 @@ func sizedSelection(selection display.Rect, width, height int, desktop display.R
 	}, true
 }
 
+// typedSelection places a Free Rectangle selection of typed width and height
+// that has none yet (SCR-015): centered on the cursor display's work area and
+// kept inside the virtual desktop, as presetPlacement places a preset frame.
+// The rectangle must keep at least one pixel and fit inside the desktop; the
+// fit check runs in 64 bits, as ParseDimension accepts values up to int64's
+// maximum.
+func typedSelection(anchor, desktop display.Rect, width, height int) (display.Rect, bool) {
+	if width < 1 || height < 1 || int64(width) > int64(desktop.Width()) || int64(height) > int64(desktop.Height()) {
+		return display.Rect{}, false
+	}
+	return presetPlacement(anchor, desktop, int32(width), int32(height)), true
+}
+
 // presetPlacement positions the Preset Rectangle frame's initial selection:
 // centered on the cursor display's work area, then clamped so the whole
 // rectangle stays inside the virtual desktop (SCR-026). The dimensions never

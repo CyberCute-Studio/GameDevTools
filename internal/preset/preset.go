@@ -89,21 +89,21 @@ func BuiltIns(module shell.ModuleID) ([]Preset, error) {
 	switch module {
 	case shell.ModuleScreenshot:
 		presets = []Preset{
-			{ID: "builtin.screenshot.hd", Name: "HD", Width: 1280, Height: 720, BuiltIn: true},
-			{ID: "builtin.screenshot.full-hd", Name: "Full HD", Width: 1920, Height: 1080, BuiltIn: true},
-			{ID: "builtin.screenshot.qhd", Name: "QHD", Width: 2560, Height: 1440, BuiltIn: true},
-			{ID: "builtin.screenshot.4k-uhd", Name: "4K UHD", Width: 3840, Height: 2160, BuiltIn: true},
+			{ID: "builtin.screenshot.hd", Name: ui.PresetNameHD, Width: 1280, Height: 720, BuiltIn: true},
+			{ID: "builtin.screenshot.full-hd", Name: ui.PresetNameFullHD, Width: 1920, Height: 1080, BuiltIn: true},
+			{ID: "builtin.screenshot.qhd", Name: ui.PresetNameQHD, Width: 2560, Height: 1440, BuiltIn: true},
+			{ID: "builtin.screenshot.4k-uhd", Name: ui.PresetName4KUHD, Width: 3840, Height: 2160, BuiltIn: true},
 		}
 	case shell.ModuleImageResizer:
 		presets = []Preset{
-			{ID: "builtin.image-resizer.16x16", Name: "16 × 16", Width: 16, Height: 16, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.32x32", Name: "32 × 32", Width: 32, Height: 32, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.64x64", Name: "64 × 64", Width: 64, Height: 64, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.128x128", Name: "128 × 128", Width: 128, Height: 128, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.256x256", Name: "256 × 256", Width: 256, Height: 256, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.512x512", Name: "512 × 512", Width: 512, Height: 512, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.1024x1024", Name: "1024 × 1024", Width: 1024, Height: 1024, ResizeMode: ResizeFit, BuiltIn: true},
-			{ID: "builtin.image-resizer.1920x1080", Name: "1920 × 1080", Width: 1920, Height: 1080, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.16x16", Name: fmt.Sprintf(ui.PresetNameDimensions, 16, 16), Width: 16, Height: 16, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.32x32", Name: fmt.Sprintf(ui.PresetNameDimensions, 32, 32), Width: 32, Height: 32, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.64x64", Name: fmt.Sprintf(ui.PresetNameDimensions, 64, 64), Width: 64, Height: 64, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.128x128", Name: fmt.Sprintf(ui.PresetNameDimensions, 128, 128), Width: 128, Height: 128, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.256x256", Name: fmt.Sprintf(ui.PresetNameDimensions, 256, 256), Width: 256, Height: 256, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.512x512", Name: fmt.Sprintf(ui.PresetNameDimensions, 512, 512), Width: 512, Height: 512, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.1024x1024", Name: fmt.Sprintf(ui.PresetNameDimensions, 1024, 1024), Width: 1024, Height: 1024, ResizeMode: ResizeFit, BuiltIn: true},
+			{ID: "builtin.image-resizer.1920x1080", Name: fmt.Sprintf(ui.PresetNameDimensions, 1920, 1080), Width: 1920, Height: 1080, ResizeMode: ResizeFit, BuiltIn: true},
 		}
 	default:
 		return nil, fmt.Errorf("unsupported preset module %q", module)
@@ -285,10 +285,10 @@ func validatePreset(module shell.ModuleID, candidate Preset) (Preset, error) {
 		return Preset{}, errors.New(ui.PresetNameInvalid)
 	}
 	if !ValidDimension(candidate.Width) {
-		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, "Width")
+		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, ui.DimensionWidthName)
 	}
 	if !ValidDimension(candidate.Height) {
-		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, "Height")
+		return Preset{}, fmt.Errorf(ui.PresetDimensionRange, ui.DimensionHeightName)
 	}
 	switch module {
 	case shell.ModuleScreenshot:

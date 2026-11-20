@@ -379,7 +379,7 @@ func (n *NativeView) applyJobEvents(active *activeJob) {
 		n.finishJob(active, *finish)
 		return
 	}
-	n.showJobProgress(active)
+	n.showJobProgress(active, false)
 }
 
 // applyRechecks applies to the source list the content checks the job made
@@ -489,7 +489,7 @@ func (n *NativeView) cancelJob() {
 		n.list.Focus()
 	}
 	n.cancelButton.Enable(false)
-	n.showJobProgress(active)
+	n.showJobProgress(active, true)
 }
 
 // awaitCancelled waits, on its own goroutine, for a cancelled job to stop,
@@ -526,14 +526,23 @@ func (n *NativeView) releaseJob(active *activeJob) {
 }
 
 // showJobProgress shows the running job's progress, naming the file that
-// most recently started processing.
-func (n *NativeView) showJobProgress(active *activeJob) {
+// most recently started processing. announce is whether a screen reader
+// reads it: the progress that follows each batch of the job's events changes
+// faster than it could be read, so only the cancelling progress the user's
+// Cancel Resize brings is announced, between the job's announced start and
+// its announced summary.
+func (n *NativeView) showJobProgress(active *activeJob, announce bool) {
 	current, others := "", 0
 	if count := len(active.processing); count > 0 {
 		current = filepath.Base(active.processing[count-1].source)
 		others = count - 1
 	}
-	n.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(active.progress, current, others, active.cancelling)})
+	notice := ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(active.progress, current, others, active.cancelling)}
+	if announce {
+		n.showJobNotice(notice)
+		return
+	}
+	n.jobStatus.Update(notice)
 }
 
 func (n *NativeView) showJobNotice(notice ui.Notice) {

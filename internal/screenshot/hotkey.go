@@ -12,7 +12,7 @@ import (
 // ErrShortcutConflict marks a global shortcut registration that failed
 // because another application already owns the combination (SCR-003). The
 // previously registered shortcut is untouched by a conflicted attempt.
-var ErrShortcutConflict = errors.New("the shortcut is already registered by another application")
+var ErrShortcutConflict = errors.New(ui.ShortcutConflict)
 
 // Shortcut is one global capture-invocation key combination: at least one
 // modifier plus a letter, digit, or function key. Key holds the Windows
@@ -138,5 +138,5 @@ func parseShortcutKey(token string) (uint32, string, bool) {
 // shortcutConflictError describes a registration conflict with the offending
 // combination for the user.
 func shortcutConflictError(shortcut Shortcut) error {
-	return fmt.Errorf("%w: %s. "+ui.ShortcutConflictAction, ErrShortcutConflict, shortcut)
+	return fmt.Errorf(ui.ShortcutConflictDetail, ErrShortcutConflict, shortcut)
 }

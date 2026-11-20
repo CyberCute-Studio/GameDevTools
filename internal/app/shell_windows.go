@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -36,7 +37,7 @@ type nativeShell struct {
 	dpi           uint32
 	scrollY       int32
 	navHeading    windows.Handle
-	navButtons    map[core.ModuleID]windows.Handle
+	navButtons    map[core.ModuleID]*ui.Button
 	navIDs        map[uint16]core.ModuleID
 	nativeViews   map[core.ModuleID]nativeView
 	title         windows.Handle
@@ -49,6 +50,10 @@ type nativeShell struct {
 	// acceptingDrops is whether the shell window and its children are
 	// registered for file drops, as updateDropAcceptance last applied it.
 	acceptingDrops bool
+
+	// focus is the control that last had the keyboard focus, which
+	// restoreFocus gives it back to when the window is activated again.
+	focus windows.Handle
 }
 
 type nativeView interface {
@@ -161,54 +166,11 @@ type shellTextHeights struct {
 var shellStates = map[windows.Handle]*nativeShell{}
 
 func runShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, displays *display.Monitor, notice string) error {
-	if err := registerShellClass(); err != nil {
+	shell, err := newNativeShell(navigator, store, initial, logger, displays, notice)
+	if err != nil {
 		return err
 	}
-	shell := &nativeShell{
-		navigator:     navigator,
-		store:         store,
-		settings:      initial,
-		logger:        logger,
-		displays:      displays,
-		startupNotice: notice,
-		notice:        notice,
-		dpi:           96,
-		navButtons:    make(map[core.ModuleID]windows.Handle),
-		navIDs:        make(map[uint16]core.ModuleID),
-		nativeViews:   make(map[core.ModuleID]nativeView),
-	}
-	window := initial.Shell.Window
-	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
-	if window.HasPosition {
-		x, y = uintptr(uint32(window.X)), uintptr(uint32(window.Y))
-	}
-	hwnd, _, err := procCreateWindowExW.Call(
-		0,
-		uintptr(unsafe.Pointer(utf16(shellClassName))),
-		uintptr(unsafe.Pointer(utf16(ui.AppName))),
-		wsOverlappedWindow|wsClipChildren|wsVScroll,
-		x, y, uintptr(window.Width), uintptr(window.Height),
-		0, 0, 0, 0,
-	)
-	if hwnd == 0 {
-		return callError("CreateWindowExW(main)", err)
-	}
-	shell.hwnd = windows.Handle(hwnd)
-	shell.dispatcher = core.NewDispatchQueue(func() error {
-		return postShellMessage(hwnd, wmAppDispatch)
-	})
-	shellStates[shell.hwnd] = shell
-	if dpi, _, _ := procGetDpiForWindow.Call(hwnd); dpi != 0 {
-		shell.dpi = uint32(dpi)
-	}
-	if err := shell.createControls(); err != nil {
-		procDestroyWindow.Call(hwnd)
-		return err
-	}
-	shell.updateFonts()
-	shell.updateView()
-	shell.fitInitialWindow()
-	shell.layout()
+	hwnd := uintptr(shell.hwnd)
 	showCommand := uintptr(swShow)
 	if initial.Shell.Window.Maximized {
 		showCommand = swShowMaximized
@@ -236,7 +198,75 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 	}
 }
 
+// newNativeShell creates the main window with its controls and every module's
+// native view, laid out but not yet shown.
+func newNativeShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, displays *display.Monitor, notice string) (*nativeShell, error) {
+	if err := registerShellClass(); err != nil {
+		return nil, err
+	}
+	shell := &nativeShell{
+		navigator:     navigator,
+		store:         store,
+		settings:      initial,
+		logger:        logger,
+		displays:      displays,
+		startupNotice: notice,
+		notice:        notice,
+		dpi:           96,
+		navButtons:    make(map[core.ModuleID]*ui.Button),
+		navIDs:        make(map[uint16]core.ModuleID),
+		nativeViews:   make(map[core.ModuleID]nativeView),
+	}
+	window := initial.Shell.Window
+	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
+	if window.HasPosition {
+		x, y = uintptr(uint32(window.X)), uintptr(uint32(window.Y))
+	}
+	hwnd, _, err := procCreateWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(utf16(shellClassName))),
+		uintptr(unsafe.Pointer(utf16(ui.AppName))),
+		wsOverlappedWindow|wsClipChildren|wsVScroll,
+		x, y, uintptr(window.Width), uintptr(window.Height),
+		0, 0, 0, 0,
+	)
+	if hwnd == 0 {
+		return nil, callError("CreateWindowExW(main)", err)
+	}
+	shell.hwnd = windows.Handle(hwnd)
+	shell.dispatcher = core.NewDispatchQueue(func() error {
+		return postShellMessage(hwnd, wmAppDispatch)
+	})
+	shellStates[shell.hwnd] = shell
+	if dpi, _, _ := procGetDpiForWindow.Call(hwnd); dpi != 0 {
+		shell.dpi = uint32(dpi)
+	}
+	if err := shell.createControls(); err != nil {
+		procDestroyWindow.Call(hwnd)
+		return nil, err
+	}
+	shell.updateFonts()
+	shell.updateView()
+	shell.fitInitialWindow()
+	shell.layout()
+	return shell, nil
+}
+
+var (
+	registerShellClassOnce sync.Once
+	registerShellClassErr  error
+)
+
+// registerShellClass registers the main window's class once per process,
+// however many shells are created, as tests create several.
 func registerShellClass() error {
+	registerShellClassOnce.Do(func() {
+		registerShellClassErr = registerShellClassNow()
+	})
+	return registerShellClassErr
+}
+
+func registerShellClassNow() error {
 	instance, _, err := procGetModuleHandleW.Call(0)
 	if instance == 0 {
 		return callError("GetModuleHandleW", err)
@@ -276,7 +306,7 @@ func (s *nativeShell) createControls() error {
 		if err != nil {
 			return err
 		}
-		s.navButtons[module.ID()] = button.Handle()
+		s.navButtons[module.ID()] = button
 		s.navIDs[id] = module.ID()
 	}
 	title, err := ui.NewLabel(s.hwnd, "")
@@ -342,7 +372,7 @@ func (s *nativeShell) updateFonts() {
 		setControlFont(control, s.bodyFont)
 	}
 	for _, button := range s.navButtons {
-		setControlFont(button, s.bodyFont)
+		setControlFont(button.Handle(), s.bodyFont)
 	}
 	for _, native := range s.nativeViews {
 		native.NativeFont(s.bodyFont)
@@ -358,12 +388,10 @@ func (s *nativeShell) updateView() {
 	s.note.SetText(s.noteText())
 	s.action.Show(view.PrimaryAction() != "")
 	s.refreshAction()
+	// SetChecked keeps the current module's button the navigation's only
+	// tab stop, so Tab passes the navigation without switching modules.
 	for id, button := range s.navButtons {
-		checked := uintptr(0)
-		if id == current.ID() {
-			checked = bstChecked
-		}
-		procSendMessageW.Call(uintptr(button), bmSetCheck, checked, 0)
+		button.SetChecked(id == current.ID())
 	}
 	for id, native := range s.nativeViews {
 		native.NativeShow(id == current.ID())
@@ -375,18 +403,71 @@ func (s *nativeShell) updateView() {
 // module has a native view that runs the action and, when it reports the
 // action's availability, reports it available. A button it disables while
 // the button has the keyboard focus first hands the focus to the next
-// control in tab order (AC-A03), or, when there is none, to the shell window,
-// where Tab reaches the first control again.
+// control in tab order (AC-A03), or, when there is none, to the current
+// module's navigation button.
 func (s *nativeShell) refreshAction() {
 	enabled := s.actionEnabled()
 	if !enabled && s.action.HasFocus() {
 		next, _, _ := procGetNextDlgTabItem.Call(uintptr(s.hwnd), uintptr(s.action.Handle()), 0)
 		if next == 0 || windows.Handle(next) == s.action.Handle() {
-			next = uintptr(s.hwnd)
+			next = uintptr(s.currentNavButton())
 		}
-		procSetFocus.Call(next)
+		if next != 0 {
+			procSetFocus.Call(next)
+		}
 	}
 	s.action.Enable(enabled)
+}
+
+// currentNavButton returns the current module's navigation button, or 0
+// when the shell has none.
+func (s *nativeShell) currentNavButton() windows.Handle {
+	if button, exists := s.navButtons[s.navigator.Current().ID()]; exists {
+		return button.Handle()
+	}
+	return 0
+}
+
+// restoreFocus gives the keyboard focus that reached the shell window itself
+// to a control (UX-006, AC-A03). Windows focuses a plain window, not the
+// control inside it that had the focus, whenever the window is activated —
+// at startup, on Alt+Tab or a click on its title bar, and when it is shown
+// again after a capture — and a window holding the focus shows no focus
+// indicator, while Tab would start again from the first control. So the
+// control that last had the focus gets it back while it can take it, and
+// otherwise, as at startup, the current module's navigation button does.
+func (s *nativeShell) restoreFocus() {
+	target := s.focus
+	if !s.canTakeFocus(target) {
+		target = s.currentNavButton()
+	}
+	if target != 0 {
+		procSetFocus.Call(uintptr(target))
+	}
+}
+
+// canTakeFocus reports whether restoreFocus may give the control the focus:
+// it is still one of the window's controls, visible — its module is shown —
+// and enabled, and not a radio button that is unchecked, which would report
+// a click on gaining the focus and change the selection the user made.
+func (s *nativeShell) canTakeFocus(control windows.Handle) bool {
+	if control == 0 {
+		return false
+	}
+	if child, _, _ := procIsChild.Call(uintptr(s.hwnd), uintptr(control)); child == 0 {
+		return false
+	}
+	if visible, _, _ := procIsWindowVisible.Call(uintptr(control)); visible == 0 {
+		return false
+	}
+	if enabled, _, _ := procIsWindowEnabled.Call(uintptr(control)); enabled == 0 {
+		return false
+	}
+	if code, _, _ := procSendMessageW.Call(uintptr(control), wmGetDlgCode, 0, 0); code&dlgcRadioButton != 0 {
+		checked, _, _ := procSendMessageW.Call(uintptr(control), bmGetCheck, 0, 0)
+		return checked&bstChecked != 0
+	}
+	return true
 }
 
 func (s *nativeShell) actionEnabled() bool {
@@ -568,8 +649,10 @@ func (s *nativeShell) layout() {
 	procShowWindow.Call(uintptr(s.navHeading), uintptr(headingVisibility))
 	moveWindow(s.navHeading, plan.margin, plan.margin-s.scrollY, plan.navWidth, s.scale(24))
 	for i, module := range modules {
-		y := plan.navY + int32(i)*(plan.navHeight+s.scale(8))
-		moveWindow(s.navButtons[module.ID()], plan.margin, y-s.scrollY, plan.navWidth, plan.navHeight)
+		if button, exists := s.navButtons[module.ID()]; exists {
+			y := plan.navY + int32(i)*(plan.navHeight+s.scale(8))
+			moveWindow(button.Handle(), plan.margin, y-s.scrollY, plan.navWidth, plan.navHeight)
+		}
 	}
 	contentY := func(y int32) int32 { return y - s.scrollY }
 	moveWindow(s.title, plan.contentX, contentY(plan.contentY), plan.contentWidth, plan.titleHeight)
@@ -874,6 +957,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmCommand:
 		notification := highWord(wParam)
 		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus || notification == lbnSetFocus) && lParam != nil {
+			shell.focus = windows.Handle(lParam)
 			shell.ensureControlVisible(windows.Handle(lParam))
 			// Set-focus notifications also reach the owning module view: the
 			// Screenshot shortcut field suspends its global hotkey while it is
@@ -909,6 +993,23 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				shell.layout()
 				return 0
 			}
+		}
+	case wmActivate:
+		// The control holding the focus as the window is deactivated is the
+		// one restoreFocus gives it back to; DefWindowProc then focuses the
+		// window itself on the next activation, which WM_SETFOCUS turns into
+		// that control's focus.
+		if shell != nil && lowWord(wParam) == waInactive {
+			if focused, _, _ := procGetFocus.Call(); focused != 0 {
+				if child, _, _ := procIsChild.Call(uintptr(hwnd), focused); child != 0 {
+					shell.focus = windows.Handle(focused)
+				}
+			}
+		}
+	case wmSetFocus:
+		if shell != nil {
+			shell.restoreFocus()
+			return 0
 		}
 	case wmVScroll:
 		if shell != nil {

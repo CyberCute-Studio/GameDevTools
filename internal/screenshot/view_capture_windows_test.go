@@ -100,7 +100,7 @@ func TestDisplayListItemDescribesDisplay(t *testing.T) {
 		DPIX:       144,
 		DPIY:       144,
 	}
-	if got := displayListItem(item); got != "2 — Dell U2415 — 1920 × 1200 (150%)" {
+	if got := displayListItem(item); got != "2 — Dell U2415 — 1920 × 1200 px (150%)" {
 		t.Fatalf("secondary item = %q", got)
 	}
 	primary := display.Display{
@@ -111,7 +111,7 @@ func TestDisplayListItemDescribesDisplay(t *testing.T) {
 		DPIX:       96,
 		DPIY:       96,
 	}
-	if got := displayListItem(primary); got != `1 — \\.\DISPLAY1 — 3840 × 2160 (100%, primary)` {
+	if got := displayListItem(primary); got != `1 — \\.\DISPLAY1 — 3840 × 2160 px (100%, primary)` {
 		t.Fatalf("primary item = %q", got)
 	}
 }

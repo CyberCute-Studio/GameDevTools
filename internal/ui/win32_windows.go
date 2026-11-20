@@ -13,6 +13,9 @@ const (
 	wsTabStop  = 0x00010000
 	wsGroup    = 0x00020000
 
+	// gwlStyle is GWL_STYLE (-16) as GetWindowLongPtrW takes it.
+	gwlStyle = ^uintptr(15)
+
 	wsExClientEdge = 0x00000200
 
 	bsNotify            = 0x00004000
@@ -109,4 +112,7 @@ var (
 	procKillTimer            = user32.NewProc("KillTimer")
 	procMessageBoxW          = user32.NewProc("MessageBoxW")
 	procInvalidateRect       = user32.NewProc("InvalidateRect")
+	procGetWindowLongPtrW    = user32.NewProc("GetWindowLongPtrW")
+	procSetWindowLongPtrW    = user32.NewProc("SetWindowLongPtrW")
+	procNotifyWinEvent       = user32.NewProc("NotifyWinEvent")
 )

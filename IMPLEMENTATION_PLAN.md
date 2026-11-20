@@ -251,11 +251,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Validate the combined application against shared UX, reliability, privacy, compatibility, and performance requirements.
 
 28. **QLT-01 — Complete accessibility, keyboard, contrast, and localization-readiness audit**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** SCR-11, RSZ-09
-    - **Requirements:** UX-001, UX-002, UX-003, UX-004, UX-005, UX-006, UX-007, UX-008, UX-009, UX-010, AC-A03.
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** SCR-11, RSZ-09
+    - **Requirements:** UX-001, UX-002, UX-003, UX-004, UX-005, UX-006, UX-007, UX-008, UX-009, UX-010, AC-A03, SCR-015.
     - **Deliver:** Full keyboard navigation audit, visible-focus fixes, contrast checks, screen-reader/accessibility metadata supported by the selected stack, non-color-only status review, high-contrast/theme behavior decision, and centralized-string cleanup.
     - **Verify:** Exercise every main-window workflow keyboard-only, inspect contrast and focus, test supported Windows theme/high-contrast modes, and document any platform accessibility limitation with an approved resolution.
-    - **Notes:** Resolve the PRD open decision on initial light/dark theme support.
+    - **Notes:** Resolve the PRD open decision on initial light/dark theme support. The audit, its findings, the result for each requirement, every view's tab order and access keys, the screen-reader support, and the measured contrast are recorded in [docs/accessibility-verification.md](docs/accessibility-verification.md). Every UX requirement and AC-A03 passes, with UX-008 met as the PRD now decides: the theme decision is resolved as system colors that follow the Windows contrast themes, with no dark app mode in the initial release (PRD 1.1, section 20). Fixes: Tab could not leave the navigation, because every radio button was a tab stop and one that gains the focus unchecked reports a click, so Tab switched modules, and capture modes and collision policies, as it passed; a radio button is now a tab stop only while checked (`ui.Button.SetChecked`). The shell gives the keyboard focus back to the control that had it whenever the window is activated, where Windows focused the window itself. Free Rectangle capture can be completed without a pointer (new SCR-015, P1): the session starts in the width field, a typed size and Enter create a centered rectangle, and the arrow keys nudge it. Status areas, validation messages, the capture toolbar's message, and the source detail line are UI Automation live regions a screen reader announces, with a resize job announcing its start and summary only; the annotation is kept alive by holding `oleacc.dll` loaded, as COM unloaded it with each call's apartment. The source list is named after its label instead of its hint. The selection ring and handles use two system colors that contrast at least 9:1 with each other, so one of them stands out at 3:1 on any background. The capture toolbar's message line no longer clips its second line. Pixel values that lacked `px` are labeled. The remaining user-facing strings moved into `internal/ui/strings.go`. The keyboard audit runs on the real main window with every production module (`internal/app/accessibility_windows_test.go`), and the screen-reader properties are read through a UI Automation client (`internal/ui/uiatest`). No screen reader was listened to and the contrast themes were measured from their theme files rather than switched on; both remain manual pre-release checks.
 
 29. **QLT-02 — Harden settings migration, recovery, reset, and application shutdown**
     - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-01
@@ -316,7 +316,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 |---|---|---|
 | APP-001 through APP-005 | FND-03, FND-04, SCR-09, QLT-02 | QLT-04, REL-03 |
 | PRESET-001 through PRESET-008 | FND-06, FND-07, SCR-01, RSZ-01 | QLT-02, QLT-04 |
-| SCR-001 through SCR-069 | SCR-01 through SCR-10 | SCR-11, QLT-04, REL-03 |
+| SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01 | SCR-11, QLT-04, REL-03 |
 | RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08 | RSZ-09, QLT-04, REL-03 |
 | SET-001 through SET-007 | FND-04, FND-06, module settings items, QLT-02, QLT-03 | QLT-04, REL-03 |
 | UX-001 through UX-010 | FND-05 and all feature UI items | QLT-01, QLT-04 |

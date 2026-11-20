@@ -14,8 +14,6 @@ import (
 
 const wsOverlappedWindow = 0x00cf0000
 
-var procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
-
 func TestDimensionInputPresentsValidation(t *testing.T) {
 	parent := newTestParent(t)
 	input, err := NewDimensionInput(parent, "Width", 42)
@@ -181,7 +179,7 @@ func TestStatusAreaRevisionIdentifiesTheNotice(t *testing.T) {
 }
 
 func TestStatusAreaReportsTimerFailure(t *testing.T) {
-	area := &StatusArea{Label: &Label{Control{hwnd: 1}}, parent: 1}
+	area := &StatusArea{Label: &Label{Control: Control{hwnd: 1}}, parent: 1}
 	if err := area.Show(Notice{Message: "Saved"}, time.Second); err == nil {
 		t.Fatal("Show() error = nil for an invalid parent window")
 	}
