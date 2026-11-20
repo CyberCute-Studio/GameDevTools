@@ -186,7 +186,10 @@ type Status struct {
 	// Cancelled item's temporary file could not be removed, which
 	// output.Write joins to the error that ended the write. A Failed item's
 	// error includes such a file's too, and an item planned again carries
-	// those of its earlier attempts. It is nil otherwise.
+	// those of its earlier attempts. It is nil otherwise. An Err that joins
+	// several errors, as errors.Join does, lists first the error that ended
+	// the item's last attempt, and after it only errors that name a file left
+	// behind, so a consumer classifies the failure by the first.
 	Err error
 }
 

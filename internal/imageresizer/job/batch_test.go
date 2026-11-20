@@ -862,6 +862,34 @@ func TestRunReportsATemporaryFileLeftBehindWhateverTheItemEndsIn(t *testing.T) {
 		events.check(t, summary)
 		requireLeftover(t, requireStatus(t, summary, 0, StateCompleted, filepath.Join(out, "sprite_2.png"), output.ReasonExists))
 	})
+
+	t.Run("planned again and failed", func(t *testing.T) {
+		// The error that ended the last attempt comes first, as Status.Err
+		// documents, so the view classifies the failure by it rather than by
+		// the earlier attempt's file left behind.
+		full := &output.Error{Kind: output.KindWrite, Op: "write result", Err: output.ErrDiskFull}
+		cfg := testConfig(1)
+		cfg.process = func(_ context.Context, item output.Item, _ Settings, _ reservation) (string, error) {
+			if filepath.Base(item.Destination) == "sprite.png" {
+				if err := os.WriteFile(item.Destination, []byte("another program's"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return "", errors.Join(taken, removal)
+			}
+			return "", full
+		}
+		out := t.TempDir()
+		summary, err := run(context.Background(), newRequest([]Input{listed(t, "sprite.png", 1)}, out, output.CollisionRename), nil, cfg)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		status := requireStatus(t, summary, 0, StateFailed, filepath.Join(out, "sprite_2.png"), output.ReasonNone)
+		requireLeftover(t, status)
+		joined, ok := status.Err.(interface{ Unwrap() []error })
+		if !ok || len(joined.Unwrap()) < 2 || joined.Unwrap()[0] != full {
+			t.Fatalf("error = %v, want the last attempt's failure first, then the file left behind", status.Err)
+		}
+	})
 }
 
 // TestRunKeepsTheReasonOfAnItemPlannedAgain: a duplicate renamed at planning

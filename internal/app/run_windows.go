@@ -21,12 +21,20 @@ import (
 
 // The shell finds a module view's optional hooks by interface assertion, so a
 // signature that drifted would silently drop the hook. The Image Resizer view
-// depends on its hooks — without the dispatcher, no content check would ever
-// reach the list — so its conformance is checked when the program compiles.
+// depends on its hooks — without the dispatcher, no content check or job
+// event would ever reach the list; without the availability hooks, Start
+// Resize and drops would stay enabled while a job runs; and without
+// NativeShutdown, the process would exit without waiting for a cancelled
+// job's images in flight to remove their temporary files — so its
+// conformance is checked when the program compiles.
 var (
-	_ nativeView            = (*imageresizer.NativeView)(nil)
-	_ nativeDispatcherAware = (*imageresizer.NativeView)(nil)
-	_ nativeDropTarget      = (*imageresizer.NativeView)(nil)
+	_ nativeView               = (*imageresizer.NativeView)(nil)
+	_ nativeDispatcherAware    = (*imageresizer.NativeView)(nil)
+	_ nativeActionHandler      = (*imageresizer.NativeView)(nil)
+	_ nativeActionAvailability = (*imageresizer.NativeView)(nil)
+	_ nativeDropTarget         = (*imageresizer.NativeView)(nil)
+	_ nativeDropAvailability   = (*imageresizer.NativeView)(nil)
+	_ nativeShutdown           = (*imageresizer.NativeView)(nil)
 )
 
 func runNative() error {

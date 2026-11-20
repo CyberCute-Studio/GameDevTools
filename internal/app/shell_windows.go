@@ -41,10 +41,14 @@ type nativeShell struct {
 	nativeViews   map[core.ModuleID]nativeView
 	title         windows.Handle
 	description   windows.Handle
-	action        windows.Handle
+	action        *ui.Button
 	note          *ui.StatusArea
 	headingFont   windows.Handle
 	bodyFont      windows.Handle
+
+	// acceptingDrops is whether the shell window and its children are
+	// registered for file drops, as updateDropAcceptance last applied it.
+	acceptingDrops bool
 }
 
 type nativeView interface {
@@ -65,6 +69,19 @@ type nativeViewProvider interface {
 // primary action button, such as the Screenshot module's Start Capture.
 type nativeActionHandler interface {
 	NativeAction()
+}
+
+// nativeActionAvailability is implemented by module views whose primary
+// action is unavailable for a while, such as Start Resize while a resize job
+// runs. The shell disables the primary action button while the view reports
+// it unavailable, and re-reads the availability on every relayout, which
+// follows every module command, action, and dispatched task. Before it
+// disables the button while the button has the keyboard focus, the shell
+// moves the focus to the next control in tab order, so the keyboard is never
+// stranded on a disabled button; a view may move it first to a better place,
+// as Start Resize moves it to Cancel Resize.
+type nativeActionAvailability interface {
+	NativeActionAvailable() bool
 }
 
 // nativeDispatcherAware is implemented by module views that post background
@@ -102,6 +119,16 @@ type nativeShutdown interface {
 // other modules keep the no-drop cursor.
 type nativeDropTarget interface {
 	NativeDropFiles(paths []string)
+}
+
+// nativeDropAvailability is implemented by drop targets that refuse drops
+// for a while, such as the Image Resizer source list while a resize job runs.
+// The shell registers the window for drops only while the view reports them
+// available, re-reading it on every relayout as it re-reads the primary
+// action's availability, so a drop the view would refuse keeps the no-drop
+// cursor instead of seeming to be accepted.
+type nativeDropAvailability interface {
+	NativeDropAvailable() bool
 }
 
 type shellLayout struct {
@@ -262,11 +289,9 @@ func (s *nativeShell) createControls() error {
 		return err
 	}
 	s.description = description.Handle()
-	action, err := ui.NewButton(s.hwnd, "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true})
-	if err != nil {
+	if s.action, err = ui.NewButton(s.hwnd, "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true}); err != nil {
 		return err
 	}
-	s.action = action.Handle()
 	s.note, err = ui.NewStatusArea(s.hwnd)
 	if err != nil {
 		return err
@@ -313,7 +338,7 @@ func (s *nativeShell) updateFonts() {
 		}
 	}
 	setControlFont(s.title, s.headingFont)
-	for _, control := range []windows.Handle{s.navHeading, s.description, s.action, s.note.Handle()} {
+	for _, control := range []windows.Handle{s.navHeading, s.description, s.action.Handle(), s.note.Handle()} {
 		setControlFont(control, s.bodyFont)
 	}
 	for _, button := range s.navButtons {
@@ -329,20 +354,10 @@ func (s *nativeShell) updateView() {
 	view := current.View()
 	setWindowText(s.title, view.Title())
 	setWindowText(s.description, view.Description())
-	setWindowText(s.action, view.PrimaryAction())
+	s.action.SetText(view.PrimaryAction())
 	s.note.SetText(s.noteText())
-	showAction := int32(swHide)
-	if view.PrimaryAction() != "" {
-		showAction = swShow
-	}
-	procShowWindow.Call(uintptr(s.action), uintptr(showAction))
-	enabled := uintptr(0)
-	if native, exists := s.nativeViews[current.ID()]; exists && view.PrimaryAction() != "" {
-		if _, actionable := native.(nativeActionHandler); actionable {
-			enabled = 1
-		}
-	}
-	procEnableWindow.Call(uintptr(s.action), enabled)
+	s.action.Show(view.PrimaryAction() != "")
+	s.refreshAction()
 	for id, button := range s.navButtons {
 		checked := uintptr(0)
 		if id == current.ID() {
@@ -354,6 +369,43 @@ func (s *nativeShell) updateView() {
 		native.NativeShow(id == current.ID())
 	}
 	s.updateDropAcceptance()
+}
+
+// refreshAction enables the primary action button only while the current
+// module has a native view that runs the action and, when it reports the
+// action's availability, reports it available. A button it disables while
+// the button has the keyboard focus first hands the focus to the next
+// control in tab order (AC-A03), or, when there is none, to the shell window,
+// where Tab reaches the first control again.
+func (s *nativeShell) refreshAction() {
+	enabled := s.actionEnabled()
+	if !enabled && s.action.HasFocus() {
+		next, _, _ := procGetNextDlgTabItem.Call(uintptr(s.hwnd), uintptr(s.action.Handle()), 0)
+		if next == 0 || windows.Handle(next) == s.action.Handle() {
+			next = uintptr(s.hwnd)
+		}
+		procSetFocus.Call(next)
+	}
+	s.action.Enable(enabled)
+}
+
+func (s *nativeShell) actionEnabled() bool {
+	current := s.navigator.Current()
+	native, exists := s.nativeViews[current.ID()]
+	return exists && current.View().PrimaryAction() != "" && hookAvailable[nativeActionHandler](native, nativeActionAvailability.NativeActionAvailable)
+}
+
+// hookAvailable reports whether the native view implements the hook H and,
+// when it reports the hook's availability as the optional A, reports it
+// available, as available asks.
+func hookAvailable[H, A any](native nativeView, available func(A) bool) bool {
+	if _, implements := native.(H); !implements {
+		return false
+	}
+	if availability, reports := native.(A); reports {
+		return available(availability)
+	}
+	return true
 }
 
 func (s *nativeShell) noteText() string {
@@ -522,11 +574,19 @@ func (s *nativeShell) layout() {
 	contentY := func(y int32) int32 { return y - s.scrollY }
 	moveWindow(s.title, plan.contentX, contentY(plan.contentY), plan.contentWidth, plan.titleHeight)
 	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, plan.descriptionHeight)
-	moveWindow(s.action, plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
+	moveWindow(s.action.Handle(), plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
 	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
 		native.NativeLayout(plan.contentX, contentY(plan.moduleY), plan.contentWidth, s.scale, measureModuleText)
 	}
 	s.note.Move(plan.contentX, contentY(plan.noteY), plan.contentWidth, plan.noteHeight)
+	// Every module command, action, and dispatched task ends in a relayout,
+	// so the primary action's and the drops' availability are re-read here;
+	// the drop registration is only re-applied when it changed, as applying
+	// it visits every child control.
+	s.refreshAction()
+	if s.dropsAvailable() != s.acceptingDrops {
+		s.updateDropAcceptance()
+	}
 }
 
 // waitForBackgroundWork lets in-flight module work, such as a capture still
@@ -633,19 +693,28 @@ func childDropVisit(hwnd windows.Handle, _ uintptr) uintptr {
 }
 
 // updateDropAcceptance registers the shell window and every child control
-// for file drops while the active module consumes them, so other modules
-// keep the no-drop cursor. Controls are created before the first updateView
-// and never recreated, so the enumeration subclasses each child exactly once.
+// for file drops while the active module consumes them and, when it reports
+// their availability, reports them available, so other modules, and a module
+// that would refuse a drop, keep the no-drop cursor. Controls are created
+// before the first updateView and never recreated, so the enumeration
+// subclasses each child exactly once.
 func (s *nativeShell) updateDropAcceptance() {
+	s.acceptingDrops = s.dropsAvailable()
 	accept := uintptr(0)
-	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
-		if _, target := native.(nativeDropTarget); target {
-			accept = 1
-		}
+	if s.acceptingDrops {
+		accept = 1
 	}
 	procDragAcceptFiles.Call(uintptr(s.hwnd), accept)
 	dropForwardAccept = accept
 	procEnumChildWindows.Call(uintptr(s.hwnd), childDropCallback, 0)
+}
+
+// dropsAvailable reports whether the active module consumes dropped files
+// now: its native view is a drop target and, when it reports their
+// availability, reports them available.
+func (s *nativeShell) dropsAvailable() bool {
+	native, exists := s.nativeViews[s.navigator.Current().ID()]
+	return exists && hookAvailable[nativeDropTarget](native, nativeDropAvailability.NativeDropAvailable)
 }
 
 // filterModuleMessage lets module views pre-handle a queued message before

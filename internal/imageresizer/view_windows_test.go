@@ -401,11 +401,12 @@ func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
 
 	narrow := view.NativeHeight(400, scale, measure)
 	wide := view.NativeHeight(600, scale, measure)
-	// Two extra radio rows (2 × 26 = 52) in the options section and three
-	// stacked source buttons instead of one row (3×36 + 2×8 − 36 = 88) at
-	// the narrow width.
-	if narrow != wide+140 {
-		t.Fatalf("stacked rows should add 140: narrow = %d, wide = %d", narrow, wide)
+	// Two extra radio rows (2 × 26 = 52) in the options section, three
+	// stacked source buttons instead of one row (3×36 + 2×8 − 36 = 88), and
+	// two stacked job buttons instead of one row (2×36 + 8 − 36 = 44) at the
+	// narrow width.
+	if narrow != wide+184 {
+		t.Fatalf("stacked rows should add 184: narrow = %d, wide = %d", narrow, wide)
 	}
 
 	baseline := view.NativeHeight(600, scale, measure)
@@ -418,5 +419,12 @@ func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
 	view.NativeLayout(0, 0, 600, scale, measure)
 	if view.quality.Error.Text() == "" || view.status.Text() == "" {
 		t.Fatal("layout discarded validation or persistence text")
+	}
+
+	// A job's progress or result takes its measured height and a gap above
+	// the job buttons, and none while there is none.
+	view.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: "Resizing"})
+	if withJob := view.NativeHeight(600, scale, measure); withJob-expanded != 128 {
+		t.Fatalf("job status height increase = %d, want 128", withJob-expanded)
 	}
 }

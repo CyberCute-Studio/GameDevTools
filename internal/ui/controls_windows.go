@@ -57,6 +57,14 @@ func (c Control) Focus() {
 	procSetFocus.Call(uintptr(c.hwnd))
 }
 
+// HasFocus reports whether the control has the keyboard focus, so a view
+// that is about to disable it can move the focus on first instead of
+// stranding the keyboard on a disabled control.
+func (c Control) HasFocus() bool {
+	focused, _, _ := procGetFocus.Call()
+	return windows.Handle(focused) == c.hwnd
+}
+
 type Label struct {
 	Control
 }

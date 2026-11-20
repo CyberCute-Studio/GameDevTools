@@ -77,6 +77,7 @@ func TestErrorKindsHaveDistinctPresentation(t *testing.T) {
 		ErrorClipboard,
 		ErrorShortcutRegistration,
 		ErrorCapture,
+		ErrorUnexpected,
 	}
 	seen := make(map[string]ErrorKind)
 	for _, kind := range kinds {

@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -67,6 +69,32 @@ type NativeView struct {
 	// notice, or an area left empty, never a notice another part of the view
 	// raised in the meantime.
 	sourceNotice uint64
+	// busyNotice is the status area's revision right after it last said that
+	// the source list cannot change, or Start Resize run, while a job runs,
+	// which finishJob clears while the area still shows it, or 0.
+	busyNotice uint64
+
+	// run runs a resize job, confirm asks for an Overwrite job's
+	// confirmation, and openFolder opens the output folder on request; tests
+	// substitute them.
+	run        jobRunner
+	confirm    func(windows.Handle, string, string) bool
+	openFolder func(string) error
+	// active is the running job, or nil while none runs.
+	active *activeJob
+	// jobs counts the job goroutines that have not returned, including those
+	// of jobs the view let go, for NativeShutdown.
+	jobs sync.WaitGroup
+	// releaseDelay is how long a cancelled job may take to stop before the
+	// view lets it go, jobReleaseDelay; tests shorten it.
+	releaseDelay time.Duration
+	// outputFolder is the folder Open Output Folder opens: the latest job's
+	// that saved a result, once it saved one, or empty.
+	outputFolder string
+
+	jobStatus    *ui.StatusArea
+	cancelButton *ui.Button
+	openButton   *ui.Button
 
 	sourceLabel     *ui.Label
 	sourceHint      *ui.Label
@@ -113,11 +141,15 @@ type checkTally struct {
 
 func NewNativeView(manager *preset.Manager, options *OptionsManager) *NativeView {
 	view := &NativeView{
-		options:   options,
-		presets:   preset.NewNativeManager(manager),
-		inventory: NewInventory(),
-		browse:    ui.BrowseForFolder,
-		pickFiles: ui.PickImageFiles,
+		options:      options,
+		presets:      preset.NewNativeManager(manager),
+		inventory:    NewInventory(),
+		browse:       ui.BrowseForFolder,
+		pickFiles:    ui.PickImageFiles,
+		run:          job.Run,
+		confirm:      ui.Confirm,
+		openFolder:   ui.OpenFolder,
+		releaseDelay: jobReleaseDelay,
 	}
 	view.inspector = NewInspector(decode.Inspect, view.deliverInspection)
 	return view
@@ -134,6 +166,11 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	n.parent = parent
 	base := int32(optionsCommandBase)
 	sources := int32(sourcesCommandBase)
+	// The job section comes first, directly below the shell's Start Resize
+	// button, in layout and in tab order.
+	if err := n.createJobControls(parent); err != nil {
+		return err
+	}
 	var err error
 	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
 		return err
@@ -224,6 +261,9 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
+	n.jobStatus.SetFont(font)
+	n.cancelButton.SetFont(font)
+	n.openButton.SetFont(font)
 	n.sourceLabel.SetFont(font)
 	n.sourceHint.SetFont(font)
 	n.list.SetFont(font)
@@ -254,6 +294,9 @@ func (n *NativeView) NativeFont(font windows.Handle) {
 }
 
 func (n *NativeView) NativeShow(visible bool) {
+	n.jobStatus.Label.Show(visible)
+	n.cancelButton.Show(visible)
+	n.openButton.Show(visible)
 	n.sourceLabel.Show(visible)
 	n.sourceHint.Show(visible)
 	n.list.Show(visible)
@@ -285,11 +328,12 @@ func (n *NativeView) NativeShow(visible bool) {
 
 func (n *NativeView) NativeHeight(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
 	own, _, _, _ := n.optionsSectionHeight(width, scale, measure)
-	return n.sourcesSectionHeight(width, scale, measure) + scale(16) + n.presets.NativeHeight(width, scale, measure) + scale(16) + own
+	return n.jobSectionHeight(width, scale, measure) + scale(16) + n.sourcesSectionHeight(width, scale, measure) + scale(16) + n.presets.NativeHeight(width, scale, measure) + scale(16) + own
 }
 
 func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, measure func(string, int32) int32) {
 	_, qualityMetrics, backgroundMetrics, statusHeight := n.optionsSectionHeight(width, scale, measure)
+	y = n.layoutJobSection(x, y, width, scale, measure) + scale(16)
 	y = n.layoutSourcesSection(x, y, width, scale, measure) + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 	y += n.presets.NativeHeight(width, scale, measure) + scale(16)
@@ -426,9 +470,14 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		}
 		return true
 	}
+	if n.jobCommand(id, notification) {
+		return true
+	}
 	switch id - sourcesCommandBase {
 	case addImagesCommand:
-		if notification != 0 {
+		// The picker does not open while a job runs; addSources checks again
+		// once it closes, as its modal loop dispatches messages.
+		if notification != 0 || n.refuseWhileRunning() {
 			return true
 		}
 		paths, chosen, err := n.pickFiles(n.parent, ui.ImagePickerTitle)
@@ -442,23 +491,14 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		n.addSources(paths)
 		return true
 	case removeSelectedCommand:
-		if notification != 0 {
-			return true
+		if notification == 0 {
+			n.removeSelectedSources()
 		}
-		n.removeSelectedSources()
 		return true
 	case clearListCommand:
-		if notification != 0 {
-			return true
+		if notification == 0 {
+			n.clearSources()
 		}
-		n.inventory.Clear()
-		n.inspector.DropAll()
-		n.checked = checkTally{}
-		n.refreshSources()
-		// Clearing disables the Clear button itself, so keyboard focus moves
-		// to the list instead of being stranded on a disabled control.
-		n.list.Focus()
-		n.showSourceNotice(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared})
 		return true
 	case sourceListCommand:
 		if notification == ui.NotificationListSelChange {
@@ -520,17 +560,54 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 }
 
 // NativeDestroy abandons the queued and in-flight content checks, so the
-// worker stops at its next read instead of decoding for a closing window.
-// The view deliberately has no NativeShutdown: a content check only reads
-// its source, so nothing is lost when the process exits around one, and
-// waiting for the worker could hold the process — and its single-instance
-// lock — for as long as an open or read on a slow network share or an
-// online-only file blocks. Any result a worker still finishes fails to post
-// harmlessly against the destroyed window, and the post is not retried.
+// worker stops at its next read instead of decoding for a closing window,
+// and cancels a running job, whose items in flight stop at their next safe
+// point and keep every completed result (RSZ-045). Content checks are not
+// waited for: a check only reads its source, so nothing is lost when the
+// process exits around one, and waiting for the worker could hold the
+// process — and its single-instance lock — for as long as an open or read
+// on a slow network share or an online-only file blocks. NativeShutdown
+// waits, within a bound, for the job. Any result a worker or the job still
+// finishes fails to post harmlessly against the destroyed window, and the
+// post is not retried, as closing the inspector marks the view destroyed.
 func (n *NativeView) NativeDestroy() {
 	n.inspector.Close()
+	if n.active != nil {
+		n.active.cancel()
+	}
 	n.status.Destroy()
+	n.jobStatus.Destroy()
 	n.presets.NativeDestroy()
+}
+
+// destroyed reports whether NativeDestroy has run, which closes the
+// inspector, so a refused post of a drain task, which can then only fail
+// again, is not retried.
+func (n *NativeView) destroyed() bool {
+	return n.inspector.Closed()
+}
+
+// refuseWhileRunning explains, while a job runs, that the source list cannot
+// change, as its rows are the job's items, and reports whether it did, as
+// refuseBusy describes. Every change to the list — Add Images, a drop,
+// Remove Selected, and Clear List — goes through addSources,
+// removeSelectedSources, or clearSources, which each refuse it first.
+func (n *NativeView) refuseWhileRunning() bool {
+	return n.refuseBusy(ui.ImagesBusy)
+}
+
+// refuseBusy explains in the status area, while a job runs, why what was
+// asked cannot run until the job ends — a change to the source list, or
+// Start Resize again — and reports whether it did. The job section keeps
+// the job's progress, and the job's end clears the explanation while the
+// status area still shows it.
+func (n *NativeView) refuseBusy(message string) bool {
+	if n.active == nil {
+		return false
+	}
+	n.showSourceNotice(ui.Notice{Kind: ui.NoticeWarning, Message: message})
+	n.busyNotice = n.status.Revision()
+	return true
 }
 
 func (n *NativeView) selectCollision(notification uint16, policy CollisionPolicy) {
@@ -634,14 +711,28 @@ func (n *NativeView) refreshModeDescription() {
 	n.modeDescription.SetText(fmt.Sprintf(format, selected.Width, selected.Height))
 }
 
+// NativeDropAvailable reports drops unavailable while a job runs, as the
+// source list cannot change then, so the shell keeps the no-drop cursor
+// instead of seeming to accept a drop the view would refuse.
+func (n *NativeView) NativeDropAvailable() bool {
+	return n.active == nil
+}
+
 // NativeDropFiles handles files and folders dropped on the shell window
 // while the Image Resizer module is active (RSZ-002, RSZ-008). The shell
-// enables drag-and-drop only while the active module accepts it.
+// enables drag-and-drop only while the active module accepts it, and so
+// never while a job runs; a drop that arrives then all the same is refused,
+// as addSources refuses every add then.
 func (n *NativeView) NativeDropFiles(paths []string) {
 	n.addSources(paths)
 }
 
+// addSources adds the paths to the source list and queues their content
+// checks, unless a job runs (refuseWhileRunning).
 func (n *NativeView) addSources(paths []string) {
+	if n.refuseWhileRunning() {
+		return
+	}
 	first := n.inventory.Len()
 	summary := n.inventory.Add(paths)
 	n.refreshSources()
@@ -678,21 +769,21 @@ func (n *NativeView) deliverInspection(result InspectionResult) {
 	if n.dispatcher == nil || !n.results.put(result) {
 		return
 	}
-	n.postResults()
+	n.postDrain(n.applyInspections)
 }
 
-// postResults posts the drain task for the queued results. A refused post —
-// the GUI thread's message queue is momentarily full — is retried after a
-// pause, since no later result may come to post again, and the queued
-// results would otherwise leave their items Checking for good; the drain
-// task stays outstanding meanwhile, so the retry carries every result queued
-// in the meantime. Once the view is destroyed a post can only fail, so the
-// retries stop.
-func (n *NativeView) postResults() {
-	if err := n.dispatcher.Post(n.applyInspections); err == nil || n.inspector.Closed() {
+// postDrain posts a mailbox's drain task. A refused post — the GUI thread's
+// message queue is momentarily full — is retried after a pause, since nothing
+// may come to post it again: the drain task stays outstanding meanwhile, as
+// drainSlot describes, so the retry carries everything queued in the
+// meantime, and what the mailbox holds would otherwise never reach the view,
+// leaving items Checking, or a job unfinished, for good. Once the view is
+// destroyed a post can only fail, so the retries stop.
+func (n *NativeView) postDrain(drain func()) {
+	if err := n.dispatcher.Post(drain); err == nil || n.destroyed() {
 		return
 	}
-	time.AfterFunc(postRetryDelay, n.postResults)
+	time.AfterFunc(postRetryDelay, func() { n.postDrain(drain) })
 }
 
 // applyInspections resolves the delivered content checks into their items on
@@ -785,7 +876,12 @@ func summarizeChecks(added AddSummary, ready, failed int) ui.Notice {
 	return ui.Notice{Kind: kind, Message: message}
 }
 
+// removeSelectedSources removes the selected items and abandons their
+// pending content checks, unless a job runs (refuseWhileRunning).
 func (n *NativeView) removeSelectedSources() {
+	if n.refuseWhileRunning() {
+		return
+	}
 	indices := n.list.SelectedIndices()
 	if len(indices) == 0 {
 		n.showSourceNotice(ui.Notice{Kind: ui.NoticeInfo, Message: ui.ImagesRemoveNone})
@@ -805,6 +901,22 @@ func (n *NativeView) removeSelectedSources() {
 		}
 	}
 	n.showSourceNotice(notice)
+}
+
+// clearSources empties the source list and abandons every pending content
+// check, unless a job runs (refuseWhileRunning).
+func (n *NativeView) clearSources() {
+	if n.refuseWhileRunning() {
+		return
+	}
+	n.inventory.Clear()
+	n.inspector.DropAll()
+	n.checked = checkTally{}
+	n.refreshSources()
+	// Clearing disables the Clear button itself, so keyboard focus moves to
+	// the list instead of being stranded on a disabled control.
+	n.list.Focus()
+	n.showSourceNotice(ui.Notice{Kind: ui.NoticeSuccess, Message: ui.ImagesCleared})
 }
 
 // summarizeAdd builds the batch result notice: every add reports what was
@@ -869,8 +981,12 @@ func (n *NativeView) refreshSourceSelection() {
 		n.path.SetText(item.Path)
 		n.pathDetail.SetText(item.DetailText())
 	}
-	n.removeButton.Enable(len(selection) > 0)
-	n.clearButton.Enable(n.inventory.Len() > 0)
+	// The source list cannot change while a job runs, as its rows are the
+	// job's items.
+	idle := n.active == nil
+	n.addButton.Enable(idle)
+	n.removeButton.Enable(idle && len(selection) > 0)
+	n.clearButton.Enable(idle && n.inventory.Len() > 0)
 }
 
 func (n *NativeView) presentResult(err error, success string) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -66,24 +67,40 @@ type SourceItem struct {
 	Detail    string
 	Info      decode.Info
 	Inspected bool
+	// Result is what the last resize job reported for the item while InJob
+	// is set: the item was one of that job's sources. Its row and detail then
+	// show the job's state and result (RSZ-043, RSZ-046) instead of the
+	// content check, which Status keeps for the next job.
+	Result job.Status
+	InJob  bool
 	// key is the path key the item claimed in the inventory, which Remove
 	// releases.
 	key string
 }
 
 // RowText is the source-list row: the file name, the upright source
-// dimensions once they are known, and the status (RSZ-005).
+// dimensions once they are known, and the status (RSZ-005) — the job's state
+// for the item once a job included it (RSZ-043), in words, never by color
+// alone (UX-005).
 func (s SourceItem) RowText() string {
-	if s.Status == StatusReady {
-		return fmt.Sprintf(ui.SourceListReadyFormat, s.Name, ui.FormatDimensions(s.Info.Width, s.Info.Height), s.Status.Label())
+	status := s.Status.Label()
+	if s.InJob {
+		status = stateLabel(s.Result.State)
 	}
-	return fmt.Sprintf(ui.SourceListFormat, s.Name, s.Status.Label())
+	if s.Status == StatusReady {
+		return fmt.Sprintf(ui.SourceListReadyFormat, s.Name, ui.FormatDimensions(s.Info.Width, s.Info.Height), status)
+	}
+	return fmt.Sprintf(ui.SourceListFormat, s.Name, status)
 }
 
 // DetailText explains the item's status below the full path: the decoded
 // format, dimensions, alpha, and applied orientation for a Ready item, and
-// the reason for every other status.
+// the reason for every other status; once a job included the item, its
+// result instead, as resultDetail describes (RSZ-046).
 func (s SourceItem) DetailText() string {
+	if s.InJob {
+		return resultDetail(s.Result)
+	}
 	switch s.Status {
 	case StatusReady:
 		return readyDetail(s)
@@ -243,12 +260,19 @@ func (v *Inventory) Resolve(result InspectionResult) (index int, ok bool) {
 		return index, false
 	}
 	v.checking--
-	if result.Err != nil {
-		item.Status, item.Detail = failureStatus(result.Err)
-		return index, true
-	}
-	item.Status, item.Detail, item.Info = StatusReady, "", result.Info
+	item.resolve(result)
 	return index, true
+}
+
+// resolve gives the item its content check's outcome: Ready with the
+// decoded description, or the failure's status and explanation.
+func (s *SourceItem) resolve(result InspectionResult) {
+	if result.Err != nil {
+		s.Status, s.Detail = failureStatus(result.Err)
+		s.Info = decode.Info{}
+		return
+	}
+	s.Status, s.Detail, s.Info = StatusReady, "", result.Info
 }
 
 // failureStatus maps a typed decode failure to the list status and its

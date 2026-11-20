@@ -395,6 +395,10 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	if err != nil {
 		t.Fatal(err)
 	}
+	action, err := ui.NewButton(windows.Handle(hwnd), "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	shell := &nativeShell{
 		navigator:   navigator,
 		hwnd:        windows.Handle(hwnd),
@@ -402,6 +406,7 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 		navButtons:  make(map[core.ModuleID]windows.Handle),
 		navIDs:      make(map[uint16]core.ModuleID),
 		nativeViews: make(map[core.ModuleID]nativeView),
+		action:      action,
 		note:        note,
 	}
 	if native != nil {
@@ -551,5 +556,125 @@ func TestShellWindowProcScrollsFocusedListIntoView(t *testing.T) {
 	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(601)|uintptr(lbnSetFocus)<<16, uintptr(list.Handle()))
 	if shell.scrollY == 0 {
 		t.Fatal("list focus did not scroll the control into view")
+	}
+}
+
+var procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
+
+type actionTestView struct{}
+
+func (actionTestView) Title() string         { return "Action" }
+func (actionTestView) Description() string   { return "Action view" }
+func (actionTestView) PrimaryAction() string { return "Act" }
+
+type actionTestModule struct{}
+
+func (actionTestModule) ID() core.ModuleID       { return core.ModuleScreenshot }
+func (actionTestModule) NavigationLabel() string { return "Action" }
+func (actionTestModule) View() core.View         { return actionTestView{} }
+
+// availabilityView runs the primary action and reports whether it is
+// available, as the Image Resizer does for Start Resize while a job runs.
+type availabilityView struct {
+	recordingNativeView
+	available bool
+	actions   int
+}
+
+func (v *availabilityView) NativeAction()               { v.actions++ }
+func (v *availabilityView) NativeActionAvailable() bool { return v.available }
+
+// TestShellDisablesAnUnavailablePrimaryAction pins that the shell disables
+// the primary action button while the module view reports the action
+// unavailable, re-reading it on every relayout, such as the one that follows
+// the action itself, and enables it again once it is available. A button it
+// disables while the button has the keyboard focus first hands the focus on
+// to the next control, so the keyboard is never stranded on it (AC-A03).
+func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
+	native := &availabilityView{available: true}
+	shell := newCommandTestShell(t, native)
+	navigator := core.NewNavigator()
+	if err := navigator.Register(actionTestModule{}); err != nil {
+		t.Fatal(err)
+	}
+	shell.navigator = navigator
+	next, err := ui.NewButton(shell.hwnd, "Next", ui.ButtonOptions{ID: 210})
+	if err != nil {
+		t.Fatal(err)
+	}
+	isEnabled := func() bool {
+		result, _, _ := procIsWindowEnabled.Call(uintptr(shell.action.Handle()))
+		return result != 0
+	}
+
+	shell.layout()
+	if !isEnabled() {
+		t.Fatal("an available primary action was disabled")
+	}
+	native.available = false
+	shell.action.Focus()
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), nil)
+	if native.actions != 1 || isEnabled() {
+		t.Fatalf("after the action: %d actions, enabled = %v; want 1 and disabled", native.actions, isEnabled())
+	}
+	if shell.action.HasFocus() || !next.HasFocus() {
+		t.Fatal("the disabled primary action kept the keyboard focus instead of handing it to the next control")
+	}
+	native.available = true
+	shell.layout()
+	if !isEnabled() {
+		t.Fatal("the primary action stayed disabled once it was available again")
+	}
+
+	// A view that does not run the action leaves it disabled whatever it
+	// reports.
+	shell.nativeViews[core.ModuleScreenshot] = &recordingNativeView{}
+	shell.layout()
+	if isEnabled() {
+		t.Fatal("a primary action no view runs was enabled")
+	}
+}
+
+var procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
+
+// dropAvailabilityView is a drop target that reports whether it takes drops
+// now, as the Image Resizer source list does while a resize job runs.
+type dropAvailabilityView struct {
+	dropRecordingView
+	available bool
+}
+
+func (v *dropAvailabilityView) NativeDropAvailable() bool { return v.available }
+
+// TestShellRegistersDropsOnlyWhileAvailable pins that the shell registers
+// the window and its children for drops only while the drop target reports
+// drops available, re-reading it on every relayout, so a drop the view would
+// refuse keeps the no-drop cursor.
+func TestShellRegistersDropsOnlyWhileAvailable(t *testing.T) {
+	const gwlExStyle, wsExAcceptFiles = ^uintptr(19), 0x10
+	native := &dropAvailabilityView{available: true}
+	shell := newCommandTestShell(t, native)
+	child, err := ui.NewButton(shell.hwnd, "Child", ui.ButtonOptions{ID: 211})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepts := func(hwnd windows.Handle) bool {
+		style, _, _ := procGetWindowLongPtrW.Call(uintptr(hwnd), gwlExStyle)
+		return style&wsExAcceptFiles != 0
+	}
+
+	shell.layout()
+	if !accepts(shell.hwnd) || !accepts(child.Handle()) {
+		t.Fatal("an available drop target was not registered for drops")
+	}
+	native.available = false
+	shell.layout()
+	if accepts(shell.hwnd) || accepts(child.Handle()) {
+		t.Fatal("the window stayed registered for drops the view refuses")
+	}
+	native.available = true
+	shell.layout()
+	if !accepts(shell.hwnd) || !accepts(child.Handle()) {
+		t.Fatal("the window was not registered again once drops were available")
 	}
 }
