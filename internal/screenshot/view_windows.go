@@ -195,13 +195,11 @@ func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 }
 
 // NativeAnnounceNotice asks a screen reader to read the status area's
-// notice, if any, once the main window first appears: a startup shortcut
-// conflict or display failure is shown while the window is still hidden,
-// where its announcement goes unheard.
+// notice, if any, once the view is first shown in the visible main window: a
+// startup shortcut conflict or display failure is shown while the window, or
+// the view, is still hidden, where its announcement goes unheard.
 func (n *NativeView) NativeAnnounceNotice() {
-	if n.status.Text() != "" {
-		n.status.Announce()
-	}
+	n.status.Announce()
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {

@@ -54,6 +54,15 @@ type nativeShell struct {
 	// focus is the control that last had the keyboard focus, which
 	// restoreFocus gives it back to when the window is activated again.
 	focus windows.Handle
+	// clickActivating is whether the window is being activated by a mouse
+	// click, whose focus restoreFocus leaves to the click, as wmActivate
+	// describes.
+	clickActivating bool
+
+	// announced holds the modules whose notice was announced once shown in
+	// the visible window, as announceModuleNotice describes; it is nil until
+	// the window first appears.
+	announced map[core.ModuleID]bool
 }
 
 type nativeView interface {
@@ -112,10 +121,10 @@ type nativeHotkeyHandler interface {
 }
 
 // nativeNoticeAnnouncer is implemented by module views whose status area can
-// take a notice while the main window is still hidden, such as a global
-// shortcut another application holds at startup. The shell asks the current
-// module's view to announce its notice once the window first appears, as
-// announceNotices describes.
+// take a notice while the main window, or the view, is still hidden, such as
+// a global shortcut another application holds at startup. The shell asks a
+// module's view to announce its notice the first time the module is shown
+// in the visible window, as announceModuleNotice describes.
 type nativeNoticeAnnouncer interface {
 	NativeAnnounceNotice()
 }
@@ -406,6 +415,7 @@ func (s *nativeShell) updateView() {
 	for id, native := range s.nativeViews {
 		native.NativeShow(id == current.ID())
 	}
+	s.announceModuleNotice()
 	s.updateDropAcceptance()
 }
 
@@ -431,14 +441,29 @@ func (s *nativeShell) refreshAction() {
 
 // announceNotices asks a screen reader to read the notices on display once
 // the window first appears: the shell's startup warning, such as settings
-// that were recovered, and the current module's own (nativeNoticeAnnouncer).
+// that were recovered, and the current module's own (announceModuleNotice).
 // Each was announced as it was set, while the window was still hidden and no
 // screen reader was reading it, and an unchanged text is not announced again.
 func (s *nativeShell) announceNotices() {
-	if s.note.Text() != "" {
-		s.note.Announce()
+	s.note.Announce()
+	s.announced = make(map[core.ModuleID]bool)
+	s.announceModuleNotice()
+}
+
+// announceModuleNotice asks the current module's view to announce its notice
+// (nativeNoticeAnnouncer) the first time the module is shown once the window
+// has appeared. A module hidden at startup takes its startup notice, such as
+// a global shortcut another application holds while Image Resizer is the
+// remembered module, where no screen reader hears it, and showing the
+// unchanged notice later announces nothing. Later visits announce nothing,
+// so switching modules does not repeat a notice already heard.
+func (s *nativeShell) announceModuleNotice() {
+	id := s.navigator.Current().ID()
+	if s.announced == nil || s.announced[id] {
+		return
 	}
-	if announcer, ok := s.nativeViews[s.navigator.Current().ID()].(nativeNoticeAnnouncer); ok {
+	s.announced[id] = true
+	if announcer, ok := s.nativeViews[id].(nativeNoticeAnnouncer); ok {
 		announcer.NativeAnnounceNotice()
 	}
 }
@@ -458,10 +483,18 @@ func (s *nativeShell) currentNavButton() windows.Handle {
 // at startup, on Alt+Tab or a click on its title bar, and when it is shown
 // again after a capture — and a window holding the focus shows no focus
 // indicator, while Tab would start again from the first control. So the
-// control that last had the focus gets it back while it can take it, and
-// otherwise, as at startup, the current module's navigation button does.
+// control that last had the focus gets it back while it can take it. One
+// still shown that can no longer take it — Cancel Resize, disabled as a job
+// finished while the window was inactive, when its own hand-off could not
+// see the focus — hands it to the next control in tab order, as a control
+// disabled while it holds the focus does (AC-A03). Otherwise, as at startup
+// or with its module hidden, the current module's navigation button gets it.
 func (s *nativeShell) restoreFocus() {
 	target := s.focus
+	if !s.canTakeFocus(target) && s.shown(target) {
+		next, _, _ := procGetNextDlgTabItem.Call(uintptr(s.hwnd), uintptr(target), 0)
+		target = windows.Handle(next)
+	}
 	if !s.canTakeFocus(target) {
 		target = s.currentNavButton()
 	}
@@ -470,18 +503,25 @@ func (s *nativeShell) restoreFocus() {
 	}
 }
 
-// canTakeFocus reports whether restoreFocus may give the control the focus:
-// it is still one of the window's controls, visible — its module is shown —
-// and enabled, and not a radio button that is unchecked, which would report
-// a click on gaining the focus and change the selection the user made.
-func (s *nativeShell) canTakeFocus(control windows.Handle) bool {
+// shown reports whether the control is still one of the window's controls
+// and visible, as its module is shown.
+func (s *nativeShell) shown(control windows.Handle) bool {
 	if control == 0 {
 		return false
 	}
 	if child, _, _ := procIsChild.Call(uintptr(s.hwnd), uintptr(control)); child == 0 {
 		return false
 	}
-	if visible, _, _ := procIsWindowVisible.Call(uintptr(control)); visible == 0 {
+	visible, _, _ := procIsWindowVisible.Call(uintptr(control))
+	return visible != 0
+}
+
+// canTakeFocus reports whether restoreFocus may give the control the focus:
+// it is shown, enabled, and not a radio button that is unchecked, which
+// would report a click on gaining the focus and change the selection the
+// user made.
+func (s *nativeShell) canTakeFocus(control windows.Handle) bool {
+	if !s.shown(control) {
 		return false
 	}
 	if enabled, _, _ := procIsWindowEnabled.Call(uintptr(control)); enabled == 0 {
@@ -1022,17 +1062,43 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		// The control holding the focus as the window is deactivated is the
 		// one restoreFocus gives it back to; DefWindowProc then focuses the
 		// window itself on the next activation, which WM_SETFOCUS turns into
-		// that control's focus.
-		if shell != nil && lowWord(wParam) == waInactive {
-			if focused, _, _ := procGetFocus.Call(); focused != 0 {
-				if child, _, _ := procIsChild.Call(uintptr(hwnd), focused); child != 0 {
-					shell.focus = windows.Handle(focused)
+		// that control's focus. A click activates the window before the click
+		// reaches the control under the pointer, which then takes the focus
+		// itself; giving the focus back first would run the earlier control's
+		// focus handlers for nothing — suspending the global shortcut while
+		// the shortcut field holds it — or scroll it into view from under the
+		// pointer. So on a click activation the focus is given back once the
+		// click has been handled, and only if the click left it on the window
+		// itself, as a click on the title bar or the background does.
+		if shell != nil {
+			switch lowWord(wParam) {
+			case waInactive:
+				if focused, _, _ := procGetFocus.Call(); focused != 0 {
+					if child, _, _ := procIsChild.Call(uintptr(hwnd), focused); child != 0 {
+						shell.focus = windows.Handle(focused)
+					}
 				}
+			case waClickActive:
+				shell.clickActivating = true
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				shell.clickActivating = false
+				return r
 			}
 		}
 	case wmSetFocus:
 		if shell != nil {
-			shell.restoreFocus()
+			if shell.clickActivating {
+				_ = postShellMessage(uintptr(hwnd), wmAppRestoreFocus)
+			} else {
+				shell.restoreFocus()
+			}
+			return 0
+		}
+	case wmAppRestoreFocus:
+		if shell != nil {
+			if focused, _, _ := procGetFocus.Call(); windows.Handle(focused) == hwnd {
+				shell.restoreFocus()
+			}
 			return 0
 		}
 	case wmVScroll:

@@ -28,6 +28,9 @@ const (
 	wmDropFiles      = 0x0233
 	wmUser           = 0x0400
 	wmAppDispatch    = wmUser + 1
+	// wmAppRestoreFocus asks the shell to give the focus back once a click
+	// that activated the window has been handled, as wmActivate describes.
+	wmAppRestoreFocus = wmUser + 2
 
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000
@@ -40,9 +43,11 @@ const (
 	cbnSetFocus = 3
 	lbnSetFocus = 4
 
-	// waInactive is WM_ACTIVATE's code for a window being deactivated, and
+	// waInactive and waClickActive are WM_ACTIVATE's codes for a window
+	// being deactivated and being activated by a mouse click, and
 	// dlgcRadioButton the WM_GETDLGCODE flag of a radio button.
 	waInactive      = 0
+	waClickActive   = 2
 	dlgcRadioButton = 0x0040
 
 	sbVert          = 1

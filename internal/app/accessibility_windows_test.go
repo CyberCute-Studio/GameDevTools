@@ -29,6 +29,7 @@ var (
 	procGetWindowTextW  = user32.NewProc("GetWindowTextW")
 	procPeekMessageW    = user32.NewProc("PeekMessageW")
 	procGetActiveWindow = user32.NewProc("GetActiveWindow")
+	procEnableWindow    = user32.NewProc("EnableWindow")
 )
 
 const (
@@ -580,7 +581,9 @@ func mnemonic(text string) (rune, bool) {
 // itself on activation, which would leave no visible focus and restart Tab
 // from the first control. The first activation focuses the current module's
 // navigation button; a later one, the control that had the focus, unless it
-// can no longer take it, as when its module is hidden.
+// can no longer take it: one disabled meanwhile, as Cancel Resize is when a
+// job finishes while the window is inactive, hands it to the next control
+// in tab order (AC-A03), and one whose module is hidden, to the navigation.
 func TestShellRestoresFocusOnActivation(t *testing.T) {
 	shell := newAuditShell(t)
 	shell.selectModule(t, core.ModuleScreenshot)
@@ -601,10 +604,70 @@ func TestShellRestoresFocusOnActivation(t *testing.T) {
 		t.Fatalf("reactivating the window focused %q, want the global shortcut field it left", windowText(shell.focused()))
 	}
 
+	shell.tabTo(t, "Edit Output folder")
+	folder := shell.focused()
+	procSendMessageW.Call(uintptr(shell.hwnd), wmActivate, waInactive, 0)
+	procSetFocus.Call(0)
+	procEnableWindow.Call(uintptr(folder), 0)
+	procSendMessageW.Call(uintptr(shell.hwnd), wmActivate, waActive, 0)
+	procEnableWindow.Call(uintptr(folder), 1)
+	if got := shell.describeFocused(t); got != "Button Browse…" {
+		t.Fatalf("reactivating with the focused control disabled meanwhile focused %q, want the next control, Browse…", got)
+	}
+
 	shell.selectModule(t, core.ModuleImageResizer)
 	activate()
 	if !shell.navButtons[core.ModuleImageResizer].HasFocus() {
 		t.Fatalf("reactivating with the focused control's module hidden focused %q, want the Image Resizer navigation button", windowText(shell.focused()))
+	}
+}
+
+// TestShellLeavesAClickActivationsFocusToTheClick pins that a click that
+// activates the window keeps the focus it gives (UX-006): the window is
+// activated before the click reaches the control under the pointer, and
+// giving the focus back to the control that had it first would run that
+// control's focus handlers for nothing — the global shortcut field suspends
+// the shortcut — or scroll it into view from under the pointer. Once the
+// click is handled, the focus goes back only if the click left it on the
+// window itself, as a click on the title bar does.
+func TestShellLeavesAClickActivationsFocusToTheClick(t *testing.T) {
+	shell := newAuditShell(t)
+	shell.selectModule(t, core.ModuleScreenshot)
+	shell.tabTo(t, "Button Browse…")
+	browse := shell.focused()
+	shell.tabTo(t, "Edit Global shortcut")
+	shortcut := shell.focused()
+	clickActivate := func() {
+		procSendMessageW.Call(uintptr(shell.hwnd), wmActivate, waInactive, 0)
+		procSetFocus.Call(0)
+		procSendMessageW.Call(uintptr(shell.hwnd), wmActivate, waClickActive, 0)
+	}
+	// handleClick dispatches what the activation posted, as the message loop
+	// does once the click itself has been delivered.
+	handleClick := func() {
+		var message msg
+		for {
+			if available, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&message)), uintptr(shell.hwnd), 0, 0, pmRemove); available == 0 {
+				return
+			}
+			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
+		}
+	}
+
+	clickActivate()
+	if focus, _, _ := procGetFocus.Call(); windows.Handle(focus) == shortcut {
+		t.Fatal("a click activation gave the focus back to the shortcut field before the click was handled")
+	}
+	procSetFocus.Call(uintptr(browse))
+	handleClick()
+	if focus, _, _ := procGetFocus.Call(); windows.Handle(focus) != browse {
+		t.Fatalf("after a click on Browse… activated the window, %q has the focus", windowText(windows.Handle(focus)))
+	}
+
+	clickActivate()
+	handleClick()
+	if focus, _, _ := procGetFocus.Call(); windows.Handle(focus) != browse {
+		t.Fatalf("after a click on the title bar activated the window, %q has the focus, want Browse…, which had it", windowText(windows.Handle(focus)))
 	}
 }
 
@@ -631,5 +694,49 @@ func TestShellAnnouncesStartupNoticeOnceShown(t *testing.T) {
 	shell.announceNotices()
 	if got := watch.Count(shell.note.Handle()); got != 2 {
 		t.Fatalf("note announcements after the warning was set and the window appeared = %d, want 2", got)
+	}
+}
+
+// noticeProbe stands in for a module view's notice announcement
+// (nativeNoticeAnnouncer), counting the shell's requests.
+type noticeProbe struct {
+	nativeView
+	requests *int
+}
+
+func (p noticeProbe) NativeAnnounceNotice() {
+	*p.requests++
+}
+
+// TestShellAnnouncesEachModulesNoticeWhenFirstShown pins that the shell asks
+// a module to announce its notice the first time the module is shown in the
+// visible window, and not again (announceModuleNotice): a module hidden at
+// startup, such as Screenshot with Image Resizer remembered, takes its
+// startup notice, a global shortcut another application holds, where no
+// screen reader hears it.
+func TestShellAnnouncesEachModulesNoticeWhenFirstShown(t *testing.T) {
+	shell := newAuditShell(t)
+	requests := 0
+	screenshotView := shell.nativeViews[core.ModuleScreenshot]
+	shell.nativeViews[core.ModuleScreenshot] = noticeProbe{nativeView: screenshotView, requests: &requests}
+	t.Cleanup(func() { shell.nativeViews[core.ModuleScreenshot] = screenshotView })
+
+	shell.selectModule(t, core.ModuleScreenshot)
+	shell.selectModule(t, core.ModuleImageResizer)
+	if requests != 0 {
+		t.Fatalf("Screenshot was asked %d time(s) to announce its notice before the window appeared", requests)
+	}
+	shell.announceNotices()
+	if requests != 0 {
+		t.Fatalf("Screenshot, hidden as the window appeared, was asked %d time(s) to announce its notice", requests)
+	}
+	shell.selectModule(t, core.ModuleScreenshot)
+	if requests != 1 {
+		t.Fatalf("showing Screenshot first asked %d time(s) for its notice, want 1", requests)
+	}
+	shell.selectModule(t, core.ModuleImageResizer)
+	shell.selectModule(t, core.ModuleScreenshot)
+	if requests != 1 {
+		t.Fatalf("showing Screenshot again asked %d time(s) in all for its notice, want still 1", requests)
 	}
 }

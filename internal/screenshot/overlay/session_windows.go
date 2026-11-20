@@ -52,6 +52,7 @@ const (
 	handleLogicalGrabExtra = 8
 
 	wmDestroy        = 0x0002
+	wmActivate       = 0x0006
 	wmClose          = 0x0010
 	wmSetCursor      = 0x0020
 	wmNCHitTest      = 0x0084
@@ -62,10 +63,22 @@ const (
 	wmLButtonDown    = 0x0201
 	wmLButtonUp      = 0x0202
 	wmCaptureChanged = 0x0215
+	// wmAppRestoreFocus asks the toolbar to give the focus back once a
+	// click that activated it has been handled, as toolbarWindowProc
+	// describes.
+	wmAppRestoreFocus = 0x8000 + 1
+
+	// waInactive, waActive, and waClickActive are WM_ACTIVATE's codes for a
+	// window being deactivated, activated otherwise than by a click, and
+	// activated by a click.
+	waInactive    = 0
+	waActive      = 1
+	waClickActive = 2
 
 	enKillFocus = 0x0200
 	enChange    = 0x0300
 
+	vkTab    = 0x09
 	vkEscape = 0x1b
 	vkReturn = 0x0d
 	vkShift  = 0x10
@@ -128,6 +141,10 @@ var (
 	procSetWindowPos                = user32.NewProc("SetWindowPos")
 	procEnableWindow                = user32.NewProc("EnableWindow")
 	procIsChild                     = user32.NewProc("IsChild")
+	procIsWindowEnabled             = user32.NewProc("IsWindowEnabled")
+	procIsWindowVisible             = user32.NewProc("IsWindowVisible")
+	procGetNextDlgTabItem           = user32.NewProc("GetNextDlgTabItem")
+	procPostMessageW                = user32.NewProc("PostMessageW")
 	procIsDialogMessageW            = user32.NewProc("IsDialogMessageW")
 	procLoadCursorW                 = user32.NewProc("LoadCursorW")
 	procSetCursor                   = user32.NewProc("SetCursor")
@@ -305,6 +322,9 @@ type windowsSession struct {
 	// programmatically, so the resulting EN_CHANGE is not mistaken for the
 	// user typing again.
 	syncing bool
+	// focus is the toolbar control that had the keyboard focus as the
+	// toolbar was last deactivated, which restoreFocus gives it back to.
+	focus uintptr
 
 	// frameOrigin is the preset frame window's top-left corner in
 	// virtual-desktop coordinates: the selection inflated outward by the
@@ -619,10 +639,13 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 
 	// The message shows the instructions and, in their place, why a typed
 	// size was refused, so it is a live region a screen reader announces.
+	// It is kept at once, so Close clears its marking (ui.Label.ClearLive)
+	// even when a later control cannot be created.
 	message, err := ui.NewLiveLabel(s.toolbar, s.instructions())
 	if err != nil {
 		return err
 	}
+	s.message = message
 	widthLabel, err := ui.NewMnemonicLabel(s.toolbar, ui.SelectionWidthLabel)
 	if err != nil {
 		return err
@@ -657,7 +680,6 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 	// The dimension fields stay enabled in both modes: in a Free Rectangle
 	// session without a selection, typing a width and height creates one
 	// (SCR-015), so the mode can be completed from the keyboard.
-	s.message = message
 	s.widthLabel = widthLabel
 	s.heightLabel = heightLabel
 	s.widthEdit = widthEdit
@@ -813,6 +835,29 @@ func (s *windowsSession) Attention() {
 	procSetForegroundWindow.Call(uintptr(s.toolbar))
 }
 
+// restoreFocus gives the keyboard focus back to the toolbar control that
+// had it as the toolbar was last deactivated, as toolbarWindowProc
+// describes, while that control can still take it. Otherwise, as when
+// nothing was focused or the toolbar itself was, the focus stays on the
+// toolbar, where Escape cancels, Tab reaches the controls, and the arrow
+// keys nudge a selection.
+func (s *windowsSession) restoreFocus() {
+	control := s.focus
+	if control == 0 {
+		return
+	}
+	if child, _, _ := procIsChild.Call(uintptr(s.toolbar), control); child == 0 {
+		return
+	}
+	if visible, _, _ := procIsWindowVisible.Call(control); visible == 0 {
+		return
+	}
+	if enabled, _, _ := procIsWindowEnabled.Call(control); enabled == 0 {
+		return
+	}
+	procSetFocus.Call(control)
+}
+
 // DisplayChanged revalidates the session against a changed virtual desktop
 // (SCR-054). The selection keeps its exact dimensions whenever they still
 // fit the new desktop — the Preset Rectangle frame's dimensions never change
@@ -924,8 +969,10 @@ func (s *windowsSession) isDimensionEdit(hwnd uintptr) bool {
 // moving the text caret, and toolbar messages go through IsDialogMessage so
 // Tab and Enter work between the toolbar controls even though the toolbar is
 // a popup rather than a dialog (in a Free Rectangle session without a
-// selection, arrow keys keep their dialog-navigation role there). Messages
-// for other windows pass through untouched.
+// selection, arrow keys keep their dialog-navigation role there, and Tab out
+// of the filled pair of dimension fields creates the typed selection first,
+// as commitBeforeTab describes). Messages for other windows pass through
+// untouched.
 func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 	msg := (*windowMessage)(message)
 	c.mu.Lock()
@@ -963,6 +1010,9 @@ func (c *Controller) FilterMessage(message unsafe.Pointer) bool {
 			native.nudge(dx, dy, nudgeStep())
 			return true
 		}
+	}
+	if msg.Message == wmKeyDown && msg.WParam == vkTab && native.selection.Empty() && native.isDimensionEdit(hwnd) {
+		native.commitBeforeTab(hwnd)
 	}
 	if native.isToolbarMessage(hwnd) {
 		handled, _, _ := procIsDialogMessageW.Call(uintptr(native.toolbar), uintptr(message))
@@ -1317,15 +1367,9 @@ func (s *windowsSession) commitDimensions(explicit bool) {
 		s.createTypedSelection(explicit)
 		return
 	}
-	width, err := ui.ParseDimension(ui.DimensionWidthName, s.widthEdit.Text())
-	if err != nil {
-		s.report(ui.FormatError(ui.ErrorValidation, err))
-		s.syncDimensions()
-		return
-	}
-	height, err := ui.ParseDimension(ui.DimensionHeightName, s.heightEdit.Text())
-	if err != nil {
-		s.report(ui.FormatError(ui.ErrorValidation, err))
+	width, height, refusal := s.typedSize()
+	if refusal != "" {
+		s.report(refusal)
 		s.syncDimensions()
 		return
 	}
@@ -1335,50 +1379,101 @@ func (s *windowsSession) commitDimensions(explicit bool) {
 		s.syncDimensions()
 		return
 	}
+	s.applyTypedSize(resized)
+}
+
+// typedSize parses the typed width and height (SCR-013), or returns the
+// validation message that refuses the first field that is not a size.
+func (s *windowsSession) typedSize() (width, height int, refusal string) {
+	width, err := ui.ParseDimension(ui.DimensionWidthName, s.widthEdit.Text())
+	if err != nil {
+		return 0, 0, ui.FormatError(ui.ErrorValidation, err)
+	}
+	height, err = ui.ParseDimension(ui.DimensionHeightName, s.heightEdit.Text())
+	if err != nil {
+		return 0, 0, ui.FormatError(ui.ErrorValidation, err)
+	}
+	return width, height, ""
+}
+
+// applyTypedSize makes the selection an accepted typed size describes: the
+// instructions replace any refusal shown, and the toolbar follows the
+// selection.
+func (s *windowsSession) applyTypedSize(selection display.Rect) {
 	s.restoreInstructions()
-	s.setSelection(resized)
+	s.setSelection(selection)
 	s.placeToolbar()
 }
 
 // createTypedSelection creates a Free Rectangle selection of the typed width
 // and height, centered on the cursor display's work area and kept inside the
 // virtual desktop (SCR-015), so the mode can be completed without a pointer.
-// Moving the focus from one field to the other while typing the pair is not
-// a request — a selection created then would be resized in place, not
-// centered again, by a correction to the pair — and neither is leaving the
-// pair with a field still empty; Enter with a field empty explains what is
-// missing. A refused size keeps the typed text for correcting, as there is
-// no selection to revert to.
+// Leaving the fields commits the pair only as leavesFilledPair describes;
+// Enter with a field empty explains what is missing. A refused size keeps
+// the typed text for correcting, as there is no selection to revert to.
 func (s *windowsSession) createTypedSelection(explicit bool) {
-	widthText, heightText := s.widthEdit.Text(), s.heightEdit.Text()
 	if !explicit {
 		// A field's focus-loss notification arrives once the focus has
 		// moved, so the focus is already in its new place.
-		if focus, _, _ := procGetFocus.Call(); s.isDimensionEdit(focus) {
-			return
-		}
-		if strings.TrimSpace(widthText) == "" || strings.TrimSpace(heightText) == "" {
+		if focus, _, _ := procGetFocus.Call(); !s.leavesFilledPair(focus) {
 			return
 		}
 	}
-	width, err := ui.ParseDimension(ui.DimensionWidthName, widthText)
-	if err != nil {
-		s.report(ui.FormatError(ui.ErrorValidation, err))
+	selection, refusal := s.typedFreeSelection()
+	if refusal != "" {
+		s.report(refusal)
 		return
 	}
-	height, err := ui.ParseDimension(ui.DimensionHeightName, heightText)
-	if err != nil {
-		s.report(ui.FormatError(ui.ErrorValidation, err))
+	s.applyTypedSize(selection)
+}
+
+// commitBeforeTab creates the typed selection as Tab leaves the pair of
+// dimension fields, before the dialog manager picks the control Tab moves to
+// (SCR-015). Capture is disabled until a selection exists, and Tab skips
+// disabled controls, so a selection created only by the field's focus loss
+// would come once Tab had passed Capture for Cancel, where Enter, as the
+// instructions suggest, cancels. A refused size is left to the field's focus
+// loss to explain, so it is announced once.
+func (s *windowsSession) commitBeforeTab(field uintptr) {
+	if s.drag.op != dragNone {
 		return
+	}
+	previous := uintptr(0)
+	if state, _, _ := procGetKeyState.Call(vkShift); state&0x8000 != 0 {
+		previous = 1
+	}
+	next, _, _ := procGetNextDlgTabItem.Call(uintptr(s.toolbar), field, previous)
+	if !s.leavesFilledPair(next) {
+		return
+	}
+	if selection, refusal := s.typedFreeSelection(); refusal == "" {
+		s.applyTypedSize(selection)
+	}
+}
+
+// leavesFilledPair reports whether moving the focus to next, from a
+// dimension field of a Free Rectangle session without a selection, commits
+// the typed size as Enter does. Moving from one field to the other while
+// typing the pair is not a request — a selection created then would be
+// resized in place, not centered again, by a correction to the pair — and
+// neither is leaving the pair with a field still empty.
+func (s *windowsSession) leavesFilledPair(next uintptr) bool {
+	return !s.isDimensionEdit(next) && strings.TrimSpace(s.widthEdit.Text()) != "" && strings.TrimSpace(s.heightEdit.Text()) != ""
+}
+
+// typedFreeSelection returns the Free Rectangle selection the typed width
+// and height describe, as typedSelection places it, or the message that
+// refuses them.
+func (s *windowsSession) typedFreeSelection() (display.Rect, string) {
+	width, height, refusal := s.typedSize()
+	if refusal != "" {
+		return display.Rect{}, refusal
 	}
 	selection, ok := typedSelection(s.anchor, s.bounds, width, height)
 	if !ok {
-		s.report(ui.SelectionTooLarge)
-		return
+		return display.Rect{}, ui.SelectionTooLarge
 	}
-	s.restoreInstructions()
-	s.setSelection(selection)
-	s.placeToolbar()
+	return selection, ""
 }
 
 // report shows a message in the toolbar in place of the instructions and
@@ -1668,6 +1763,44 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 				}
 				return 0
 			}
+		}
+	case wmActivate:
+		// Windows focuses the toolbar itself, not the control in it that had
+		// the focus, whenever the toolbar is activated again — on Alt+Tab, or
+		// as the global shortcut brings it back (Attention) — which leaves a
+		// keyboard user typing a size into nothing, so the control that had
+		// the focus as the toolbar was deactivated gets it back (UX-006,
+		// SCR-015). A click activates the toolbar before the click reaches
+		// the control under the pointer, which then takes the focus itself,
+		// and a field given the focus first would commit its size again as
+		// it lost it; on a click activation the focus is given back once the
+		// click has been handled, and only if the click left it on the
+		// toolbar itself, as dragging the toolbar by its background does.
+		if session != nil {
+			switch wParam & 0xffff {
+			case waInactive:
+				session.focus = 0
+				if focused, _, _ := procGetFocus.Call(); focused != 0 {
+					if child, _, _ := procIsChild.Call(uintptr(hwnd), focused); child != 0 {
+						session.focus = focused
+					}
+				}
+			case waActive:
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				session.restoreFocus()
+				return r
+			case waClickActive:
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				procPostMessageW.Call(uintptr(hwnd), wmAppRestoreFocus, 0, 0)
+				return r
+			}
+		}
+	case wmAppRestoreFocus:
+		if session != nil {
+			if focused, _, _ := procGetFocus.Call(); focused == uintptr(hwnd) {
+				session.restoreFocus()
+			}
+			return 0
 		}
 	case wmClose:
 		// Alt+F4 targets the foreground window, which is the toolbar while a

@@ -9,6 +9,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
 var (
@@ -16,12 +17,17 @@ var (
 	procGetDC       = user32.NewProc("GetDC")
 	procReleaseDC   = user32.NewProc("ReleaseDC")
 	procDrawTextW   = user32.NewProc("DrawTextW")
+
+	procPeekMessageW     = user32.NewProc("PeekMessageW")
+	procDispatchMessageW = user32.NewProc("DispatchMessageW")
 )
 
 const (
 	dtWordBreak = 0x0010
 	dtCalcRect  = 0x0400
 	dtNoPrefix  = 0x0800
+
+	pmRemove = 0x0001
 )
 
 // pressEnter hands Enter in the field to the session's message filter, as
@@ -129,6 +135,120 @@ func TestFreeRectangleLeavingTypedSizeCreatesSelection(t *testing.T) {
 	}
 	if native.selection != want {
 		t.Fatalf("selection after leaving the filled fields = %v, want %v", native.selection, want)
+	}
+}
+
+// TestFreeRectangleTabFromFilledPairReachesCapture pins that Tab out of the
+// filled pair of dimension fields lands on Capture (SCR-015): the typed
+// selection is created before the dialog manager picks the next control, so
+// Tab does not pass the still-disabled Capture for Cancel, where Enter would
+// cancel the session. A refused size leaves Capture disabled and is
+// announced once.
+func TestFreeRectangleTabFromFilledPairReachesCapture(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+	pressTab := func() {
+		t.Helper()
+		native.heightEdit.Focus()
+		tab := windowMessage{HWND: native.heightEdit.Handle(), Message: wmKeyDown, WParam: vkTab}
+		if !controller.FilterMessage(unsafe.Pointer(&tab)) {
+			t.Fatal("the filter did not give the toolbar Tab")
+		}
+	}
+
+	native.widthEdit.SetText("640")
+	native.heightEdit.SetText("48x")
+	pressTab()
+	if !native.selection.Empty() || captureEnabled(native) {
+		t.Fatalf("Tab out of a refused size created %v", native.selection)
+	}
+	if got := native.message.Text(); !strings.Contains(got, ui.DimensionHeightName) {
+		t.Fatalf("Tab out of a refused height showed %q, want the height explained", got)
+	}
+	if got := watch.Count(native.message.Handle()); got != 1 {
+		t.Fatalf("the refusal was announced %d time(s), want once", got)
+	}
+
+	native.heightEdit.SetText("480")
+	pressTab()
+	want, ok := typedSelection(native.anchor, native.bounds, 640, 480)
+	if !ok {
+		t.Fatal("640 × 480 does not fit the test desktop")
+	}
+	if native.selection != want {
+		t.Fatalf("selection after Tab out of the filled pair = %v, want %v", native.selection, want)
+	}
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.captureButton) {
+		t.Fatalf("Tab out of the filled pair focused %#x, want Capture (%#x)", focus, uintptr(native.captureButton))
+	}
+}
+
+// TestToolbarRestoresFocusOnActivation pins that the toolbar gives the
+// keyboard focus back to the control that had it when it is activated again
+// (UX-006, SCR-015) — on Alt+Tab, or as the global shortcut brings it back —
+// rather than keeping it on the toolbar itself, where typed digits go
+// nowhere. A click activation leaves the focus to the click, and gives it
+// back once the click is handled only if the click left it on the toolbar.
+func TestToolbarRestoresFocusOnActivation(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	toolbar := uintptr(native.toolbar)
+	focused := func() uintptr {
+		focus, _, _ := procGetFocus.Call()
+		return focus
+	}
+	deactivate := func() {
+		procSendMessageW.Call(toolbar, wmActivate, waInactive, 0)
+		procSetFocus.Call(0)
+	}
+	// handleClick dispatches what the activation posted, as the shell's
+	// message loop does once the click itself has been delivered.
+	handleClick := func() {
+		var message windowMessage
+		for {
+			if available, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&message)), toolbar, 0, 0, pmRemove); available == 0 {
+				return
+			}
+			if !controller.FilterMessage(unsafe.Pointer(&message)) {
+				procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
+			}
+		}
+	}
+
+	native.heightEdit.Focus()
+	deactivate()
+	procSendMessageW.Call(toolbar, wmActivate, waActive, 0)
+	if focused() != uintptr(native.heightEdit.Handle()) {
+		t.Fatalf("reactivating the toolbar focused %#x, want the height field it left", focused())
+	}
+
+	deactivate()
+	procSendMessageW.Call(toolbar, wmActivate, waClickActive, 0)
+	if focused() == uintptr(native.heightEdit.Handle()) {
+		t.Fatal("a click activation gave the focus back to the height field before the click was handled")
+	}
+	native.cancel.Focus()
+	handleClick()
+	if focused() != uintptr(native.cancel.Handle()) {
+		t.Fatalf("after a click on Cancel activated the toolbar, %#x has the focus, want Cancel", focused())
+	}
+
+	deactivate()
+	procSendMessageW.Call(toolbar, wmActivate, waClickActive, 0)
+	handleClick()
+	if focused() != uintptr(native.cancel.Handle()) {
+		t.Fatalf("after a click on the toolbar's background activated it, %#x has the focus, want Cancel, which had it", focused())
 	}
 }
 

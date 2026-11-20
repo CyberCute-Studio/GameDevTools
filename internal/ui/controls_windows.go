@@ -108,9 +108,10 @@ func (l *Label) SetText(text string) {
 
 // Announce asks a screen reader to read a live label's current text now,
 // whether or not it changed — as when the window that shows it appears, or
-// a refused edit is refused again. It does nothing for other labels.
+// a refused edit is refused again. It does nothing for other labels, or
+// while the label is empty, as there is nothing to read.
 func (l *Label) Announce() {
-	if l.live {
+	if l.live && l.Text() != "" {
 		announceLiveRegion(l.hwnd)
 	}
 }
