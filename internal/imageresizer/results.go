@@ -2,8 +2,10 @@ package imageresizer
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"io/fs"
 	"slices"
 	"sync"
@@ -13,6 +15,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/resize"
+	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -113,11 +116,17 @@ func (v *Inventory) JobInputs() ([]job.Input, []uint64) {
 func (v *Inventory) Recheckable() []int {
 	var indexes []int
 	for index, item := range v.items {
-		if item.Status != StatusReady && item.Status != StatusChecking && SupportedExtension(item.Path) {
+		if item.recheckable() {
 			indexes = append(indexes, index)
 		}
 	}
 	return indexes
+}
+
+// recheckable reports whether a job checks the item again before it starts,
+// as Recheckable describes.
+func (s SourceItem) recheckable() bool {
+	return s.Status != StatusReady && s.Status != StatusChecking && SupportedExtension(s.Path)
 }
 
 // Recheck applies a content check made again before a job, for an item
@@ -144,6 +153,107 @@ func recheckedInput(path string, result InspectionResult) job.Input {
 	}
 	status, detail := failureStatus(result.Err)
 	return job.Input{Path: path, Err: &sourceError{status: status, detail: detail}}
+}
+
+// jobStart is a job ready to start: its request, the inventory IDs of its
+// items by input index, and the indexes of the inputs it checks again first
+// (Inventory.Recheckable).
+type jobStart struct {
+	request  job.Request
+	ids      []uint64
+	rechecks []int
+}
+
+// The checks and the request below are Start Resize's, shared by the view
+// and the acceptance suite (RSZ-09), so the suite checks and builds every job
+// as the user's Start Resize does; what stays in the view is what needs the
+// window — committing the JPEG fields' text and confirming an Overwrite job.
+
+// jobRefusal explains why the source list cannot start a job — an image is
+// still being checked, or none is Ready or to be checked again — or is empty
+// when it can. Start Resize asks it before it builds a job, and again once an
+// Overwrite job is confirmed, as the confirmation's modal loop may change the
+// list.
+func (v *Inventory) jobRefusal() string {
+	if checking := v.Checking(); checking > 0 {
+		return fmt.Sprintf(ui.ResizeJobChecking, checking)
+	}
+	if !slices.ContainsFunc(v.items, func(item SourceItem) bool { return item.Status == StatusReady || item.recheckable() }) {
+		return ui.ResizeJobNoImages
+	}
+	return ""
+}
+
+// jobTarget is the size and fitting mode a job resizes to under the selected
+// preset, and why the preset cannot be used when it cannot.
+func jobTarget(selected preset.Preset) (resize.Target, error) {
+	target := resize.Target{Width: selected.Width, Height: selected.Height, Mode: selected.ResizeMode}
+	return target, target.Validate()
+}
+
+// jobBackground checks the options a job starts with, once the JPEG fields'
+// text is applied, and returns the background color JPEG results are
+// flattened against. Start Resize refuses the job with either error.
+func jobBackground(options ResizeOptions) (color.RGBA, error) {
+	if err := options.Validate(); err != nil {
+		return color.RGBA{}, err
+	}
+	return BackgroundColor(options.Background)
+}
+
+// newJobStart builds the job Start Resize starts for every listed item
+// (RSZ-040), once jobRefusal, jobTarget, and jobBackground have let it start
+// and an Overwrite job has been confirmed or not: each item is an input, as
+// JobInputs lists them, and the items whose content check failed are checked
+// again first, as Recheckable lists them.
+func (v *Inventory) newJobStart(options ResizeOptions, target resize.Target, background color.RGBA, confirmed bool) jobStart {
+	inputs, ids := v.JobInputs()
+	return jobStart{
+		request: job.Request{
+			Inputs:           inputs,
+			Folder:           options.OutputFolder,
+			Format:           options.Format,
+			Collision:        options.Collision,
+			ConfirmOverwrite: confirmed,
+			Settings: job.Settings{
+				Target:      target,
+				JPEGQuality: options.JPEGQuality,
+				Background:  background,
+			},
+		},
+		ids:      ids,
+		rechecks: v.Recheckable(),
+	}
+}
+
+// recheckInputs checks again, before the job starts, the content of its
+// inputs whose check had failed, at the indexes start.rechecks lists, as
+// Recheckable lists them, so the job takes each as it now is (RSZ-049): one
+// that has since become readable, or was replaced by a valid image, is
+// resized, and one that still cannot be used fails with its current reason.
+// Each check made replaces its input in start.request.Inputs, which the
+// caller's copy of the job shares, and is handed to report, with the item's
+// ID from start.ids, for the source list to apply (Inventory.Recheck). It
+// reports whether it checked every one: once ctx is cancelled no further
+// check starts, and a check that returns once ctx is cancelled is neither
+// reported nor applied, as the cancellation may have cut it short — even one
+// that had finished first, as the two cannot be told apart — so its item
+// counts as one the job did not check again.
+func recheckInputs(ctx context.Context, start jobStart, check inspectFunc, report func(InspectionResult)) bool {
+	for _, index := range start.rechecks {
+		if ctx.Err() != nil {
+			return false
+		}
+		input := &start.request.Inputs[index]
+		info, err := check(ctx, input.Path)
+		if ctx.Err() != nil {
+			return false
+		}
+		result := InspectionResult{ID: start.ids[index], Info: info, Err: err}
+		report(result)
+		*input = recheckedInput(input.Path, result)
+	}
+	return true
 }
 
 // stateLabel is the source-list status of an item in a job state

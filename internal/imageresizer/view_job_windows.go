@@ -13,7 +13,6 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
-	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/resize"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -52,18 +51,10 @@ const jobReleaseDelay = 5 * time.Second
 // jobRunner runs a resize job as job.Run does; tests substitute it.
 type jobRunner func(context.Context, job.Request, func(job.Event)) (job.Summary, error)
 
-// jobStart is a job ready to start: its request, the inventory IDs of its
-// items by input index, and the indexes of the inputs it checks again first
-// (Inventory.Recheckable).
-type jobStart struct {
-	request  job.Request
-	ids      []uint64
-	rechecks []int
-}
-
 // activeJob is a job the view started, as the GUI thread tracks it, but for
-// events and done, which the job's goroutine uses too, and ids and rechecks,
-// which it reads and nothing changes.
+// events and done, which the job's goroutine uses too. ids and rechecks are
+// its jobStart's, which the job's goroutine reads through the jobStart it
+// runs (recheckInputs) and nothing changes.
 type activeJob struct {
 	ids      []uint64
 	rechecks []int
@@ -165,25 +156,22 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 	if n.dispatcher == nil {
 		return refuse(ui.ErrorUnexpected, ui.ResizeJobUnavailable)
 	}
-	if refusal := n.listRefusal(); refusal != "" {
+	if refusal := n.inventory.jobRefusal(); refusal != "" {
 		return refuse(ui.ErrorValidation, refusal)
 	}
 	selected, exists := n.presets.SelectedPreset()
 	if !exists {
 		return refuse(ui.ErrorValidation, ui.ResizePresetRequired)
 	}
-	target := resize.Target{Width: selected.Width, Height: selected.Height, Mode: selected.ResizeMode}
-	if err := target.Validate(); err != nil {
+	target, err := jobTarget(selected)
+	if err != nil {
 		return refuse(ui.ErrorValidation, fmt.Sprintf(ui.ResizePresetInvalid, err))
 	}
 	if !n.commitJobFields() {
 		return jobStart{}, false
 	}
 	options := n.options.Options()
-	if err := options.Validate(); err != nil {
-		return refuse(ui.ErrorValidation, err.Error())
-	}
-	background, err := BackgroundColor(options.Background)
+	background, err := jobBackground(options)
 	if err != nil {
 		return refuse(ui.ErrorValidation, err.Error())
 	}
@@ -194,41 +182,11 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 			return jobStart{}, false
 		}
 		confirmed = true
-		if refusal := n.listRefusal(); refusal != "" {
+		if refusal := n.inventory.jobRefusal(); refusal != "" {
 			return refuse(ui.ErrorValidation, refusal)
 		}
 	}
-	inputs, ids := n.inventory.JobInputs()
-	rechecks := n.inventory.Recheckable()
-	return jobStart{
-		request: job.Request{
-			Inputs:           inputs,
-			Folder:           options.OutputFolder,
-			Format:           options.Format,
-			Collision:        options.Collision,
-			ConfirmOverwrite: confirmed,
-			Settings: job.Settings{
-				Target:      target,
-				JPEGQuality: options.JPEGQuality,
-				Background:  background,
-			},
-		},
-		ids:      ids,
-		rechecks: rechecks,
-	}, true
-}
-
-// listRefusal explains why the source list cannot start a job — an image is
-// still being checked, or none is Ready or to be checked again — or is
-// empty when it can.
-func (n *NativeView) listRefusal() string {
-	if checking := n.inventory.Checking(); checking > 0 {
-		return fmt.Sprintf(ui.ResizeJobChecking, checking)
-	}
-	if n.inventory.Ready() == 0 && len(n.inventory.Recheckable()) == 0 {
-		return ui.ResizeJobNoImages
-	}
-	return ""
+	return n.inventory.newJobStart(options, target, background, confirmed), true
 }
 
 // commitJobFields applies the JPEG quality and background fields' text
@@ -330,18 +288,25 @@ func (n *NativeView) startJob(start jobStart) {
 	n.openButton.Enable(false)
 	n.refreshSourceSelection()
 	n.jobs.Add(1)
-	go n.runJob(ctx, active, start.request, n.run, n.inspector.check)
+	go n.runJob(ctx, active, start, n.run, n.inspector.check)
 }
 
 // runJob runs the job on its own goroutine — first checking again the
-// inputs whose content check had failed, then the job itself — and hands its
-// outcome to the GUI thread after its last event. A job cancelled while it
-// checked them again has planned nothing, so it does not run the job, which
-// would end the inputs it had not checked yet Failed with reasons that no
-// longer hold: the GUI thread makes up its outcome (jobFinish.unplanned). A
-// panic that escapes the job is reported as its failure rather than ending
-// the process (NFR-021).
-func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.Request, run jobRunner, check inspectFunc) {
+// inputs whose content check had failed, as recheckInputs describes
+// (RSZ-049), then the job itself — and hands its outcome to the GUI thread
+// after its last event. The list's content checks are idle while it checks
+// them again, as no image is being checked when a job starts and none can be
+// added while it runs, so it decodes one source at a time as they do
+// (NFR-014) — but for a check of a job the view let go, which the list's
+// checks of images added since may run beside. Each check made goes to the
+// job's mailbox, which the view applies to the list with the job's events,
+// or when the job ends, however it ends (applyRechecks). A job cancelled
+// while it checked them again has planned nothing, so it does not run the
+// job, which would end the inputs it had not checked yet Failed with reasons
+// that no longer hold: the GUI thread makes up its outcome
+// (jobFinish.unplanned). A panic that escapes the job is reported as its
+// failure rather than ending the process (NFR-021).
+func (n *NativeView) runJob(ctx context.Context, active *activeJob, start jobStart, run jobRunner, check inspectFunc) {
 	defer n.jobs.Done()
 	defer close(active.done)
 	var finish jobFinish
@@ -351,11 +316,11 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 				finish = jobFinish{err: fmt.Errorf("%w: %v", job.ErrUnexpected, recovered)}
 			}
 		}()
-		if !recheck(ctx, active, request.Inputs, check) {
+		if !recheckInputs(ctx, start, check, active.events.recheck) {
 			finish.unplanned = true
 			return
 		}
-		finish.summary, finish.err = run(ctx, request, func(event job.Event) {
+		finish.summary, finish.err = run(ctx, start.request, func(event job.Event) {
 			// job.Run calls this for every change of an item's state, and it
 			// only hands the event on, as Run requires: the GUI thread applies
 			// it.
@@ -367,33 +332,6 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 	if active.events.end(finish) {
 		n.postJobEvents(active)
 	}
-}
-
-// recheck checks again, on the job's goroutine and before the job starts,
-// the content of the inputs whose check had failed, as Recheckable lists
-// them, so the job takes each as it now is (RSZ-049): one that has since
-// become readable, or was replaced by a valid image, is resized, and one
-// that still cannot be used fails with its current reason. The list's
-// content checks are idle meanwhile, as no image is being checked when a job
-// starts and none can be added while it runs, so this decodes one source at
-// a time as they do (NFR-014) — but for a check of a job the view let go,
-// which the list's checks of images added since may run beside. Each check
-// made goes to the job's mailbox, which the view applies to the list with
-// the job's events, or when the job ends, however it ends (applyRechecks).
-// It reports whether it checked every one: once the job is cancelled the
-// rest are not checked.
-func recheck(ctx context.Context, active *activeJob, inputs []job.Input, check inspectFunc) bool {
-	for _, index := range active.rechecks {
-		input := &inputs[index]
-		info, err := check(ctx, input.Path)
-		if ctx.Err() != nil {
-			return false
-		}
-		result := InspectionResult{ID: active.ids[index], Info: info, Err: err}
-		active.events.recheck(result)
-		*input = recheckedInput(input.Path, result)
-	}
-	return true
 }
 
 // postJobEvents posts the drain task for the job's queued events, retried

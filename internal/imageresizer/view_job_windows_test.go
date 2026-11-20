@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -66,28 +65,27 @@ func selectRow(view *NativeView, index int) {
 	view.refreshSourceSelection()
 }
 
-// imageSize decodes an output file's dimensions.
+// imageSize decodes a file whole, as the acceptance suite decodes its
+// results (decodeOutput), and returns its dimensions.
 func imageSize(t *testing.T, path string) (int, int) {
 	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(content))
-	if err != nil {
-		t.Fatalf("decode %s: %v", path, err)
-	}
-	return config.Width, config.Height
+	img := decodeOutput(t, path)
+	return img.Width, img.Height
 }
 
-// expectedSize is the output size of a source under the selected preset.
+// expectedSize is the output size of a source under the selected preset, at
+// the target Start Resize takes from it (jobTarget).
 func expectedSize(t *testing.T, view *NativeView, width, height int) (int, int) {
 	t.Helper()
 	selected, exists := view.presets.SelectedPreset()
 	if !exists {
 		t.Fatal("no preset is selected")
 	}
-	geometry, err := resize.Plan(width, height, resize.Target{Width: selected.Width, Height: selected.Height, Mode: selected.ResizeMode})
+	target, err := jobTarget(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	geometry, err := resize.Plan(width, height, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +108,10 @@ func TestNativeViewResizesEveryReadyImageEndToEnd(t *testing.T) {
 		return nil
 	}
 	view.NativeDropFiles([]string{
-		writeViewFile(t, directory, "photo.png", encodeTestPNG(t, 8, 6)),
-		writeViewFile(t, directory, "shot.jpg", encodeTestJPEG(t, 6, 8)),
-		writeViewFile(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
-		writeViewFile(t, directory, "notes.txt", []byte("text")),
+		writeFixture(t, directory, "photo.png", encodeTestPNG(t, 8, 6)),
+		writeFixture(t, directory, "shot.jpg", encodeTestJPEG(t, 6, 8)),
+		writeFixture(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
+		writeFixture(t, directory, "notes.txt", []byte("text")),
 	})
 	settle(t, view, dispatcher)
 	if enabled(view.cancelButton) || enabled(view.openButton) {
@@ -223,7 +221,7 @@ func TestNativeViewRerunsPlanAroundEarlierResults(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	view.NativeDropFiles([]string{writeViewFile(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
+	view.NativeDropFiles([]string{writeFixture(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
 	settle(t, view, dispatcher)
 	view.NativeAction()
 	drainJob(t, view, dispatcher)
@@ -269,8 +267,8 @@ func TestNativeViewOverwriteNeedsConfirmation(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	existing := writeViewFile(t, folder, "photo.png", encodeTestPNG(t, 2, 2))
-	view.NativeDropFiles([]string{writeViewFile(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
+	existing := writeFixture(t, folder, "photo.png", encodeTestPNG(t, 2, 2))
+	view.NativeDropFiles([]string{writeFixture(t, directory, "photo.png", encodeTestPNG(t, 8, 6))})
 	settle(t, view, dispatcher)
 	if err := view.options.SetCollision(CollisionOverwrite); err != nil {
 		t.Fatal(err)
@@ -458,6 +456,185 @@ func TestNativeViewCancelStopsTheJob(t *testing.T) {
 	}
 }
 
+var (
+	procGetWindowRect = testUser32.NewProc("GetWindowRect")
+	procSetWindowPos  = testUser32.NewProc("SetWindowPos")
+)
+
+// windowRect is the screen rectangle of a window.
+func windowRect(t *testing.T, hwnd windows.Handle) windows.Rect {
+	t.Helper()
+	var rect windows.Rect
+	if result, _, err := procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rect))); result == 0 {
+		t.Fatalf("GetWindowRect: %v", err)
+	}
+	return rect
+}
+
+// TestNativeViewStaysResponsiveDuringARealJob pins AC-A04 and the GUI's
+// part of AC-R13 with a real job: the view's own job.Run resizes real files,
+// and is held partway, once its first result is saved, inside the observer
+// that hands its events to the GUI thread. The job runs on a thread of its
+// own, never the GUI thread, which is what keeps the window responsive
+// (TECH-005), and the test checks that it does; meanwhile the GUI thread
+// moves the window, reviews every image's state, and cancels the job through
+// Cancel Resize. Released, the job starts no further image; the saved
+// results stay valid, the rest end Cancelled with nothing left in the output
+// folder for them, and the view is ready for the next job.
+func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	directory := sourceDir(t, view)
+	folder := view.options.Options().OutputFolder
+	content := fixtureJPEG(t, fixtureQuadrants(800, 600))
+	var paths []string
+	for index := range 8 {
+		paths = append(paths, writeFixture(t, directory, fmt.Sprintf("photo-%d.jpg", index), content))
+	}
+	view.NativeDropFiles(paths)
+	settle(t, view, dispatcher)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { waitJobDone(t, view) })
+	// Registered after waitJobDone, so it runs first: a test that fails while
+	// the job is held cancels the job and lets it go before waiting for it,
+	// so the job stops rather than resizing the remaining images.
+	t.Cleanup(func() {
+		if view.active != nil {
+			view.active.cancel()
+		}
+		releaseOnce.Do(func() { close(release) })
+	})
+	// The test's goroutine is locked to the GUI thread, which runs nothing
+	// else, so the job's goroutine runs on the GUI thread only if the view
+	// runs the job there itself. Such a job is not held — the GUI thread
+	// would wait on itself — so the test fails rather than hangs.
+	guiThread := windows.GetCurrentThreadId()
+	var jobThread atomic.Uint32
+	var lateStarts atomic.Int32
+	view.run = func(ctx context.Context, request job.Request, observe func(job.Event)) (job.Summary, error) {
+		jobThread.Store(windows.GetCurrentThreadId())
+		started := make(map[int]bool)
+		holding := true
+		return job.Run(ctx, request, func(event job.Event) {
+			observe(event)
+			if event.Status.State == job.StateProcessing {
+				if ctx.Err() != nil && !started[event.Index] {
+					lateStarts.Add(1)
+				}
+				started[event.Index] = true
+			}
+			if event.Status.State == job.StateCompleted && holding {
+				holding = false
+				close(held)
+				if windows.GetCurrentThreadId() != guiThread {
+					<-release
+				}
+			}
+		})
+	}
+
+	view.NativeAction()
+	if view.active == nil {
+		t.Fatalf("the job did not start: %q", view.jobStatus.Text())
+	}
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job saved no result")
+	}
+	if jobThread.Load() == guiThread {
+		t.Fatal("the job ran on the GUI thread")
+	}
+	for len(dispatcher.tasks) > 0 {
+		dispatcher.runNext(t)
+	}
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Information: Resizing: ") {
+		t.Fatalf("progress while the job runs = %q", got)
+	}
+
+	// The test's window is hidden and this thread owns it, so moving it is a
+	// direct call that succeeds whatever the job does: it shows the GUI
+	// thread is free to act while the job is held, as returning from Start
+	// Resize and applying the job's progress do, not that a message loop
+	// keeps up with a drag. What keeps the window responsive is the thread
+	// check above: the job never runs on the GUI thread.
+	before := windowRect(t, view.parent)
+	const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
+	if result, _, err := procSetWindowPos.Call(uintptr(view.parent), 0, uintptr(before.Left+37), uintptr(before.Top+23), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate); result == 0 {
+		t.Fatalf("SetWindowPos: %v", err)
+	}
+	if after := windowRect(t, view.parent); after.Left != before.Left+37 || after.Top != before.Top+23 || after.Right-after.Left != before.Right-before.Left {
+		t.Fatalf("the window is at %+v after moving it from %+v", after, before)
+	}
+
+	completed := 0
+	for index := range paths {
+		selectRow(view, index)
+		row, detail := view.list.ItemText(index), view.pathDetail.Text()
+		switch {
+		case strings.HasSuffix(row, " — Completed"):
+			completed++
+			if !strings.HasPrefix(detail, "Completed: saved to ") {
+				t.Fatalf("row %q shows %q", row, detail)
+			}
+		case strings.HasSuffix(row, " — Processing…"):
+			if !strings.HasPrefix(detail, "Processing: being resized and saved to ") {
+				t.Fatalf("row %q shows %q", row, detail)
+			}
+		case strings.HasSuffix(row, " — Pending"):
+			if detail != ui.ResizeDetailPending {
+				t.Fatalf("row %q shows %q", row, detail)
+			}
+		default:
+			t.Fatalf("row %q while the job runs", row)
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("%d rows show Completed while the job is held after its first result", completed)
+	}
+
+	view.NativeCommand(jobCommandBase+cancelResizeCommand, 0)
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Information: Cancelling:") {
+		t.Fatalf("status while cancelling = %q", got)
+	}
+	releaseOnce.Do(func() { close(release) })
+	drainJob(t, view, dispatcher)
+
+	if late := lateStarts.Load(); late != 0 {
+		t.Fatalf("%d images started after the job was cancelled", late)
+	}
+	width, height := expectedSize(t, view, 800, 600)
+	var saved []string
+	cancelled := 0
+	for index, path := range paths {
+		row := view.list.ItemText(index)
+		result := filepath.Join(folder, filepath.Base(path))
+		switch {
+		case strings.HasSuffix(row, " — Completed"):
+			if gotWidth, gotHeight := imageSize(t, result); gotWidth != width || gotHeight != height {
+				t.Fatalf("%s is %d × %d, want %d × %d", result, gotWidth, gotHeight, width, height)
+			}
+			saved = append(saved, filepath.Base(result))
+		case strings.HasSuffix(row, " — Cancelled"):
+			cancelled++
+		default:
+			t.Fatalf("row %q after cancelling", row)
+		}
+	}
+	if cancelled == 0 {
+		t.Fatal("no image was cancelled")
+	}
+	requireNames(t, folder, saved...)
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Warning: Resize cancelled: ") {
+		t.Fatalf("summary after cancelling = %q", got)
+	}
+	if !view.NativeActionAvailable() || !enabled(view.addButton) || enabled(view.cancelButton) {
+		t.Fatal("the controls did not return to their idle state after the cancelled job")
+	}
+}
+
 // TestNativeViewRefusesAnAddOnceTheJobStartedDuringThePicker pins that the
 // source list cannot change under a job that started while the Add Images
 // picker was open, as its modal loop dispatches messages, a Start Resize
@@ -585,7 +762,7 @@ func TestNativeViewRefusesJobsThatCannotStart(t *testing.T) {
 func TestNativeViewReportsAJobThatCannotStart(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
-	blocker := writeViewFile(t, t.TempDir(), "blocker", []byte("a file"))
+	blocker := writeFixture(t, t.TempDir(), "blocker", []byte("a file"))
 	if err := view.options.SetOutputFolder(filepath.Join(blocker, "Resized")); err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +797,7 @@ func TestNativeViewKeepsOfferingTheLatestResults(t *testing.T) {
 		t.Fatal("Open Output Folder was not offered for the saved result")
 	}
 
-	blocker := writeViewFile(t, t.TempDir(), "blocker", []byte("a file"))
+	blocker := writeFixture(t, t.TempDir(), "blocker", []byte("a file"))
 	if err := view.options.SetOutputFolder(filepath.Join(blocker, "Resized")); err != nil {
 		t.Fatal(err)
 	}
@@ -752,9 +929,9 @@ func TestNativeViewChecksFailedImagesAgainBeforeAJob(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
 	folder := view.options.Options().OutputFolder
-	fixed := writeViewFile(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
+	fixed := writeFixture(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
 	missing := filepath.Join(directory, "missing.png")
-	view.NativeDropFiles([]string{fixed, missing, writeViewFile(t, directory, "notes.txt", []byte("text"))})
+	view.NativeDropFiles([]string{fixed, missing, writeFixture(t, directory, "notes.txt", []byte("text"))})
 	settle(t, view, dispatcher)
 	before := []string{"fixed.png — Damaged or incomplete", "missing.png — Cannot be read", "notes.txt — Unsupported format"}
 	if got := listContents(view.list); strings.Join(got, "\n") != strings.Join(before, "\n") {
@@ -770,8 +947,8 @@ func TestNativeViewChecksFailedImagesAgainBeforeAJob(t *testing.T) {
 		t.Fatalf("rows after the refused job = %q, want %q", got, before)
 	}
 
-	writeViewFile(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
-	writeViewFile(t, directory, "missing.png", encodeTestPNG(t, 6, 8))
+	writeFixture(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
+	writeFixture(t, directory, "missing.png", encodeTestPNG(t, 6, 8))
 	view.NativeAction()
 	drainJob(t, view, dispatcher)
 	after := []string{"fixed.png — 8 × 6 px — Completed", "missing.png — 6 × 8 px — Completed", "notes.txt — Failed"}
@@ -857,10 +1034,10 @@ func (r *stuckRunner) run(ctx context.Context, request job.Request, observe func
 func TestNativeViewLetsGoOfAJobThatDoesNotStop(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
-	fixed := writeViewFile(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
+	fixed := writeFixture(t, directory, "fixed.png", []byte("\x89PNG\r\n\x1a\nnot yet a PNG"))
 	view.NativeDropFiles([]string{writeViewSource(t, directory, "stuck.png"), writeViewSource(t, directory, "waiting.png"), fixed})
 	settle(t, view, dispatcher)
-	writeViewFile(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
+	writeFixture(t, directory, "fixed.png", encodeTestPNG(t, 8, 6))
 	runner := &stuckRunner{started: make(chan struct{}), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(runner.release) }) }
@@ -933,8 +1110,8 @@ func TestNativeViewLetsGoOfAJobStuckCheckingAgain(t *testing.T) {
 	directory := sourceDir(t, view)
 	view.NativeDropFiles([]string{
 		writeViewSource(t, directory, "ready.png"),
-		writeViewFile(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
-		writeViewFile(t, directory, "notes.txt", []byte("text")),
+		writeFixture(t, directory, "damaged.png", []byte("\x89PNG\r\n\x1a\nnot really a PNG")),
+		writeFixture(t, directory, "notes.txt", []byte("text")),
 	})
 	settle(t, view, dispatcher)
 	// The check made again blocks without observing the cancellation, as a

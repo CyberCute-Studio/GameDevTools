@@ -117,6 +117,72 @@ func TestInventoryRechecksFailedItems(t *testing.T) {
 	}
 }
 
+// TestRecheckInputsStopsOnceCancelled pins Start Resize's pre-job check
+// (RSZ-049): each input it lists is checked again in order, reported with
+// its item's ID, and replaced by what the check found; once the job is
+// cancelled no further check starts — a job cancelled before the first
+// starts none, as a check of a source on a drive that stopped responding
+// would hold the cancelled job — and the check during which it was cancelled
+// is neither reported nor applied.
+func TestRecheckInputsStopsOnceCancelled(t *testing.T) {
+	ids := []uint64{11, 12, 13}
+	fresh := func() []job.Input {
+		return []job.Input{
+			{Path: filepath.Join("In", "a.png"), Err: errors.New("unreadable")},
+			{Path: filepath.Join("In", "b.png"), Info: decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3}},
+			{Path: filepath.Join("In", "c.png"), Err: errors.New("damaged")},
+		}
+	}
+	info := decode.Info{Format: decode.FormatPNG, Width: 8, Height: 6}
+	type run struct {
+		checked  []string
+		reported []uint64
+	}
+	start := func(ctx context.Context, inputs []job.Input, during func(path string)) (bool, run) {
+		var r run
+		check := func(_ context.Context, path string) (decode.Info, error) {
+			r.checked = append(r.checked, filepath.Base(path))
+			if during != nil {
+				during(path)
+			}
+			if filepath.Base(path) == "c.png" {
+				return decode.Info{}, &decode.Error{Kind: decode.KindCorrupt, Format: decode.FormatPNG, Err: errors.New("invalid checksum")}
+			}
+			return info, nil
+		}
+		ok := recheckInputs(ctx, jobStart{request: job.Request{Inputs: inputs}, ids: ids, rechecks: []int{0, 2}}, check, func(result InspectionResult) { r.reported = append(r.reported, result.ID) })
+		return ok, r
+	}
+
+	inputs := fresh()
+	ok, r := start(context.Background(), inputs, nil)
+	if !ok || strings.Join(r.checked, ",") != "a.png,c.png" || len(r.reported) != 2 || r.reported[0] != 11 || r.reported[1] != 13 {
+		t.Fatalf("checked %v and reported %v (%v), want a.png and c.png as items 11 and 13", r.checked, r.reported, ok)
+	}
+	var source *sourceError
+	if inputs[0].Err != nil || inputs[0].Info != info || inputs[1] != fresh()[1] || !errors.As(inputs[2].Err, &source) || source.status != StatusCorrupt {
+		t.Fatalf("inputs after the checks = %+v", inputs)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	inputs = fresh()
+	if ok, r := start(cancelled, inputs, nil); ok || len(r.checked) != 0 || len(r.reported) != 0 {
+		t.Fatalf("a job cancelled before its checks checked %v and reported %v (%v)", r.checked, r.reported, ok)
+	}
+
+	during, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	inputs = fresh()
+	ok, r = start(during, inputs, func(string) { cancel() })
+	if ok || strings.Join(r.checked, ",") != "a.png" || len(r.reported) != 0 {
+		t.Fatalf("a job cancelled during its first check checked %v and reported %v (%v)", r.checked, r.reported, ok)
+	}
+	if inputs[0].Err == nil || inputs[0].Err.Error() != "unreadable" {
+		t.Fatalf("the interrupted check replaced its input: %+v", inputs[0])
+	}
+}
+
 // TestSourceItemShowsJobResults pins that a row shows the job's state for
 // its item in words (RSZ-043, UX-005) and the detail the item's result,
 // until ClearResults restores the content check.
