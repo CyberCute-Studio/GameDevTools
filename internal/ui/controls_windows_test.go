@@ -180,6 +180,33 @@ func TestStatusAreaRevisionIdentifiesTheNotice(t *testing.T) {
 	}
 }
 
+// TestStatusAreaClearShownClearsOnlyARecordedNotice pins ClearShown: it
+// clears the notice only while it is one whose revision was recorded, keeps
+// a notice shown since, and takes a revision of 0 for no notice at all.
+func TestStatusAreaClearShownClearsOnlyARecordedNotice(t *testing.T) {
+	area, err := NewStatusArea(newTestParent(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := Notice{Kind: NoticeSuccess, Message: "Folder saved."}
+	_ = area.Show(recorded, 0)
+	revision := area.Revision()
+	later := Notice{Kind: NoticeInfo, Message: "Display captured."}
+	_ = area.Show(later, 0)
+	area.ClearShown(0, revision)
+	if got := area.Text(); got != later.Text() {
+		t.Fatalf("status after ClearShown of an earlier notice = %q, want the later one kept", got)
+	}
+	area.ClearShown(0)
+	if got := area.Text(); got != later.Text() {
+		t.Fatalf("status after ClearShown of no notice = %q, want it kept", got)
+	}
+	area.ClearShown(revision, area.Revision())
+	if got := area.Text(); got != "" {
+		t.Fatalf("status after ClearShown of the notice shown = %q, want it cleared", got)
+	}
+}
+
 func TestStatusAreaReportsTimerFailure(t *testing.T) {
 	area := &StatusArea{Label: &Label{Control: Control{hwnd: 1}}, parent: 1}
 	if err := area.Show(Notice{Message: "Saved"}, time.Second); err == nil {

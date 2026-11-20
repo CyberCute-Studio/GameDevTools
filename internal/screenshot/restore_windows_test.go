@@ -159,6 +159,28 @@ func TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice(t *testing.T) {
 	}
 }
 
+// TestNativeViewRestoreDefaultsClearsAReplacedRefusal pins that Start
+// Capture's refusal of JPEG quality text, which the restore replaces with
+// the default quality, does not stay in the status area beside the field
+// that then shows the default.
+func TestNativeViewRestoreDefaultsClearsAReplacedRefusal(t *testing.T) {
+	view, _ := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
+	view.quality.Edit.SetText("0")
+	view.NativeAction()
+	if got := view.status.Text(); !strings.Contains(got, ui.ErrorValidation.Label()) {
+		t.Fatalf("status after Start Capture = %q, want the quality refused", got)
+	}
+
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status after the restore = %q, want the replaced quality's refusal cleared", got)
+	}
+	if got := view.quality.Edit.Text(); got != "90" {
+		t.Fatalf("JPEG quality field after the restore = %q, want 90", got)
+	}
+}
+
 // TestNativeViewRestoreDefaultsShowsThePresetsTheRestoreKept pins that the
 // view takes a preset library the restore kept that is not the one it
 // shows — the settings file's, kept when the session never loaded it — so

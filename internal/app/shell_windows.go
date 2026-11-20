@@ -5,7 +5,6 @@ package app
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,39 +29,40 @@ const (
 )
 
 // endSessionWait bounds how long the end of the Windows session waits for
-// the background work (endSession), counted from WM_ENDSESSION's arrival.
-// Windows lists an application that has not returned from WM_ENDSESSION
-// within a few seconds as holding up the sign-out, restart, or shutdown, and
-// may then end its process, so the wait stays under that: a cancelled job's
-// images in flight and a capture delivering its outputs normally finish at
-// once, and work that has not finished by then — a read or write blocked on
-// an unresponsive network drive, which no wait would see through — is left
-// to the process's end rather than holding the session's end up. It is a
-// variable so tests can shorten it.
+// the settings to be saved and the background work to finish (endSession),
+// counted from WM_ENDSESSION's arrival. Windows lists an application that
+// has not returned from WM_ENDSESSION within a few seconds as holding up the
+// sign-out, restart, or shutdown, and may then end its process, so the wait
+// stays under that: the save, a cancelled job's images in flight, and a
+// capture delivering its outputs normally finish at once, and work that has
+// not finished by then — a read or write blocked on an unresponsive network
+// drive, such as a settings folder redirected to a share that has gone,
+// which no wait would see through — is left to the process's end rather
+// than holding the session's end up. It is a variable so tests can shorten
+// it.
 var endSessionWait = 3 * time.Second
 
 type nativeShell struct {
-	navigator     *core.Navigator
-	dispatcher    *core.DispatchQueue
-	store         *settings.Store
-	settings      *settings.Settings
-	logger        *diagnostics.Logger
-	displays      *display.Monitor
-	startupNotice string
-	notice        string
-	hwnd          windows.Handle
-	dpi           uint32
-	scrollY       int32
-	navHeading    windows.Handle
-	navButtons    map[core.ModuleID]*ui.Button
-	navIDs        map[uint16]core.ModuleID
-	nativeViews   map[core.ModuleID]nativeView
-	title         windows.Handle
-	description   windows.Handle
-	action        *ui.Button
-	note          *ui.StatusArea
-	headingFont   windows.Handle
-	bodyFont      windows.Handle
+	navigator   *core.Navigator
+	dispatcher  *core.DispatchQueue
+	store       *settings.Store
+	settings    *settings.Settings
+	logger      *diagnostics.Logger
+	displays    *display.Monitor
+	notice      string
+	hwnd        windows.Handle
+	dpi         uint32
+	scrollY     int32
+	navHeading  windows.Handle
+	navButtons  map[core.ModuleID]*ui.Button
+	navIDs      map[uint16]core.ModuleID
+	nativeViews map[core.ModuleID]nativeView
+	title       windows.Handle
+	description windows.Handle
+	action      *ui.Button
+	note        *ui.StatusArea
+	headingFont windows.Handle
+	bodyFont    windows.Handle
 
 	// acceptingDrops is whether the shell window and its children are
 	// registered for file drops, as updateDropAcceptance last applied it.
@@ -92,7 +92,7 @@ type nativeShell struct {
 	confirm func(windows.Handle, string, string) bool
 	// startup holds the warnings the startup notice is made of, by what
 	// decides whether each still applies once the default settings are
-	// restored (settleNotice) or the settings are saved (writeSettings).
+	// restored (settleNotice) or the settings are saved (saveSettings).
 	startup startupWarnings
 	// backgroundWork is closed once every module view's background work has
 	// finished (stopBackgroundWork); it is nil until the shell first waits
@@ -104,14 +104,27 @@ type nativeShell struct {
 
 // startupWarnings are the warnings the shell's note shows as the
 // application starts, kept by what decides whether each still applies once
-// the default settings are restored (settleNotice): each is placed by what
-// it is about where it is made, so a restore need not work out again which
-// lines of a joined notice still apply.
+// the settings are saved (saveSettings) or the default settings are
+// restored (settleNotice): each is placed by what it is about where it is
+// made, so neither need work out again which lines of a joined notice still
+// apply.
 type startupWarnings struct {
-	// settingsFile are the warnings about the settings file the session
-	// started from — that it could not be located, read, or decoded, or
-	// that its recovery is incomplete — which a restore that backs the file
-	// up, or finds none to back up, settles.
+	// recovered is the warning that the malformed settings file the session
+	// started from was backed up and the defaults took its place, naming the
+	// backup, or "" (settings.LoadResult.Recovered). No save or restore
+	// settles it: the backup, which holds that file's settings, stays where
+	// it names.
+	recovered string
+	// unwritten is the warning that the settings the session started from —
+	// the defaults that replaced a malformed file, or the migrated settings —
+	// could not be written to the file, or "" (settings.LoadResult.Unwritten),
+	// which any save that succeeds, the restore's included, settles.
+	unwritten string
+	// settingsFile are the other warnings about the settings file the
+	// session started from — that it could not be located, read, or backed
+	// up, so saving is disabled — which a restore that backs the file up, or
+	// finds none to back up, settles, but for those about a settings path
+	// there is not.
 	settingsFile []string
 	// folders returns the output folders' warnings as the options now hold
 	// them, which a restore or the choice of a folder can change; nil
@@ -123,9 +136,16 @@ type startupWarnings struct {
 }
 
 // text returns the warnings that apply, one to a line: the settings file's,
-// the output folders', and the others.
+// in the order loading the settings gave them, the output folders', and the
+// others.
 func (w startupWarnings) text() string {
-	warnings := slices.Clone(w.settingsFile)
+	var warnings []string
+	for _, warning := range []string{w.recovered, w.unwritten} {
+		if warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	warnings = append(warnings, w.settingsFile...)
 	if w.folders != nil {
 		warnings = append(warnings, w.folders()...)
 	}
@@ -319,21 +339,19 @@ func newNativeShell(navigator *core.Navigator, store *settings.Store, initial *s
 	if err := registerShellClass(); err != nil {
 		return nil, err
 	}
-	notice := startup.text()
 	shell := &nativeShell{
-		navigator:     navigator,
-		store:         store,
-		settings:      initial,
-		logger:        logger,
-		displays:      displays,
-		startup:       startup,
-		startupNotice: notice,
-		notice:        notice,
-		dpi:           96,
-		navButtons:    make(map[core.ModuleID]*ui.Button),
-		navIDs:        make(map[uint16]core.ModuleID),
-		nativeViews:   make(map[core.ModuleID]nativeView),
-		confirm:       ui.Confirm,
+		navigator:   navigator,
+		store:       store,
+		settings:    initial,
+		logger:      logger,
+		displays:    displays,
+		startup:     startup,
+		notice:      startup.text(),
+		dpi:         96,
+		navButtons:  make(map[core.ModuleID]*ui.Button),
+		navIDs:      make(map[uint16]core.ModuleID),
+		nativeViews: make(map[core.ModuleID]nativeView),
+		confirm:     ui.Confirm,
 	}
 	window := initial.Shell.Window
 	x, y := uintptr(cwUseDefault), uintptr(cwUseDefault)
@@ -1144,52 +1162,52 @@ func (s *nativeShell) scale(value int32) int32 {
 	return int32((int64(value)*int64(s.dpi) + 48) / 96)
 }
 
-// saveSettings saves the settings, with the window's placement when
-// captureWindow (writeSettings), and shows the note it leaves.
+// saveSettings saves the settings, with the window's current module and,
+// when captureWindow, its placement (recordWindow), and shows the outcome in
+// the note: the warning of a failed save, or the startup warnings that still
+// apply — the warning that the settings the session started from could not
+// be written is gone, as they now are, and so is an output folder's warning
+// the user has since resolved by choosing a folder, as the options now give
+// them.
 func (s *nativeShell) saveSettings(captureWindow bool) error {
-	err := s.writeSettings(captureWindow)
+	s.recordWindow(captureWindow)
+	err := s.store.Save(*s.settings)
+	if err != nil {
+		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
+		s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
+	} else {
+		s.startup.unwritten = ""
+		s.notice = s.startup.text()
+	}
 	s.updateView()
 	s.layout()
 	return err
 }
 
-// writeSettings saves the settings, with the window's current module and,
-// when captureWindow, its placement, and sets the note to the outcome
-// without showing it: the warning of a failed save, or the startup warnings
-// that still apply, the output folders' as the options now give them, so
-// one the user has since resolved, such as by choosing an output folder, is
-// gone. The end of the Windows session calls it directly, as the window it
-// would show the note in is destroyed at once (endSession).
-func (s *nativeShell) writeSettings(captureWindow bool) error {
-	value := *s.settings
-	value.Shell.SelectedModule = string(s.navigator.Current().ID())
-	if captureWindow {
-		placement := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
-		if r, _, _ := procGetWindowPlacement.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&placement))); r != 0 {
-			normal := placement.NormalPosition
-			width := normal.Right - normal.Left
-			height := normal.Bottom - normal.Top
-			if width >= 320 && height >= 240 {
-				value.Shell.Window.X = normal.Left
-				value.Shell.Window.Y = normal.Top
-				value.Shell.Window.Width = width
-				value.Shell.Window.Height = height
-				value.Shell.Window.HasPosition = true
-			}
+// recordWindow records the window's current module in the settings and,
+// when captureWindow, the window's placement, which only a window that has
+// not been destroyed has.
+func (s *nativeShell) recordWindow(captureWindow bool) {
+	s.settings.Shell.SelectedModule = string(s.navigator.Current().ID())
+	if !captureWindow {
+		return
+	}
+	window := &s.settings.Shell.Window
+	placement := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
+	if r, _, _ := procGetWindowPlacement.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&placement))); r != 0 {
+		normal := placement.NormalPosition
+		width := normal.Right - normal.Left
+		height := normal.Bottom - normal.Top
+		if width >= 320 && height >= 240 {
+			window.X = normal.Left
+			window.Y = normal.Top
+			window.Width = width
+			window.Height = height
+			window.HasPosition = true
 		}
-		maximized, _, _ := procIsZoomed.Call(uintptr(s.hwnd))
-		value.Shell.Window.Maximized = maximized != 0
 	}
-	*s.settings = value
-	err := s.store.Save(value)
-	if err != nil {
-		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
-		s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
-	} else {
-		s.startupNotice = s.startup.text()
-		s.notice = s.startupNotice
-	}
-	return err
+	maximized, _, _ := procIsZoomed.Call(uintptr(s.hwnd))
+	window.Maximized = maximized != 0
 }
 
 // restoredSettings returns the settings the restore of the default settings
@@ -1283,27 +1301,28 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 // are restored and the module views show them, err being the restore's
 // failed write, if any. The settings file was then backed up, or there was
 // none to back up, so the warnings about the file the session started from,
-// such as saving disabled to protect it or settings recovered from it, no
-// longer apply — but for a session without a settings path
-// (settings.ErrPathUnavailable), whose warning about that still does, and
-// whose outcome already says the restored settings cannot be saved. The
-// startup notice becomes the warnings that apply, the output folders' as the
-// restored options give them included (startupWarnings) — no default folder
-// known, as at startup, with the reason startup gave, rather than a stored
-// folder the default one replaced — and the note shows it, or the failed
-// write, as every failed save does (SET-004).
+// such as saving disabled to protect it or settings that could not be
+// written to it, no longer apply — but for a session without a settings
+// path (settings.ErrPathUnavailable), whose warning about that still does,
+// and whose outcome already says the restored settings cannot be saved. The
+// warning naming the backup of a malformed file the session started without
+// still applies, as that backup still holds the file's settings. The note
+// becomes the warnings that apply, the output folders' as the restored
+// options give them included (startupWarnings) — no default folder known,
+// as at startup, with the reason startup gave, rather than a stored folder
+// the default one replaced — or the failed write, as every failed save does
+// (SET-004). It is shown at once and laid out with the Settings view's
+// outcome, as every module command is.
 func (s *nativeShell) settleNotice(err error) {
 	pathless := errors.Is(err, settings.ErrPathUnavailable)
 	if !pathless {
-		s.startup.settingsFile = nil
+		s.startup.settingsFile, s.startup.unwritten = nil, ""
 	}
-	s.startupNotice = s.startup.text()
-	s.notice = s.startupNotice
+	s.notice = s.startup.text()
 	if err != nil && !pathless {
 		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
 	}
 	s.updateView()
-	s.layout()
 }
 
 // confirmClose asks, before the window closes, about what closing would
@@ -1344,28 +1363,50 @@ func (s *nativeShell) ask(title, message string) bool {
 // endSession shuts the application down as Windows ends the user's session —
 // signing out, restarting, or shutting down — which may terminate the
 // process as soon as WM_ENDSESSION returns, so nothing is left to the end of
-// the message loop. Nothing is asked: the settings are saved with the
-// window's placement, a failure only logged, as no one is left to read a
-// warning, and the window, which is destroyed next, is not laid out again
-// (writeSettings); the window is destroyed, which releases the global shortcut,
-// closes any capture overlay, cancels a running resize job, and stops
-// accepting work (NFR-022, AC-A05), as closing does; and the background
-// work is waited for, as at the end of the message loop, so a cancelled
-// job's images in flight remove their temporary files (NFR-023) — but no
-// longer than endSessionWait from the message's arrival, so the session's
-// end is not held up by work that does not stop, which the process's end
-// then ends. The quit message the window's destruction posts still ends the
-// message loop when the process outlives WM_ENDSESSION, and the wait there
-// waits only for what is left (waitForBackgroundWork).
+// the message loop. Nothing is asked. The window's placement is recorded
+// first, as only the window has it (recordWindow), and the window is then
+// destroyed, which releases the global shortcut, closes any capture overlay,
+// cancels a running resize job, and stops accepting work (NFR-022, AC-A05),
+// as closing does, before anything is written, so a write that blocks holds
+// none of that up. The settings, as they are once the window is destroyed,
+// are then saved on a goroutine of their own, a failure only logged, as no
+// one is left to read a warning, and the background work is waited for, as
+// at the end of the message loop, so a cancelled job's images in flight
+// remove their temporary files (NFR-023): both for no longer than
+// endSessionWait from the message's arrival, so the session's end is not
+// held up by a save or work that does not stop — as on a settings folder or
+// an output folder on a network share that has gone — which the process's
+// end then ends. A save so ended leaves the settings file as it was, as a
+// save replaces the file only once its temporary file is written
+// (settings.Store.Save). Nothing else uses the store or the settings once
+// the window is destroyed, so the save needs no lock. The quit message the
+// window's destruction posts still ends the message loop when the process
+// outlives WM_ENDSESSION, and the wait there waits only for the background
+// work that is left (waitForBackgroundWork).
 func (s *nativeShell) endSession() {
 	deadline := time.NewTimer(endSessionWait)
 	defer deadline.Stop()
-	_ = s.writeSettings(true)
+	s.recordWindow(true)
 	s.logEvent(diagnostics.LevelInfo, "app.end-session", "stopped")
 	procDestroyWindow.Call(uintptr(s.hwnd))
-	select {
-	case <-s.stopBackgroundWork():
-	case <-deadline.C:
+	value := *s.settings
+	saved := make(chan struct{})
+	go func() {
+		defer close(saved)
+		if err := s.store.Save(value); err != nil {
+			s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
+		}
+	}()
+	stopped := s.stopBackgroundWork()
+	for saved != nil || stopped != nil {
+		select {
+		case <-saved:
+			saved = nil
+		case <-stopped:
+			stopped = nil
+		case <-deadline.C:
+			return
+		}
 	}
 }
 

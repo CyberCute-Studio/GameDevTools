@@ -655,6 +655,19 @@ func (s *StatusArea) Clear() {
 	s.Update(Notice{})
 }
 
+// ClearShown removes the notice when it is still one of those whose
+// revisions a caller recorded once it showed them (Revision), as when the
+// setting a notice reports was replaced, and keeps any notice shown since.
+// A revision of 0, recorded before anything was shown, matches none.
+func (s *StatusArea) ClearShown(revisions ...uint64) {
+	for _, revision := range revisions {
+		if revision != 0 && revision == s.revision {
+			s.Clear()
+			return
+		}
+	}
+}
+
 func (s *StatusArea) HandleTimer(id uintptr) bool {
 	if id == 0 || id != s.timer {
 		return false

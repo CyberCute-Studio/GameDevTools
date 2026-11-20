@@ -296,7 +296,10 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 // default folder could be resolved, nothing takes the place of a stored
 // folder only earlier builds accepted, so the warning says the default
 // folder is unavailable too rather than that it is selected, and no second
-// warning about the default folder follows.
+// warning about the default folder follows. Once the user chooses a folder,
+// there is no warning, as the shell's note shows the warning again with
+// every save: in particular, a replaced folder no longer says the default
+// folder is selected in its place.
 func TestFolderWarning(t *testing.T) {
 	folder := testFolder(t)
 	if filepath.VolumeName(folder) == "" {
@@ -352,6 +355,12 @@ func TestFolderWarning(t *testing.T) {
 			}
 			if strings.Contains(warning, "%!") || (test.defaultErr != nil && warning != "" && !strings.Contains(warning, test.defaultErr.Error())) {
 				t.Fatalf("FolderWarning = %q, want one that says why the default folder is unavailable", warning)
+			}
+			if err := manager.SetOutputFolder(filepath.Join(folder, "Chosen")); err != nil {
+				t.Fatal(err)
+			}
+			if warning := manager.FolderWarning(test.defaultErr); warning != "" {
+				t.Fatalf("FolderWarning once a folder was chosen = %q, want none", warning)
 			}
 		})
 	}

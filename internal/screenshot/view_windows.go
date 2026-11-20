@@ -76,10 +76,12 @@ type NativeView struct {
 	// NativeAnnounceNotice compares to tell whether a later notice replaced
 	// it.
 	shortcutNotice uint64
-	// optionsNotice is the status area's revision once presentResult last
-	// showed an option change's outcome there, such as an output folder
-	// saved, which the restore of the default settings clears while it is
-	// still shown, as the option it reports is replaced.
+	// optionsNotice is the status area's revision once a notice about the
+	// capture options was last shown there — an option change's outcome,
+	// such as an output folder saved (presentResult), or Start Capture's
+	// refusal of the options or the JPEG quality text (refuseOptions) — which
+	// the restore of the default settings clears while it is still shown, as
+	// the option it reports is replaced.
 	optionsNotice uint64
 
 	modeLabel    *ui.Label
@@ -455,7 +457,7 @@ func (n *NativeView) NativeAction() {
 	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
 	if err != nil {
 		n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		n.refuseOptions(err)
 		return
 	}
 	options := n.options.Options()
@@ -473,7 +475,7 @@ func (n *NativeView) NativeAction() {
 	}
 	options = n.options.Options()
 	if err := options.Validate(); err != nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		n.refuseOptions(err)
 		return
 	}
 	if options.Mode != ModeFullDisplay {
@@ -878,16 +880,16 @@ func (n *NativeView) refreshOptions() {
 // area, and the combination the settings no longer name is released rather
 // than left registered behind a field that shows another. The status area
 // keeps its notice, such as the last capture's result, unless it shows a
-// shortcut failure, or an option change's outcome, about a setting the
-// restore replaced. What the user still has to do — a
-// shortcut to choose — or a library or options that could not be shown is
-// returned for the Settings view to report with the restore's outcome; an
-// output folder that has no default is left to the shell's note, which
-// gives the reason startup found. The preset library is shown again only
-// when the restore kept another than the one shown, as when the session
-// never loaded the settings file it replaced (preset.NativeManager.Reload);
-// otherwise the selected preset and the preset form's unsaved edits are not
-// touched (APP-004).
+// shortcut failure, an option change's outcome, or Start Capture's refusal
+// of the options, about a setting the restore replaced. What the user still
+// has to do — a shortcut to choose — or a library or options that could not
+// be shown is returned for the Settings view to report with the restore's
+// outcome; an output folder that has no default is left to the shell's
+// note, which gives the reason startup found. The preset library is shown
+// again only when the restore kept another than the one shown, as when the
+// session never loaded the settings file it replaced
+// (preset.NativeManager.Reload); otherwise the selected preset and the
+// preset form's unsaved edits are not touched (APP-004).
 func (n *NativeView) NativeRestoreDefaults() string {
 	var followUps []string
 	if err := n.presets.Reload(); err != nil {
@@ -902,9 +904,7 @@ func (n *NativeView) NativeRestoreDefaults() string {
 	options := n.options.Options()
 	n.shortcut.Edit.SetText(options.Shortcut.String())
 	n.shortcut.Error.SetText("")
-	if revision := n.status.Revision(); revision == n.shortcutNotice || revision == n.optionsNotice {
-		n.status.Clear()
-	}
+	n.status.ClearShown(n.shortcutNotice, n.optionsNotice)
 	if n.hotkeys != nil {
 		if err := n.hotkeys.Apply(options.Shortcut); err != nil {
 			n.hotkeys.Release()
@@ -945,6 +945,15 @@ func (n *NativeView) presentResult(err error, success string) {
 		notice = ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}
 	}
 	_ = n.status.Show(notice, 0)
+	n.optionsNotice = n.status.Revision()
+}
+
+// refuseOptions shows Start Capture's refusal of the capture options, or of
+// the JPEG quality text the options would take, in the status area, and
+// records it as the option notice (optionsNotice), as the restore of the
+// default settings replaces what it refuses.
+func (n *NativeView) refuseOptions(err error) {
+	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 	n.optionsNotice = n.status.Revision()
 }
 

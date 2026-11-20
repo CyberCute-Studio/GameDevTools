@@ -78,6 +78,12 @@ type NativeView struct {
 	// saved, which the restore of the default settings clears while it is
 	// still shown, as the option it reports is replaced, or 0.
 	optionsNotice uint64
+	// optionsRefusal is the job section's revision once Start Resize last
+	// refused the resize options there, or a JPEG field's text the options
+	// would take (refuseOptions), which the restore of the default settings
+	// clears while the section still shows it, as it replaces what the
+	// refusal is about, or 0.
+	optionsRefusal uint64
 
 	// run runs a resize job, confirm asks for an Overwrite job's
 	// confirmation, and openFolder opens the output folder on request; tests
@@ -694,7 +700,9 @@ func (n *NativeView) refreshOptions() {
 // its progress, the selected preset, and the preset form are kept (APP-004):
 // a job runs on the options and preset it started with. The status area
 // keeps its notice, such as the source list's, unless it shows an option
-// change's outcome about a setting the restore replaced. The preset library
+// change's outcome about a setting the restore replaced, and the job section
+// its own, such as the last job's summary, unless it shows Start Resize's
+// refusal of the options or of a JPEG field's text. The preset library
 // is shown again only when the restore kept another than the one shown, as
 // when the session never loaded the settings file it replaced
 // (preset.NativeManager.Reload), and the fitting mode's description then
@@ -714,9 +722,8 @@ func (n *NativeView) NativeRestoreDefaults() string {
 		followUps = append(followUps, message)
 	} else {
 		n.refreshOptions()
-		if n.optionsNotice != 0 && n.status.Revision() == n.optionsNotice {
-			n.status.Clear()
-		}
+		n.status.ClearShown(n.optionsNotice)
+		n.jobStatus.ClearShown(n.optionsRefusal)
 	}
 	return strings.Join(followUps, " ")
 }

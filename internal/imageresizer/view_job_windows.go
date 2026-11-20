@@ -173,7 +173,8 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 	options := n.options.Options()
 	background, err := jobBackground(options)
 	if err != nil {
-		return refuse(ui.ErrorValidation, err.Error())
+		n.refuseOptions(ui.FormatError(ui.ErrorValidation, err))
+		return jobStart{}, false
 	}
 	confirmed := false
 	if options.Collision == CollisionOverwrite {
@@ -210,14 +211,14 @@ func (n *NativeView) commitJobFields() bool {
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
 		n.quality.Error.SetTextQuietly(message)
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
+		n.refuseOptions(message)
 		return false
 	}
 	background, err := ParseBackground(n.background.Edit.Text())
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
 		n.background.Error.SetTextQuietly(message)
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
+		n.refuseOptions(message)
 		return false
 	}
 	applied := func(err error) bool {
@@ -228,7 +229,7 @@ func (n *NativeView) commitJobFields() bool {
 			n.presentResult(err, "")
 			return true
 		}
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)})
+		n.refuseOptions(ui.FormatError(ui.ErrorValidation, err))
 		return false
 	}
 	if quality != options.JPEGQuality && !applied(n.options.SetJPEGQuality(quality)) {
@@ -549,6 +550,15 @@ func (n *NativeView) showJobProgress(active *activeJob, announce bool) {
 
 func (n *NativeView) showJobNotice(notice ui.Notice) {
 	_ = n.jobStatus.Show(notice, 0)
+}
+
+// refuseOptions shows Start Resize's refusal of the resize options, or of a
+// JPEG field's text the options would take, in the job section, and records
+// it as the options refusal (optionsRefusal), as the restore of the default
+// settings replaces what it refuses.
+func (n *NativeView) refuseOptions(message string) {
+	n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
+	n.optionsRefusal = n.jobStatus.Revision()
 }
 
 // openOutputFolder opens the folder the latest job saved its results in,

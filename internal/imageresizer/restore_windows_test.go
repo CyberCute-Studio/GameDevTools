@@ -144,6 +144,38 @@ func TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice(t *testing.T) {
 	}
 }
 
+// TestNativeViewRestoreDefaultsClearsAReplacedRefusal pins that Start
+// Resize's refusal of JPEG quality text, which the restore replaces with the
+// default quality, does not stay in the job section beside the field that
+// then shows the default, while a job's own notice there is kept.
+func TestNativeViewRestoreDefaultsClearsAReplacedRefusal(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "photo.png")})
+	settle(t, view, dispatcher)
+	view.quality.Edit.SetText("0")
+	view.NativeAction()
+	if got := view.jobStatus.Text(); view.active != nil || !strings.Contains(got, ui.ErrorValidation.Label()) {
+		t.Fatalf("job section after Start Resize = %q, want the quality refused", got)
+	}
+
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.jobStatus.Text(); got != "" {
+		t.Fatalf("job section after the restore = %q, want the replaced quality's refusal cleared", got)
+	}
+	if got := view.quality.Edit.Text(); got != "90" {
+		t.Fatalf("JPEG quality field after the restore = %q, want 90", got)
+	}
+
+	summary := ui.Notice{Kind: ui.NoticeSuccess, Message: "1 image resized."}
+	view.showJobNotice(summary)
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.jobStatus.Text(); got != summary.Text() {
+		t.Fatalf("job section after the restore = %q, want the job's notice %q kept", got, summary.Text())
+	}
+}
+
 // TestNativeViewRestoreDefaultsWithoutADefaultFolder pins that a restore
 // with no default output folder known, as when the Pictures folder cannot
 // be resolved, shows no folder and leaves the warning to the shell's note,

@@ -79,9 +79,23 @@ type Migration interface {
 
 type ModuleValidator func(json.RawMessage) error
 
+// LoadResult is the settings Load gives and every warning it gave about the
+// settings file, in Warnings, two of which a caller that keeps showing them
+// may need to tell from the rest, as a later save or restore settles each
+// differently: Recovered and Unwritten.
 type LoadResult struct {
 	Settings Settings
 	Warnings []string
+	// Recovered is the warning, among Warnings, that the settings file was
+	// malformed and was backed up, naming the backup, and that the defaults
+	// took its place, or "". No later save or restore makes it untrue: the
+	// backup, which alone holds that file's settings, stays where it names.
+	Recovered string
+	// Unwritten is the warning, among Warnings, that the settings Load gives
+	// — the defaults that replaced a malformed file, or the migrated
+	// settings — could not be written to the settings file, or "". The next
+	// save that succeeds writes them, and it no longer applies.
+	Unwritten string
 }
 
 type Store struct {
@@ -185,9 +199,11 @@ func (s *Store) Load() LoadResult {
 			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsInvalidBackupFailed, s.path, err, backupErr))
 			return result
 		}
-		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup))
+		result.Recovered = fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup)
+		result.Warnings = append(result.Warnings, result.Recovered)
 		if saveErr := s.save(result.Settings); saveErr != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.DefaultSettingsWriteFailed, saveErr))
+			result.Unwritten = fmt.Sprintf(ui.DefaultSettingsWriteFailed, saveErr)
+			result.Warnings = append(result.Warnings, result.Unwritten)
 		}
 		return result
 	}
@@ -201,7 +217,8 @@ func (s *Store) Load() LoadResult {
 			return result
 		}
 		if saveErr := s.save(decoded); saveErr != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.MigratedSettingsWriteFailed, saveErr, backup))
+			result.Unwritten = fmt.Sprintf(ui.MigratedSettingsWriteFailed, saveErr, backup)
+			result.Warnings = append(result.Warnings, result.Unwritten)
 		}
 	}
 	return result
@@ -262,16 +279,14 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 	if err != nil {
 		return Settings{}, "", notRestored{err}
 	}
-	if err := validate(value); err != nil {
-		return Settings{}, "", notRestored{err}
-	}
-	if err := s.validateModules(value); err != nil {
+	if err := s.check(value); err != nil {
 		return Settings{}, "", notRestored{err}
 	}
 	if s.path == "" {
 		// There is no file to replace: the session takes the restored
-		// settings in memory, and the write fails as every save does.
-		return value, "", s.save(value)
+		// settings in memory, and the write fails as every save without a
+		// settings path does.
+		return value, "", ErrPathUnavailable
 	}
 	backup := ""
 	if exists {
@@ -280,7 +295,7 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		}
 	}
 	s.blocked = nil
-	return value, backup, s.save(value)
+	return value, backup, s.write(value)
 }
 
 // removeStaleTemporaries removes the temporary files that saves interrupted
@@ -316,12 +331,25 @@ func (s *Store) save(value Settings) error {
 	if s.path == "" {
 		return ErrPathUnavailable
 	}
+	if err := s.check(value); err != nil {
+		return err
+	}
+	return s.write(value)
+}
+
+// check validates value as every write requires: the shell's settings and
+// every module section, with each section owner's validator.
+func (s *Store) check(value Settings) error {
 	if err := validate(value); err != nil {
 		return err
 	}
-	if err := s.validateModules(value); err != nil {
-		return err
-	}
+	return s.validateModules(value)
+}
+
+// write replaces the settings file with value, which check has accepted,
+// through a temporary file in the same folder, so the file is replaced only
+// once the new settings are written in full.
+func (s *Store) write(value Settings) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode settings: %w", err)

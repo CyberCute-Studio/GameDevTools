@@ -476,6 +476,47 @@ func TestRestoreDefaultsClearsAFailedSaveWarning(t *testing.T) {
 	}
 }
 
+// TestStartupWarningsAboutARecoveredFileFollowItsSaves pins which startup
+// warnings about a malformed settings file the shell's note keeps, as the
+// application starts on a file it can read but not replace: the warning
+// that the defaults taking its place could not be written leaves the note
+// once a save succeeds, as they then are, while the warning naming the
+// backup, which alone holds the malformed file's settings, stays through
+// that save and through Restore Default Settings, which backs up only the
+// file the defaults were then written to.
+func TestStartupWarningsAboutARecoveredFileFollowItsSaves(t *testing.T) {
+	readOnly := func(t *testing.T, path string) func() {
+		t.Helper()
+		if err := os.Chmod(path, 0o400); err != nil {
+			t.Fatal(err)
+		}
+		return func() { _ = os.Chmod(path, 0o600) }
+	}
+	shell := newAuditShellWhile(t, []byte(`{"version":1`), readOnly)
+	probeScreenshotRestore(t, shell)
+	backups, err := filepath.Glob(shell.path + ".corrupt-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v, err = %v, want one", backups, err)
+	}
+	const unwritten = "Default settings could not be written"
+	if got := shell.note.Text(); !strings.Contains(got, backups[0]) || !strings.Contains(got, unwritten) {
+		t.Fatalf("note at startup = %q, want the recovery naming %s and the failed write", got, backups[0])
+	}
+
+	shell.selectModule(t, core.ModuleImageResizer)
+	if got := shell.note.Text(); !strings.Contains(got, backups[0]) || strings.Contains(got, unwritten) {
+		t.Fatalf("note once a save succeeded = %q, want only the recovery naming %s", got, backups[0])
+	}
+
+	shell.selectModule(t, core.ModuleSettings)
+	if notice := shell.restoreDefaults(); notice.Kind != ui.NoticeSuccess {
+		t.Fatalf("outcome = %+v, want the restore written", notice)
+	}
+	if got := shell.note.Text(); !strings.Contains(got, backups[0]) || strings.Contains(got, unwritten) {
+		t.Fatalf("note after the restore = %q, want only the recovery naming %s", got, backups[0])
+	}
+}
+
 // TestRestoreDefaultsWithoutASettingsPath pins the outcome of a restore in a
 // session without a settings path: the defaults are in use in memory, and
 // the outcome says so without naming a settings file there is not; the
@@ -483,9 +524,9 @@ func TestRestoreDefaultsClearsAFailedSaveWarning(t *testing.T) {
 func TestRestoreDefaultsWithoutASettingsPath(t *testing.T) {
 	shell, _ := newExitTestShell(t, &exitRecordingView{})
 	shell.store = settings.NewStore(settings.Paths{})
-	shell.startup = startupWarnings{settingsFile: []string{fmt.Sprintf(ui.LocalSettingsUnavailable, "no per-user configuration directory")}}
-	shell.startupNotice = shell.startup.text()
-	shell.notice = shell.startupNotice
+	startup := fmt.Sprintf(ui.LocalSettingsUnavailable, "no per-user configuration directory")
+	shell.startup = startupWarnings{settingsFile: []string{startup}}
+	shell.notice = shell.startup.text()
 	shell.settings.Shell.Window.Maximized = true
 
 	notice := shell.restoreDefaults()
@@ -495,8 +536,8 @@ func TestRestoreDefaultsWithoutASettingsPath(t *testing.T) {
 	if !shell.settings.Shell.Window.Maximized {
 		t.Fatal("the restore in memory dropped the running window's placement")
 	}
-	if shell.notice != shell.startupNotice || !strings.Contains(shell.startupNotice, "Local settings are unavailable") {
-		t.Fatalf("note after the restore = %q, want the startup warning kept", shell.notice)
+	if shell.notice != startup {
+		t.Fatalf("note after the restore = %q, want the startup warning %q kept", shell.notice, startup)
 	}
 }
 

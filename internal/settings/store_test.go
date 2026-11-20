@@ -70,6 +70,11 @@ func TestStoreMalformedSettingsAreBackedUpAndRecovered(t *testing.T) {
 	if err != nil || len(backups) != 1 {
 		t.Fatalf("backups = %v, err = %v", backups, err)
 	}
+	// The warning naming the backup is the one later saves do not settle,
+	// and the defaults were written, so none says they could not be.
+	if result.Recovered != result.Warnings[0] || !strings.Contains(result.Recovered, backups[0]) || result.Unwritten != "" {
+		t.Fatalf("recovered warning = %q, unwritten = %q; want the one naming %s, and none", result.Recovered, result.Unwritten, backups[0])
+	}
 	backedUp, err := os.ReadFile(backups[0])
 	if err != nil {
 		t.Fatal(err)

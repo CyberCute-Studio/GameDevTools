@@ -111,13 +111,16 @@ type session struct {
 	value *settings.Settings
 	// settingsWarnings are the warnings about the settings file loading the
 	// settings gave: that it could not be located, read, or decoded, or
-	// that its recovery is incomplete.
-	settingsWarnings  []string
-	screenshotPresets *preset.Repository
-	resizerPresets    *preset.Repository
-	capture           *screenshot.OptionsManager
-	resize            *imageresizer.OptionsManager
-	folders           defaultFolders
+	// that its recovery is incomplete. Of them, recovered is the one naming
+	// the backup of a malformed file, and unwritten the one saying that the
+	// settings loaded could not be written, or "" (settings.LoadResult).
+	settingsWarnings     []string
+	recovered, unwritten string
+	screenshotPresets    *preset.Repository
+	resizerPresets       *preset.Repository
+	capture              *screenshot.OptionsManager
+	resize               *imageresizer.OptionsManager
+	folders              defaultFolders
 }
 
 // openSession opens the settings at paths and builds the modules'
@@ -155,6 +158,7 @@ func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*
 		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.LocalSettingsUnavailable, pathErr))
 	}
 	state.value, state.settingsWarnings = &loaded.Settings, loaded.Warnings
+	state.recovered, state.unwritten = loaded.Recovered, loaded.Unwritten
 	if state.capture, err = screenshot.NewOptionsManager(captureStore, state.value); err != nil {
 		return nil, err
 	}
@@ -165,12 +169,25 @@ func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*
 }
 
 // startupWarnings returns the session's warnings for the shell's note, kept
-// by what decides whether each still applies once the default settings are
-// restored: the settings file's, which the restore settles once it has
-// backed the file up, and the output folders', which follow the options the
-// restore gives.
+// by what decides whether each still applies once the settings are saved or
+// the default settings restored: the settings file's — the recovered file's
+// backup, which stays, the settings that could not be written, which the
+// next save that succeeds settles, and the rest, which the restore settles
+// once it has backed the file up — and the output folders', which follow
+// the options as they now are.
 func (state *session) startupWarnings() startupWarnings {
-	return startupWarnings{settingsFile: state.settingsWarnings, folders: state.folderWarnings}
+	warnings := startupWarnings{folders: state.folderWarnings}
+	for _, warning := range state.settingsWarnings {
+		switch warning {
+		case state.recovered:
+			warnings.recovered = warning
+		case state.unwritten:
+			warnings.unwritten = warning
+		default:
+			warnings.settingsFile = append(warnings.settingsFile, warning)
+		}
+	}
+	return warnings
 }
 
 // folderWarnings returns the warnings the output folders give as the

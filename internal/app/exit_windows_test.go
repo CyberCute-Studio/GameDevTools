@@ -170,10 +170,10 @@ func TestCloseAsksBeforeCancellingWork(t *testing.T) {
 
 // TestEndSessionSavesAndStopsWithoutAsking pins the end of the Windows
 // session (endSession): the session's end is never refused, a session that
-// goes on after all changes nothing, and one that ends saves the settings
-// with the window's placement, destroys the window — shutting every module
-// view down — and waits for the background work, asking nothing although
-// work is running. The message loop's end, which the quit message the
+// goes on after all changes nothing, and one that ends destroys the window —
+// shutting every module view down — saves the settings with the placement
+// the window had, and waits for the background work, asking nothing
+// although work is running. The message loop's end, which the quit message the
 // window's destruction posted brings when the process outlives the
 // session's end, does not wait for the work a second time.
 func TestEndSessionSavesAndStopsWithoutAsking(t *testing.T) {
@@ -202,6 +202,44 @@ func TestEndSessionSavesAndStopsWithoutAsking(t *testing.T) {
 	shell.waitForBackgroundWork()
 	if view.shutdowns != 1 {
 		t.Fatalf("the message loop's end waited %d more time(s) for the work, want none", view.shutdowns-1)
+	}
+}
+
+// saveOrderView records, as the window's destruction shuts it down, whether
+// the settings file at path had been written by then.
+type saveOrderView struct {
+	exitRecordingView
+	path       string
+	savedFirst bool
+}
+
+func (v *saveOrderView) NativeDestroy() {
+	v.exitRecordingView.NativeDestroy()
+	_, err := os.Stat(v.path)
+	v.savedFirst = err == nil
+}
+
+// TestEndSessionStopsTheWorkBeforeSaving pins the order of the end of the
+// Windows session (endSession): the window is destroyed — releasing the
+// global shortcut and cancelling a running job — before the settings are
+// written, so a write that blocks, as on a settings folder redirected to a
+// network share that has gone, holds none of that up, and the write is then
+// bounded with the background work (endSessionWait). The settings are still
+// written, with the placement the window had before it was destroyed.
+func TestEndSessionStopsTheWorkBeforeSaving(t *testing.T) {
+	view := &saveOrderView{}
+	shell, path := newExitTestShell(t, view)
+	view.path = path
+
+	procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
+	if isWindow(shell.hwnd) || view.destroys != 1 {
+		t.Fatalf("window alive = %v, destroys = %d; want it destroyed once", isWindow(shell.hwnd), view.destroys)
+	}
+	if view.savedFirst {
+		t.Fatal("the settings were written before the window was destroyed")
+	}
+	if window := savedWindow(t, path); !window.HasPosition || window.Width != 640 || window.Height != 480 {
+		t.Fatalf("saved window = %+v, want the placement the window had", window)
 	}
 }
 

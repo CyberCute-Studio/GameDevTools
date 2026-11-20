@@ -311,13 +311,18 @@ func (m *OptionsManager) SetBackground(background string) error {
 	return m.save()
 }
 
+// SetOutputFolder selects the output folder the user chose. The choice
+// settles a stored folder the default folder replaced at startup: the folder
+// in use is now the user's, not the default, so FolderWarning no longer
+// reports the replaced one, whether or not the choice could be saved, as the
+// session uses it either way.
 func (m *OptionsManager) SetOutputFolder(folder string) error {
 	updated := m.options
 	updated.OutputFolder = folder
 	if err := updated.Validate(); err != nil {
 		return err
 	}
-	m.options = updated
+	m.options, m.replaced = updated, ""
 	return m.save()
 }
 
