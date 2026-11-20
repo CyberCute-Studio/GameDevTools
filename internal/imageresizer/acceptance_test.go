@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -39,7 +40,10 @@ import (
 // are checked too. Each test is named after its scenario, so
 // `go test -run TestAcceptance ./internal/imageresizer` runs the whole suite;
 // docs/image-resizer-verification.md maps each scenario to these tests and to
-// the unit tests behind them.
+// the unit tests behind them. The suite verifies the Windows application;
+// outside Windows the tests here run too, but AC-R10's confirmed Overwrite
+// skips, as replacing a file needs its identity, which only Windows lets the
+// planner read.
 
 // acceptanceResult is a finished acceptance job: the source list with every
 // item's final status applied, as the view's rows show them, the job's
@@ -622,6 +626,12 @@ func TestAcceptanceR10ConfirmedOverwrite(t *testing.T) {
 	requireUnchanged(t, destinationsBefore)
 	requireUnchanged(t, othersBefore)
 
+	if runtime.GOOS != "windows" {
+		// Outside Windows, where the application does not run, no file's
+		// identity can be read, so a confirmed Overwrite job renames rather
+		// than replaces (output.Prepare).
+		t.Skip("replacing needs file identities, read on Windows only")
+	}
 	result, err := startAcceptance(t, context.Background(), inventory, options, true, acceptancePreset(16, 16, preset.ResizeFit), nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)

@@ -54,8 +54,11 @@ func folderCreation(t *testing.T, folder string) (deny, restore func() error) {
 	if original == nil {
 		// A NULL access control list grants everyone everything; one holding
 		// only the denying entry would grant nothing, so the folder could not
-		// even be read, rather than refuse only new files.
-		t.Fatalf("%s has no access control list, which AC-R14 changes: run it with an NTFS temporary folder", folder)
+		// even be read, rather than refuse only new files. A volume that
+		// keeps no access control lists, such as FAT32 or exFAT, cannot hold
+		// the scenario, as the volume tests elsewhere skip one that cannot
+		// hold a junction or a hard link.
+		t.Skipf("%s has no access control list, which AC-R14 changes: run it with an NTFS temporary folder", folder)
 	}
 	control, _, err := descriptor.Control()
 	if err != nil {

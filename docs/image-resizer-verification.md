@@ -19,7 +19,9 @@ go test -count=1 -v -run 'TestAcceptance|TestNativeViewStaysResponsiveDuringARea
 go test -count=1 -v -run TestNativeManagerScreenshotPresetAbsentFromImageResizer ./internal/preset
 ```
 
-The window-level tests create real Win32 windows and controls, so run them in an interactive desktop session, as the Screenshot suite is run. AC-R14 changes the access control list of a temporary folder it creates, so it needs an NTFS temporary folder, as every Windows default is.
+The window-level tests create real Win32 windows and controls, so run them in an interactive desktop session, as the Screenshot suite is run. AC-R14 changes the access control list of a temporary folder it creates, so it needs an NTFS temporary folder, as every Windows default is, and skips, saying so, on a temporary folder that has no access control list, such as one on a FAT32 or exFAT drive.
+
+The suite verifies the Windows application. Outside Windows, where the application does not run, the tests of `acceptance_test.go` run too, but AC-R10's confirmed Overwrite skips, as replacing a file needs its identity, which only Windows lets the planner read; AC-R14 and the window-level tests are Windows-only.
 
 The performance benchmarks are on-demand rather than part of the default run, because their timings are machine-dependent:
 

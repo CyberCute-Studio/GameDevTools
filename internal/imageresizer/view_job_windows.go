@@ -52,8 +52,9 @@ const jobReleaseDelay = 5 * time.Second
 type jobRunner func(context.Context, job.Request, func(job.Event)) (job.Summary, error)
 
 // activeJob is a job the view started, as the GUI thread tracks it, but for
-// events and done, which the job's goroutine uses too, and ids and rechecks,
-// which it reads and nothing changes.
+// events and done, which the job's goroutine uses too. ids and rechecks are
+// its jobStart's, which the job's goroutine reads through the jobStart it
+// runs (recheckInputs) and nothing changes.
 type activeJob struct {
 	ids      []uint64
 	rechecks []int

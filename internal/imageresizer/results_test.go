@@ -122,15 +122,15 @@ func TestInventoryRechecksFailedItems(t *testing.T) {
 // its item's ID, and replaced by what the check found; once the job is
 // cancelled no further check starts — a job cancelled before the first
 // starts none, as a check of a source on a drive that stopped responding
-// would hold the cancelled job — and the check the cancellation interrupted
+// would hold the cancelled job — and the check during which it was cancelled
 // is neither reported nor applied.
 func TestRecheckInputsStopsOnceCancelled(t *testing.T) {
 	ids := []uint64{11, 12, 13}
 	fresh := func() []job.Input {
 		return []job.Input{
-			{Path: `C:\In\a.png`, Err: errors.New("unreadable")},
-			{Path: `C:\In\b.png`, Info: decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3}},
-			{Path: `C:\In\c.png`, Err: errors.New("damaged")},
+			{Path: filepath.Join("In", "a.png"), Err: errors.New("unreadable")},
+			{Path: filepath.Join("In", "b.png"), Info: decode.Info{Format: decode.FormatPNG, Width: 4, Height: 3}},
+			{Path: filepath.Join("In", "c.png"), Err: errors.New("damaged")},
 		}
 	}
 	info := decode.Info{Format: decode.FormatPNG, Width: 8, Height: 6}

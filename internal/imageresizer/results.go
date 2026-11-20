@@ -235,7 +235,10 @@ func (v *Inventory) newJobStart(options ResizeOptions, target resize.Target, bac
 // caller's copy of the job shares, and is handed to report, with the item's
 // ID from start.ids, for the source list to apply (Inventory.Recheck). It
 // reports whether it checked every one: once ctx is cancelled no further
-// check starts, and a check it interrupted is neither reported nor applied.
+// check starts, and a check that returns once ctx is cancelled is neither
+// reported nor applied, as the cancellation may have cut it short — even one
+// that had finished first, as the two cannot be told apart — so its item
+// counts as one the job did not check again.
 func recheckInputs(ctx context.Context, start jobStart, check inspectFunc, report func(InspectionResult)) bool {
 	for _, index := range start.rechecks {
 		if ctx.Err() != nil {
