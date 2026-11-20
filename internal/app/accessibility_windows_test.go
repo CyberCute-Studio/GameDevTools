@@ -397,19 +397,70 @@ func TestTabReachesEveryControlInLayoutOrder(t *testing.T) {
 }
 
 // TestNavigationArrowKeysSwitchModules pins the navigation's keyboard model
-// beside Tab: the arrow keys move between the modules, switching to each, as
-// in any Windows radio group.
+// beside Tab: the arrow keys move between the modules, switching to each, and
+// wrap from the last module to the first and back, as in any Windows radio
+// group. The navigation's group ends at its last button, where the title
+// starts the next; before, it ran on into the title and description, so Down
+// from Settings and Up from Screenshot did nothing.
 func TestNavigationArrowKeysSwitchModules(t *testing.T) {
 	shell := newAuditShell(t)
 	shell.selectModule(t, core.ModuleScreenshot)
 	procSetFocus.Call(uintptr(shell.navButtons[core.ModuleScreenshot].Handle()))
+	for _, step := range []struct {
+		key  uintptr
+		from core.ModuleID
+		want core.ModuleID
+	}{
+		{vkDown, core.ModuleScreenshot, core.ModuleImageResizer},
+		{vkUp, core.ModuleImageResizer, core.ModuleScreenshot},
+		{vkUp, core.ModuleScreenshot, core.ModuleSettings},
+		{vkDown, core.ModuleSettings, core.ModuleScreenshot},
+	} {
+		shell.press(wmKeyDown, step.key)
+		if current := shell.navigator.Current().ID(); current != step.want || !shell.navButtons[step.want].HasFocus() {
+			t.Fatalf("key %#x from %s: current %s, focus %q; want %s focused and shown", step.key, step.from, current, windowText(shell.focused()), step.want)
+		}
+	}
+}
+
+// TestRadioGroupsWrapAtTheirEnds pins that the arrow keys keep to the capture
+// modes and the collision policies (UX-006): Up from a group's first button
+// selects its last and Down from its last selects its first. Each group ends
+// at its last button, where the label after it starts the next group; before,
+// each ran on into the labels and fields after it, so Up from Free Rectangle
+// moved the focus to Output folder and Up from Rename to Fitting mode,
+// selecting nothing, and Down from the last button did nothing. The display
+// label, which ends the capture modes' group, keeps its access key.
+func TestRadioGroupsWrapAtTheirEnds(t *testing.T) {
+	shell := newAuditShell(t)
+	shell.selectModule(t, core.ModuleScreenshot)
+	procSetFocus.Call(uintptr(shell.navButtons[core.ModuleScreenshot].Handle()))
+	shell.tabTo(t, "Button Free Rectangle")
+	shell.press(wmKeyDown, vkUp)
+	if got, mode := shell.describeFocused(t), shell.capture.Options().Mode; got != "Button Full Display" || mode != screenshot.ModeFullDisplay {
+		t.Fatalf("Up from Free Rectangle focused %q with mode %v, want Full Display focused and selected", got, mode)
+	}
 	shell.press(wmKeyDown, vkDown)
-	if current := shell.navigator.Current().ID(); current != core.ModuleImageResizer || !shell.navButtons[core.ModuleImageResizer].HasFocus() {
-		t.Fatalf("Down from Screenshot: current %s, focus %q; want Image Resizer focused and shown", current, windowText(shell.focused()))
+	if got, mode := shell.describeFocused(t), shell.capture.Options().Mode; got != "Button Free Rectangle" || mode != screenshot.ModeFreeRectangle {
+		t.Fatalf("Down from Full Display focused %q with mode %v, want Free Rectangle focused and selected", got, mode)
 	}
 	shell.press(wmKeyDown, vkUp)
-	if current := shell.navigator.Current().ID(); current != core.ModuleScreenshot || !shell.navButtons[core.ModuleScreenshot].HasFocus() {
-		t.Fatalf("Up from Image Resizer: current %s, focus %q; want Screenshot focused and shown", current, windowText(shell.focused()))
+	shell.layout()
+	shell.press(wmSysChar, 'd')
+	if got := shell.describeFocused(t); got != "ComboBox Display" {
+		t.Fatalf("Alt+D focused %q, want the display picker", got)
+	}
+
+	shell.selectModule(t, core.ModuleImageResizer)
+	procSetFocus.Call(uintptr(shell.navButtons[core.ModuleImageResizer].Handle()))
+	shell.tabTo(t, "Button Rename")
+	shell.press(wmKeyDown, vkUp)
+	if got, policy := shell.describeFocused(t), shell.resize.Options().Collision; got != "Button Overwrite" || policy != imageresizer.CollisionOverwrite {
+		t.Fatalf("Up from Rename focused %q with policy %v, want Overwrite focused and selected", got, policy)
+	}
+	shell.press(wmKeyDown, vkDown)
+	if got, policy := shell.describeFocused(t), shell.resize.Options().Collision; got != "Button Rename" || policy != imageresizer.CollisionRename {
+		t.Fatalf("Down from Overwrite focused %q with policy %v, want Rename focused and selected", got, policy)
 	}
 }
 

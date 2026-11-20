@@ -248,7 +248,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.collisionOver, err = ui.NewButton(parent, ui.ResizeCollisionOverwrite, ui.ButtonOptions{ID: base + collisionOverwriteCommand, Radio: true}); err != nil {
 		return err
 	}
-	if n.collisionNote, err = ui.NewLabel(parent, ""); err != nil {
+	// The note starts a group, ending the collision policies' radio group at
+	// Overwrite, so the arrow keys wrap between the policies
+	// (ui.NewGroupLabel).
+	if n.collisionNote, err = ui.NewGroupLabel(parent, ""); err != nil {
 		return err
 	}
 	if n.namingLabel, err = ui.NewLabel(parent, ui.ResizeNamingLabel); err != nil {

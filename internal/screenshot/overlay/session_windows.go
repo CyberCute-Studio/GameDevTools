@@ -54,6 +54,7 @@ const (
 	wmDestroy        = 0x0002
 	wmActivate       = 0x0006
 	wmClose          = 0x0010
+	wmSysColorChange = 0x0015
 	wmSetCursor      = 0x0020
 	wmNCHitTest      = 0x0084
 	wmKeyDown        = 0x0100
@@ -764,6 +765,24 @@ func systemRingColors() (core, edge uint32) {
 		return uint32(value)
 	}
 	return ringColors(color(colorHighlight), color(colorHighlightText), color(colorWindow), color(colorWindowText))
+}
+
+// recolor chooses the ring colors again from the active system colors and,
+// when they changed, draws the selection's ring and handles again in them, as
+// a contrast theme switched on or off during the session requires.
+func (s *windowsSession) recolor() {
+	core, edge := systemRingColors()
+	if core == s.borderPx && edge == s.edgePx {
+		return
+	}
+	s.borderPx, s.edgePx = core, edge
+	// A compositing failure leaves the previous colors on screen; the
+	// session stays usable, so the error is not fatal.
+	if s.mode == ModePresetRectangle {
+		_ = s.renderFrame()
+	} else if !s.selection.Empty() {
+		_ = s.renderSelection(s.visualBounds())
+	}
 }
 
 func (s *windowsSession) Close() {
@@ -1836,6 +1855,14 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 			session.onCancel()
 		}
 		return 0
+	case wmSysColorChange:
+		// Switching a contrast theme on or off during the session changes the
+		// system colors the ring and handles are drawn in, which configure
+		// chose as the session started (UX-007). Windows sends the change to
+		// every top-level window, and the toolbar lives as long as the session.
+		if session != nil {
+			session.recolor()
+		}
 	case wmNCHitTest:
 		// The toolbar background drags the toolbar; child controls still
 		// receive their own hit tests.

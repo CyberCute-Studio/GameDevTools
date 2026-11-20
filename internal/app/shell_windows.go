@@ -332,7 +332,10 @@ func (s *nativeShell) createControls() error {
 		s.navButtons[module.ID()] = button
 		s.navIDs[id] = module.ID()
 	}
-	title, err := ui.NewLabel(s.hwnd, "")
+	// The title starts a group, ending the navigation's radio group at its
+	// last button, so the arrow keys wrap between the modules
+	// (ui.NewGroupLabel).
+	title, err := ui.NewGroupLabel(s.hwnd, "")
 	if err != nil {
 		return err
 	}

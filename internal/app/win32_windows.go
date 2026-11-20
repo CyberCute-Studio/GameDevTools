@@ -26,11 +26,16 @@ const (
 	wmDisplayChange  = 0x007e
 	wmDPIChanged     = 0x02e0
 	wmDropFiles      = 0x0233
-	wmUser           = 0x0400
-	wmAppDispatch    = wmUser + 1
+	// The shell's own messages are in the WM_APP range, as the capture
+	// toolbar's are. The dialog manager, which the shell's message loop runs,
+	// sends the window DM_GETDEFID (WM_USER) as it handles Tab, Enter, the
+	// arrow keys, and access keys, and the codes after it are the dialog
+	// messages DM_SETDEFID and DM_REPOSITION.
+	wmApp         = 0x8000
+	wmAppDispatch = wmApp + 1
 	// wmAppRestoreFocus asks the shell to give the focus back once a click
 	// that activated the window has been handled, as wmActivate describes.
-	wmAppRestoreFocus = wmUser + 2
+	wmAppRestoreFocus = wmApp + 2
 
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000

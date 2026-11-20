@@ -127,7 +127,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.modeFull, err = ui.NewButton(parent, ui.CaptureModeFullDisplay, ui.ButtonOptions{ID: base + modeFullCommand, Radio: true}); err != nil {
 		return err
 	}
-	if n.displayLabel, err = ui.NewMnemonicLabel(parent, ui.DisplayLabel); err != nil {
+	// The display label starts a group, ending the capture modes' radio
+	// group at Full Display, so the arrow keys wrap between the modes
+	// (ui.NewGroupLabel).
+	if n.displayLabel, err = ui.NewGroupMnemonicLabel(parent, ui.DisplayLabel); err != nil {
 		return err
 	}
 	if n.displayCombo, err = ui.NewComboBox(parent, base+displayCommand); err != nil {

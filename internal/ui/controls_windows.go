@@ -141,6 +141,24 @@ func NewMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
 	return newLabel(parent, text, 0)
 }
 
+// NewGroupLabel creates a label that starts a group (WS_GROUP), for the label
+// laid out directly after a radio group (UX-006). The dialog manager moves
+// the arrow keys through the run of controls from a group's first button to
+// the next control that starts a group, wrapping at its ends, and stop at a
+// label, so a group that ran on into the labels and fields after it would not
+// wrap: Down from its last button would stop at the label after it, and Up
+// from its first button would stop at the run's last control or, when that
+// is a field, move the focus there, selecting nothing.
+func NewGroupLabel(parent windows.Handle, text string) (*Label, error) {
+	return newLabel(parent, text, ssNoPrefix|wsGroup)
+}
+
+// NewGroupMnemonicLabel is NewMnemonicLabel for a label that starts a group,
+// as NewGroupLabel describes.
+func NewGroupMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
+	return newLabel(parent, text, wsGroup)
+}
+
 func newMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
 	return NewMnemonicLabel(parent, text)
 }
@@ -167,7 +185,8 @@ type Button struct {
 
 // NewButton creates a push button, or with Radio an automatic radio button.
 // A radio group is the run of radio buttons from one created with Group to
-// the next control created with Group. Its first button is the group's tab
+// the next control created with Group, which must directly follow its last
+// button, as NewGroupLabel describes. Its first button is the group's tab
 // stop until SetChecked checks one, as SetChecked describes.
 func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Button, error) {
 	style := uintptr(wsChild | wsVisible | wsTabStop | bsNotify)
@@ -623,10 +642,9 @@ func (s *StatusArea) Update(notice Notice) {
 	s.SetTextQuietly(notice.Text())
 }
 
+// Clear removes the notice, as Update with no notice does.
 func (s *StatusArea) Clear() {
-	s.stopTimer()
-	s.revision++
-	s.SetTextQuietly("")
+	s.Update(Notice{})
 }
 
 func (s *StatusArea) HandleTimer(id uintptr) bool {
