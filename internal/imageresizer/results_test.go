@@ -150,7 +150,7 @@ func TestRecheckInputsStopsOnceCancelled(t *testing.T) {
 			}
 			return info, nil
 		}
-		ok := recheckInputs(ctx, []int{0, 2}, ids, inputs, check, func(result InspectionResult) { r.reported = append(r.reported, result.ID) })
+		ok := recheckInputs(ctx, jobStart{request: job.Request{Inputs: inputs}, ids: ids, rechecks: []int{0, 2}}, check, func(result InspectionResult) { r.reported = append(r.reported, result.ID) })
 		return ok, r
 	}
 

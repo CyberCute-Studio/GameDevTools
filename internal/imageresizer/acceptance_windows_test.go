@@ -30,8 +30,10 @@ const fileAddFile = 0x2
 // control entry denying FILE_ADD_FILE to the folder alone, which every later
 // create in it meets at once while the folder stays listable and its files
 // readable; restore puts back the folder's own access control list, and runs
-// at the end of the test too. Both may run on another goroutine, such as a
-// job's observer, so they report failures rather than failing the test.
+// at the end of the test too. AC-R14 calls both from the job's observer,
+// which job.Run calls on the test's goroutine while items are in flight, so
+// they return their errors, for the test to report once the job has
+// returned, rather than ending the test's goroutine inside job.Run.
 //
 // Both change the folder's own access control list through a handle to it
 // (SetKernelObjectSecurity), which leaves the files in it alone.

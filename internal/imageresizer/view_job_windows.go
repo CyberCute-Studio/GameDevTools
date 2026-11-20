@@ -287,7 +287,7 @@ func (n *NativeView) startJob(start jobStart) {
 	n.openButton.Enable(false)
 	n.refreshSourceSelection()
 	n.jobs.Add(1)
-	go n.runJob(ctx, active, start.request, n.run, n.inspector.check)
+	go n.runJob(ctx, active, start, n.run, n.inspector.check)
 }
 
 // runJob runs the job on its own goroutine — first checking again the
@@ -305,7 +305,7 @@ func (n *NativeView) startJob(start jobStart) {
 // that no longer hold: the GUI thread makes up its outcome
 // (jobFinish.unplanned). A panic that escapes the job is reported as its
 // failure rather than ending the process (NFR-021).
-func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.Request, run jobRunner, check inspectFunc) {
+func (n *NativeView) runJob(ctx context.Context, active *activeJob, start jobStart, run jobRunner, check inspectFunc) {
 	defer n.jobs.Done()
 	defer close(active.done)
 	var finish jobFinish
@@ -315,11 +315,11 @@ func (n *NativeView) runJob(ctx context.Context, active *activeJob, request job.
 				finish = jobFinish{err: fmt.Errorf("%w: %v", job.ErrUnexpected, recovered)}
 			}
 		}()
-		if !recheckInputs(ctx, active.rechecks, active.ids, request.Inputs, check, active.events.recheck) {
+		if !recheckInputs(ctx, start, check, active.events.recheck) {
 			finish.unplanned = true
 			return
 		}
-		finish.summary, finish.err = run(ctx, request, func(event job.Event) {
+		finish.summary, finish.err = run(ctx, start.request, func(event job.Event) {
 			// job.Run calls this for every change of an item's state, and it
 			// only hands the event on, as Run requires: the GUI thread applies
 			// it.

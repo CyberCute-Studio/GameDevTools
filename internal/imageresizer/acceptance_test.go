@@ -81,13 +81,16 @@ func listSources(t *testing.T, paths []string) *Inventory {
 }
 
 // startAcceptance runs a job over the listed sources under the selected
-// preset with the options, as the view's Start Resize does once the user
-// confirmed an Overwrite job, or declined to when confirmed is false: Start
+// preset with the options, as the view's Start Resize does once an Overwrite
+// job is confirmed, as confirmed says, or for any other policy: Start
 // Resize's own checks of the list, the preset, and the options (jobRefusal,
 // jobTarget, jobBackground) must let the job start, the request is built by
 // its newJobStart, and the sources whose check failed are checked again by
 // its recheckInputs, their checks applied to the list, before job.Run. Every
-// item's final status is then applied to the list.
+// item's final status is then applied to the list. An Overwrite job with
+// confirmed false is one the view never starts — when the user declines, it
+// starts nothing (TestNativeViewOverwriteNeedsConfirmation) — and runs here
+// only to show that job.Run refuses it too.
 func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, options ResizeOptions, confirmed bool, selected preset.Preset, observe func(job.Event)) (acceptanceResult, error) {
 	t.Helper()
 	if refusal := inventory.jobRefusal(); refusal != "" {
@@ -107,7 +110,7 @@ func startAcceptance(t *testing.T, ctx context.Context, inventory *Inventory, op
 			t.Errorf("the check of item %d made again was not applied", result.ID)
 		}
 	}
-	if !recheckInputs(ctx, start.rechecks, start.ids, start.request.Inputs, acceptanceCheck, applied) {
+	if !recheckInputs(ctx, start, acceptanceCheck, applied) {
 		t.Fatal("the job was cancelled while it checked its sources again")
 	}
 	summary, err := job.Run(ctx, start.request, observe)
@@ -582,11 +585,13 @@ func TestAcceptanceR09SkipCollisions(t *testing.T) {
 	requireUnchanged(t, before)
 }
 
-// TestAcceptanceR10ConfirmedOverwrite pins AC-R10: an Overwrite job is
-// refused before anything is touched until the user confirms it, and once
-// confirmed replaces only the existing files at its destinations — neither
-// another file in the output folder, a numbered name included, nor a
-// source.
+// TestAcceptanceR10ConfirmedOverwrite pins AC-R10: a confirmed Overwrite job
+// replaces only the existing files at its destinations — neither another
+// file in the output folder, a numbered name included, nor a source. The
+// view starts no Overwrite job the user has not confirmed, which
+// TestNativeViewOverwriteNeedsConfirmation pins in the window; behind it,
+// job.Run itself refuses an unconfirmed one before anything is touched,
+// which this test checks first.
 func TestAcceptanceR10ConfirmedOverwrite(t *testing.T) {
 	sources := t.TempDir()
 	paths := []string{

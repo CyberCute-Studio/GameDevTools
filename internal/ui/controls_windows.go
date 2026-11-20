@@ -156,28 +156,41 @@ func (c *ComboBox) Selected() int {
 	return int(int32(index))
 }
 
-// Count returns the number of items in the combo box's list, or 0 when the
-// control reports that it cannot count them (CB_ERR), so a caller can size a
-// slice by it.
+// Count returns the number of items in the combo box's list, as itemCount
+// describes.
 func (c *ComboBox) Count() int {
-	count, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetCount, 0, 0)
+	return itemCount(c.hwnd, cbGetCount)
+}
+
+// ItemText returns the text of the item at index, as itemText describes.
+func (c *ComboBox) ItemText(index int) string {
+	return itemText(c.hwnd, cbGetLBTextLen, cbGetLBText, index)
+}
+
+// itemCount returns the number of items a list or combo box holds, by its
+// count message (LB_GETCOUNT, CB_GETCOUNT), or 0 when the control reports
+// that it cannot count them (LB_ERR, CB_ERR), so a caller can size a slice
+// by it.
+func itemCount(hwnd windows.Handle, countMessage uintptr) int {
+	count, _, _ := procSendMessageW.Call(uintptr(hwnd), countMessage, 0, 0)
 	return max(0, int(int32(count)))
 }
 
-// ItemText returns the text of the item at index, or "" for an index out of
-// range or an item that cannot be read. Call it on the thread that owns the
-// combo box, as every control is driven: CB_GETLBTEXT takes no buffer size,
-// so the buffer is sized by CB_GETLBTEXTLEN, and on the owning thread
-// nothing can change the item between the two messages, which go straight
-// to its window procedure; from another thread a change dispatched between
-// them could overrun the buffer.
-func (c *ComboBox) ItemText(index int) string {
-	length, _, _ := procSendMessageW.Call(uintptr(c.hwnd), cbGetLBTextLen, uintptr(index), 0)
+// itemText returns the text of a list or combo box item at index, by its
+// length and text messages (LB_GETTEXTLEN and LB_GETTEXT, CB_GETLBTEXTLEN
+// and CB_GETLBTEXT), or "" for an index out of range or an item that cannot
+// be read. Call it on the thread that owns the control, as every control is
+// driven: the text message takes no buffer size, so the buffer is sized by
+// the length message, and on the owning thread nothing can change the item
+// between the two messages, which go straight to its window procedure; from
+// another thread a change dispatched between them could overrun the buffer.
+func itemText(hwnd windows.Handle, lengthMessage, textMessage uintptr, index int) string {
+	length, _, _ := procSendMessageW.Call(uintptr(hwnd), lengthMessage, uintptr(index), 0)
 	if int32(length) <= 0 {
 		return ""
 	}
 	buffer := make([]uint16, int(length)+1)
-	procSendMessageW.Call(uintptr(c.hwnd), cbGetLBText, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])))
+	procSendMessageW.Call(uintptr(hwnd), textMessage, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])))
 	return windows.UTF16ToString(buffer)
 }
 
@@ -380,19 +393,14 @@ func (l *ListBox) Reset() {
 	procSendMessageW.Call(uintptr(l.hwnd), lbResetContent, 0, 0)
 }
 
+// Count returns the number of items in the list, as itemCount describes.
 func (l *ListBox) Count() int {
-	count, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetCount, 0, 0)
-	return int(int32(count))
+	return itemCount(l.hwnd, lbGetCount)
 }
 
+// ItemText returns the text of the item at index, as itemText describes.
 func (l *ListBox) ItemText(index int) string {
-	length, _, _ := procSendMessageW.Call(uintptr(l.hwnd), lbGetTextLen, uintptr(index), 0)
-	if int32(length) <= 0 {
-		return ""
-	}
-	buffer := make([]uint16, int(length)+1)
-	procSendMessageW.Call(uintptr(l.hwnd), lbGetText, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])))
-	return windows.UTF16ToString(buffer)
+	return itemText(l.hwnd, lbGetTextLen, lbGetText, index)
 }
 
 // SetItemText replaces one item's text in place. The list box has no

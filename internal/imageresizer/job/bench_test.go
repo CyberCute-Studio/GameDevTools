@@ -92,8 +92,8 @@ func encodeReference(b *testing.B, img image.Image) []byte {
 // description depends only on the file's content, so each of the 11
 // distinct contents — the seven pictures, and the four landscapes tagged
 // with an orientation: the sources tagged 6 take landscapes 0 and 2, as
-// their index is even, and those tagged 8 landscapes 1 and 3 — is checked
-// once and its description given to its copies.
+// their index is even, and those tagged 8 landscapes 1 and 3 — is built
+// and checked once, and its content and description given to its copies.
 func referenceInputs(b *testing.B) ([]Input, uint64, uint64) {
 	b.Helper()
 	var landscapes, portraits [][]byte
@@ -110,6 +110,7 @@ func referenceInputs(b *testing.B) ([]Input, uint64, uint64) {
 		index       int
 		orientation uint16
 	}
+	tagged := make(map[picture][]byte)
 	checked := make(map[picture]decode.Info)
 	folder := b.TempDir()
 	inputs := make([]Input, 0, referenceSources)
@@ -129,7 +130,11 @@ func referenceInputs(b *testing.B) ([]Input, uint64, uint64) {
 			if index%2 == 1 {
 				source.orientation = 8
 			}
-			content = withOrientation(landscapes[source.index], source.orientation)
+			var exists bool
+			if content, exists = tagged[source]; !exists {
+				content = withOrientation(landscapes[source.index], source.orientation)
+				tagged[source] = content
+			}
 		}
 		path := filepath.Join(folder, fmt.Sprintf("photo-%03d.jpg", index))
 		if err := os.WriteFile(path, content, 0o644); err != nil {

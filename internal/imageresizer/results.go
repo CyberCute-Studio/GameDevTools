@@ -116,11 +116,17 @@ func (v *Inventory) JobInputs() ([]job.Input, []uint64) {
 func (v *Inventory) Recheckable() []int {
 	var indexes []int
 	for index, item := range v.items {
-		if item.Status != StatusReady && item.Status != StatusChecking && SupportedExtension(item.Path) {
+		if item.recheckable() {
 			indexes = append(indexes, index)
 		}
 	}
 	return indexes
+}
+
+// recheckable reports whether a job checks the item again before it starts,
+// as Recheckable describes.
+func (s SourceItem) recheckable() bool {
+	return s.Status != StatusReady && s.Status != StatusChecking && SupportedExtension(s.Path)
 }
 
 // Recheck applies a content check made again before a job, for an item
@@ -172,7 +178,7 @@ func (v *Inventory) jobRefusal() string {
 	if checking := v.Checking(); checking > 0 {
 		return fmt.Sprintf(ui.ResizeJobChecking, checking)
 	}
-	if v.Ready() == 0 && len(v.Recheckable()) == 0 {
+	if !slices.ContainsFunc(v.items, func(item SourceItem) bool { return item.Status == StatusReady || item.recheckable() }) {
 		return ui.ResizeJobNoImages
 	}
 	return ""
@@ -220,26 +226,27 @@ func (v *Inventory) newJobStart(options ResizeOptions, target resize.Target, bac
 	}
 }
 
-// recheckInputs checks again, before a job starts, the content of its inputs
-// whose check had failed, at the indexes rechecks lists, as Recheckable
-// lists them, so the job takes each as it now is (RSZ-049): one that has
-// since become readable, or was replaced by a valid image, is resized, and
-// one that still cannot be used fails with its current reason. Each check
-// made replaces its input in inputs and is handed to report, with the item's
-// ID from ids, for the source list to apply (Inventory.Recheck). It reports
-// whether it checked every one: once ctx is cancelled no further check
-// starts, and a check it interrupted is neither reported nor applied.
-func recheckInputs(ctx context.Context, rechecks []int, ids []uint64, inputs []job.Input, check inspectFunc, report func(InspectionResult)) bool {
-	for _, index := range rechecks {
+// recheckInputs checks again, before the job starts, the content of its
+// inputs whose check had failed, at the indexes start.rechecks lists, as
+// Recheckable lists them, so the job takes each as it now is (RSZ-049): one
+// that has since become readable, or was replaced by a valid image, is
+// resized, and one that still cannot be used fails with its current reason.
+// Each check made replaces its input in start.request.Inputs, which the
+// caller's copy of the job shares, and is handed to report, with the item's
+// ID from start.ids, for the source list to apply (Inventory.Recheck). It
+// reports whether it checked every one: once ctx is cancelled no further
+// check starts, and a check it interrupted is neither reported nor applied.
+func recheckInputs(ctx context.Context, start jobStart, check inspectFunc, report func(InspectionResult)) bool {
+	for _, index := range start.rechecks {
 		if ctx.Err() != nil {
 			return false
 		}
-		input := &inputs[index]
+		input := &start.request.Inputs[index]
 		info, err := check(ctx, input.Path)
 		if ctx.Err() != nil {
 			return false
 		}
-		result := InspectionResult{ID: ids[index], Info: info, Err: err}
+		result := InspectionResult{ID: start.ids[index], Info: info, Err: err}
 		report(result)
 		*input = recheckedInput(input.Path, result)
 	}

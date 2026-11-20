@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,18 +65,12 @@ func selectRow(view *NativeView, index int) {
 	view.refreshSourceSelection()
 }
 
-// imageSize decodes an output file's dimensions.
+// imageSize decodes a file whole, as the acceptance suite decodes its
+// results (decodeOutput), and returns its dimensions.
 func imageSize(t *testing.T, path string) (int, int) {
 	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(content))
-	if err != nil {
-		t.Fatalf("decode %s: %v", path, err)
-	}
-	return config.Width, config.Height
+	img := decodeOutput(t, path)
+	return img.Width, img.Height
 }
 
 // expectedSize is the output size of a source under the selected preset, at

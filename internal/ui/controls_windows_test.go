@@ -215,6 +215,8 @@ func newTestParent(t *testing.T) windows.Handle {
 
 // TestComboBoxReadsBackItsItems pins that a combo box reports how many items
 // its list holds and the text of each, and "" for an index out of range.
+// Every item's text is non-empty, so an item that could not be read, which
+// reads as "", cannot pass for one.
 func TestComboBoxReadsBackItsItems(t *testing.T) {
 	parent := newTestParent(t)
 	combo, err := NewComboBox(parent, 76)
@@ -224,7 +226,7 @@ func TestComboBoxReadsBackItsItems(t *testing.T) {
 	if got := combo.Count(); got != 0 {
 		t.Fatalf("empty combo box count = %d", got)
 	}
-	want := []string{"HD — 1280 × 720 px (built-in)", "Capture 640 — 640 × 480 px", ""}
+	want := []string{"HD — 1280 × 720 px (built-in)", "Capture 640 — 640 × 480 px", "Écran 📷 — 1 × 1 px"}
 	for _, text := range want {
 		combo.Add(text)
 	}
@@ -236,8 +238,10 @@ func TestComboBoxReadsBackItsItems(t *testing.T) {
 			t.Fatalf("item %d = %q, want %q", index, got, text)
 		}
 	}
-	if got := combo.ItemText(len(want)); got != "" {
-		t.Fatalf("item out of range = %q", got)
+	for _, index := range []int{-1, len(want)} {
+		if got := combo.ItemText(index); got != "" {
+			t.Fatalf("item %d, out of range, = %q", index, got)
+		}
 	}
 	combo.Reset()
 	if got := combo.Count(); got != 0 {
