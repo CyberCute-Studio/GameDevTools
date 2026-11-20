@@ -230,6 +230,46 @@ func TestCloseQuestionEndedBySessionEnd(t *testing.T) {
 	}
 }
 
+// TestFailedSaveWarnsAndClosingAsks pins SET-004 in the shell: a settings
+// write that fails shows a warning and keeps the session's change in
+// memory, and closing then asks before the unsaved settings are lost, No
+// keeping the window open.
+func TestFailedSaveWarnsAndClosingAsks(t *testing.T) {
+	shell, path := newExitTestShell(t, &exitRecordingView{})
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shell.settings.Shell.Window.Maximized = true
+	if err := shell.saveSettings(false); err == nil {
+		t.Fatal("saving over a folder succeeded")
+	}
+	if got := shell.note.Text(); !strings.Contains(got, "Settings could not be saved") || !strings.Contains(got, ui.NoticeWarningLabel) {
+		t.Fatalf("note after the failed save = %q, want the warning", got)
+	}
+	if !shell.settings.Shell.Window.Maximized {
+		t.Fatal("the failed save discarded the session's change")
+	}
+
+	var questions []string
+	answer := false
+	shell.confirm = func(_ windows.Handle, title, message string) bool {
+		questions = append(questions, title)
+		if title != ui.SettingsCloseTitle || message != ui.SettingsCloseConfirmation {
+			t.Errorf("question = %q, %q, want the unsaved settings'", title, message)
+		}
+		return answer
+	}
+	procSendMessageW.Call(uintptr(shell.hwnd), wmClose, 0, 0)
+	if len(questions) != 1 || !isWindow(shell.hwnd) {
+		t.Fatalf("questions = %q, window alive = %v; want one question and the window kept", questions, isWindow(shell.hwnd))
+	}
+	answer = true
+	procSendMessageW.Call(uintptr(shell.hwnd), wmClose, 0, 0)
+	if len(questions) != 2 || isWindow(shell.hwnd) {
+		t.Fatalf("questions = %q, window alive = %v; want Yes to close", questions, isWindow(shell.hwnd))
+	}
+}
+
 // shortcutIsFree reports whether the combination the audit shell registers,
 // Ctrl+Alt+Shift+F24, can be registered again, as it can once no window
 // holds it (AC-A05).

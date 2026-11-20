@@ -83,6 +83,8 @@ Settings are UTF-8 JSON. Unknown fields, unsupported versions, invalid module id
 
 New versions are implemented through the `settings.Migration` interface. A migration consumes one complete versioned JSON document and returns the next document. The store applies registered migrations until it reaches the current version, backs up the original using a `settings.json.migration-<timestamp>` suffix, and writes the migrated document.
 
+Every build so far has written version `1`, so the application registers no migration: the builds that changed the format added optional fields and sections, which version `1` loads with their defaults when they are absent. The file each of those builds wrote is kept in `internal/app/testdata/settings`, and `app.TestOpenSessionUpgradesEverySettingsFormat` loads every one with all section validators registered, as the application starts, and through a restart; see [Settings, recovery, and shutdown verification](reliability-verification.md). A change that removes or renames a field, or changes what one means, needs a new version, a migration, and a fixture of the version it replaces.
+
 ## Module presets
 
 Each feature module stores custom presets under its own `presets` object. The optional `selectedPresetId` records the last selected built-in or custom preset in that module; an omitted value selects the first built-in. The nested preset format version is currently `1`; unsupported versions, unknown fields, duplicate identifiers or names, unknown selected identifiers, invalid module options, and invalid dimensions are rejected. Saving presets preserves unrelated options in the same module section.
@@ -125,12 +127,27 @@ Unsupported versions, unknown fields, duplicate fields, invalid enumerations, ou
 
 ## Recovery and writes
 
-Writes use a temporary file in the settings directory. The file is flushed and closed before it replaces the destination, and temporary files are removed after failure. A failed write leaves the current in-memory session intact and produces a visible shell warning.
+Writes use a temporary file in the settings directory. The file is flushed and closed before it replaces the destination, and temporary files are removed after failure. A failed write leaves the current in-memory session intact and produces a visible shell warning. A save that is interrupted before its rename — by a crash, a forced exit, or the end of the Windows session — can leave its `.settings-*.tmp` file behind; loading the settings removes such files once they are more than a minute old, older than any save in flight, even one by an instance in another of the user's Windows sessions.
 
-Malformed settings are copied byte-for-byte to `settings.json.corrupt-<timestamp>` before defaults are written. The warning reports the backup path. If the backup cannot be created, or an existing settings file cannot be read, saving is disabled for that store so a later close or navigation cannot overwrite the original. Recovery and migration never inspect or modify saved images.
+Malformed settings are copied byte-for-byte to `settings.json.corrupt-<timestamp>` before defaults are written. The warning reports the backup path. If the backup cannot be created, or an existing settings file cannot be read, saving is disabled for that store so a later close or navigation cannot overwrite the original. Every backup — `corrupt`, `migration`, and `reset` — is read back and compared with the bytes it copies before the original is replaced; a copy that differs or cannot be read is removed and treated as a backup that could not be created. Recovery and migration never inspect or modify saved images.
+
+The settings are saved, with the window's placement, when the main window closes and when Windows ends the user's session — signing out, restarting, or shutting down — which asks nothing and only logs a save that fails, as no one is left to read a warning.
+
+## Restoring default settings
+
+Restore Default Settings in the Settings view (SET-005) asks first; its safe answer, No, is the default. It then copies the settings file byte-for-byte to `settings.json.reset-<timestamp>`, verified as every backup is, and replaces it with the default settings, keeping:
+
+- each module's `presets` object, exactly as stored: its custom presets and its `selectedPresetId`. A custom preset is deleted only with Delete in its module, which asks first (PRESET-002).
+- `shell`: the window placement and current module, which describe the running window and are saved again as it closes.
+
+Everything else in the module sections is removed and loads as its default: the Screenshot `capture` options — capture mode, format, JPEG quality, output folder, and global shortcut — and the Image Resizer `resize` options — format, collision policy, JPEG quality, transparency background, and output folder. The running session takes the restored settings at once. Screenshot registers the default global shortcut in place of the one registered and releases that one, reporting a default another application holds as at startup, in the Screenshot view and in the restore's outcome; the outcome also says when no default output folder is known. Saved images, source images, the images in the resize list, a running resize job, which runs on the options it started with, and unsaved edits in the preset forms are not touched.
+
+When the settings file cannot be read or backed up, nothing changes and the outcome says so. When the backup exists but the restored settings cannot be written, the session keeps them, as it keeps any setting change whose save fails (SET-004), and the file keeps the previous settings until the next successful save. A session whose saving was disabled because recovery could not read or back up the original file saves again once the restore has backed that file up.
 
 ## Diagnostic redaction and rotation
 
 Diagnostic events contain only a UTC timestamp, severity, a fixed operation identifier, and a fixed result code. The logging API has no message, path, filename, image, clipboard, or arbitrary-metadata field. User-facing local error details may contain a settings or backup path when needed for recovery; those details are not copied into the diagnostic event.
+
+The settings events are `settings.load` with `recovered-with-warnings`, `settings.save` with `write-failed`, and `settings.restore` with `restored`, `not-restored`, or `write-failed`; the end of the Windows session records `app.end-session` with `stopped`.
 
 The active log rotates before it exceeds 1 MiB. Up to three numbered backups are retained (`gamedevtools.log.1` through `.3`), with older events discarded first. Logging is local and does not transmit data.
