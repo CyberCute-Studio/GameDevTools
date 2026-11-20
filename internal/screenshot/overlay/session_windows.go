@@ -932,7 +932,12 @@ func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 		0, 0, uintptr(s.toolbarSize.Width), uintptr(s.toolbarSize.Height),
 		swpNoZOrder|swpNoActivate|swpNoMove)
 	s.layoutToolbarControls()
-	s.syncDimensions()
+	// Without a selection the fields hold the size the user is typing toward
+	// one (SCR-015), which a display change must not wipe; with one they show
+	// its revalidated size.
+	if !selection.Empty() {
+		s.syncDimensions()
+	}
 	s.syncPosition()
 	s.placeToolbar()
 	if s.onSelection != nil {
@@ -1418,6 +1423,12 @@ func (s *windowsSession) applyTypedSize(selection display.Rect) {
 // Leaving the fields commits the pair only as leavesFilledPair describes;
 // Enter with a field empty explains what is missing. A refused size keeps
 // the typed text for correcting, as there is no selection to revert to.
+// Enter hands the focus to Capture, which the new selection enables, as Tab
+// out of the pair does (commitBeforeTab): inside a dimension field the arrow
+// keys move the caret and Enter commits the size again, so a focus left
+// there would keep the arrow keys from nudging the selection and Enter from
+// capturing it, as the instructions promise. A screen reader announces
+// Capture as it takes the focus.
 func (s *windowsSession) createTypedSelection(explicit bool) {
 	if !explicit {
 		// A field's focus-loss notification arrives once the focus has
@@ -1432,6 +1443,9 @@ func (s *windowsSession) createTypedSelection(explicit bool) {
 		return
 	}
 	s.applyTypedSize(selection)
+	if explicit {
+		procSetFocus.Call(uintptr(s.captureButton))
+	}
 }
 
 // commitBeforeTab creates the typed selection as Tab leaves the pair of

@@ -286,7 +286,7 @@ func (n *NativeView) startJob(start jobStart) {
 	n.cancelButton.Focus()
 	n.outputFolder = ""
 	n.openButton.Enable(false)
-	n.refreshSourceSelection()
+	n.showSourceSelection(false)
 	n.jobs.Add(1)
 	go n.runJob(ctx, active, start, n.run, n.inspector.check)
 }
@@ -369,7 +369,7 @@ func (n *NativeView) applyJobEvents(active *activeJob) {
 		}
 	}
 	if refreshDetail {
-		n.refreshSourceSelection()
+		n.showSourceSelection(false)
 	}
 	if hasResults(active.progress) && n.outputFolder == "" {
 		n.outputFolder = active.folder
@@ -468,7 +468,7 @@ func (n *NativeView) finishJob(active *activeJob, finish jobFinish) {
 		}
 	}
 	n.cancelButton.Enable(false)
-	n.refreshSourceSelection()
+	n.showSourceSelection(false)
 }
 
 // cancelJob cancels the running job (RSZ-045): no further item starts, the

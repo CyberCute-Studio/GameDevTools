@@ -630,7 +630,8 @@ func TestShellRestoresFocusOnActivation(t *testing.T) {
 // control's focus handlers for nothing — the global shortcut field suspends
 // the shortcut — or scroll it into view from under the pointer. Once the
 // click is handled, the focus goes back only if the click left it on the
-// window itself, as a click on the title bar does.
+// window itself, as a click on the title bar or the scroll bar does, and
+// without scrolling the view.
 func TestShellLeavesAClickActivationsFocusToTheClick(t *testing.T) {
 	shell := newAuditShell(t)
 	shell.selectModule(t, core.ModuleScreenshot)
@@ -670,6 +671,39 @@ func TestShellLeavesAClickActivationsFocusToTheClick(t *testing.T) {
 	if focus, _, _ := procGetFocus.Call(); windows.Handle(focus) != browse {
 		t.Fatalf("after a click on the title bar activated the window, %q has the focus, want Browse…, which had it", windowText(windows.Handle(focus)))
 	}
+
+	// A click on the scroll bar leaves the focus on the window too, and the
+	// view keeps the scrolling the click made: the control given the focus
+	// back is not scrolled into view.
+	moveWindow(shell.hwnd, 0, 0, 720, 320)
+	for _, delta := range []int32{-1 << 20, 1 << 20} {
+		shell.scrollBy(delta)
+		if !shell.controlInView(browse) {
+			break
+		}
+	}
+	if shell.controlInView(browse) {
+		t.Fatal("the test cannot scroll Browse… out of a 320-pixel-tall window")
+	}
+	scrolled := shell.scrollY
+	clickActivate()
+	handleClick()
+	if focus, _, _ := procGetFocus.Call(); windows.Handle(focus) != browse {
+		t.Fatalf("after a click on the scroll bar activated the window, %q has the focus, want Browse…, which had it", windowText(windows.Handle(focus)))
+	}
+	if shell.scrollY != scrolled {
+		t.Fatalf("giving the focus back after a click on the scroll bar scrolled the view from %d to %d", scrolled, shell.scrollY)
+	}
+}
+
+// controlInView reports whether any of the control shows in the window's
+// client area.
+func (a *auditShell) controlInView(control windows.Handle) bool {
+	var bounds, client rect
+	procGetWindowRect.Call(uintptr(control), uintptr(unsafe.Pointer(&bounds)))
+	procMapWindowPoints.Call(0, uintptr(a.hwnd), uintptr(unsafe.Pointer(&bounds)), 2)
+	procGetClientRect.Call(uintptr(a.hwnd), uintptr(unsafe.Pointer(&client)))
+	return bounds.Bottom > client.Top && bounds.Top < client.Bottom
 }
 
 // TestShellAnnouncesStartupNoticeOnceShown pins that the shell announces its

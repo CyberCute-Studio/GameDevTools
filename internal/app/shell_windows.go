@@ -58,6 +58,10 @@ type nativeShell struct {
 	// click, whose focus restoreFocus leaves to the click, as wmActivate
 	// describes.
 	clickActivating bool
+	// keepScroll is whether a control's set-focus notification leaves the
+	// view's scroll position alone, as it does while the focus is given back
+	// after a click activation (wmAppRestoreFocus).
+	keepScroll bool
 
 	// announced holds the modules whose notice was announced once shown in
 	// the visible window, as announceModuleNotice describes; it is nil until
@@ -432,7 +436,8 @@ func (s *nativeShell) updateView() {
 // action's availability, reports it available. A button it disables while
 // the button has the keyboard focus first hands the focus to the next
 // control in tab order (AC-A03), or, when there is none, to the current
-// module's navigation button.
+// module's navigation button, and in a shell without one to the window
+// itself, where Tab reaches the first control again.
 func (s *nativeShell) refreshAction() {
 	enabled := s.actionEnabled()
 	if !enabled && s.action.HasFocus() {
@@ -440,9 +445,13 @@ func (s *nativeShell) refreshAction() {
 		if next == 0 || windows.Handle(next) == s.action.Handle() {
 			next = uintptr(s.currentNavButton())
 		}
-		if next != 0 {
-			procSetFocus.Call(next)
+		if next == 0 {
+			// The window's focus runs restoreFocus, which would give the
+			// focus straight back to the button, still enabled.
+			s.focus = 0
+			next = uintptr(s.hwnd)
 		}
+		procSetFocus.Call(next)
 	}
 	s.action.Enable(enabled)
 }
@@ -477,6 +486,25 @@ func (s *nativeShell) announceModuleNotice() {
 	if announcer, ok := s.nativeViews[id].(nativeNoticeAnnouncer); ok {
 		announcer.NativeAnnounceNotice()
 	}
+}
+
+// reportsFocus reports whether a WM_COMMAND notification from the control
+// says it gained the keyboard focus. A list box's LBN_SETFOCUS shares its
+// code, 4, with a combo box's CBN_KILLFOCUS, which arrives once the focus
+// has left the combo box for another control, so that code counts only
+// while the control holds the focus.
+func reportsFocus(notification uint16, control uintptr) bool {
+	if control == 0 {
+		return false
+	}
+	switch notification {
+	case bnSetFocus, enSetFocus, cbnSetFocus:
+		return true
+	case lbnSetFocus:
+		focus, _, _ := procGetFocus.Call()
+		return focus == control
+	}
+	return false
 }
 
 // currentNavButton returns the current module's navigation button, or 0
@@ -1031,9 +1059,11 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	switch message {
 	case wmCommand:
 		notification := highWord(wParam)
-		if shell != nil && (notification == bnSetFocus || notification == enSetFocus || notification == cbnSetFocus || notification == lbnSetFocus) && lParam != nil {
+		if shell != nil && reportsFocus(notification, uintptr(lParam)) {
 			shell.focus = windows.Handle(lParam)
-			shell.ensureControlVisible(windows.Handle(lParam))
+			if !shell.keepScroll {
+				shell.ensureControlVisible(windows.Handle(lParam))
+			}
 			// Set-focus notifications also reach the owning module view: the
 			// Screenshot shortcut field suspends its global hotkey while it is
 			// being edited, which only works if this branch does not swallow
@@ -1079,8 +1109,10 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		// focus handlers for nothing — suspending the global shortcut while
 		// the shortcut field holds it — or scroll it into view from under the
 		// pointer. So on a click activation the focus is given back once the
-		// click has been handled, and only if the click left it on the window
-		// itself, as a click on the title bar or the background does.
+		// click has been handled, only if the click left it on the window
+		// itself, as a click on the title bar, the scroll bar, or the
+		// background does, and without scrolling the control into view
+		// (wmAppRestoreFocus).
 		if shell != nil {
 			switch lowWord(wParam) {
 			case waInactive:
@@ -1106,9 +1138,15 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			return 0
 		}
 	case wmAppRestoreFocus:
+		// The click that activated the window may have been on its scroll
+		// bar, whose scrolling the view must keep, so the control given the
+		// focus back is not scrolled into view: a pointer, not the keyboard,
+		// brought the user back.
 		if shell != nil {
 			if focused, _, _ := procGetFocus.Call(); windows.Handle(focused) == hwnd {
+				shell.keepScroll = true
 				shell.restoreFocus()
+				shell.keepScroll = false
 			}
 			return 0
 		}

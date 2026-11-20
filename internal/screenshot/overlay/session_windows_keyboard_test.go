@@ -43,7 +43,8 @@ func pressEnter(t *testing.T, controller *Controller, native *windowsSession, fi
 // TestFreeRectangleTypedSizeCreatesSelection pins the keyboard path through
 // Free Rectangle (SCR-015): with nothing drawn, typing a width and height
 // and pressing Enter creates a selection of exactly that size, centered on
-// the cursor display; moving from one field to the other is no request,
+// the cursor display, and hands the focus to Capture; moving from one field
+// to the other is no request,
 // with the second field empty or filled; Enter with a field empty, or a
 // size larger than the desktop, explains the problem and keeps the typed
 // text.
@@ -104,6 +105,9 @@ func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	}
 	if selections != 1 || !captureEnabled(native) {
 		t.Fatalf("after the typed selection: %d reports, Capture enabled %v; want 1 and enabled", selections, captureEnabled(native))
+	}
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.captureButton) {
+		t.Fatalf("Enter that created the selection left the focus on %#x, want Capture (%#x)", focus, uintptr(native.captureButton))
 	}
 	if got := native.message.Text(); got != ui.OverlayInstructions {
 		t.Fatalf("an accepted size left %q in the toolbar, want the instructions", got)
@@ -303,7 +307,9 @@ func TestToolbarRestoresFocusOnActivation(t *testing.T) {
 
 // TestFreeRectangleArrowKeysNudgeSelection pins that the arrow keys move a
 // free rectangle by one physical pixel once one exists (SCR-015), as they
-// move the preset frame (SCR-027), and do nothing to the selection before.
+// move the preset frame (SCR-027), and do nothing to the selection before:
+// right after the Enter that created it, from the Capture button Enter
+// focused, and from the toolbar itself.
 func TestFreeRectangleArrowKeysNudgeSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
@@ -323,13 +329,17 @@ func TestFreeRectangleArrowKeysNudgeSelection(t *testing.T) {
 	native.heightEdit.SetText("100")
 	pressEnter(t, controller, native, native.heightEdit)
 	start := native.selection
-	procSetFocus.Call(uintptr(native.toolbar))
-	if !controller.FilterMessage(unsafe.Pointer(&right)) {
-		t.Fatal("the filter did not take the Right arrow")
+	focus, _, _ := procGetFocus.Call()
+	if focus != uintptr(native.captureButton) {
+		t.Fatalf("Enter that created the selection left the focus on %#x, want Capture (%#x)", focus, uintptr(native.captureButton))
 	}
 	down := windowMessage{HWND: native.capture.Handle(), Message: wmKeyDown, WParam: vkDown}
 	if !controller.FilterMessage(unsafe.Pointer(&down)) {
-		t.Fatal("the filter did not take the Down arrow on the Capture button")
+		t.Fatal("the filter did not take the Down arrow on the Capture button Enter focused")
+	}
+	procSetFocus.Call(uintptr(native.toolbar))
+	if !controller.FilterMessage(unsafe.Pointer(&right)) {
+		t.Fatal("the filter did not take the Right arrow")
 	}
 	want := display.Rect{Left: start.Left + 1, Top: start.Top + 1, Right: start.Right + 1, Bottom: start.Bottom + 1}
 	if native.selection != want {
@@ -340,6 +350,33 @@ func TestFreeRectangleArrowKeysNudgeSelection(t *testing.T) {
 	controller.FilterMessage(unsafe.Pointer(&caret))
 	if native.selection != want {
 		t.Fatalf("an arrow key inside the width field moved the selection to %v", native.selection)
+	}
+}
+
+// TestFreeRectangleDisplayChangeKeepsTypedSize pins that a display change
+// (SCR-054) in a Free Rectangle session without a selection leaves the size
+// the user is typing toward one in the fields (SCR-015): there is no
+// selection whose revalidated size they would show instead.
+func TestFreeRectangleDisplayChangeKeepsTypedSize(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	native.widthEdit.SetText("1280")
+	native.heightEdit.SetText("72")
+	grown := native.bounds
+	grown.Right += 64
+	if !native.DisplayChanged(grown) {
+		t.Fatal("the session did not survive a grown desktop")
+	}
+	if native.bounds != grown {
+		t.Fatalf("the display change was answered without revalidating: bounds %v, want %v", native.bounds, grown)
+	}
+	if width, height := native.widthEdit.Text(), native.heightEdit.Text(); width != "1280" || height != "72" {
+		t.Fatalf("the display change left the fields %q × %q, want the typed 1280 × 72", width, height)
 	}
 }
 

@@ -12,9 +12,10 @@ import (
 // TestNativeViewAnnouncesAJobsStartAndSummaryOnly pins what a screen reader
 // hears of a resize job: its start and its summary, which the job section
 // announces as a live region, and not the progress for every image between
-// them, which would queue one announcement per image. The detail line for
-// the selected image is a live region too, as it says how that image's
-// resize ended.
+// them, which would queue one announcement per image, nor the selected
+// image's state changing in the detail line beside them. The detail line is
+// a live region too, which announces how an image's resize ended as the
+// selection moves to it.
 func TestNativeViewAnnouncesAJobsStartAndSummaryOnly(t *testing.T) {
 	view, dispatcher := newSourcesTestView(t)
 	directory := sourceDir(t, view)
@@ -24,6 +25,8 @@ func TestNativeViewAnnouncesAJobsStartAndSummaryOnly(t *testing.T) {
 	}
 	view.NativeDropFiles(paths)
 	settle(t, view, dispatcher)
+	selectRow(view, 0)
+	before := view.pathDetail.Text()
 
 	watch, err := uiatest.WatchAnnouncements()
 	if err != nil {
@@ -45,6 +48,16 @@ func TestNativeViewAnnouncesAJobsStartAndSummaryOnly(t *testing.T) {
 	}
 	if got := watch.Count(view.jobStatus.Handle()); got != 2 {
 		t.Fatalf("the job section was announced %d times, want 2: the start and the summary", got)
+	}
+	if view.pathDetail.Text() == before {
+		t.Fatalf("the selected image's detail stayed %q through the job; the test needs it to change", before)
+	}
+	if got := watch.Count(view.pathDetail.Handle()); got != 0 {
+		t.Fatalf("the detail line was announced %d time(s) during the job, want none", got)
+	}
+	selectRow(view, 1)
+	if got := watch.Count(view.pathDetail.Handle()); got != 1 {
+		t.Fatalf("moving the selection to another resized image announced the detail line %d time(s), want once", got)
 	}
 
 	setting, err := uiatest.LiveSetting(view.pathDetail.Handle())

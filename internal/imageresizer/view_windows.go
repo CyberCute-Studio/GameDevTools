@@ -978,15 +978,33 @@ func (n *NativeView) refreshSources() {
 	n.refreshSourceSelection()
 }
 
+// refreshSourceSelection shows the selected item's path and detail and
+// enables the source list's commands for the selection, announcing a changed
+// detail, as when the selection moves or the selected image's content check
+// ends (showSourceSelection).
 func (n *NativeView) refreshSourceSelection() {
+	n.showSourceSelection(true)
+}
+
+// showSourceSelection is refreshSourceSelection, where announce is whether
+// the detail line announces a changed detail (ui.NewLiveLabel). A resize
+// job's changes to it are shown quietly, as the job announces only its
+// start, its Cancel, and its summary (showJobProgress): the selected image's
+// Pending, Processing, and final state would otherwise queue beside them,
+// its final state just ahead of the summary.
+func (n *NativeView) showSourceSelection(announce bool) {
+	setDetail := n.pathDetail.SetTextQuietly
+	if announce {
+		setDetail = n.pathDetail.SetText
+	}
 	selection := n.list.SelectedIndices()
 	if len(selection) == 0 {
 		n.path.SetText("")
-		n.pathDetail.SetText("")
+		setDetail("")
 	} else {
 		item := n.inventory.Item(selection[0])
 		n.path.SetText(item.Path)
-		n.pathDetail.SetText(item.DetailText())
+		setDetail(item.DetailText())
 	}
 	// The source list cannot change while a job runs, as its rows are the
 	// job's items.
