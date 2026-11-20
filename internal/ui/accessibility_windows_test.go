@@ -163,10 +163,10 @@ func TestLiveLabelsAreLiveRegions(t *testing.T) {
 }
 
 // TestLiveLabelsAnnounceWhatChanged pins when a screen reader is asked to
-// read a label: a live label's changed text, and not the same text again or
-// an emptied label; a status area's every notice, an identical one
-// included, as an identical result is still a new one, but not a quiet
-// Update or a Clear; and never a plain label.
+// read a label: a live label's changed text, and not the same text again,
+// an emptied label, or text set with SetTextQuietly; a status area's every
+// notice, an identical one included, as an identical result is still a new
+// one, but not a quiet Update or a Clear; and never a plain label.
 func TestLiveLabelsAnnounceWhatChanged(t *testing.T) {
 	parent := newTestParent(t)
 	live, err := NewLiveLabel(parent, "")
@@ -199,6 +199,13 @@ func TestLiveLabelsAnnounceWhatChanged(t *testing.T) {
 	live.Announce()
 	if got := watch.Count(live.Handle()); got != 3 {
 		t.Fatalf("live label announcements after another change and Announce = %d, want 3", got)
+	}
+	live.SetTextQuietly("Shortcut registration error: the shortcut is taken.")
+	if got := watch.Count(live.Handle()); got != 3 {
+		t.Fatalf("live label announcements after SetTextQuietly = %d, want still 3", got)
+	}
+	if got := live.Text(); got != "Shortcut registration error: the shortcut is taken." {
+		t.Fatalf("SetTextQuietly left the text %q", got)
 	}
 	if got := watch.Count(plain.Handle()); got != 0 {
 		t.Fatalf("a plain label raised %d announcements", got)

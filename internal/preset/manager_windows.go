@@ -370,9 +370,10 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		return "", 0, 0, "", false
 	}
 	n.name.Error.SetText("")
+	shown := n.width.Error.Text()
 	width, err := n.width.Validate()
 	if err != nil {
-		n.width.Focus()
+		refuseDimension(n.width, shown)
 		return "", 0, 0, "", false
 	}
 	if !ValidDimension(width) {
@@ -380,9 +381,10 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		n.width.Focus()
 		return "", 0, 0, "", false
 	}
+	shown = n.height.Error.Text()
 	height, err := n.height.Validate()
 	if err != nil {
-		n.height.Focus()
+		refuseDimension(n.height, shown)
 		return "", 0, 0, "", false
 	}
 	if !ValidDimension(height) {
@@ -407,6 +409,21 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		}
 	}
 	return name, width, height, mode, true
+}
+
+// refuseDimension moves the focus to a dimension field whose text refused
+// Create or Rename / Save and has a screen reader read the field's message
+// (UX-003): a refusal is news each time the user asks, as each of the
+// capture toolbar's refusals is. The field validates as it changes and as it
+// loses the focus, so Validate here usually sets the message already shown,
+// which a live label does not announce again; shown is the message before
+// Validate, so a message Validate changed, and so announced, is not
+// announced twice.
+func refuseDimension(field *ui.DimensionInput, shown string) {
+	field.Focus()
+	if field.Error.Text() == shown {
+		field.Error.Announce()
+	}
 }
 
 func (n *NativeManager) presentResult(err error, success string) {

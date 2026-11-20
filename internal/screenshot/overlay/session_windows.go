@@ -1398,9 +1398,16 @@ func (s *windowsSession) typedSize() (width, height int, refusal string) {
 
 // applyTypedSize makes the selection an accepted typed size describes: the
 // instructions replace any refusal shown, and the toolbar follows the
-// selection.
+// selection. A size the selection already has only tidies the fields' text:
+// the field's focus loss commits again what Enter or Tab out of the pair
+// (commitBeforeTab) has just applied, which would otherwise re-render the
+// selection and report it unchanged.
 func (s *windowsSession) applyTypedSize(selection display.Rect) {
 	s.restoreInstructions()
+	if selection == s.selection {
+		s.syncDimensions()
+		return
+	}
 	s.setSelection(selection)
 	s.placeToolbar()
 }
@@ -1456,9 +1463,12 @@ func (s *windowsSession) commitBeforeTab(field uintptr) {
 // the typed size as Enter does. Moving from one field to the other while
 // typing the pair is not a request — a selection created then would be
 // resized in place, not centered again, by a correction to the pair — and
-// neither is leaving the pair with a field still empty.
+// neither is leaving the pair with a field still empty, nor switching to
+// another application, which takes the focus from the toolbar's thread
+// (next is 0): the toolbar gives the focus back to the field on return
+// (restoreFocus), where the user goes on typing the pair.
 func (s *windowsSession) leavesFilledPair(next uintptr) bool {
-	return !s.isDimensionEdit(next) && strings.TrimSpace(s.widthEdit.Text()) != "" && strings.TrimSpace(s.heightEdit.Text()) != ""
+	return next != 0 && !s.isDimensionEdit(next) && strings.TrimSpace(s.widthEdit.Text()) != "" && strings.TrimSpace(s.heightEdit.Text()) != ""
 }
 
 // typedFreeSelection returns the Free Rectangle selection the typed width
@@ -1480,7 +1490,7 @@ func (s *windowsSession) typedFreeSelection() (display.Rect, string) {
 // announces it to a screen reader, even when it repeats the message shown,
 // as a refused edit is news each time the user commits it.
 func (s *windowsSession) report(text string) {
-	s.message.Control.SetText(text)
+	s.message.SetTextQuietly(text)
 	s.message.Announce()
 }
 
@@ -1488,7 +1498,7 @@ func (s *windowsSession) report(text string) {
 // the session announced them when it started, and they return while the
 // user types or once an edit is accepted.
 func (s *windowsSession) restoreInstructions() {
-	s.message.Control.SetText(s.instructions())
+	s.message.SetTextQuietly(s.instructions())
 }
 
 // syncPosition mirrors the live selection's virtual-desktop origin into the

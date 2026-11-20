@@ -404,7 +404,15 @@ func (s *nativeShell) updateView() {
 	setWindowText(s.title, view.Title())
 	setWindowText(s.description, view.Description())
 	s.action.SetText(view.PrimaryAction())
-	s.note.SetText(s.noteText())
+	// Only a warning is news. The placeholder note of a module without a
+	// native view belongs to its view, as the view's title and description
+	// do, so it is shown quietly: switching to the module would otherwise
+	// announce it on every visit.
+	if s.notice != "" {
+		s.note.SetText(s.noteText())
+	} else {
+		s.note.SetTextQuietly(s.noteText())
+	}
 	s.action.Show(view.PrimaryAction() != "")
 	s.refreshAction()
 	// SetChecked keeps the current module's button the navigation's only
@@ -444,8 +452,11 @@ func (s *nativeShell) refreshAction() {
 // that were recovered, and the current module's own (announceModuleNotice).
 // Each was announced as it was set, while the window was still hidden and no
 // screen reader was reading it, and an unchanged text is not announced again.
+// A placeholder note is not a notice, as updateView describes.
 func (s *nativeShell) announceNotices() {
-	s.note.Announce()
+	if s.notice != "" {
+		s.note.Announce()
+	}
 	s.announced = make(map[core.ModuleID]bool)
 	s.announceModuleNotice()
 }

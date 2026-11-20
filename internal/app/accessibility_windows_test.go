@@ -20,6 +20,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
@@ -675,10 +676,11 @@ func TestShellLeavesAClickActivationsFocusToTheClick(t *testing.T) {
 // note once the window appears (announceNotices): a startup warning is set
 // while the window is still hidden, where its announcement goes unheard,
 // and its unchanged text would never be announced again. An empty note
-// announces nothing.
+// announces nothing, and neither does the placeholder note, which belongs
+// to the Settings view and would otherwise be announced on every visit.
 func TestShellAnnouncesStartupNoticeOnceShown(t *testing.T) {
 	shell := newAuditShell(t)
-	shell.selectModule(t, core.ModuleScreenshot)
+	shell.selectModule(t, core.ModuleSettings)
 	watch, err := uiatest.WatchAnnouncements()
 	if err != nil {
 		t.Fatal(err)
@@ -686,8 +688,14 @@ func TestShellAnnouncesStartupNoticeOnceShown(t *testing.T) {
 	t.Cleanup(watch.Stop)
 
 	shell.announceNotices()
+	if got := shell.note.Text(); got != ui.PlaceholderNote {
+		t.Fatalf("the Settings view's note = %q, want the placeholder note", got)
+	}
+	shell.selectModule(t, core.ModuleScreenshot)
+	shell.selectModule(t, core.ModuleSettings)
+	shell.selectModule(t, core.ModuleScreenshot)
 	if got := watch.Count(shell.note.Handle()); got != 0 {
-		t.Fatalf("an empty note raised %d announcements", got)
+		t.Fatalf("the placeholder note and an empty note raised %d announcements", got)
 	}
 	shell.notice = "The settings file was recovered."
 	shell.updateView()

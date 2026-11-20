@@ -1,11 +1,15 @@
 package ui
 
-// Every sentence and label the application shows is defined here (UX-009),
-// so a translation replaces this file rather than searching the feature
-// packages. Error values from Windows and the Go libraries, and the
-// operation a lower layer names around them, appear only as the detail a %v
-// adds after one of these sentences; a typed error's kind, not its text,
-// chooses the sentence.
+// Every sentence and label the application presents is defined here
+// (UX-009), so a translation replaces this file rather than searching the
+// feature packages. An error's own text is not: an error value's message —
+// from Windows, the Go libraries, or the application's own lower layers,
+// such as the Image Resizer's decode, encode, output, and job packages, whose
+// messages are English — and the operation a layer names around it appear
+// only as the detail after one of these sentences or labels. A typed
+// error's kind, not its text, chooses the sentence, its category, and any
+// recovery hint, so a translation can replace such a detail by its kind
+// (errors.Is, errors.As) without changing the layer that reports it.
 
 // Severity, error-category, and dimension-validation text shared by every
 // module's presentation.

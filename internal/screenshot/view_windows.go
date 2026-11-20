@@ -70,6 +70,11 @@ type NativeView struct {
 	savedPath        string
 	shown            bool
 	font             windows.Handle
+	// shortcutNotice is the status area's revision once
+	// presentShortcutFailure last showed a failure there, which
+	// NativeAnnounceNotice compares to tell whether a later notice replaced
+	// it.
+	shortcutNotice uint64
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -197,9 +202,15 @@ func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 // NativeAnnounceNotice asks a screen reader to read the status area's
 // notice, if any, once the view is first shown in the visible main window: a
 // startup shortcut conflict or display failure is shown while the window, or
-// the view, is still hidden, where its announcement goes unheard.
+// the view, is still hidden, where its announcement goes unheard. A shortcut
+// failure that a later notice replaced in the status area, as a display
+// failure at startup in Full Display mode replaces a conflict, is still
+// shown beside the field, and is announced from there.
 func (n *NativeView) NativeAnnounceNotice() {
 	n.status.Announce()
+	if n.status.Revision() != n.shortcutNotice {
+		n.shortcut.Error.Announce()
+	}
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
@@ -800,10 +811,14 @@ func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 
 // presentShortcutFailure reports a registration problem beside the shortcut
 // field and in the status area, categorized as a shortcut-registration
-// failure (UX-010).
+// failure (UX-010). The status area announces it, so the field shows it
+// quietly: a screen reader would otherwise read the same failure twice in a
+// row.
 func (n *NativeView) presentShortcutFailure(err error) {
-	n.shortcut.Error.SetText(ui.FormatError(ui.ErrorShortcutRegistration, err))
-	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorShortcutRegistration, err)}, 0)
+	message := ui.FormatError(ui.ErrorShortcutRegistration, err)
+	n.shortcut.Error.SetTextQuietly(message)
+	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)
+	n.shortcutNotice = n.status.Revision()
 }
 
 func (n *NativeView) commitQuality() {

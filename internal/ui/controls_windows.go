@@ -106,6 +106,15 @@ func (l *Label) SetText(text string) {
 	}
 }
 
+// SetTextQuietly replaces the label's text without announcing it, for a
+// caller that announces the text itself (Announce) or whose text is not
+// news: progress that changes faster than a screen reader could read it,
+// instructions that return while the user types, or a message another live
+// region already announces.
+func (l *Label) SetTextQuietly(text string) {
+	l.Control.SetText(text)
+}
+
 // Announce asks a screen reader to read a live label's current text now,
 // whether or not it changed — as when the window that shows it appears, or
 // a refused edit is refused again. It does nothing for other labels, or
@@ -621,13 +630,13 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 func (s *StatusArea) Update(notice Notice) {
 	s.stopTimer()
 	s.revision++
-	s.Control.SetText(notice.Text())
+	s.SetTextQuietly(notice.Text())
 }
 
 func (s *StatusArea) Clear() {
 	s.stopTimer()
 	s.revision++
-	s.Control.SetText("")
+	s.SetTextQuietly("")
 }
 
 func (s *StatusArea) HandleTimer(id uintptr) bool {

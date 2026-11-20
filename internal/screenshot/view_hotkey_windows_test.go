@@ -267,8 +267,10 @@ func TestNativeViewShortcutCommitReportsRestoreFailure(t *testing.T) {
 
 // TestNativeViewAnnouncesItsStartupNotice pins that the view announces its
 // notice when the shell asks once the main window appears, as a startup
-// shortcut conflict is shown while the window is hidden, and that it has
-// nothing to announce with an empty status area.
+// shortcut conflict is shown while the window is hidden; that a conflict a
+// later notice replaced in the status area, as a display failure at startup
+// does in Full Display mode, is announced from beside the field instead; and
+// that it has nothing to announce with nothing shown.
 func TestNativeViewAnnouncesItsStartupNotice(t *testing.T) {
 	view := newConflictedHotkeyView(t)
 	watch, err := uiatest.WatchAnnouncements()
@@ -281,10 +283,55 @@ func TestNativeViewAnnouncesItsStartupNotice(t *testing.T) {
 	if got := watch.Count(view.status.Handle()); got != 1 {
 		t.Fatalf("announcements of the startup conflict = %d, want 1", got)
 	}
-	view.status.Clear()
+	if got := watch.Count(view.shortcut.Error.Handle()); got != 0 {
+		t.Fatalf("the conflict the status area announced was announced %d time(s) beside the field too", got)
+	}
+
+	// A display failure takes the status area, as refreshDisplays reports it.
+	_ = view.status.Show(ui.Notice{Kind: ui.NoticeError, Message: "The displays could not be listed."}, 0)
 	view.NativeAnnounceNotice()
+	if got := watch.Count(view.shortcut.Error.Handle()); got != 1 {
+		t.Fatalf("announcements of the conflict the display failure replaced = %d, want 1 from beside the field", got)
+	}
+
+	view.status.Clear()
+	view.shortcut.Error.SetText("")
+	view.NativeAnnounceNotice()
+	if got := watch.Count(view.status.Handle()); got != 3 {
+		t.Fatalf("status announcements after the status area was cleared = %d, want still 3", got)
+	}
+	if got := watch.Count(view.shortcut.Error.Handle()); got != 1 {
+		t.Fatalf("field announcements after the field was cleared = %d, want still 1", got)
+	}
+}
+
+// TestNativeViewAnnouncesAShortcutFailureOnce pins that a registration
+// conflict, shown both beside the shortcut field and in the status area, is
+// announced once, by the status area, rather than read twice in a row.
+func TestNativeViewAnnouncesAShortcutFailureOnce(t *testing.T) {
+	view, fake := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
+	fake.applyFunc = func(shortcut Shortcut) error {
+		if shortcut == DefaultShortcut() {
+			return nil
+		}
+		return shortcutConflictError(shortcut)
+	}
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	view.shortcut.Edit.SetText("Ctrl+Shift+F9")
+	view.NativeCommand(optionsCommandBase+shortcutCommand, ui.NotificationEditKillFocus)
+	if got := view.shortcut.Error.Text(); !strings.Contains(got, "Shortcut registration error:") {
+		t.Fatalf("field error for conflict = %q", got)
+	}
 	if got := watch.Count(view.status.Handle()); got != 1 {
-		t.Fatalf("announcements after the status area was cleared = %d, want still 1", got)
+		t.Fatalf("status announcements of the conflict = %d, want 1", got)
+	}
+	if got := watch.Count(view.shortcut.Error.Handle()); got != 0 {
+		t.Fatalf("field announcements of the conflict = %d, want 0, as the status area announces it", got)
 	}
 }
 

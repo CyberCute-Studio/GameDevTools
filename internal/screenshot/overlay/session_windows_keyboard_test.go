@@ -138,18 +138,64 @@ func TestFreeRectangleLeavingTypedSizeCreatesSelection(t *testing.T) {
 	}
 }
 
+// TestFreeRectangleSwitchingAwayCommitsNoTypedSize pins that switching to
+// another application while typing the pair is no request (SCR-015): the
+// focus leaves the toolbar's thread rather than the pair, and the toolbar
+// gives it back to the field on return, so the size finished there is
+// centered as typed, not resized in place from a half-typed one created as
+// the focus left.
+func TestFreeRectangleSwitchingAwayCommitsNoTypedSize(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	toolbar := uintptr(native.toolbar)
+
+	native.widthEdit.SetText("640")
+	native.heightEdit.Focus()
+	native.heightEdit.SetText("4")
+	// Another application's activation deactivates the toolbar and takes
+	// the focus from its thread.
+	procSendMessageW.Call(toolbar, wmActivate, waInactive, 0)
+	procSetFocus.Call(0)
+	if !native.selection.Empty() {
+		t.Fatalf("switching away with the pair half typed created %v", native.selection)
+	}
+	procSendMessageW.Call(toolbar, wmActivate, waActive, 0)
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.heightEdit.Handle()) {
+		t.Fatalf("returning to the toolbar focused %#x, want the height field", focus)
+	}
+	native.heightEdit.SetText("480")
+	pressEnter(t, controller, native, native.heightEdit)
+	want, ok := typedSelection(native.anchor, native.bounds, 640, 480)
+	if !ok {
+		t.Fatal("640 × 480 does not fit the test desktop")
+	}
+	if native.selection != want {
+		t.Fatalf("selection after finishing the pair on return = %v, want %v, centered", native.selection, want)
+	}
+}
+
 // TestFreeRectangleTabFromFilledPairReachesCapture pins that Tab out of the
 // filled pair of dimension fields lands on Capture (SCR-015): the typed
 // selection is created before the dialog manager picks the next control, so
 // Tab does not pass the still-disabled Capture for Cancel, where Enter would
-// cancel the session. A refused size leaves Capture disabled and is
-// announced once.
+// cancel the session, and the field's focus loss then reports it no second
+// time. A refused size leaves Capture disabled and is announced once.
 func TestFreeRectangleTabFromFilledPairReachesCapture(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
 		t.Fatal(err)
 	}
 	native := nativeOf(t, controller)
+	selections := 0
+	report := native.onSelection
+	native.onSelection = func(selection display.Rect) {
+		selections++
+		report(selection)
+	}
 	watch, err := uiatest.WatchAnnouncements()
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +234,9 @@ func TestFreeRectangleTabFromFilledPairReachesCapture(t *testing.T) {
 	}
 	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.captureButton) {
 		t.Fatalf("Tab out of the filled pair focused %#x, want Capture (%#x)", focus, uintptr(native.captureButton))
+	}
+	if selections != 1 {
+		t.Fatalf("Tab out of the filled pair reported the selection %d time(s), want once", selections)
 	}
 }
 
