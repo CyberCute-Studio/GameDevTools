@@ -93,6 +93,8 @@ Windows CI runs the same formatting, static-analysis, test, and release-build ch
 
 The Screenshot module's acceptance and performance verification is recorded in [Screenshot verification and acceptance results](docs/screenshot-verification.md): the repeatable test matrix for every Screenshot acceptance scenario, the NFR-011 overlay-appearance and NFR-012 capture-to-clipboard benchmarks, the environment of record the results were measured on, and the scenarios still gated on mixed-DPI hardware.
 
+The Image Resizer module's acceptance and performance verification is recorded in [Image Resizer verification and acceptance results](docs/image-resizer-verification.md): the end-to-end acceptance suite for every Image Resizer acceptance scenario and the responsive-batch scenario, the repeatable fixtures it generates, the NFR-013 100-image reference benchmark with its NFR-014 memory observations, and the environment the results were measured on.
+
 ## FND-01 technical spike
 
 Build the spike directly with:

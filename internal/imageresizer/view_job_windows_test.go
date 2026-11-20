@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 
@@ -455,6 +456,159 @@ func TestNativeViewCancelStopsTheJob(t *testing.T) {
 	}
 	if got := view.status.Text(); got != "" {
 		t.Fatalf("status once the job ended = %q, want the notice that the list cannot change cleared", got)
+	}
+}
+
+var (
+	procGetWindowRect = testUser32.NewProc("GetWindowRect")
+	procSetWindowPos  = testUser32.NewProc("SetWindowPos")
+)
+
+// windowRect is the screen rectangle of a window.
+func windowRect(t *testing.T, hwnd windows.Handle) windows.Rect {
+	t.Helper()
+	var rect windows.Rect
+	if result, _, err := procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rect))); result == 0 {
+		t.Fatalf("GetWindowRect: %v", err)
+	}
+	return rect
+}
+
+// TestNativeViewStaysResponsiveDuringARealJob pins AC-A04 and the GUI's
+// part of AC-R13 with a real job: the view's own job.Run resizes real files,
+// and is held partway, once its first result is saved, inside the observer
+// that hands its events to the GUI thread. Meanwhile the GUI thread, which
+// the job never runs on, moves the window, reviews every image's state, and
+// cancels the job through Cancel Resize. Released, the job starts no further
+// image; the saved results stay valid, the rest end Cancelled with nothing
+// left in the output folder for them, and the view is ready for the next
+// job.
+func TestNativeViewStaysResponsiveDuringARealJob(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	directory := sourceDir(t, view)
+	folder := view.options.Options().OutputFolder
+	var paths []string
+	for index := range 8 {
+		paths = append(paths, writeViewFile(t, directory, fmt.Sprintf("photo-%d.jpg", index), fixtureJPEG(t, fixtureQuadrants(800, 600))))
+	}
+	view.NativeDropFiles(paths)
+	settle(t, view, dispatcher)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { waitJobDone(t, view) })
+	// Registered after waitJobDone, so it runs first: a test that fails while
+	// the job is held lets it go before waiting for it.
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var lateStarts atomic.Int32
+	view.run = func(ctx context.Context, request job.Request, observe func(job.Event)) (job.Summary, error) {
+		started := make(map[int]bool)
+		holding := true
+		return job.Run(ctx, request, func(event job.Event) {
+			observe(event)
+			if event.Status.State == job.StateProcessing {
+				if ctx.Err() != nil && !started[event.Index] {
+					lateStarts.Add(1)
+				}
+				started[event.Index] = true
+			}
+			if event.Status.State == job.StateCompleted && holding {
+				holding = false
+				close(held)
+				<-release
+			}
+		})
+	}
+
+	view.NativeAction()
+	if view.active == nil {
+		t.Fatalf("the job did not start: %q", view.jobStatus.Text())
+	}
+	select {
+	case <-held:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the job saved no result")
+	}
+	for len(dispatcher.tasks) > 0 {
+		dispatcher.runNext(t)
+	}
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Information: Resizing: ") {
+		t.Fatalf("progress while the job runs = %q", got)
+	}
+
+	before := windowRect(t, view.parent)
+	const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
+	if result, _, err := procSetWindowPos.Call(uintptr(view.parent), 0, uintptr(before.Left+37), uintptr(before.Top+23), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate); result == 0 {
+		t.Fatalf("SetWindowPos: %v", err)
+	}
+	if after := windowRect(t, view.parent); after.Left != before.Left+37 || after.Top != before.Top+23 || after.Right-after.Left != before.Right-before.Left {
+		t.Fatalf("the window is at %+v after moving it from %+v", after, before)
+	}
+
+	completed := 0
+	for index := range paths {
+		selectRow(view, index)
+		row, detail := view.list.ItemText(index), view.pathDetail.Text()
+		switch {
+		case strings.HasSuffix(row, " — Completed"):
+			completed++
+			if !strings.HasPrefix(detail, "Completed: saved to ") {
+				t.Fatalf("row %q shows %q", row, detail)
+			}
+		case strings.HasSuffix(row, " — Processing…"):
+			if !strings.HasPrefix(detail, "Processing: being resized and saved to ") {
+				t.Fatalf("row %q shows %q", row, detail)
+			}
+		case strings.HasSuffix(row, " — Pending"):
+			if detail != ui.ResizeDetailPending {
+				t.Fatalf("row %q shows %q", row, detail)
+			}
+		default:
+			t.Fatalf("row %q while the job runs", row)
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("%d rows show Completed while the job is held after its first result", completed)
+	}
+
+	view.NativeCommand(jobCommandBase+cancelResizeCommand, 0)
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Information: Cancelling:") {
+		t.Fatalf("status while cancelling = %q", got)
+	}
+	releaseOnce.Do(func() { close(release) })
+	drainJob(t, view, dispatcher)
+
+	if late := lateStarts.Load(); late != 0 {
+		t.Fatalf("%d images started after the job was cancelled", late)
+	}
+	width, height := expectedSize(t, view, 800, 600)
+	var saved []string
+	cancelled := 0
+	for index, path := range paths {
+		row := view.list.ItemText(index)
+		result := filepath.Join(folder, filepath.Base(path))
+		switch {
+		case strings.HasSuffix(row, " — Completed"):
+			if gotWidth, gotHeight := imageSize(t, result); gotWidth != width || gotHeight != height {
+				t.Fatalf("%s is %d × %d, want %d × %d", result, gotWidth, gotHeight, width, height)
+			}
+			saved = append(saved, filepath.Base(result))
+		case strings.HasSuffix(row, " — Cancelled"):
+			cancelled++
+		default:
+			t.Fatalf("row %q after cancelling", row)
+		}
+	}
+	if cancelled == 0 {
+		t.Fatal("no image was cancelled")
+	}
+	requireNames(t, folder, saved...)
+	if got := view.jobStatus.Text(); !strings.HasPrefix(got, "Warning: Resize cancelled: ") {
+		t.Fatalf("summary after cancelling = %q", got)
+	}
+	if !view.NativeActionAvailable() || !enabled(view.addButton) || enabled(view.cancelButton) {
+		t.Fatal("the controls did not return to their idle state after the cancelled job")
 	}
 }
 

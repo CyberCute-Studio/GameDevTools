@@ -3,9 +3,11 @@
 package preset
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func TestNativeManagerCRUDIndependenceAndRestart(t *testing.T) {
@@ -103,6 +106,88 @@ func TestNativeManagerCRUDIndependenceAndRestart(t *testing.T) {
 	}
 	if restartedScreenshot.manager.library.Custom()[0].Name != "HD copy" || restartedResizer.manager.library.Custom()[0].Name != "Shared name" {
 		t.Fatal("restart did not preserve independent custom libraries")
+	}
+}
+
+// listedTexts reads back the rows a preset manager's list shows.
+func listedTexts(t *testing.T, manager *NativeManager) []string {
+	t.Helper()
+	const cbGetCount, cbGetLBText, cbGetLBTextLen = 0x0146, 0x0148, 0x0149
+	sendMessage := windows.NewLazySystemDLL("user32.dll").NewProc("SendMessageW")
+	handle := uintptr(manager.list.Handle())
+	count, _, _ := sendMessage.Call(handle, cbGetCount, 0, 0)
+	if int32(count) < 0 {
+		t.Fatal("the preset list did not report its rows")
+	}
+	texts := make([]string, 0, int(count))
+	for index := range int(count) {
+		length, _, _ := sendMessage.Call(handle, cbGetLBTextLen, uintptr(index), 0)
+		if int32(length) < 0 {
+			t.Fatalf("the preset list did not report row %d", index)
+		}
+		buffer := make([]uint16, int(length)+1)
+		sendMessage.Call(handle, cbGetLBText, uintptr(index), uintptr(unsafe.Pointer(&buffer[0])))
+		texts = append(texts, windows.UTF16ToString(buffer))
+	}
+	return texts
+}
+
+// TestNativeManagerScreenshotPresetAbsentFromImageResizer pins AC-R15: a
+// custom 640 × 480 Screenshot preset is not among the presets the Image
+// Resizer lists — before or after a restart — until one is created there
+// separately, which then stands on its own: deleting the Screenshot preset
+// leaves it.
+func TestNativeManagerScreenshotPresetAbsentFromImageResizer(t *testing.T) {
+	parent := newPresetTestParent(t)
+	path := filepath.Join(t.TempDir(), "settings.json")
+	store := settings.NewStore(settings.Paths{ConfigFile: path})
+	RegisterValidators(store)
+	value := settings.Default()
+	screenshot := newNativeManagerForTest(t, shell.ModuleScreenshot, store, &value, parent)
+	resizer := newNativeManagerForTest(t, shell.ModuleImageResizer, store, &value, parent)
+	resizerRows := listedTexts(t, resizer)
+	row := fmt.Sprintf(ui.PresetListFormat, "Capture 640", ui.FormatDimensions(640, 480), "")
+
+	setNativeForm(screenshot, "Capture 640", "640", "480", -1)
+	screenshot.NativeCommand(200+presetCreateCommand, 0)
+	if !slices.Contains(listedTexts(t, screenshot), row) {
+		t.Fatalf("the Screenshot list %q does not show %q", listedTexts(t, screenshot), row)
+	}
+	resizer.refresh()
+	if got := listedTexts(t, resizer); !slices.Equal(got, resizerRows) {
+		t.Fatalf("the Image Resizer list became %q, was %q", got, resizerRows)
+	}
+
+	restartedStore := settings.NewStore(settings.Paths{ConfigFile: path})
+	RegisterValidators(restartedStore)
+	loaded := restartedStore.Load()
+	if len(loaded.Warnings) != 0 {
+		t.Fatalf("restart warnings = %v", loaded.Warnings)
+	}
+	restartedScreenshot := newNativeManagerForTest(t, shell.ModuleScreenshot, restartedStore, &loaded.Settings, parent)
+	restartedResizer := newNativeManagerForTest(t, shell.ModuleImageResizer, restartedStore, &loaded.Settings, parent)
+	if !slices.Contains(listedTexts(t, restartedScreenshot), row) {
+		t.Fatalf("the restarted Screenshot list %q does not show %q", listedTexts(t, restartedScreenshot), row)
+	}
+	if got := listedTexts(t, restartedResizer); !slices.Equal(got, resizerRows) {
+		t.Fatalf("the restarted Image Resizer list is %q, want %q", got, resizerRows)
+	}
+
+	setNativeForm(restartedResizer, "Capture 640", "640", "480", 0)
+	restartedResizer.NativeCommand(300+presetCreateCommand, 0)
+	if got := listedTexts(t, restartedResizer); !slices.Contains(got, row) || len(got) != len(resizerRows)+1 {
+		t.Fatalf("the Image Resizer list after creating its own preset = %q", got)
+	}
+	created := restartedScreenshot.manager.library.Custom()[0]
+	selectNativePreset(t, restartedScreenshot, created.ID)
+	restartedScreenshot.confirm = func(windows.Handle, string, string) bool { return true }
+	restartedScreenshot.NativeCommand(200+presetDeleteCommand, 0)
+	if slices.Contains(listedTexts(t, restartedScreenshot), row) {
+		t.Fatal("the Screenshot preset was not deleted")
+	}
+	restartedResizer.refresh()
+	if !slices.Contains(listedTexts(t, restartedResizer), row) {
+		t.Fatal("deleting the Screenshot preset removed the Image Resizer's own")
 	}
 }
 

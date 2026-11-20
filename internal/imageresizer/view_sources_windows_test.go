@@ -5,7 +5,6 @@ package imageresizer
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -103,20 +102,6 @@ func encodeTestJPEG(t *testing.T, width, height int) []byte {
 		t.Fatal(err)
 	}
 	return buffer.Bytes()
-}
-
-// withOrientation inserts an EXIF APP1 segment carrying the orientation
-// directly after the JPEG's SOI marker.
-func withOrientation(content []byte, orientation uint16) []byte {
-	tiff := []byte{'M', 'M', 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0}
-	binary.BigEndian.PutUint16(tiff[18:], orientation)
-	payload := append([]byte("Exif\x00\x00"), tiff...)
-	segment := []byte{0xff, 0xe1, 0, 0}
-	binary.BigEndian.PutUint16(segment[2:], uint16(len(payload)+2))
-	result := append([]byte(nil), content[:2]...)
-	result = append(result, segment...)
-	result = append(result, payload...)
-	return append(result, content[2:]...)
 }
 
 func writeViewFile(t *testing.T, directory, name string, content []byte) string {
