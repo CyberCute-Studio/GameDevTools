@@ -115,6 +115,18 @@ func (l *Label) Announce() {
 	}
 }
 
+// ClearLive removes a live label's live-region marking, after which it is a
+// plain label. Call it before destroying a live label that does not live as
+// long as the process, as a capture session's toolbar does: oleacc.dll keeps
+// the marking by window handle, so the markings of destroyed windows would
+// otherwise build up, and a later window given the same handle would be
+// reported as a live region.
+func (l *Label) ClearLive() {
+	if l.live && unmarkLive(l.hwnd) == nil {
+		l.live = false
+	}
+}
+
 func NewMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
 	return newLabel(parent, text, 0)
 }

@@ -376,7 +376,7 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		return "", 0, 0, "", false
 	}
 	if !ValidDimension(width) {
-		n.width.Error.SetText(ui.FormatError(ui.ErrorValidation, fmt.Errorf(ui.PresetDimensionRange, "Width")))
+		n.width.Error.SetText(ui.FormatError(ui.ErrorValidation, fmt.Errorf(ui.PresetDimensionRange, ui.DimensionWidthName)))
 		n.width.Focus()
 		return "", 0, 0, "", false
 	}
@@ -386,7 +386,7 @@ func (n *NativeManager) readForm() (string, int, int, ResizeMode, bool) {
 		return "", 0, 0, "", false
 	}
 	if !ValidDimension(height) {
-		n.height.Error.SetText(ui.FormatError(ui.ErrorValidation, fmt.Errorf(ui.PresetDimensionRange, "Height")))
+		n.height.Error.SetText(ui.FormatError(ui.ErrorValidation, fmt.Errorf(ui.PresetDimensionRange, ui.DimensionHeightName)))
 		n.height.Focus()
 		return "", 0, 0, "", false
 	}

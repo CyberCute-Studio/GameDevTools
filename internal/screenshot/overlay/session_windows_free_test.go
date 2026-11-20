@@ -120,7 +120,16 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 		t.Fatalf("toolbar top = %d, want %d just below the selection", toolbar.Top, selectionBottom+native.margin)
 	}
 
-	procSendMessageW.Call(uintptr(native.toolbar), wmCommand, toolbarCaptureCommand, 0)
+	// Drawing hands the focus from the width field to the toolbar, so Enter
+	// presses Capture rather than applying the field.
+	focus, _, _ := procGetFocus.Call()
+	if native.isDimensionEdit(focus) {
+		t.Fatal("the focus stayed in a dimension field after a pointer draw")
+	}
+	enter := windowMessage{HWND: native.toolbar, Message: wmKeyDown, WParam: vkReturn}
+	if !controller.FilterMessage(unsafe.Pointer(&enter)) {
+		t.Fatal("the filter did not take Enter on the toolbar")
+	}
 	if captured != want {
 		t.Fatalf("captured region = %v, want %v (SCR-014)", captured, want)
 	}

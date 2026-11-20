@@ -109,8 +109,8 @@ func TestRadioButtonsAreTabStopsOnlyWhileChecked(t *testing.T) {
 
 // TestLiveLabelsAreLiveRegions pins that the labels reporting results —
 // status areas, validation messages, and NewLiveLabel's — are polite UI
-// Automation live regions, which a screen reader announces, and that other
-// labels are not.
+// Automation live regions, which a screen reader announces, that other
+// labels are not, and that ClearLive makes a live label plain again.
 func TestLiveLabelsAreLiveRegions(t *testing.T) {
 	parent := newTestParent(t)
 	live, err := NewLiveLabel(parent, "")
@@ -153,6 +153,12 @@ func TestLiveLabelsAreLiveRegions(t *testing.T) {
 		if got != check.want {
 			t.Errorf("%s live setting = %d, want %d", check.name, got, check.want)
 		}
+	}
+
+	// ClearLive removes the marking, as a label about to be destroyed does.
+	live.ClearLive()
+	if got, err := uiatest.LiveSetting(live.Handle()); err != nil || got != liveSettingOff {
+		t.Fatalf("live setting after ClearLive = %d (%v), want %d", got, err, liveSettingOff)
 	}
 }
 

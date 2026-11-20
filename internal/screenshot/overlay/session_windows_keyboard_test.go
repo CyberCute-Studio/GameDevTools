@@ -37,9 +37,10 @@ func pressEnter(t *testing.T, controller *Controller, native *windowsSession, fi
 // TestFreeRectangleTypedSizeCreatesSelection pins the keyboard path through
 // Free Rectangle (SCR-015): with nothing drawn, typing a width and height
 // and pressing Enter creates a selection of exactly that size, centered on
-// the cursor display; moving from one field to the other with the second
-// still empty is no request; Enter with a field empty, or a size larger
-// than the desktop, explains the problem and keeps the typed text.
+// the cursor display; moving from one field to the other is no request,
+// with the second field empty or filled; Enter with a field empty, or a
+// size larger than the desktop, explains the problem and keeps the typed
+// text.
 func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	selections := 0
@@ -55,9 +56,9 @@ func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	}
 
 	native.widthEdit.SetText("640")
-	procSendMessageW.Call(uintptr(native.toolbar), wmCommand, uintptr(toolbarWidthCommand)|uintptr(enKillFocus)<<16, uintptr(native.widthEdit.Handle()))
+	native.heightEdit.Focus()
 	if !native.selection.Empty() || selections != 0 {
-		t.Fatalf("leaving the width field with the height empty created %v", native.selection)
+		t.Fatalf("moving from the width field to the empty height field created %v", native.selection)
 	}
 	if got := native.message.Text(); got != ui.OverlayInstructions {
 		t.Fatalf("leaving the width field with the height empty showed %q", got)
@@ -80,8 +81,14 @@ func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 		t.Fatal("a size larger than the desktop created a selection")
 	}
 
+	// Going back to the width with both fields filled is still typing the
+	// pair, so the size Enter then applies is centered, not resized in place.
 	native.heightEdit.SetText("480")
-	pressEnter(t, controller, native, native.heightEdit)
+	native.widthEdit.Focus()
+	if !native.selection.Empty() || selections != 0 {
+		t.Fatalf("moving from the filled height field back to the width created %v", native.selection)
+	}
+	pressEnter(t, controller, native, native.widthEdit)
 	want, ok := typedSelection(native.anchor, native.bounds, 640, 480)
 	if !ok {
 		t.Fatal("640 × 480 does not fit the test desktop")
@@ -94,6 +101,34 @@ func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	}
 	if got := native.message.Text(); got != ui.OverlayInstructions {
 		t.Fatalf("an accepted size left %q in the toolbar, want the instructions", got)
+	}
+}
+
+// TestFreeRectangleLeavingTypedSizeCreatesSelection pins that leaving the
+// pair of fields for another toolbar control commits a typed size as Enter
+// does (SCR-013, SCR-015), and does nothing while a field is still empty.
+func TestFreeRectangleLeavingTypedSizeCreatesSelection(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+
+	native.widthEdit.SetText("300")
+	native.cancel.Focus()
+	if !native.selection.Empty() {
+		t.Fatalf("leaving the fields with the height empty created %v", native.selection)
+	}
+	native.heightEdit.Focus()
+	native.heightEdit.SetText("200")
+	native.cancel.Focus()
+	want, ok := typedSelection(native.anchor, native.bounds, 300, 200)
+	if !ok {
+		t.Fatal("300 × 200 does not fit the test desktop")
+	}
+	if native.selection != want {
+		t.Fatalf("selection after leaving the filled fields = %v, want %v", native.selection, want)
 	}
 }
 
@@ -136,6 +171,32 @@ func TestFreeRectangleArrowKeysNudgeSelection(t *testing.T) {
 	controller.FilterMessage(unsafe.Pointer(&caret))
 	if native.selection != want {
 		t.Fatalf("an arrow key inside the width field moved the selection to %v", native.selection)
+	}
+}
+
+// TestCancelCommitsNoTypedSize pins that ending a session commits nothing
+// typed: the field holding the focus loses it as Close destroys the
+// toolbar, and that focus loss is no request to create a selection, nor a
+// refusal to announce, after the user cancelled.
+func TestCancelCommitsNoTypedSize(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	selections := 0
+	native.onSelection = func(display.Rect) { selections++ }
+
+	native.heightEdit.Focus()
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.heightEdit.Handle()) {
+		t.Fatal("the height field did not take the focus")
+	}
+	native.widthEdit.SetText("100")
+	native.heightEdit.SetText("50")
+	controller.Cancel()
+	if selections != 0 {
+		t.Fatalf("cancelling with a size typed in the fields created %d selection(s)", selections)
 	}
 }
 

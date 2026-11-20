@@ -12,6 +12,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
 func newHotkeyTestView(t *testing.T, configPath string) (*NativeView, *fakeHotkeyRegistrar) {
@@ -261,6 +262,29 @@ func TestNativeViewShortcutCommitReportsRestoreFailure(t *testing.T) {
 	}
 	if got := view.options.Options().Shortcut; got != DefaultShortcut() {
 		t.Fatalf("failed commit changed the stored shortcut to %+v", got)
+	}
+}
+
+// TestNativeViewAnnouncesItsStartupNotice pins that the view announces its
+// notice when the shell asks once the main window appears, as a startup
+// shortcut conflict is shown while the window is hidden, and that it has
+// nothing to announce with an empty status area.
+func TestNativeViewAnnouncesItsStartupNotice(t *testing.T) {
+	view := newConflictedHotkeyView(t)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	view.NativeAnnounceNotice()
+	if got := watch.Count(view.status.Handle()); got != 1 {
+		t.Fatalf("announcements of the startup conflict = %d, want 1", got)
+	}
+	view.status.Clear()
+	view.NativeAnnounceNotice()
+	if got := watch.Count(view.status.Handle()); got != 1 {
+		t.Fatalf("announcements after the status area was cleared = %d, want still 1", got)
 	}
 }
 

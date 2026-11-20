@@ -29,9 +29,12 @@ const (
 
 	// accPropServicesSetHwndProp is the vtable slot of
 	// IAccPropServices::SetHwndProp, after IUnknown's three methods and
-	// SetPropValue, SetPropServer, and ClearProps.
-	accPropServicesSetHwndProp = 6
-	unknownRelease             = 2
+	// SetPropValue, SetPropServer, and ClearProps, and
+	// accPropServicesClearHwndProps that of ClearHwndProps, after
+	// SetHwndPropStr and SetHwndPropServer.
+	accPropServicesSetHwndProp    = 6
+	accPropServicesClearHwndProps = 9
+	unknownRelease                = 2
 )
 
 // guid is a COM GUID in its in-memory layout.
@@ -79,6 +82,36 @@ var (
 // initialized for the call, and the annotation with it, so the DLL is held
 // loaded for the life of the process first.
 func markLive(hwnd windows.Handle) error {
+	return withAccPropServices(func(services *comObject) error {
+		value := variant{vt: vtI4}
+		value.value[0] = liveSettingPolite
+		if result := setHwndProp(services, uintptr(hwnd), &liveSettingProperty, &value); int32(result) < 0 {
+			return fmt.Errorf("IAccPropServices.SetHwndProp(LiveSetting): HRESULT %#x", uint32(result))
+		}
+		return nil
+	})
+}
+
+// unmarkLive removes the annotation markLive made
+// (IAccPropServices::ClearHwndProps). oleacc.dll keeps annotations by window
+// handle, and nothing documents that it drops one when the window is
+// destroyed.
+func unmarkLive(hwnd windows.Handle) error {
+	return withAccPropServices(func(services *comObject) error {
+		result, _, _ := syscall.SyscallN(services.vtable[accPropServicesClearHwndProps],
+			uintptr(unsafe.Pointer(services)), uintptr(hwnd), objidClient, childidSelf,
+			uintptr(unsafe.Pointer(&liveSettingProperty)), 1)
+		if int32(result) < 0 {
+			return fmt.Errorf("IAccPropServices.ClearHwndProps(LiveSetting): HRESULT %#x", uint32(result))
+		}
+		return nil
+	})
+}
+
+// withAccPropServices runs work with the Dynamic Annotation service, created
+// in an apartment initialized for the call once oleacc.dll is held loaded,
+// as markLive describes.
+func withAccPropServices(work func(*comObject) error) error {
 	if err := oleacc.Load(); err != nil {
 		return err
 	}
@@ -95,12 +128,7 @@ func markLive(hwnd windows.Handle) error {
 		return fmt.Errorf("CoCreateInstance(AccPropServices): HRESULT %#x", uint32(result))
 	}
 	defer syscall.SyscallN(services.vtable[unknownRelease], uintptr(unsafe.Pointer(services)))
-	value := variant{vt: vtI4}
-	value.value[0] = liveSettingPolite
-	if result := setHwndProp(services, uintptr(hwnd), &liveSettingProperty, &value); int32(result) < 0 {
-		return fmt.Errorf("IAccPropServices.SetHwndProp(LiveSetting): HRESULT %#x", uint32(result))
-	}
-	return nil
+	return work(services)
 }
 
 // announceLiveRegion raises the live-region change event for the window, so

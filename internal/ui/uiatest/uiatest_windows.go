@@ -103,14 +103,19 @@ func Names(hwnds ...windows.Handle) ([]string, error) {
 				names[i] = windows.UTF16PtrToString(value.bstr)
 			case vtEmpty:
 			default:
+				vt := value.vt
 				clearVariant(&value)
-				return fmt.Errorf("the name of %#x has VARIANT type %d", hwnd, value.vt)
+				return fmt.Errorf("the name of %#x has VARIANT type %d", hwnd, vt)
 			}
 			clearVariant(&value)
 		}
 		return nil
 	})
-	return names, err
+	if err != nil {
+		// A query that timed out may still be writing the names.
+		return nil, err
+	}
+	return names, nil
 }
 
 // LiveSetting returns the UI Automation LiveSetting of the window's element:
@@ -129,11 +134,17 @@ func LiveSetting(hwnd windows.Handle) (int32, error) {
 		setting = *(*int32)(unsafe.Pointer(&value.bstr))
 		return nil
 	})
-	return setting, err
+	if err != nil {
+		// A query that timed out may still be writing the setting.
+		return 0, err
+	}
+	return setting, nil
 }
 
 // query runs work with a UI Automation client on a thread of its own and
-// dispatches the calling thread's messages until it returns.
+// dispatches the calling thread's messages until it returns. Once it
+// returns an error, work may still be running, so a caller reads what work
+// writes only after a nil error, which work's own completion sends.
 func query(work func(*comObject) error) error {
 	done := make(chan error, 1)
 	go func() {

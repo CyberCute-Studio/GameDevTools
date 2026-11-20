@@ -607,3 +607,29 @@ func TestShellRestoresFocusOnActivation(t *testing.T) {
 		t.Fatalf("reactivating with the focused control's module hidden focused %q, want the Image Resizer navigation button", windowText(shell.focused()))
 	}
 }
+
+// TestShellAnnouncesStartupNoticeOnceShown pins that the shell announces its
+// note once the window appears (announceNotices): a startup warning is set
+// while the window is still hidden, where its announcement goes unheard,
+// and its unchanged text would never be announced again. An empty note
+// announces nothing.
+func TestShellAnnouncesStartupNoticeOnceShown(t *testing.T) {
+	shell := newAuditShell(t)
+	shell.selectModule(t, core.ModuleScreenshot)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	shell.announceNotices()
+	if got := watch.Count(shell.note.Handle()); got != 0 {
+		t.Fatalf("an empty note raised %d announcements", got)
+	}
+	shell.notice = "The settings file was recovered."
+	shell.updateView()
+	shell.announceNotices()
+	if got := watch.Count(shell.note.Handle()); got != 2 {
+		t.Fatalf("note announcements after the warning was set and the window appeared = %d, want 2", got)
+	}
+}

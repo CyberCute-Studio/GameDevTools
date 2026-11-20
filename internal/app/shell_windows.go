@@ -111,6 +111,15 @@ type nativeHotkeyHandler interface {
 	NativeHotkey(id int32) bool
 }
 
+// nativeNoticeAnnouncer is implemented by module views whose status area can
+// take a notice while the main window is still hidden, such as a global
+// shortcut another application holds at startup. The shell asks the current
+// module's view to announce its notice once the window first appears, as
+// announceNotices describes.
+type nativeNoticeAnnouncer interface {
+	NativeAnnounceNotice()
+}
+
 // nativeShutdown is implemented by module views with background work, such
 // as an in-flight capture, that must finish delivering before the process
 // exits.
@@ -177,6 +186,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 	}
 	procShowWindow.Call(hwnd, showCommand)
 	procUpdateWindow.Call(hwnd)
+	shell.announceNotices()
 	var message msg
 	for {
 		r, _, err := procGetMessageW.Call(uintptr(unsafe.Pointer(&message)), 0, 0, 0)
@@ -417,6 +427,20 @@ func (s *nativeShell) refreshAction() {
 		}
 	}
 	s.action.Enable(enabled)
+}
+
+// announceNotices asks a screen reader to read the notices on display once
+// the window first appears: the shell's startup warning, such as settings
+// that were recovered, and the current module's own (nativeNoticeAnnouncer).
+// Each was announced as it was set, while the window was still hidden and no
+// screen reader was reading it, and an unchanged text is not announced again.
+func (s *nativeShell) announceNotices() {
+	if s.note.Text() != "" {
+		s.note.Announce()
+	}
+	if announcer, ok := s.nativeViews[s.navigator.Current().ID()].(nativeNoticeAnnouncer); ok {
+		announcer.NativeAnnounceNotice()
+	}
 }
 
 // currentNavButton returns the current module's navigation button, or 0

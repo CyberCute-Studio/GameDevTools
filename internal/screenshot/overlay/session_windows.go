@@ -32,7 +32,11 @@ const (
 	// Logical toolbar measurements, scaled by the cursor display's DPI. The
 	// height leaves the message label two lines of the shell's 18-pixel
 	// font, which are 50 pixels tall: static text word-wraps, so a shorter
-	// label would clip the instructions and validation messages.
+	// label would clip the instructions and validation messages. The font is
+	// made at the main window's DPI (SetFont), so the two lines fit while
+	// the main window's display and the cursor display share a scaling; with
+	// the main window on a display scaled higher, the second line is still
+	// clipped (the mixed-DPI case ADR-0001 leaves unvalidated).
 	toolbarLogicalWidth         = 592
 	toolbarLogicalHeight        = 96
 	toolbarLogicalMargin        = 16
@@ -742,6 +746,16 @@ func systemRingColors() (core, edge uint32) {
 
 func (s *windowsSession) Close() {
 	if s.toolbar != 0 {
+		// Destroying the toolbar takes the focus from the field holding it,
+		// whose focus loss would otherwise commit the typed size — creating
+		// a selection, or announcing a refusal, after the session ended — so
+		// the toolbar stops reaching the session first. The message's
+		// live-region annotation is cleared, as ui.Label.ClearLive
+		// describes.
+		delete(toolbarStates, s.toolbar)
+		if s.message != nil {
+			s.message.ClearLive()
+		}
 		procDestroyWindow.Call(uintptr(s.toolbar))
 		s.toolbar = 0
 	}
@@ -771,8 +785,8 @@ func (s *windowsSession) SetSelectionReady(ready bool) {
 	if !ready && s.toolbar != 0 {
 		// The overlay never takes activation, so the Capture button can
 		// still hold keyboard focus when a fresh draw disables it; move
-		// focus to the toolbar first, the same way clearing the selection
-		// moves focus off the dimension fields, so Escape keeps cancelling.
+		// focus to the toolbar first, the same way a draw moves it off the
+		// dimension fields (onButtonDown), so Escape keeps cancelling.
 		if focus, _, _ := procGetFocus.Call(); focus == uintptr(s.captureButton) {
 			procSetFocus.Call(uintptr(s.toolbar))
 		}
@@ -1265,9 +1279,9 @@ func (s *windowsSession) placeToolbar() {
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's
 // fields (SCR-011). Both fields are updated even while one holds keyboard
-// focus: selection changes come from pointer drags and, in preset sessions,
-// keyboard nudges, and leaving a stale value in the focused field would let
-// a later focus-loss commit silently apply it over the newer rectangle.
+// focus: selection changes come from pointer drags and keyboard nudges, and
+// leaving a stale value in the focused field would let a later focus-loss
+// commit silently apply it over the newer rectangle.
 func (s *windowsSession) syncDimensions() {
 	if s.widthEdit == nil || s.heightEdit == nil {
 		return
@@ -1330,13 +1344,22 @@ func (s *windowsSession) commitDimensions(explicit bool) {
 // and height, centered on the cursor display's work area and kept inside the
 // virtual desktop (SCR-015), so the mode can be completed without a pointer.
 // Moving the focus from one field to the other while typing the pair is not
-// a request, so a focus change with a field still empty does nothing; Enter
-// with a field empty explains what is missing. A refused size keeps the
-// typed text for correcting, as there is no selection to revert to.
+// a request — a selection created then would be resized in place, not
+// centered again, by a correction to the pair — and neither is leaving the
+// pair with a field still empty; Enter with a field empty explains what is
+// missing. A refused size keeps the typed text for correcting, as there is
+// no selection to revert to.
 func (s *windowsSession) createTypedSelection(explicit bool) {
 	widthText, heightText := s.widthEdit.Text(), s.heightEdit.Text()
-	if !explicit && (strings.TrimSpace(widthText) == "" || strings.TrimSpace(heightText) == "") {
-		return
+	if !explicit {
+		// A field's focus-loss notification arrives once the focus has
+		// moved, so the focus is already in its new place.
+		if focus, _, _ := procGetFocus.Call(); s.isDimensionEdit(focus) {
+			return
+		}
+		if strings.TrimSpace(widthText) == "" || strings.TrimSpace(heightText) == "" {
+			return
+		}
 	}
 	width, err := ui.ParseDimension(ui.DimensionWidthName, widthText)
 	if err != nil {
@@ -1383,9 +1406,10 @@ func (s *windowsSession) syncPosition() {
 	s.position.SetText(fmt.Sprintf(ui.SelectionPositionFormat, s.selection.Left, s.selection.Top))
 }
 
-// nudge moves the preset frame by whole physical pixels in one direction,
-// clamped inside the virtual desktop (SCR-027). Nudges are complete moves,
-// so the toolbar follows immediately.
+// nudge moves the selection — the preset frame, or a free rectangle — by
+// whole physical pixels in one direction, clamped inside the virtual desktop
+// (SCR-015, SCR-027). Nudges are complete moves, so the toolbar follows
+// immediately.
 func (s *windowsSession) nudge(dx, dy, step int32) {
 	if s.selection.Empty() || s.drag.op != dragNone {
 		return
@@ -1534,6 +1558,14 @@ func (s *windowsSession) onButtonDown(lParam unsafe.Pointer) {
 	default:
 		s.drag = dragState{op: dragDraw, anchor: p}
 		s.setSelection(display.Rect{})
+		// The session starts in the width field (SCR-015), and the overlay
+		// never takes the focus, so a draw hands it from a dimension field
+		// to the toolbar: Enter then presses Capture and the arrow keys nudge
+		// the drawn rectangle. The field's focus loss commits nothing
+		// mid-drag.
+		if focus, _, _ := procGetFocus.Call(); s.isDimensionEdit(focus) {
+			procSetFocus.Call(uintptr(s.toolbar))
+		}
 	}
 	procSetCapture.Call(uintptr(s.overlay))
 }

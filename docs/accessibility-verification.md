@@ -15,9 +15,10 @@ go test -count=1 ./...
 `go test` runs every check below. To run only the audit's own tests:
 
 ```bash
-go test -count=1 -v -run 'TestTabReaches|TestNavigationArrowKeys|TestScreenshotOptionsKeyboardOnly|TestResizerSourcesKeyboardOnly|TestMnemonics|TestShellRestoresFocus' ./internal/app
+go test -count=1 -v -run 'TestTabReaches|TestNavigationArrowKeys|TestScreenshotOptionsKeyboardOnly|TestResizerSourcesKeyboardOnly|TestMnemonics|TestShellRestoresFocus|TestShellAnnounces' ./internal/app
 go test -count=1 -v -run 'TestRadioButtons|TestLiveLabels' ./internal/ui
-go test -count=1 -v -run 'TestFreeRectangle|TestToolbarInstructions|TestRingColors|TestContrastRatio|TestTypedSelection' ./internal/screenshot/overlay
+go test -count=1 -v -run 'TestFreeRectangle|TestCancelCommitsNoTypedSize|TestOverlayDragDrawsAndCapturesSelection|TestToolbarInstructions|TestRingColors|TestContrastRatio|TestTypedSelection' ./internal/screenshot/overlay
+go test -count=1 -v -run TestNativeViewAnnouncesItsStartupNotice ./internal/screenshot
 go test -count=1 -v -run TestNativeViewAnnouncesAJobsStartAndSummaryOnly ./internal/imageresizer
 ```
 
