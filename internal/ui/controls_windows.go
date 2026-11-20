@@ -163,8 +163,6 @@ type ButtonOptions struct {
 
 type Button struct {
 	Control
-
-	radio bool
 }
 
 // NewButton creates a push button, or with Radio an automatic radio button.
@@ -192,31 +190,23 @@ func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Butt
 	if err != nil {
 		return nil, err
 	}
-	return &Button{Control: Control{hwnd: hwnd}, radio: options.Radio}, nil
+	return &Button{Control: Control{hwnd: hwnd}}, nil
 }
 
-// SetChecked checks or unchecks a radio button or check box. A radio button
-// is a tab stop exactly while it is checked, so Tab enters its group at the
-// selected button and leaves at the next control, while the arrow keys move
-// the selection within the group (UX-006). The dialog manager stops Tab at
-// every tab stop, and a radio button that gains the focus unchecked reports
-// a click (BN_CLICKED), so in a group whose every button were a tab stop,
-// tabbing through would select each button in turn — switching modules in
-// the navigation, or the capture mode — and a group label's mnemonic, which
-// focuses the next tab stop, would select the group's first button. Call it
-// for every button of a group, as refreshing a group's selection does.
+// SetChecked checks or unchecks a radio button or check box. BM_SETCHECK
+// also makes a radio button a tab stop exactly while it is checked — Windows
+// sets WS_TABSTOP on the radio button it checks and clears it on one it
+// unchecks — so Tab enters the group at the selected button and leaves at
+// the next control, while the arrow keys move the selection within the
+// group (UX-006). That matters because the dialog manager stops Tab at every
+// tab stop, and a radio button that gains the focus unchecked reports a click
+// (BN_CLICKED): tabbing through a group of tab stops would select each button
+// in turn, and a group label's mnemonic, which focuses the next tab stop,
+// would select the group's first button. Call it for every button of a
+// group, as refreshing a group's selection does, so no unchecked button keeps
+// the tab stop it was created with.
 func (b *Button) SetChecked(checked bool) {
 	procSendMessageW.Call(uintptr(b.hwnd), bmSetCheck, boolPointer(checked), 0)
-	if b.radio {
-		style, _, _ := procGetWindowLongPtrW.Call(uintptr(b.hwnd), gwlStyle)
-		next := style &^ wsTabStop
-		if checked {
-			next |= wsTabStop
-		}
-		if next != style {
-			procSetWindowLongPtrW.Call(uintptr(b.hwnd), gwlStyle, next)
-		}
-	}
 }
 
 type ComboBox struct {

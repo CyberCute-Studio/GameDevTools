@@ -198,7 +198,9 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 // every options save is; one the options refuse — they are invalid as a
 // whole, as while no output folder is selected — stops the job, and the
 // refusal is explained beside the job's progress, where the user looks after
-// Start Resize.
+// Start Resize. A field's refusal is also shown beside the field, quietly, as
+// the job section announces the same message, which would otherwise be read
+// twice in a row when the field's message was not already shown.
 func (n *NativeView) commitJobFields() bool {
 	options := n.options.Options()
 	if options.Format == FormatPNG {
@@ -207,14 +209,14 @@ func (n *NativeView) commitJobFields() bool {
 	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
-		n.quality.Error.SetText(message)
+		n.quality.Error.SetTextQuietly(message)
 		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
 		return false
 	}
 	background, err := ParseBackground(n.background.Edit.Text())
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
-		n.background.Error.SetText(message)
+		n.background.Error.SetTextQuietly(message)
 		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
 		return false
 	}

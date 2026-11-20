@@ -14,6 +14,8 @@ import (
 
 const wsOverlappedWindow = 0x00cf0000
 
+var procGetWindowLongPtrW = user32.NewProc("GetWindowLongPtrW")
+
 func TestDimensionInputPresentsValidation(t *testing.T) {
 	parent := newTestParent(t)
 	input, err := NewDimensionInput(parent, "Width", 42)

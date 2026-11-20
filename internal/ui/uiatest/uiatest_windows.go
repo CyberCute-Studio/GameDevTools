@@ -44,11 +44,14 @@ type guid struct {
 }
 
 // variant is a COM VARIANT on 64-bit Windows; the value's first word is
-// read as a BSTR for VT_BSTR and as a 32-bit integer for VT_I4.
+// read as a BSTR for VT_BSTR and as a 32-bit integer for VT_I4. It is held
+// as an integer, not a pointer: a VT_I4 such as Polite (1) in a pointer
+// field is an invalid pointer to the Go runtime, which throws when it copies
+// a stack that holds one.
 type variant struct {
 	vt       uint16
 	reserved [3]uint16
-	bstr     *uint16
+	value    uintptr
 	extra    uintptr
 }
 
@@ -100,7 +103,7 @@ func Names(hwnds ...windows.Handle) ([]string, error) {
 			}
 			switch value.vt {
 			case vtBSTR:
-				names[i] = windows.UTF16PtrToString(value.bstr)
+				names[i] = windows.UTF16PtrToString(*(**uint16)(unsafe.Pointer(&value.value)))
 			case vtEmpty:
 			default:
 				vt := value.vt
@@ -131,7 +134,7 @@ func LiveSetting(hwnd windows.Handle) (int32, error) {
 		if value.vt != vtI4 {
 			return fmt.Errorf("the live setting of %#x has VARIANT type %d", hwnd, value.vt)
 		}
-		setting = *(*int32)(unsafe.Pointer(&value.bstr))
+		setting = *(*int32)(unsafe.Pointer(&value.value))
 		return nil
 	})
 	if err != nil {

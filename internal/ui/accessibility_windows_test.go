@@ -18,6 +18,9 @@ var (
 )
 
 const (
+	// gwlStyle is GWL_STYLE (-16) as GetWindowLongPtrW takes it.
+	gwlStyle = ^uintptr(15)
+
 	wmKeyDown          = 0x0100
 	vkTab              = 0x09
 	vkDown             = 0x28
@@ -48,9 +51,11 @@ func pressKey(parent windows.Handle, key uintptr) {
 }
 
 // TestRadioButtonsAreTabStopsOnlyWhileChecked pins the radio group's
-// keyboard model (UX-006): only the checked button is a tab stop, so Tab
-// enters the group at the selection without focusing — and so clicking — an
-// unchecked button, and the arrow keys move within the group.
+// keyboard model (UX-006): only the checked button is a tab stop — the
+// group's first until one is checked, then the one BM_SETCHECK checked, as
+// Windows moves the tab stop itself — so Tab enters the group at the
+// selection without focusing — and so clicking — an unchecked button, and
+// the arrow keys move within the group.
 func TestRadioButtonsAreTabStopsOnlyWhileChecked(t *testing.T) {
 	parent := newTestParent(t)
 	before, err := NewButton(parent, "Before", ButtonOptions{ID: 80})

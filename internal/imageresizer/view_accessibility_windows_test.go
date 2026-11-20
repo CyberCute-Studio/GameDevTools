@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
@@ -66,5 +67,37 @@ func TestNativeViewAnnouncesAJobsStartAndSummaryOnly(t *testing.T) {
 	}
 	if setting != 1 {
 		t.Fatalf("the source detail line's live setting = %d, want Polite (1)", setting)
+	}
+}
+
+// TestNativeViewAnnouncesARefusedFieldOnce pins that Start Resize's refusal
+// of JPEG text the field has not yet validated, shown both beside the field
+// and in the job section, is announced once, by the job section, rather than
+// read twice in a row.
+func TestNativeViewAnnouncesARefusedFieldOnce(t *testing.T) {
+	view, dispatcher := newSourcesTestView(t)
+	view.NativeDropFiles([]string{writeViewSource(t, sourceDir(t, view), "photo.png")})
+	settle(t, view, dispatcher)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	view.quality.Edit.SetText("0")
+	view.NativeAction()
+	view.quality.Edit.SetText("90")
+	view.background.Edit.SetText("white")
+	view.NativeAction()
+	if view.active != nil || view.background.Error.Text() == "" {
+		t.Fatalf("the background refusal was not shown: %q", view.background.Error.Text())
+	}
+	if got := watch.Count(view.jobStatus.Handle()); got != 2 {
+		t.Fatalf("job section announcements of the two refusals = %d, want 2", got)
+	}
+	for _, field := range []*ui.TextInput{view.quality, view.background} {
+		if got := watch.Count(field.Error.Handle()); got != 0 {
+			t.Fatalf("field announcements of a refusal = %d, want 0, as the job section announces it", got)
+		}
 	}
 }

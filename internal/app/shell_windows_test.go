@@ -172,6 +172,7 @@ func TestShellWindowProcScrollsFocusedComboIntoView(t *testing.T) {
 	combo.Move(0, 500, 200, 200)
 	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
 	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	combo.Focus()
 	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(201)|uintptr(cbnSetFocus)<<16, uintptr(combo.Handle()))
 	if shell.scrollY == 0 {
 		t.Fatal("combo focus did not scroll the control into view")
@@ -580,6 +581,28 @@ func TestShellWindowProcIgnoresAComboLosingFocus(t *testing.T) {
 	}
 	if shell.focus == combo.Handle() {
 		t.Fatal("a combo box losing the focus became the control to give the focus back to")
+	}
+}
+
+// TestShellWindowProcIgnoresAListCancellingItsSelection pins the same for a
+// list box's LBN_SELCANCEL, whose code CBN_SETFOCUS shares: a list box that
+// does not hold the focus did not gain it.
+func TestShellWindowProcIgnoresAListCancellingItsSelection(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	list, err := ui.NewListBox(shell.hwnd, 601)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 500, 200, 140)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	const lbnSelCancel = 3
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(601)|uintptr(lbnSelCancel)<<16, uintptr(list.Handle()))
+	if shell.scrollY != 0 {
+		t.Fatalf("a list box cancelling its selection scrolled the view to %d", shell.scrollY)
+	}
+	if shell.focus == list.Handle() {
+		t.Fatal("a list box cancelling its selection became the control to give the focus back to")
 	}
 }
 

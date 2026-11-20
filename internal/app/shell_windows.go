@@ -491,16 +491,18 @@ func (s *nativeShell) announceModuleNotice() {
 // reportsFocus reports whether a WM_COMMAND notification from the control
 // says it gained the keyboard focus. A list box's LBN_SETFOCUS shares its
 // code, 4, with a combo box's CBN_KILLFOCUS, which arrives once the focus
-// has left the combo box for another control, so that code counts only
-// while the control holds the focus.
+// has left the combo box for another control, and a combo box's
+// CBN_SETFOCUS shares its code, 3, with a list box's LBN_SELCANCEL, so those
+// codes count only while the control holds the focus. The combo boxes are
+// drop-down lists, which hold the focus themselves.
 func reportsFocus(notification uint16, control uintptr) bool {
 	if control == 0 {
 		return false
 	}
 	switch notification {
-	case bnSetFocus, enSetFocus, cbnSetFocus:
+	case bnSetFocus, enSetFocus:
 		return true
-	case lbnSetFocus:
+	case cbnSetFocus, lbnSetFocus:
 		focus, _, _ := procGetFocus.Call()
 		return focus == control
 	}
@@ -519,8 +521,9 @@ func (s *nativeShell) currentNavButton() windows.Handle {
 // restoreFocus gives the keyboard focus that reached the shell window itself
 // to a control (UX-006, AC-A03). Windows focuses a plain window, not the
 // control inside it that had the focus, whenever the window is activated —
-// at startup, on Alt+Tab or a click on its title bar, and when it is shown
-// again after a capture — and a window holding the focus shows no focus
+// at startup, on Alt+Tab or a click on its title bar, and when the user
+// returns to it after a capture, which shows it again without activating it
+// (capture.Exclusion.Restore) — and a window holding the focus shows no focus
 // indicator, while Tab would start again from the first control. So the
 // control that last had the focus gets it back while it can take it. One
 // still shown that can no longer take it — Cancel Resize, disabled as a job

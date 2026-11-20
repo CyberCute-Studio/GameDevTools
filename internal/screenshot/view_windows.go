@@ -439,10 +439,13 @@ func (n *NativeView) NativeAction() {
 	}
 	// The quality field otherwise commits only when it loses focus, and
 	// keyboard activation of Start Capture never moves focus; the capture
-	// must not run with stale or invalid quality text.
+	// must not run with stale or invalid quality text. The refusal is shown
+	// beside the field quietly, as the status area announces the same
+	// message, which would otherwise be read twice in a row when the field's
+	// message was not already shown.
 	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
 	if err != nil {
-		n.quality.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
+		n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 		return
 	}
