@@ -5,6 +5,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,11 @@ type nativeShell struct {
 	// session waits inside WM_ENDSESSION for a while (endSession), and the
 	// message loop's end then waits only for what is left.
 	backgroundWork chan struct{}
+	// sessionSaved is closed once the settings save the end of the Windows
+	// session started has finished; it is nil until endSession starts it.
+	// The message loop's end, should the process outlive WM_ENDSESSION,
+	// waits for it (waitForBackgroundWork).
+	sessionSaved chan struct{}
 }
 
 // startupWarnings are the warnings the shell's note shows as the
@@ -903,9 +909,16 @@ func (s *nativeShell) layout() {
 // cancelled resize job's by imageresizer.JobShutdownWait, but for a capture,
 // which is waited for until its outputs are delivered; the modules' waits
 // run at once, so the longest of them is the whole wait. After the end of
-// the Windows session it waits only for what endSession's wait left running.
+// the Windows session it waits only for what endSession's wait left running,
+// the settings save included, so the process — should it outlive
+// WM_ENDSESSION, as when an installer's Restart Manager closes the
+// application — releases its single-instance lock, which lets a new
+// instance load the settings, only once that save has written them.
 func (s *nativeShell) waitForBackgroundWork() {
 	<-s.stopBackgroundWork()
+	if s.sessionSaved != nil {
+		<-s.sessionSaved
+	}
 }
 
 // stopBackgroundWork starts waiting, once, for every module view's
@@ -1186,28 +1199,56 @@ func (s *nativeShell) saveSettings(captureWindow bool) error {
 
 // recordWindow records the window's current module in the settings and,
 // when captureWindow, the window's placement, which only a window that has
-// not been destroyed has.
+// not been destroyed has: its normal bounds, in the screen coordinates the
+// window is created at as the application next starts, and whether it is
+// maximized — for a minimized window, whether it is maximized as it is
+// restored, as one minimized from maximized is, so that signing out, or
+// closing it from the taskbar, while it is minimized keeps it maximized.
 func (s *nativeShell) recordWindow(captureWindow bool) {
 	s.settings.Shell.SelectedModule = string(s.navigator.Current().ID())
 	if !captureWindow {
 		return
 	}
 	window := &s.settings.Shell.Window
+	zoomed, _, _ := procIsZoomed.Call(uintptr(s.hwnd))
+	window.Maximized = zoomed != 0
 	placement := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
-	if r, _, _ := procGetWindowPlacement.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&placement))); r != 0 {
-		normal := placement.NormalPosition
-		width := normal.Right - normal.Left
-		height := normal.Bottom - normal.Top
-		if width >= 320 && height >= 240 {
-			window.X = normal.Left
-			window.Y = normal.Top
-			window.Width = width
-			window.Height = height
-			window.HasPosition = true
+	if r, _, _ := procGetWindowPlacement.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&placement))); r == 0 {
+		return
+	}
+	if placement.ShowCmd == swShowMinimized {
+		window.Maximized = placement.Flags&wpfRestoreToMaximized != 0
+	}
+	normal := placement.NormalPosition
+	width := normal.Right - normal.Left
+	height := normal.Bottom - normal.Top
+	if width < 320 || height < 240 {
+		return
+	}
+	// GetWindowPlacement gives the normal bounds of a top-level window in
+	// workspace coordinates, which are offset from screen coordinates by the
+	// toolbars docked at the top or left of the monitor's work area, such
+	// as a taskbar there; for a minimized window, MonitorFromWindow gives
+	// the monitor of its normal bounds.
+	var offset point
+	if monitor, _, _ := procMonitorFromWindow.Call(uintptr(s.hwnd), monitorDefaultToNearest); monitor != 0 {
+		info := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+		if r, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info))); r != 0 {
+			offset = workspaceOffset(info)
 		}
 	}
-	maximized, _, _ := procIsZoomed.Call(uintptr(s.hwnd))
-	window.Maximized = maximized != 0
+	window.X = normal.Left + offset.X
+	window.Y = normal.Top + offset.Y
+	window.Width = width
+	window.Height = height
+	window.HasPosition = true
+}
+
+// workspaceOffset returns what turns a monitor's workspace coordinates into
+// screen coordinates: the offset of its work area from the monitor's
+// top-left corner.
+func workspaceOffset(info monitorInfo) point {
+	return point{X: info.Work.Left - info.Monitor.Left, Y: info.Work.Top - info.Monitor.Top}
 }
 
 // restoredSettings returns the settings the restore of the default settings
@@ -1364,11 +1405,14 @@ func (s *nativeShell) ask(title, message string) bool {
 // signing out, restarting, or shutting down — which may terminate the
 // process as soon as WM_ENDSESSION returns, so nothing is left to the end of
 // the message loop. Nothing is asked. The window's placement is recorded
-// first, as only the window has it (recordWindow), and the window is then
-// destroyed, which releases the global shortcut, closes any capture overlay,
-// cancels a running resize job, and stops accepting work (NFR-022, AC-A05),
-// as closing does, before anything is written, so a write that blocks holds
-// none of that up. The settings, as they are once the window is destroyed,
+// first, as only the window has it (recordWindow), the store's saves are
+// held (settings.Store.Hold), and the window is then destroyed, which
+// releases the global shortcut, closes any capture overlay, cancels a
+// running resize job, and stops accepting work (NFR-022, AC-A05), as closing
+// does, before anything is written, so a write that blocks holds none of
+// that up: a field the destruction takes the focus from commits its edit to
+// the settings, as on closing, but the save that commit makes is held,
+// writing nothing. The settings, as they are once the window is destroyed,
 // are then saved on a goroutine of their own, a failure only logged, as no
 // one is left to read a warning, and the background work is waited for, as
 // at the end of the message loop, so a cancelled job's images in flight
@@ -1378,22 +1422,27 @@ func (s *nativeShell) ask(title, message string) bool {
 // an output folder on a network share that has gone — which the process's
 // end then ends. A save so ended leaves the settings file as it was, as a
 // save replaces the file only once its temporary file is written
-// (settings.Store.Save). Nothing else uses the store or the settings once
-// the window is destroyed, so the save needs no lock. The quit message the
-// window's destruction posts still ends the message loop when the process
-// outlives WM_ENDSESSION, and the wait there waits only for the background
-// work that is left (waitForBackgroundWork).
+// (settings.Store.Save). The save writes a copy of the settings, their
+// module sections' map copied too, so nothing the GUI thread could still
+// change reaches it, and the store's held saves write nothing, so the save
+// needs no lock. The quit message the window's destruction posts still ends
+// the message loop when the process outlives WM_ENDSESSION, and the wait
+// there waits only for the background work and the save that are left
+// (waitForBackgroundWork).
 func (s *nativeShell) endSession() {
 	deadline := time.NewTimer(endSessionWait)
 	defer deadline.Stop()
 	s.recordWindow(true)
 	s.logEvent(diagnostics.LevelInfo, "app.end-session", "stopped")
+	write := s.store.Hold()
 	procDestroyWindow.Call(uintptr(s.hwnd))
 	value := *s.settings
+	value.Modules = maps.Clone(value.Modules)
 	saved := make(chan struct{})
+	s.sessionSaved = saved
 	go func() {
 		defer close(saved)
-		if err := s.store.Save(value); err != nil {
+		if err := write(value); err != nil {
 			s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
 		}
 	}()

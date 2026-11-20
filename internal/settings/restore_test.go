@@ -372,3 +372,32 @@ func TestStoreLoadRemovesStaleTemporaryFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreHoldWritesOnlyThroughItsWrite pins Hold, as the end of the
+// Windows session holds the saves the main window's destruction makes: a
+// held store's Save reports success and writes nothing, and the function
+// Hold returns writes the settings as Save did, checking them first.
+func TestStoreHoldWritesOnlyThroughItsWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	store := NewStore(Paths{ConfigFile: path})
+	write := store.Hold()
+	if err := store.Save(Default()); err != nil {
+		t.Fatalf("held Save() error = %v, want success", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a held Save wrote the settings file: %v", err)
+	}
+	invalid := Default()
+	invalid.Shell.SelectedModule = "other"
+	if err := write(invalid); err == nil {
+		t.Fatal("Hold's write accepted invalid settings")
+	}
+	saved := Default()
+	saved.Shell.SelectedModule = string(shell.ModuleImageResizer)
+	if err := write(saved); err != nil {
+		t.Fatalf("Hold's write error = %v", err)
+	}
+	if reloaded := NewStore(Paths{ConfigFile: path}).Load(); len(reloaded.Warnings) != 0 || reloaded.Settings.Shell.SelectedModule != saved.Shell.SelectedModule {
+		t.Fatalf("settings after a restart = %+v, warnings %v, want the ones Hold's write wrote", reloaded.Settings, reloaded.Warnings)
+	}
+}

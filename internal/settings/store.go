@@ -105,12 +105,15 @@ type Store struct {
 	blocked    error
 	// unloaded is whether the settings file holds settings the session never
 	// took: Load could not read or decode the file and started the session
-	// from the defaults in their place, and no save has replaced it since.
-	// Restore then derives the restored settings from the file's, once they
-	// decode, so what the restore keeps — the preset libraries — is what the
-	// file stores rather than the defaults the session started from.
+	// from the defaults in their place, and neither a save nor a restore
+	// that backed the file up has replaced it since. Restore then derives
+	// the restored settings from the file's, once they decode, so what the
+	// restore keeps — the preset libraries — is what the file stores rather
+	// than the defaults the session started from.
 	unloaded bool
-	now      func() time.Time
+	// held is whether Save writes nothing, as Hold leaves it.
+	held bool
+	now  func() time.Time
 	// readBack reads a backup back to verify it; tests substitute it.
 	readBack func(string) ([]byte, error)
 }
@@ -224,8 +227,26 @@ func (s *Store) Load() LoadResult {
 	return result
 }
 
+// Save writes value to the settings file, or, once Hold has held the
+// store's saves, writes nothing and reports success.
 func (s *Store) Save(value Settings) error {
+	if s.held {
+		return nil
+	}
 	return s.save(value)
+}
+
+// Hold holds every later Save, which then writes nothing and reports
+// success, and returns the function that writes the settings as Save did
+// before. The end of the Windows session holds the saves the main window's
+// destruction makes — a field whose edit is committed as it loses the
+// focus saves the options it changed — so that none of them can block the
+// GUI thread inside WM_ENDSESSION on a settings folder that has stopped
+// responding, and writes the settings once, as they then are, with the
+// function returned, on a goroutine whose wait it bounds.
+func (s *Store) Hold() (write func(Settings) error) {
+	s.held = true
+	return s.save
 }
 
 // Restore replaces the settings file with the application's settings
@@ -245,7 +266,12 @@ func (s *Store) Save(value Settings) error {
 // then: an original such a store cannot find now is treated as one it
 // cannot read, as a file the disk cannot reach for the moment, such as one
 // on a network share that is down, is reported missing too, and the restore
-// would otherwise let a later save replace it with no copy made. A write
+// would otherwise let a later save replace it with no copy made. Once the
+// copy exists, the session's settings are also the ones a later restore
+// replaces, though the write fails: the session takes the restored
+// settings, derived from the file's, and the copy keeps the file's bytes,
+// so a later restore keeps the presets the session holds then — renamed,
+// deleted, or created since — not the file's again. A write
 // that fails after the copy is returned as Save returns
 // it, leaving the original in place beside its copy, as is the failure
 // without a settings path, ErrPathUnavailable, where there is no file to
@@ -294,7 +320,7 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 			return Settings{}, "", notRestored{fmt.Errorf("back up the current settings: %w", err)}
 		}
 	}
-	s.blocked = nil
+	s.blocked, s.unloaded = nil, false
 	return value, backup, s.write(value)
 }
 

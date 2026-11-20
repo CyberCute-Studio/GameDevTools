@@ -29,6 +29,7 @@ var (
 	procRegisterHotKey     = user32.NewProc("RegisterHotKey")
 	procUnregisterHotKey   = user32.NewProc("UnregisterHotKey")
 	procGetCurrentThreadID = kernel32.NewProc("GetCurrentThreadId")
+	procSetWindowPlacement = user32.NewProc("SetWindowPlacement")
 
 	// threadWindowsFound collects the thread's top-level windows for
 	// threadWindows; the callback is created once, as the runtime never
@@ -39,6 +40,10 @@ var (
 		return 1
 	})
 )
+
+// swShowMinNoActive is SW_SHOWMINNOACTIVE, which minimizes a window without
+// activating it.
+const swShowMinNoActive = 7
 
 // threadWindows returns this thread's top-level windows of the class, shown
 // or hidden. Other packages' tests run alongside in their own processes with
@@ -240,6 +245,129 @@ func TestEndSessionStopsTheWorkBeforeSaving(t *testing.T) {
 	}
 	if window := savedWindow(t, path); !window.HasPosition || window.Width != 640 || window.Height != 480 {
 		t.Fatalf("saved window = %+v, want the placement the window had", window)
+	}
+}
+
+// commitOnDestroyView saves the shell's settings, with a change, as the
+// window's destruction shuts it down — as a field whose edit is committed as
+// the destruction takes the focus from it saves the options it changed —
+// and records whether that save wrote the settings file at path.
+type commitOnDestroyView struct {
+	exitRecordingView
+	shell   *nativeShell
+	path    string
+	written bool
+	err     error
+}
+
+func (v *commitOnDestroyView) NativeDestroy() {
+	v.exitRecordingView.NativeDestroy()
+	v.shell.settings.Modules["screenshot"] = json.RawMessage(`{"committed":true}`)
+	v.err = v.shell.store.Save(*v.shell.settings)
+	_, err := os.Stat(v.path)
+	v.written = err == nil
+}
+
+// TestEndSessionHoldsTheSavesTheWindowsDestructionMakes pins that a save
+// the main window's destruction makes at the end of the Windows session,
+// as a field committing its edit makes, writes nothing on the GUI thread,
+// where a write blocked on a settings folder that has stopped responding
+// would hold WM_ENDSESSION up without a bound, and that its change is
+// still written, by the end of the session's own bounded save. A view
+// stands in for the field: a test's window is not the foreground window,
+// and only the foreground window's destruction takes the focus from a
+// field while the shell still routes its commands.
+func TestEndSessionHoldsTheSavesTheWindowsDestructionMakes(t *testing.T) {
+	view := &commitOnDestroyView{}
+	shell, path := newExitTestShell(t, view)
+	view.shell, view.path = shell, path
+
+	procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
+	if view.destroys != 1 {
+		t.Fatalf("destroys = %d, want the window destroyed once", view.destroys)
+	}
+	if view.err != nil || view.written {
+		t.Fatalf("the save during the window's destruction returned %v and wrote the file = %v; want it held, writing nothing", view.err, view.written)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no settings were saved: %v", err)
+	}
+	var saved struct {
+		Modules struct {
+			Screenshot struct {
+				Committed bool `json:"committed"`
+			} `json:"screenshot"`
+		} `json:"modules"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Modules.Screenshot.Committed {
+		t.Fatalf("saved settings = %s, want the change the destruction committed", data)
+	}
+}
+
+// TestEndSessionSaveIsWaitedForAsTheMessageLoopEnds pins that the message
+// loop's end, should the process outlive WM_ENDSESSION, waits for the
+// settings save the end of the session started and its bound let go, as it
+// waits for the background work left, so the process releases its
+// single-instance lock, and a new instance loads the settings, only once
+// they are written.
+func TestEndSessionSaveIsWaitedForAsTheMessageLoopEnds(t *testing.T) {
+	previous := endSessionWait
+	endSessionWait = 0
+	t.Cleanup(func() { endSessionWait = previous })
+	shell, path := newExitTestShell(t, &exitRecordingView{})
+
+	procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
+	shell.waitForBackgroundWork()
+	if window := savedWindow(t, path); !window.HasPosition || window.Width != 640 {
+		t.Fatalf("saved window = %+v, want the window's placement", window)
+	}
+}
+
+// minimize minimizes the shell's window without activating it, at its
+// normal bounds, as one minimized from maximized is, maximized as it is
+// restored, when restoreMaximized.
+func minimize(t *testing.T, shell *nativeShell, restoreMaximized bool) {
+	t.Helper()
+	placement := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
+	if r, _, err := procGetWindowPlacement.Call(uintptr(shell.hwnd), uintptr(unsafe.Pointer(&placement))); r == 0 {
+		t.Fatalf("GetWindowPlacement: %v", err)
+	}
+	placement.ShowCmd = swShowMinNoActive
+	placement.Flags = 0
+	if restoreMaximized {
+		placement.Flags = wpfRestoreToMaximized
+	}
+	if r, _, err := procSetWindowPlacement.Call(uintptr(shell.hwnd), uintptr(unsafe.Pointer(&placement))); r == 0 {
+		t.Fatalf("SetWindowPlacement: %v", err)
+	}
+}
+
+// TestSavedPlacementKeepsAMinimizedWindowMaximized pins the placement a
+// minimized window saves (recordWindow): one minimized from maximized is
+// saved as maximized, as it is restored, with its normal bounds, so signing
+// out while it is minimized, as the end of the Windows session saves its
+// placement, or closing it from the taskbar does not start it restored the
+// next time; one minimized from its normal bounds is saved as normal. The
+// bounds are saved in the screen coordinates the window was placed at.
+func TestSavedPlacementKeepsAMinimizedWindowMaximized(t *testing.T) {
+	shell, path := newExitTestShell(t, &exitRecordingView{})
+	minimize(t, shell, true)
+	procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
+	if window := savedWindow(t, path); !window.Maximized || !window.HasPosition || window.X != 40 || window.Y != 40 || window.Width != 640 || window.Height != 480 {
+		t.Fatalf("saved window = %+v, want maximized at the normal bounds 40, 40, 640 × 480", window)
+	}
+
+	normal, normalPath := newExitTestShell(t, &exitRecordingView{})
+	minimize(t, normal, false)
+	if err := normal.saveSettings(true); err != nil {
+		t.Fatal(err)
+	}
+	if window := savedWindow(t, normalPath); window.Maximized || !window.HasPosition || window.X != 40 || window.Y != 40 || window.Width != 640 {
+		t.Fatalf("saved window = %+v, want normal at the normal bounds 40, 40, 640 × 480", window)
 	}
 }
 

@@ -287,13 +287,20 @@ func (l *Library) customIndex(id string) (int, error) {
 	return -1, fmt.Errorf("%w: %q", ErrNotFound, id)
 }
 
+// checkUnique returns an error when candidate's identifier or name is
+// already used in the library by a preset other than the one replacingID
+// names, ErrDuplicateName for its name. It reads the library's own presets
+// rather than the copy Presets gives, as Duplicate and adopt call it once
+// for every name they try.
 func (l *Library) checkUnique(candidate Preset, replacingID string) error {
-	for _, existing := range l.Presets() {
-		if existing.ID == candidate.ID && existing.ID != replacingID {
-			return fmt.Errorf("preset identifier %q is already used in module %q", candidate.ID, l.module)
-		}
-		if existing.ID != replacingID && strings.EqualFold(strings.TrimSpace(existing.Name), strings.TrimSpace(candidate.Name)) {
-			return fmt.Errorf("%w: %q", ErrDuplicateName, candidate.Name)
+	for _, presets := range [2][]Preset{l.builtIns, l.custom} {
+		for _, existing := range presets {
+			if existing.ID == candidate.ID && existing.ID != replacingID {
+				return fmt.Errorf("preset identifier %q is already used in module %q", candidate.ID, l.module)
+			}
+			if existing.ID != replacingID && strings.EqualFold(strings.TrimSpace(existing.Name), strings.TrimSpace(candidate.Name)) {
+				return fmt.Errorf("%w: %q", ErrDuplicateName, candidate.Name)
+			}
 		}
 	}
 	return nil

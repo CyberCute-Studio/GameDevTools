@@ -96,18 +96,28 @@ func TestKeptSectionAddsTheSessionsOwnPresets(t *testing.T) {
 // module this build has no presets for — one a newer build added, which
 // loading the settings accepts — keeps its library exactly as stored, in a
 // format only that build can decode, rather than failing the restore of the
-// default settings for every module (SET-005).
+// default settings for every module (SET-005). A field of such a section
+// given twice, which no validator of this build checks as the file loads,
+// does not fail the restore either, as only the library is kept; a library
+// given twice does, as which one to keep is not known.
 func TestKeptSectionKeepsAnotherBuildsModuleAsStored(t *testing.T) {
 	library := `{"version":2,"custom":[{"id":"custom.0123456789abcdef0123456789abcdef","name":"Sprite","width":64,"height":64,"layer":"top"}]}`
-	section := json.RawMessage(`{"canvas":{"zoom":2},"presets":` + library + `}`)
-	for _, session := range []json.RawMessage{section, nil} {
-		kept, err := KeptSection("editor", section, session)
-		if err != nil {
-			t.Fatalf("KeptSection with session %s: %v", session, err)
+	for _, section := range []json.RawMessage{
+		json.RawMessage(`{"canvas":{"zoom":2},"presets":` + library + `}`),
+		json.RawMessage(`{"zoom":1,"presets":` + library + `,"zoom":2}`),
+	} {
+		for _, session := range []json.RawMessage{section, nil} {
+			kept, err := KeptSection("editor", section, session)
+			if err != nil {
+				t.Fatalf("KeptSection(%s) with session %s: %v", section, session, err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(kept, &fields); err != nil || len(fields) != 1 || string(fields[sectionKey]) != library {
+				t.Fatalf("kept section of %s with session %s = %s, want only the stored library %s", section, session, kept, library)
+			}
 		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(kept, &fields); err != nil || len(fields) != 1 || string(fields[sectionKey]) != library {
-			t.Fatalf("kept section with session %s = %s, want only the stored library %s", session, kept, library)
-		}
+	}
+	if _, err := KeptSection("editor", json.RawMessage(`{"presets":`+library+`,"presets":{}}`), nil); err == nil {
+		t.Fatal("a section with its library given twice was kept")
 	}
 }

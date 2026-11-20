@@ -58,6 +58,31 @@ func TestFitStartupBounds(t *testing.T) {
 	}
 }
 
+// TestWorkspaceOffset pins how a window's saved bounds are turned from the
+// workspace coordinates GetWindowPlacement gives into screen coordinates
+// (recordWindow): by the offset of the monitor's work area from its corner,
+// which a taskbar docked at its top or left makes, and which a taskbar at
+// its bottom or right does not.
+func TestWorkspaceOffset(t *testing.T) {
+	primary := rect{Right: 1920, Bottom: 1080}
+	secondary := rect{Left: 1920, Top: -200, Right: 3840, Bottom: 880}
+	for _, test := range []struct {
+		name          string
+		monitor, work rect
+		want          point
+	}{
+		{"taskbar at the bottom", primary, rect{Right: 1920, Bottom: 1032}, point{}},
+		{"taskbar at the top", primary, rect{Top: 48, Right: 1920, Bottom: 1080}, point{Y: 48}},
+		{"taskbar at the left", primary, rect{Left: 60, Right: 1920, Bottom: 1080}, point{X: 60}},
+		{"secondary monitor without a taskbar", secondary, secondary, point{}},
+		{"secondary monitor with a taskbar at the top", secondary, rect{Left: 1920, Top: -152, Right: 3840, Bottom: 880}, point{Y: 48}},
+	} {
+		if got := workspaceOffset(monitorInfo{Monitor: test.monitor, Work: test.work}); got != test.want {
+			t.Errorf("%s: workspaceOffset = %+v, want %+v", test.name, got, test.want)
+		}
+	}
+}
+
 func TestStaticTextBrushUsesSystemColors(t *testing.T) {
 	dc, _, err := procGetDC.Call(0)
 	if dc == 0 {

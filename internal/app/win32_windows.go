@@ -73,9 +73,15 @@ const (
 	sifAll   = sifRange | sifPage | sifPos | 0x0010
 
 	swHide          = 0
+	swShowMinimized = 2
 	swShowMaximized = 3
 	swShow          = 5
 	swRestore       = 9
+
+	// wpfRestoreToMaximized is WINDOWPLACEMENT's WPF_RESTORETOMAXIMIZED,
+	// which GetWindowPlacement sets for a minimized window that is
+	// maximized as it is restored.
+	wpfRestoreToMaximized = 0x0002
 
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
