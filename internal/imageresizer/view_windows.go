@@ -687,10 +687,14 @@ func (n *NativeView) refreshOptions() {
 // NativeRestoreDefaults shows the resize options the restored default
 // settings hold (SET-005). The source list, its status, a running job and
 // its progress, the selected preset, and the preset form are kept (APP-004):
-// a job runs on the options it started with. When no default output folder
-// is known, the folder warning is returned for the Settings view to report
-// with the restore's outcome, as there is then no folder to resize into.
+// a job runs on the options and preset it started with. The preset library
+// is shown again only when the restore kept another than the one shown, as
+// when the session never loaded the settings file it replaced
+// (preset.NativeManager.Reload). When no default output folder is known, the
+// folder warning is returned for the Settings view to report with the
+// restore's outcome, as there is then no folder to resize into.
 func (n *NativeView) NativeRestoreDefaults() string {
+	n.presets.Reload()
 	if err := n.options.Reload(); err != nil {
 		message := fmt.Sprintf(ui.ResizeOperationFailed, err)
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)

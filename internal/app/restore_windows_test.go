@@ -19,6 +19,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -275,6 +276,125 @@ func TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails(t *testing.T) {
 	}
 	if got, want := shell.resize.Options(), imageresizer.DefaultOptions(filepath.Join(filepath.Dir(shell.path), "Resized")); got != want || *calls != 1 {
 		t.Fatalf("resize options = %+v and %d view restore(s), want the defaults and one", got, *calls)
+	}
+}
+
+// holdOpen holds the settings file at path open without sharing it, as a
+// sync client or a virus scanner can while the application starts, so
+// reading it fails, and returns the function that lets go of it.
+func holdOpen(t *testing.T, path string) func() {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatalf("hold the settings file open: %v", err)
+	}
+	return func() { _ = windows.CloseHandle(handle) }
+}
+
+// TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead pins the
+// restore as the way out of a session that started from the defaults, its
+// saving disabled, because the settings file could not be read: once the
+// file can be read, the restore backs it up and keeps the preset libraries
+// it stores, with their selected presets, not the defaults the session
+// started from, and the session's modules show them; the shell's note no
+// longer warns that saving is disabled; and a restart loads the presets.
+func TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead(t *testing.T) {
+	data := readFixture(t, "rsz-01")
+	shell := newAuditShellWhile(t, data, holdOpen)
+	probeScreenshotRestore(t, shell)
+	if got := shell.note.Text(); !strings.Contains(got, "saving is disabled") {
+		t.Fatalf("note at startup = %q, want the unread file's warning", got)
+	}
+	stored := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(stored, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	captureWant, resizeWant := libraries(t, reopenSession(t, stored))
+
+	notice := shell.restoreDefaults()
+	backups, err := filepath.Glob(shell.path + ".reset-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v, err = %v, want one", backups, err)
+	}
+	if want := (ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(ui.SettingsRestored, backups[0])}); notice != want {
+		t.Fatalf("outcome = %+v, want %+v", notice, want)
+	}
+	if copied, err := os.ReadFile(backups[0]); err != nil || !bytes.Equal(copied, data) {
+		t.Fatalf("backup differs from the replaced file: err = %v", err)
+	}
+	if got := shell.note.Text(); got != "" {
+		t.Fatalf("note after the restore = %q, want the startup warning gone", got)
+	}
+	shell.selectModule(t, core.ModuleImageResizer)
+	if got := windowText(shell.control(t, "Edit Name")); got != "Icon" {
+		t.Fatalf("Image Resizer preset shown after the restore = %q, want the file's selected preset", got)
+	}
+
+	restarted := reopenSession(t, shell.path)
+	if len(restarted.warnings) != 0 {
+		t.Fatalf("restart warnings = %v", restarted.warnings)
+	}
+	captureAfter, resizeAfter := libraries(t, restarted)
+	for name, pair := range map[string][2][]string{
+		"Screenshot":    {presetSummary(captureWant.Custom(), captureWant.SelectedID()), presetSummary(captureAfter.Custom(), captureAfter.SelectedID())},
+		"Image Resizer": {presetSummary(resizeWant.Custom(), resizeWant.SelectedID()), presetSummary(resizeAfter.Custom(), resizeAfter.SelectedID())},
+	} {
+		if strings.Join(pair[0], "\n") != strings.Join(pair[1], "\n") {
+			t.Fatalf("%s presets after the restore = %q, want the file's %q", name, pair[1], pair[0])
+		}
+	}
+}
+
+// TestRestoreDefaultsClearsAFailedSaveWarning pins that a restore whose
+// write succeeds clears the shell's warning that an earlier save failed, as
+// any successful save does.
+func TestRestoreDefaultsClearsAFailedSaveWarning(t *testing.T) {
+	shell, path := newExitTestShell(t, &exitRecordingView{})
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := shell.saveSettings(false); err == nil {
+		t.Fatal("saving over a folder succeeded")
+	}
+	if got := shell.note.Text(); !strings.Contains(got, "Settings could not be saved") {
+		t.Fatalf("note after the failed save = %q, want the warning", got)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if notice := shell.restoreDefaults(); notice.Kind != ui.NoticeSuccess {
+		t.Fatalf("outcome = %+v, want the restore written", notice)
+	}
+	if got := shell.note.Text(); got != "" {
+		t.Fatalf("note after the restore = %q, want the failed save's warning gone", got)
+	}
+}
+
+// TestRestoreDefaultsWithoutASettingsPath pins the outcome of a restore in a
+// session without a settings path: the defaults are in use in memory, and
+// the outcome says so without naming a settings file there is not; the
+// shell's note keeps the startup warning, which still applies.
+func TestRestoreDefaultsWithoutASettingsPath(t *testing.T) {
+	shell, _ := newExitTestShell(t, &exitRecordingView{})
+	shell.store = settings.NewStore(settings.Paths{})
+	shell.startupNotice = fmt.Sprintf(ui.LocalSettingsUnavailable, "no per-user configuration directory")
+	shell.notice = shell.startupNotice
+	shell.settings.Shell.Window.Maximized = true
+
+	notice := shell.restoreDefaults()
+	if want := (ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreInMemory, settings.ErrPathUnavailable)}); notice != want {
+		t.Fatalf("outcome = %+v, want %+v", notice, want)
+	}
+	if !shell.settings.Shell.Window.Maximized {
+		t.Fatal("the restore in memory dropped the running window's placement")
+	}
+	if shell.notice != shell.startupNotice || !strings.Contains(shell.startupNotice, "Local settings are unavailable") {
+		t.Fatalf("note after the restore = %q, want the startup warning kept", shell.notice)
 	}
 }
 

@@ -74,8 +74,13 @@ func runNative() error {
 		return err
 	}
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
+	// The warnings the settings do not decide, which still apply once the
+	// default settings are restored.
+	var unsettled []string
 	if loggerErr != nil {
-		state.warnings = append(state.warnings, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
+		warning := fmt.Sprintf(ui.LoggingUnavailable, loggerErr)
+		state.warnings = append(state.warnings, warning)
+		unsettled = append(unsettled, warning)
 	} else {
 		defer logger.Close()
 	}
@@ -88,7 +93,7 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	return runShell(navigator, state.store, state.value, logger, monitor, strings.Join(state.warnings, "\n"))
+	return runShell(navigator, state.store, state.value, logger, monitor, strings.Join(state.warnings, "\n"), state.restoredNotice(unsettled))
 }
 
 // defaultFolders are the output folders the modules select by default, and
@@ -103,7 +108,8 @@ type defaultFolders struct {
 // session is the application's persistent state as it starts: the settings
 // store, with every section owner's validator registered, the settings
 // loaded through it, which every module shares, the warnings loading them
-// gave, and the preset repositories and options managers built on them.
+// gave, the preset repositories and options managers built on them, and the
+// default output folders they were built with.
 type session struct {
 	store             *settings.Store
 	value             *settings.Settings
@@ -112,19 +118,28 @@ type session struct {
 	resizerPresets    *preset.Repository
 	capture           *screenshot.OptionsManager
 	resize            *imageresizer.OptionsManager
+	folders           defaultFolders
 }
 
 // openSession opens the settings at paths and builds the modules'
 // persistent state on them, as the application starts. When pathErr says
 // the per-user paths could not be located, it starts from the defaults in
-// memory. Every validator is registered before the file is loaded, so
-// malformed preset, capture, or resize data follows the store's backup and
-// recovery like the rest of the file (PRESET-008, SET-006). The warnings
-// include an output folder that could not be resolved, so the user is asked
-// to choose one.
+// memory. Every validator is registered before the file is loaded — the
+// preset repositories register the preset libraries', and the options
+// stores the capture and resize options' — so malformed preset, capture, or
+// resize data follows the store's backup and recovery like the rest of the
+// file (PRESET-008, SET-006). The warnings include an output folder that
+// could not be resolved, so the user is asked to choose one (folderWarnings).
 func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*session, error) {
 	store := settings.NewStore(paths)
-	preset.RegisterValidators(store)
+	state := &session{store: store, folders: folders}
+	var err error
+	if state.screenshotPresets, err = preset.NewRepository(shell.ModuleScreenshot, store); err != nil {
+		return nil, err
+	}
+	if state.resizerPresets, err = preset.NewRepository(shell.ModuleImageResizer, store); err != nil {
+		return nil, err
+	}
 	captureStore, err := screenshot.NewOptionsStore(store, folders.screenshot)
 	if err != nil {
 		return nil, err
@@ -139,26 +154,43 @@ func openSession(paths settings.Paths, pathErr error, folders defaultFolders) (*
 	} else {
 		loaded.Warnings = append(loaded.Warnings, fmt.Sprintf(ui.LocalSettingsUnavailable, pathErr))
 	}
-	state := &session{store: store, value: &loaded.Settings, warnings: loaded.Warnings}
-	if state.screenshotPresets, err = preset.NewRepository(shell.ModuleScreenshot, store); err != nil {
-		return nil, err
-	}
-	if state.resizerPresets, err = preset.NewRepository(shell.ModuleImageResizer, store); err != nil {
-		return nil, err
-	}
+	state.value, state.warnings = &loaded.Settings, loaded.Warnings
 	if state.capture, err = screenshot.NewOptionsManager(captureStore, state.value); err != nil {
 		return nil, err
-	}
-	if folders.screenshotErr != nil && state.capture.Options().OutputFolder == "" {
-		state.warnings = append(state.warnings, fmt.Sprintf(ui.OutputFolderUnavailable, folders.screenshotErr))
 	}
 	if state.resize, err = imageresizer.NewOptionsManager(resizeStore, state.value); err != nil {
 		return nil, err
 	}
-	if warning := state.resize.FolderWarning(folders.resizerErr); warning != "" {
-		state.warnings = append(state.warnings, warning)
-	}
+	state.warnings = append(state.warnings, state.folderWarnings()...)
 	return state, nil
+}
+
+// folderWarnings returns the warnings the output folders give as the
+// options now hold them: the Screenshot default folder that could not be
+// resolved while no folder is chosen, and the Image Resizer's folder
+// warning, such as a stored folder the default one replaced
+// (imageresizer.OptionsManager.FolderWarning).
+func (state *session) folderWarnings() []string {
+	var warnings []string
+	if state.folders.screenshotErr != nil && state.capture.Options().OutputFolder == "" {
+		warnings = append(warnings, fmt.Sprintf(ui.OutputFolderUnavailable, state.folders.screenshotErr))
+	}
+	if warning := state.resize.FolderWarning(state.folders.resizerErr); warning != "" {
+		warnings = append(warnings, warning)
+	}
+	return warnings
+}
+
+// restoredNotice returns the shell's startup notice once the default
+// settings are restored with the settings file backed up (settleNotice):
+// the output folders' warnings the restored options give, and unsettled,
+// the startup warnings the settings do not decide, such as diagnostic
+// logging being unavailable. The warnings about the file the session
+// started from no longer apply then.
+func (state *session) restoredNotice(unsettled []string) func() string {
+	return func() string {
+		return strings.Join(append(state.folderWarnings(), unsettled...), "\n")
+	}
 }
 
 // newNavigator builds the Screenshot, Image Resizer, and Settings modules on

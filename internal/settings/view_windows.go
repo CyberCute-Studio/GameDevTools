@@ -17,13 +17,13 @@ const restoreDefaultsCommand = 801
 // application (SET-005) through the function the shell hands it
 // (NativeRestoreHandler), and the status area that reports the outcome.
 type NativeView struct {
-	parent  windows.Handle
+	parent windows.Handle
+	// confirm asks the restore's question, as ui.Confirm does, which answers
+	// No once the end of the Windows session has destroyed the window under
+	// it (WM_ENDSESSION), so the answer then changes nothing; tests
+	// substitute it.
 	confirm func(windows.Handle, string, string) bool
 	restore func() ui.Notice
-	// destroyed is set once NativeDestroy has run: the end of the Windows
-	// session destroys the window while the restore's question is open
-	// (WM_ENDSESSION), and the answer must then change nothing.
-	destroyed bool
 
 	description *ui.Label
 	restoreAll  *ui.Button
@@ -105,13 +105,12 @@ func (n *NativeView) restoreDefaults() {
 	if n.restore == nil {
 		return
 	}
-	if !n.confirm(n.parent, ui.RestoreDefaultsTitle, ui.RestoreDefaultsConfirmation) || n.destroyed {
+	if !n.confirm(n.parent, ui.RestoreDefaultsTitle, ui.RestoreDefaultsConfirmation) {
 		return
 	}
 	_ = n.status.Show(n.restore(), 0)
 }
 
 func (n *NativeView) NativeDestroy() {
-	n.destroyed = true
 	n.status.Destroy()
 }

@@ -172,7 +172,9 @@ func TestCloseAsksBeforeCancellingWork(t *testing.T) {
 // goes on after all changes nothing, and one that ends saves the settings
 // with the window's placement, destroys the window — shutting every module
 // view down — and waits for the background work, asking nothing although
-// work is running.
+// work is running. The message loop's end, which the quit message the
+// window's destruction posted brings when the process outlives the
+// session's end, does not wait for the work a second time.
 func TestEndSessionSavesAndStopsWithoutAsking(t *testing.T) {
 	view := &exitRecordingView{guard: "A job is running. Close anyway?"}
 	shell, path := newExitTestShell(t, view)
@@ -190,11 +192,15 @@ func TestEndSessionSavesAndStopsWithoutAsking(t *testing.T) {
 	}
 
 	procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
-	if isWindow(shell.hwnd) || view.destroys != 1 || view.shutdowns == 0 {
-		t.Fatalf("after the session ended: window alive = %v, destroys = %d, shutdowns = %d; want it destroyed and shut down", isWindow(shell.hwnd), view.destroys, view.shutdowns)
+	if isWindow(shell.hwnd) || view.destroys != 1 || view.shutdowns != 1 {
+		t.Fatalf("after the session ended: window alive = %v, destroys = %d, shutdowns = %d; want it destroyed and shut down once", isWindow(shell.hwnd), view.destroys, view.shutdowns)
 	}
 	if window := savedWindow(t, path); !window.HasPosition || window.Width != 640 {
 		t.Fatalf("saved window = %+v, want the window's placement", window)
+	}
+	shell.waitForBackgroundWork()
+	if view.shutdowns != 1 {
+		t.Fatalf("the message loop's end waited %d more time(s) for the work, want none", view.shutdowns-1)
 	}
 }
 
@@ -202,13 +208,15 @@ func TestEndSessionSavesAndStopsWithoutAsking(t *testing.T) {
 // the Windows session interrupts, by destroying the window under it, does
 // nothing more once answered: closing neither saves the settings again nor
 // asks about a save that failed, and the window is shut down once. The
+// question answers as ui.Confirm does, No once its window is gone, even
+// after a Yes (ui.TestConfirmAnswersNoOnceItsParentIsDestroyed). The
 // settings file is made unwritable once the session has ended, so a save
 // the answer still ran would fail and ask its own question.
 func TestCloseQuestionEndedBySessionEnd(t *testing.T) {
 	view := &exitRecordingView{guard: "A job is running. Close anyway?"}
 	shell, path := newExitTestShell(t, view)
 	questions := 0
-	shell.confirm = func(windows.Handle, string, string) bool {
+	shell.confirm = func(hwnd windows.Handle, _, _ string) bool {
 		questions++
 		if questions == 1 {
 			procSendMessageW.Call(uintptr(shell.hwnd), wmEndSession, 1, 0)
@@ -219,7 +227,7 @@ func TestCloseQuestionEndedBySessionEnd(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		return true
+		return isWindow(hwnd)
 	}
 	procSendMessageW.Call(uintptr(shell.hwnd), wmClose, 0, 0)
 	if questions != 1 {

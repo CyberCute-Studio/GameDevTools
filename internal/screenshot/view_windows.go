@@ -874,9 +874,13 @@ func (n *NativeView) refreshOptions() {
 // keeps its notice, such as the last capture's result, unless it shows a
 // shortcut failure the restore replaced. What the user still has to do — a
 // shortcut to choose, or an output folder when the default one is unknown —
-// is returned for the Settings view to report with the restore's outcome;
-// the selected preset and the preset form are not touched (APP-004).
+// is returned for the Settings view to report with the restore's outcome.
+// The preset library is shown again only when the restore kept another than
+// the one shown, as when the session never loaded the settings file it
+// replaced (preset.NativeManager.Reload); otherwise the selected preset and
+// the preset form's unsaved edits are not touched (APP-004).
 func (n *NativeView) NativeRestoreDefaults() string {
+	n.presets.Reload()
 	if err := n.options.Reload(); err != nil {
 		message := fmt.Sprintf(ui.OptionsOperationFailed, err)
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)

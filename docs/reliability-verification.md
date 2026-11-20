@@ -19,7 +19,8 @@ go test -count=1 -v -run 'TestOpenSession|TestRestoreDefaults|TestClose|TestEndS
 go test -count=1 -v -run 'TestStoreRestore|TestStoreBackup|TestStoreLoadRemoves|TestNativeView' ./internal/settings
 go test -count=1 -v -run 'TestOptionsManagerReload|TestNativeViewRestoreDefaults' ./internal/screenshot
 go test -count=1 -v -run 'TestOptionsManagerReload|TestNativeViewRestoreDefaults|TestNativeViewAsksBeforeClosing' ./internal/imageresizer
-go test -count=1 -v -run TestLibrarySection ./internal/preset
+go test -count=1 -v -run 'TestLibrarySection|TestManagerReload|TestNativeManagerReload' ./internal/preset
+go test -count=1 -v -run TestConfirmAnswersNo ./internal/ui
 ```
 
 The tests in `internal/app` build the real main window with every production module on a temporary settings file, through the same `openSession` and `newNavigator` the application starts with, and open real capture sessions and run real resize jobs, so run them in an interactive desktop session, as the module suites are run. They register the Screenshot global shortcut as Ctrl+Alt+Shift+F24 rather than the default Ctrl+Alt+S, as the accessibility audit's tests do, and the shell-level restore tests stand in for the Screenshot view's restore, which would register Ctrl+Alt+S machine-wide; `internal/screenshot`'s restore tests cover that view with a fake registrar. Windows CI (`.github/workflows/ci.yml`) runs the same commands on every pull request.
@@ -76,11 +77,14 @@ The store's own tests cover the paths that keep the original instead: an unreada
 | The file is backed up byte for byte; both preset libraries with their selections, the window, and the current module are kept, and a restart loads them; the session's options are the defaults; the resize list, unsaved edits in both preset forms, and source and saved images are kept | `app.TestRestoreDefaultsKeepsPresetsImagesAndTheSession` | Pass |
 | A file that cannot be read or backed up changes nothing, in the file or the session | `app.TestRestoreDefaultsChangesNothingWithoutABackup`, `settings.TestStoreRestoreChangesNothingWhenItCannotBackUp` | Pass |
 | A write that fails after the backup keeps the restored session, with a warning, and the file as it was (SET-004) | `app.TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails` | Pass |
+| Without a settings path, the restored session stays in memory and the outcome names no settings file | `app.TestRestoreDefaultsWithoutASettingsPath`, `settings.TestStoreRestoreWithoutAPathFailsLikeASave` | Pass |
 | A session whose saving recovery disabled saves again once the restore backed the original up | `settings.TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp` | Pass |
+| A session that started from the defaults because the file was held open keeps the presets the file stores, not the defaults, once the restore can read it; both modules show them, the shell's note drops the warning that saving is disabled, and a restart loads them | `app.TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead`, `settings.TestStoreRestoreDerivesFromAFileTheSessionNeverLoaded`, `preset.TestManagerReloadReplacesOnlyAnotherLibrary`, `preset.TestNativeManagerReloadShowsOnlyAnotherLibrary`, `screenshot.TestNativeViewRestoreDefaultsShowsThePresetsTheRestoreKept` | Pass |
+| A written restore clears the warning of an earlier failed save | `app.TestRestoreDefaultsClearsAFailedSaveWarning` | Pass |
 | Screenshot shows the default options, registers the default shortcut in place of the old one, keeps its last result, reports a default another application holds and releases the old combination, and clears a startup failure the restore resolved | `screenshot.TestNativeViewRestoreDefaults*` | Pass |
 | Image Resizer shows the default options and keeps its list, status, and a running job | `imageresizer.TestNativeViewRestoreDefaults*` | Pass |
 | An unknown default output folder is reported with the outcome | `TestNativeViewRestoreDefaultsWithoutADefaultFolder` in both modules | Pass |
-| The question an end of the Windows session interrupts restores nothing | `settings.TestNativeViewRestoresNothingOnceDestroyed` | Pass |
+| The question an end of the Windows session interrupts restores nothing, as `ui.Confirm` answers No once its window is gone, even after a Yes | `settings.TestNativeViewRestoresNothingOnceDestroyed`, `ui.TestConfirmAnswersNoOnceItsParentIsDestroyed` | Pass |
 
 ## Exit matrix
 
@@ -88,7 +92,7 @@ Each state was exited by closing the main window and by the end of the Windows s
 
 | State | Close | End of the Windows session | Tests |
 |---|---|---|---|
-| Idle | Saves the window and module; asks nothing | Saves; asks nothing; destroys the window and waits for the work | `app.TestCloseAsksBeforeCancellingWork`, `app.TestEndSessionSavesAndStopsWithoutAsking` |
+| Idle | Saves the window and module; asks nothing | Saves; asks nothing; destroys the window and waits for the work once, the message loop's end not waiting again | `app.TestCloseAsksBeforeCancellingWork`, `app.TestEndSessionSavesAndStopsWithoutAsking` |
 | Free Rectangle selection on screen, main window hidden | No session window remains, the shortcut is free, settings saved | Same | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` |
 | Preset Rectangle frame on screen | Same | Same | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` |
 | Full Display capture delivering | Waits for the delivery to finish | Same path, inside `WM_ENDSESSION` | `screenshot.TestNativeViewShutdownWaitsForInflightCapture`, `app.TestWaitForBackgroundWorkWaitsForNativeShutdown` |
@@ -97,7 +101,7 @@ Each state was exited by closing the main window and by the end of the Windows s
 | Resize job running | Asks first: No keeps the job, which finishes every image; Yes cancels it and waits, leaving no temporary file, only complete results, and unchanged sources | Asks nothing; cancels and waits, with the same results | `app.TestExitDuringAResizeJob`, `imageresizer.TestNativeViewAsksBeforeClosingCancelsAJob` |
 | Resize job cancelling, or let go after it did not stop | Asks nothing, as the user already cancelled it; waits up to ten seconds | Same | `imageresizer.TestNativeViewAsksBeforeClosingCancelsAJob`, `imageresizer.TestNativeViewShutdownCancelsAndWaitsForTheJob`, `imageresizer.TestNativeViewLetsGoOfAJobThatDoesNotStop` |
 | Settings that could not be saved | Warns, keeps the change in memory, and asks before closing; No keeps the window | Saves what it can and logs a failure, asking nothing | `app.TestFailedSaveWarnsAndClosingAsks` |
-| A close question open when the session ends | — | The window is shut down once, and the answer does nothing more | `app.TestCloseQuestionEndedBySessionEnd` |
+| A close question open when the session ends | — | The window is shut down once, and the answer, No once the window is gone, does nothing more | `app.TestCloseQuestionEndedBySessionEnd`, `ui.TestConfirmAnswersNoOnceItsParentIsDestroyed` |
 
 ## Findings and fixes
 
@@ -108,7 +112,7 @@ Each state was exited by closing the main window and by the end of the Windows s
 | Closing the window while a resize job ran cancelled it without asking. | The close asks first, No the default, unless the user already cancelled the job. |
 | A backup was trusted once it was written. | Every backup is read back and compared before the original is replaced; one that differs is removed and treated as a failed backup, which keeps the original and disables saving. |
 | A save interrupted before its rename left its temporary file in the settings directory for good. | Loading removes such files once they are more than a minute old. |
-| A session whose saving recovery had disabled could only be left by fixing the file by hand. | Restore Default Settings backs the file up, and saving works again once it has. |
+| A session whose saving recovery had disabled could only be left by fixing the file by hand. | Restore Default Settings backs the file up, and saving works again once it has. When the session started from the defaults because the file could not be read, the restore keeps the presets the file stores and the modules show them, and the shell's note drops the startup warnings about the file. |
 | The upgrade and recovery behavior was tested only on the settings store, with invented data and without the section validators the application registers. | The fixtures above, loaded through the application's own wiring (`openSession`, extracted from `runNative`). |
 
 ## Requirement results

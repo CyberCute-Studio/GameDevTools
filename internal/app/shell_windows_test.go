@@ -409,6 +409,12 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 		nativeViews: make(map[core.ModuleID]nativeView),
 		action:      action,
 		note:        note,
+		// A test that expects a question substitutes its own answer; any
+		// other would block on a real message box.
+		confirm: func(_ windows.Handle, title, message string) bool {
+			t.Errorf("unexpected question %q: %q", title, message)
+			return false
+		},
 	}
 	if native != nil {
 		shell.nativeViews[core.ModuleScreenshot] = native

@@ -314,6 +314,23 @@ func (n *NativeManager) NativeDestroy() {
 	}
 }
 
+// Reload shows the preset library the shared settings value stores once the
+// default settings are restored (SET-005), when it is not the library shown,
+// as when the session started from the defaults because the settings file
+// could not be read and the restore kept the file's presets. A library that
+// did not change is left as it is shown, with the form's unsaved edits
+// (APP-004). A library that cannot be loaded is reported in the status area.
+func (n *NativeManager) Reload() {
+	changed, err := n.manager.Reload()
+	if err != nil {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.PresetOperationFailed, err)}, 0)
+		return
+	}
+	if changed {
+		n.refresh()
+	}
+}
+
 func (n *NativeManager) refresh() {
 	n.listed = n.manager.library.Presets()
 	n.list.Reset()

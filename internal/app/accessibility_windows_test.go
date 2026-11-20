@@ -3,6 +3,7 @@
 package app
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -76,6 +77,16 @@ func newAuditShell(t *testing.T) *auditShell {
 // holds data, or on no settings file when data is nil.
 func newAuditShellOn(t *testing.T, data []byte) *auditShell {
 	t.Helper()
+	return newAuditShellWhile(t, data, nil)
+}
+
+// newAuditShellWhile builds the audit's main window as newAuditShellOn does,
+// with hold, when it is not nil, holding the settings file while the session
+// opens it — as a sync client or a virus scanner holding it open does — and
+// releasing it with the function it returns. The window's note shows the
+// startup warnings, and takes the restored ones, as runNative gives them.
+func newAuditShellWhile(t *testing.T, data []byte, hold func(t *testing.T, path string) (release func())) *auditShell {
+	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
 	dir := t.TempDir()
@@ -85,20 +96,26 @@ func newAuditShellOn(t *testing.T, data []byte) *auditShell {
 			t.Fatal(err)
 		}
 	}
+	release := func() {}
+	if hold != nil {
+		release = hold(t, path)
+	}
 	state, err := openSession(settings.Paths{ConfigFile: path}, nil, defaultFolders{
 		screenshot: filepath.Join(dir, "Screenshots"),
 		resizer:    filepath.Join(dir, "Resized"),
 	})
+	release()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A combination nothing else uses, so the view's global registration
-	// cannot take the developer's own Ctrl+Alt+S while the test runs.
+	// cannot take the developer's own Ctrl+Alt+S while the test runs. A
+	// session whose saving recovery disabled keeps it in memory.
 	shortcut, err := screenshot.ParseShortcut("Ctrl+Alt+Shift+F24")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.capture.SetShortcut(shortcut); err != nil {
+	if err := state.capture.SetShortcut(shortcut); err != nil && !errors.Is(err, screenshot.ErrPersistence) {
 		t.Fatal(err)
 	}
 	monitor := display.NewMonitor()
@@ -107,10 +124,11 @@ func newAuditShellOn(t *testing.T, data []byte) *auditShell {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shell, err := newNativeShell(navigator, state.store, state.value, nil, monitor, "")
+	shell, err := newNativeShell(navigator, state.store, state.value, nil, monitor, strings.Join(state.warnings, "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	shell.restoredNotice = state.restoredNotice(nil)
 	t.Cleanup(func() {
 		procDestroyWindow.Call(uintptr(shell.hwnd))
 		// WM_DESTROY posts the quit message a real message loop ends on;

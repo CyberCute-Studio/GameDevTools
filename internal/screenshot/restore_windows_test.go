@@ -128,6 +128,20 @@ func TestNativeViewRestoreDefaultsClearsAStaleShortcutFailure(t *testing.T) {
 	}
 }
 
+// TestNativeViewRestoreDefaultsShowsThePresetsTheRestoreKept pins that the
+// view takes a preset library the restore kept that is not the one it
+// shows — the settings file's, kept when the session never loaded it — so
+// Preset Rectangle frames the preset the file selects.
+func TestNativeViewRestoreDefaultsShowsThePresetsTheRestoreKept(t *testing.T) {
+	view, _ := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
+	const id = "custom.0123456789abcdef0123456789abcdef"
+	view.options.settings.Modules[string(moduleID)] = []byte(`{"presets":{"version":1,"custom":[{"id":"` + id + `","name":"Store thumbnail","width":640,"height":480}],"selectedPresetId":"` + id + `"}}`)
+	view.NativeRestoreDefaults()
+	if selected, _ := view.presets.SelectedPreset(); selected.ID != id || selected.Width != 640 || selected.Height != 480 {
+		t.Fatalf("selected preset after the restore = %+v, want the kept %s", selected, id)
+	}
+}
+
 // TestNativeViewRestoreDefaultsWithoutADefaultFolder pins that a restore
 // with no default output folder known returns the folder warning for the
 // Settings view to report.

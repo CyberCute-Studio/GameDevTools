@@ -50,11 +50,7 @@ func newSettingsTestView(t *testing.T, answer bool) (*NativeView, *int, *int) {
 	if err := view.NativeCreate(windows.Handle(parent)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if !view.destroyed {
-			view.NativeDestroy()
-		}
-	})
+	t.Cleanup(view.NativeDestroy)
 	return view, &questions, &restores
 }
 
@@ -81,15 +77,35 @@ func TestNativeViewRestoresOnlyOnceConfirmed(t *testing.T) {
 	}
 }
 
+var (
+	procTestSetTimer  = testUser32.NewProc("SetTimer")
+	procTestKillTimer = testUser32.NewProc("KillTimer")
+
+	// destroyingTimer destroys destroyingParent as it fires inside the
+	// question's modal loop, as the end of the Windows session destroys the
+	// main window under an open question (WM_ENDSESSION). The callback is
+	// created once, as the runtime never releases one.
+	destroyingParent, destroyingTimerID uintptr
+	destroyingTimer                     = windows.NewCallback(func(_, _, _, _ uintptr) uintptr {
+		procTestKillTimer.Call(0, destroyingTimerID)
+		procTestDestroyWindow.Call(destroyingParent)
+		return 0
+	})
+)
+
 // TestNativeViewRestoresNothingOnceDestroyed pins that the end of the
-// Windows session, which destroys the window while the question is open,
-// leaves the answer nothing to do.
+// Windows session, which destroys the window while the restore's question
+// is open, leaves the answer nothing to do: the view asks through
+// ui.Confirm, which answers No once its parent is gone.
 func TestNativeViewRestoresNothingOnceDestroyed(t *testing.T) {
 	view, _, restores := newSettingsTestView(t, true)
-	view.confirm = func(windows.Handle, string, string) bool {
-		view.NativeDestroy()
-		return true
+	view.confirm = ui.Confirm
+	destroyingParent = uintptr(view.parent)
+	timer, _, err := procTestSetTimer.Call(0, 0, 200, destroyingTimer)
+	if timer == 0 {
+		t.Fatalf("SetTimer: %v", err)
 	}
+	destroyingTimerID = timer
 	view.NativeCommand(restoreDefaultsCommand, 0)
 	if *restores != 0 {
 		t.Fatalf("restores after the window was destroyed = %d, want none", *restores)

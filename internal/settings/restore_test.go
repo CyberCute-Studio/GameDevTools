@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -12,10 +13,30 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 )
 
+// restoreTo is a reset for Restore that restores value whatever the
+// settings it replaces.
+func restoreTo(value Settings) func(Settings) (Settings, error) {
+	return func(Settings) (Settings, error) { return value, nil }
+}
+
+// compactJSON returns a module section without the file's indentation, for
+// comparing it with the section that was saved, or "" for none.
+func compactJSON(t *testing.T, section json.RawMessage) string {
+	t.Helper()
+	if len(section) == 0 {
+		return ""
+	}
+	var compacted bytes.Buffer
+	if err := json.Compact(&compacted, section); err != nil {
+		t.Fatal(err)
+	}
+	return compacted.String()
+}
+
 // TestStoreRestoreBacksUpTheFileItReplaces pins the store half of Restore
-// Default Settings (SET-005): the file's bytes are copied beside it first,
-// byte for byte, and only then replaced by the restored settings, which a
-// restart loads.
+// Default Settings (SET-005): the restored settings are derived from the
+// session's, the file's bytes are copied beside it first, byte for byte,
+// and only then replaced by the restored settings, which a restart loads.
 func TestStoreRestoreBacksUpTheFileItReplaces(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "settings.json")
@@ -31,11 +52,19 @@ func TestStoreRestoreBacksUpTheFileItReplaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restored := Default()
-	restored.Shell = value.Shell
-	backup, err := store.Restore(restored)
+	restored, backup, err := store.Restore(value, func(replaced Settings) (Settings, error) {
+		if string(replaced.Modules["screenshot"]) != string(value.Modules["screenshot"]) {
+			t.Errorf("replaced settings = %+v, want the session's", replaced)
+		}
+		restored := Default()
+		restored.Shell = replaced.Shell
+		return restored, nil
+	})
 	if err != nil {
 		t.Fatalf("Restore() error = %v", err)
+	}
+	if restored.Shell != value.Shell || len(restored.Modules) != 0 {
+		t.Fatalf("Restore() settings = %+v, want the restored settings", restored)
 	}
 	if !strings.HasPrefix(filepath.Base(backup), "settings.json.reset-") || filepath.Dir(backup) != directory {
 		t.Fatalf("backup = %q, want settings.json.reset-<timestamp> beside the file", backup)
@@ -57,7 +86,7 @@ func TestStoreRestoreBacksUpTheFileItReplaces(t *testing.T) {
 // when there is no settings file yet and reports no backup.
 func TestStoreRestoreWithoutAFileWritesOne(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "settings.json")
-	backup, err := NewStore(Paths{ConfigFile: path}).Restore(Default())
+	_, backup, err := NewStore(Paths{ConfigFile: path}).Restore(Default(), restoreTo(Default()))
 	if err != nil || backup != "" {
 		t.Fatalf("Restore() = %q, %v, want no backup and no error", backup, err)
 	}
@@ -69,7 +98,8 @@ func TestStoreRestoreWithoutAFileWritesOne(t *testing.T) {
 // TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp pins that the
 // restore is the way out of a session whose saving Load disabled because it
 // could not back up a malformed file: once Restore has copied the file,
-// saving works again, and the copy holds the original bytes.
+// saving works again, and the copy holds the original bytes. The backup at
+// load fails its verification, which fails the same way on every platform.
 func TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "settings.json")
@@ -78,15 +108,13 @@ func TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := NewStore(Paths{ConfigFile: path})
-	store.now = func() time.Time { return time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC) }
-	if err := os.Mkdir(path+".corrupt-20261120T120000.000000000Z", 0o700); err != nil {
-		t.Fatal(err)
-	}
+	store.readBack = func(string) ([]byte, error) { return nil, errors.New("device not ready") }
 	if warnings := store.Load().Warnings; len(warnings) != 1 || !strings.Contains(warnings[0], "saving is disabled") {
 		t.Fatalf("load warnings = %v, want saving disabled", warnings)
 	}
+	store.readBack = os.ReadFile
 
-	backup, err := store.Restore(Default())
+	_, backup, err := store.Restore(Default(), restoreTo(Default()))
 	if err != nil {
 		t.Fatalf("Restore() error = %v", err)
 	}
@@ -96,6 +124,61 @@ func TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp(t *testing.T) {
 	}
 	if err := store.Save(Default()); err != nil {
 		t.Fatalf("Save() after the restore = %v, want saving enabled again", err)
+	}
+}
+
+// TestStoreRestoreDerivesFromAFileTheSessionNeverLoaded pins that a session
+// Load started from the defaults, as it could not read the settings file,
+// restores from the file's settings once the file can be read, not from the
+// session's defaults, so what the restore keeps is what the file stores;
+// once a save has replaced the file, the session's own settings are the
+// ones the restore replaces again.
+func TestStoreRestoreDerivesFromAFileTheSessionNeverLoaded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(Paths{ConfigFile: path})
+	if warnings := store.Load().Warnings; len(warnings) != 1 || !strings.Contains(warnings[0], "saving is disabled") {
+		t.Fatalf("load warnings = %v, want the file unread and saving disabled", warnings)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	stored := Default()
+	stored.Modules["screenshot"] = json.RawMessage(`{"presets":{"version":1}}`)
+	if err := NewStore(Paths{ConfigFile: path}).Save(stored); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keepScreenshot := func(replaced Settings) (Settings, error) {
+		restored := Default()
+		if section, exists := replaced.Modules["screenshot"]; exists {
+			restored.Modules["screenshot"] = section
+		}
+		return restored, nil
+	}
+	restored, backup, err := store.Restore(Default(), keepScreenshot)
+	if err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if got := compactJSON(t, restored.Modules["screenshot"]); got != string(stored.Modules["screenshot"]) {
+		t.Fatalf("restored screenshot section = %q, want the file's %q", got, stored.Modules["screenshot"])
+	}
+	if copied, err := os.ReadFile(backup); err != nil || string(copied) != string(original) {
+		t.Fatalf("backup = %q, err = %v, want the file's bytes", copied, err)
+	}
+	if reloaded := NewStore(Paths{ConfigFile: path}).Load(); compactJSON(t, reloaded.Settings.Modules["screenshot"]) != string(stored.Modules["screenshot"]) {
+		t.Fatalf("settings after a restart = %+v, want the file's section kept", reloaded.Settings)
+	}
+
+	restored, _, err = store.Restore(Default(), keepScreenshot)
+	if _, exists := restored.Modules["screenshot"]; err != nil || exists {
+		t.Fatalf("second Restore() = %+v, %v, want the session's settings replaced", restored, err)
 	}
 }
 
@@ -110,7 +193,7 @@ func TestStoreRestoreChangesNothingWhenItCannotBackUp(t *testing.T) {
 		}
 		store := NewStore(Paths{ConfigFile: path})
 		store.Load()
-		if _, err := store.Restore(Default()); !errors.Is(err, ErrNotRestored) {
+		if _, _, err := store.Restore(Default(), restoreTo(Default())); !errors.Is(err, ErrNotRestored) {
 			t.Fatalf("Restore() error = %v, want ErrNotRestored", err)
 		}
 		if info, err := os.Stat(path); err != nil || !info.IsDir() {
@@ -131,7 +214,7 @@ func TestStoreRestoreChangesNothingWhenItCannotBackUp(t *testing.T) {
 			t.Fatal(err)
 		}
 		store.readBack = func(string) ([]byte, error) { return []byte("{}"), nil }
-		if _, err := store.Restore(Default()); !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "differs") {
+		if _, _, err := store.Restore(Default(), restoreTo(Default())); !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "differs") {
 			t.Fatalf("Restore() error = %v, want ErrNotRestored for a copy that differs", err)
 		}
 		current, err := os.ReadFile(path)
@@ -150,23 +233,38 @@ func TestStoreRestoreChangesNothingWhenItCannotBackUp(t *testing.T) {
 		}
 		invalid := Default()
 		invalid.Shell.SelectedModule = "other"
-		if _, err := store.Restore(invalid); !errors.Is(err, ErrNotRestored) {
+		if _, _, err := store.Restore(Default(), restoreTo(invalid)); !errors.Is(err, ErrNotRestored) {
 			t.Fatalf("Restore() error = %v, want ErrNotRestored", err)
 		}
 		if backups, _ := filepath.Glob(path + ".reset-*"); len(backups) != 0 {
 			t.Fatalf("an invalid restore made backups %v", backups)
 		}
 	})
+	t.Run("restored settings that cannot be made", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "settings.json")
+		store := NewStore(Paths{ConfigFile: path})
+		if err := store.Save(Default()); err != nil {
+			t.Fatal(err)
+		}
+		failed := func(Settings) (Settings, error) { return Settings{}, errors.New("malformed preset section") }
+		if _, _, err := store.Restore(Default(), failed); !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "malformed preset section") {
+			t.Fatalf("Restore() error = %v, want ErrNotRestored with the reason", err)
+		}
+		if backups, _ := filepath.Glob(path + ".reset-*"); len(backups) != 0 {
+			t.Fatalf("a restore that could not be made made backups %v", backups)
+		}
+	})
 }
 
 // TestStoreRestoreWithoutAPathFailsLikeASave pins that a session without a
 // settings path, kept in memory only, takes a restore as it takes any
-// change: Restore reports the write failure, not ErrNotRestored, so the
-// session still takes the restored settings (SET-004).
+// change: Restore returns the restored settings and the write failure,
+// ErrPathUnavailable, not ErrNotRestored, so the session still takes them
+// (SET-004).
 func TestStoreRestoreWithoutAPathFailsLikeASave(t *testing.T) {
-	backup, err := NewStore(Paths{}).Restore(Default())
-	if err == nil || errors.Is(err, ErrNotRestored) || backup != "" {
-		t.Fatalf("Restore() = %q, %v, want a write failure", backup, err)
+	restored, backup, err := NewStore(Paths{}).Restore(Default(), restoreTo(Default()))
+	if !errors.Is(err, ErrPathUnavailable) || errors.Is(err, ErrNotRestored) || backup != "" || restored.Version != CurrentVersion {
+		t.Fatalf("Restore() = %+v, %q, %v, want the restored settings and ErrPathUnavailable", restored, backup, err)
 	}
 }
 

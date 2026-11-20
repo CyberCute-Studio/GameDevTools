@@ -26,8 +26,14 @@ const CurrentVersion = 1
 const staleTemporaryAge = time.Minute
 
 // ErrNotRestored reports that Restore wrote nothing: the restored settings
-// were invalid, or the current settings file could not be read or backed up.
+// could not be made or were invalid, or the current settings file could not
+// be read or backed up.
 var ErrNotRestored = errors.New("the default settings were not restored")
+
+// ErrPathUnavailable reports that a save had no settings file to write, as
+// the per-user settings path could not be determined: the session's
+// settings stay in memory until the application closes.
+var ErrPathUnavailable = errors.New("settings path is unavailable")
 
 // notRestored is why Restore wrote nothing, marked as ErrNotRestored without
 // repeating that in its text, which the caller's message says already.
@@ -79,7 +85,14 @@ type Store struct {
 	migrations map[int]Migration
 	validators map[string][]ModuleValidator
 	blocked    error
-	now        func() time.Time
+	// unloaded is whether the settings file holds settings the session never
+	// took: Load could not read or decode the file and started the session
+	// from the defaults in their place, and no save has replaced it since.
+	// Restore then derives the restored settings from the file's, once they
+	// decode, so what the restore keeps — the preset libraries — is what the
+	// file stores rather than the defaults the session started from.
+	unloaded bool
+	now      func() time.Time
 	// readBack reads a backup back to verify it; tests substitute it.
 	readBack func(string) ([]byte, error)
 }
@@ -154,12 +167,14 @@ func (s *Store) Load() LoadResult {
 	}
 	if err != nil {
 		s.blocked = err
+		s.unloaded = true
 		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsReadFailed, s.path, err))
 		return result
 	}
 
 	decoded, migrated, err := s.decode(data)
 	if err != nil {
+		s.unloaded = true
 		backup, backupErr := s.backup(data, "corrupt")
 		if backupErr != nil {
 			s.blocked = backupErr
@@ -192,43 +207,69 @@ func (s *Store) Save(value Settings) error {
 	return s.save(value)
 }
 
-// Restore replaces the settings file with value, the application's settings
-// restored to their defaults (SET-005). The file's current bytes are first
-// copied to settings.json.reset-<timestamp>, as backup copies them, so the
-// settings it replaces stay recoverable, and Restore returns the copy's
-// path, or "" when there was no file to copy. When value would not save, or
-// the file cannot be read or copied, nothing is written and the error wraps
-// ErrNotRestored. Once the copy exists, a store whose saving Load disabled,
-// because it could not read or back up the original, saves again: the
-// original is preserved now, and the restore is the user's explicit request
-// to replace it. A write that fails after the copy is returned as Save
-// returns it, leaving the original in place beside its copy, as is the
-// failure without a settings path, where there is no file to copy.
-func (s *Store) Restore(value Settings) (string, error) {
+// Restore replaces the settings file with the application's settings
+// restored to their defaults (SET-005), which reset derives from the
+// settings the restore replaces: current, the session's, or, while the
+// session never took the file's (unloaded) and the file now decodes, the
+// file's, so what the restore keeps is what the file stores. The file's
+// current bytes are first copied to settings.json.reset-<timestamp>, as
+// backup copies them, so the settings it replaces stay recoverable, and
+// Restore returns the restored settings, for the session to take, and the
+// copy's path, or "" when there was no file to copy. When reset fails or
+// its settings would not save, or the file cannot be read or copied,
+// nothing is written and the error wraps ErrNotRestored. Once the copy
+// exists, a store whose saving Load disabled, because it could not read or
+// back up the original, saves again: the original is preserved now, and the
+// restore is the user's explicit request to replace it. A write that fails
+// after the copy is returned as Save returns it, leaving the original in
+// place beside its copy, as is the failure without a settings path,
+// ErrPathUnavailable, where there is no file to copy.
+func (s *Store) Restore(current Settings, reset func(replaced Settings) (Settings, error)) (Settings, string, error) {
+	replaced := current
+	var data []byte
+	exists := false
+	if s.path != "" {
+		var err error
+		data, err = os.ReadFile(s.path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
+		default:
+			exists = true
+			if s.unloaded {
+				// A file that still does not decode is kept only in its
+				// copy, as recovery from a malformed file keeps it, and the
+				// session's settings are the ones the restore replaces.
+				if stored, _, err := s.decode(data); err == nil {
+					replaced = stored
+				}
+			}
+		}
+	}
+	value, err := reset(replaced)
+	if err != nil {
+		return Settings{}, "", notRestored{err}
+	}
 	if err := validate(value); err != nil {
-		return "", notRestored{err}
+		return Settings{}, "", notRestored{err}
 	}
 	if err := s.validateModules(value); err != nil {
-		return "", notRestored{err}
+		return Settings{}, "", notRestored{err}
 	}
 	if s.path == "" {
 		// There is no file to replace: the session takes the restored
 		// settings in memory, and the write fails as every save does.
-		return "", s.save(value)
+		return value, "", s.save(value)
 	}
 	backup := ""
-	data, err := os.ReadFile(s.path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return "", notRestored{fmt.Errorf("read the current settings: %w", err)}
-	default:
+	if exists {
 		if backup, err = s.backup(data, "reset"); err != nil {
-			return "", notRestored{fmt.Errorf("back up the current settings: %w", err)}
+			return Settings{}, "", notRestored{fmt.Errorf("back up the current settings: %w", err)}
 		}
 	}
 	s.blocked = nil
-	return backup, s.save(value)
+	return value, backup, s.save(value)
 }
 
 // removeStaleTemporaries removes the temporary files that saves interrupted
@@ -262,7 +303,7 @@ func (s *Store) save(value Settings) error {
 		return fmt.Errorf("saving is disabled because settings recovery is incomplete: %w", s.blocked)
 	}
 	if s.path == "" {
-		return errors.New("settings path is unavailable")
+		return ErrPathUnavailable
 	}
 	if err := validate(value); err != nil {
 		return err
@@ -303,6 +344,7 @@ func (s *Store) save(value Settings) error {
 	if err := os.Rename(temporaryPath, s.path); err != nil {
 		return fmt.Errorf("replace settings file: %w", err)
 	}
+	s.unloaded = false
 	return nil
 }
 

@@ -108,6 +108,7 @@ var (
 	procSetTimer             = user32.NewProc("SetTimer")
 	procKillTimer            = user32.NewProc("KillTimer")
 	procMessageBoxW          = user32.NewProc("MessageBoxW")
+	procIsWindow             = user32.NewProc("IsWindow")
 	procInvalidateRect       = user32.NewProc("InvalidateRect")
 	procNotifyWinEvent       = user32.NewProc("NotifyWinEvent")
 )

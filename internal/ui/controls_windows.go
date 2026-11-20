@@ -666,6 +666,15 @@ func (s *StatusArea) stopTimer() {
 	}
 }
 
+// Confirm asks the user a yes-or-no question about the parent window, its
+// safe answer No the default (UX-002), and reports whether the answer was
+// Yes. The question's modal loop dispatches the window's messages, so the
+// window can be destroyed while it is open — as the end of the Windows
+// session destroys the main window (WM_ENDSESSION) — and the answer is then
+// No, even one given just before, so the caller does nothing more with a
+// window that is gone. Windows ends the question with no answer once its
+// owner is destroyed; the parent is also checked once it returns, so every
+// caller has that guarantee whatever the question's answer.
 func Confirm(parent windows.Handle, title, message string) bool {
 	answer, _, _ := procMessageBoxW.Call(
 		uintptr(parent),
@@ -673,6 +682,11 @@ func Confirm(parent windows.Handle, title, message string) bool {
 		uintptr(unsafe.Pointer(utf16(title))),
 		mbYesNo|mbIconWarning|mbDefButton2,
 	)
+	if parent != 0 {
+		if alive, _, _ := procIsWindow.Call(uintptr(parent)); alive == 0 {
+			return false
+		}
+	}
 	return answer == idYes
 }
 

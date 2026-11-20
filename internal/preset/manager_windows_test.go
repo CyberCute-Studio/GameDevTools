@@ -284,6 +284,35 @@ func TestNativeManagerFailedSaveKeepsInMemoryWorkflow(t *testing.T) {
 	}
 }
 
+// TestNativeManagerReloadShowsOnlyAnotherLibrary pins how a module's preset
+// controls take the library Restore Default Settings kept (SET-005,
+// APP-004): an unchanged library leaves the list and the form's unsaved
+// edit as they are, and another — the settings file's, kept when the
+// session never loaded it — is listed with its selected preset in the form.
+func TestNativeManagerReloadShowsOnlyAnotherLibrary(t *testing.T) {
+	parent := newPresetTestParent(t)
+	value := settings.Default()
+	manager := newNativeManagerForTest(t, shell.ModuleScreenshot, settings.NewStore(settings.Paths{}), &value, parent)
+	manager.refresh()
+	listed := listedTexts(manager)
+	manager.name.Edit.SetText("Unsaved edit")
+
+	manager.Reload()
+	if got := manager.name.Edit.Text(); got != "Unsaved edit" || !slices.Equal(listedTexts(manager), listed) {
+		t.Fatalf("after reloading the same library: name %q, list %q; want both kept", got, listedTexts(manager))
+	}
+
+	const id = "custom.0123456789abcdef0123456789abcdef"
+	value.Modules[string(shell.ModuleScreenshot)] = []byte(`{"presets":{"version":1,"custom":[{"id":"` + id + `","name":"Store thumbnail","width":640,"height":480}],"selectedPresetId":"` + id + `"}}`)
+	manager.Reload()
+	if selected, _ := manager.SelectedPreset(); selected.ID != id || manager.name.Edit.Text() != "Store thumbnail" {
+		t.Fatalf("after reloading another library: selected %+v, name %q; want the kept preset shown", selected, manager.name.Edit.Text())
+	}
+	if got := listedTexts(manager); len(got) != len(listed)+1 {
+		t.Fatalf("list after reloading another library = %q, want the built-ins and the kept preset", got)
+	}
+}
+
 func TestNativeManagerLayoutExpandsForWrappedMessages(t *testing.T) {
 	parent := newPresetTestParent(t)
 	value := settings.Default()

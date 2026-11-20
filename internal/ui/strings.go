@@ -88,6 +88,7 @@ const (
 	SettingsRestoredNoBackup    = "Default settings restored."
 	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
 	SettingsRestoreSaveFailed   = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings."
+	SettingsRestoreInMemory     = "Default settings are in use for this session, but they cannot be saved: %v. Changes will remain in memory for this session."
 	// SettingsRestoreFollowUp joins what a module still needs after the
 	// restore, such as a default shortcut another application holds, to the
 	// restore's outcome.
