@@ -198,7 +198,9 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 // every options save is; one the options refuse — they are invalid as a
 // whole, as while no output folder is selected — stops the job, and the
 // refusal is explained beside the job's progress, where the user looks after
-// Start Resize.
+// Start Resize. A field's refusal is also shown beside the field, quietly, as
+// the job section announces the same message, which would otherwise be read
+// twice in a row when the field's message was not already shown.
 func (n *NativeView) commitJobFields() bool {
 	options := n.options.Options()
 	if options.Format == FormatPNG {
@@ -207,14 +209,14 @@ func (n *NativeView) commitJobFields() bool {
 	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
-		n.quality.Error.SetText(message)
+		n.quality.Error.SetTextQuietly(message)
 		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
 		return false
 	}
 	background, err := ParseBackground(n.background.Edit.Text())
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
-		n.background.Error.SetText(message)
+		n.background.Error.SetTextQuietly(message)
 		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
 		return false
 	}
@@ -286,7 +288,7 @@ func (n *NativeView) startJob(start jobStart) {
 	n.cancelButton.Focus()
 	n.outputFolder = ""
 	n.openButton.Enable(false)
-	n.refreshSourceSelection()
+	n.showSourceSelection(false)
 	n.jobs.Add(1)
 	go n.runJob(ctx, active, start, n.run, n.inspector.check)
 }
@@ -369,7 +371,7 @@ func (n *NativeView) applyJobEvents(active *activeJob) {
 		}
 	}
 	if refreshDetail {
-		n.refreshSourceSelection()
+		n.showSourceSelection(false)
 	}
 	if hasResults(active.progress) && n.outputFolder == "" {
 		n.outputFolder = active.folder
@@ -379,7 +381,7 @@ func (n *NativeView) applyJobEvents(active *activeJob) {
 		n.finishJob(active, *finish)
 		return
 	}
-	n.showJobProgress(active)
+	n.showJobProgress(active, false)
 }
 
 // applyRechecks applies to the source list the content checks the job made
@@ -468,7 +470,7 @@ func (n *NativeView) finishJob(active *activeJob, finish jobFinish) {
 		}
 	}
 	n.cancelButton.Enable(false)
-	n.refreshSourceSelection()
+	n.showSourceSelection(false)
 }
 
 // cancelJob cancels the running job (RSZ-045): no further item starts, the
@@ -489,7 +491,7 @@ func (n *NativeView) cancelJob() {
 		n.list.Focus()
 	}
 	n.cancelButton.Enable(false)
-	n.showJobProgress(active)
+	n.showJobProgress(active, true)
 }
 
 // awaitCancelled waits, on its own goroutine, for a cancelled job to stop,
@@ -526,14 +528,23 @@ func (n *NativeView) releaseJob(active *activeJob) {
 }
 
 // showJobProgress shows the running job's progress, naming the file that
-// most recently started processing.
-func (n *NativeView) showJobProgress(active *activeJob) {
+// most recently started processing. announce is whether a screen reader
+// reads it: the progress that follows each batch of the job's events changes
+// faster than it could be read, so only the cancelling progress the user's
+// Cancel Resize brings is announced, between the job's announced start and
+// its announced summary.
+func (n *NativeView) showJobProgress(active *activeJob, announce bool) {
 	current, others := "", 0
 	if count := len(active.processing); count > 0 {
 		current = filepath.Base(active.processing[count-1].source)
 		others = count - 1
 	}
-	n.showJobNotice(ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(active.progress, current, others, active.cancelling)})
+	notice := ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(active.progress, current, others, active.cancelling)}
+	if announce {
+		n.showJobNotice(notice)
+		return
+	}
+	n.jobStatus.Update(notice)
 }
 
 func (n *NativeView) showJobNotice(notice ui.Notice) {

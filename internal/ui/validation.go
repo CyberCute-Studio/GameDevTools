@@ -24,23 +24,23 @@ const (
 func (k ErrorKind) Label() string {
 	switch k {
 	case ErrorValidation:
-		return "Validation error"
+		return ErrorValidationLabel
 	case ErrorUnsupportedFormat:
-		return "Unsupported format"
+		return ErrorUnsupportedFormatLabel
 	case ErrorReadDecode:
-		return "Read/decode error"
+		return ErrorReadDecodeLabel
 	case ErrorWriteEncode:
-		return "Write/encode error"
+		return ErrorWriteEncodeLabel
 	case ErrorClipboard:
-		return "Clipboard error"
+		return ErrorClipboardLabel
 	case ErrorShortcutRegistration:
-		return "Shortcut registration error"
+		return ErrorShortcutRegistrationLabel
 	case ErrorCapture:
-		return "Capture error"
+		return ErrorCaptureLabel
 	case ErrorUnexpected:
-		return "Unexpected error"
+		return ErrorUnexpectedLabel
 	default:
-		return "Error"
+		return ErrorOtherLabel
 	}
 }
 
@@ -48,30 +48,30 @@ func FormatError(kind ErrorKind, err error) string {
 	if err == nil {
 		return ""
 	}
-	return kind.Label() + ": " + err.Error()
+	return kind.Label() + LabelSeparator + err.Error()
 }
 
 func ParseDimension(field, input string) (int, error) {
 	value := strings.TrimSpace(input)
 	if value == "" {
-		return 0, fmt.Errorf("%s is required. Enter a whole number of pixels greater than 0.", field)
+		return 0, fmt.Errorf(DimensionRequired, field)
 	}
 	for _, character := range value {
 		if character < '0' || character > '9' {
-			return 0, fmt.Errorf("%s must be a whole number of pixels greater than 0.", field)
+			return 0, fmt.Errorf(DimensionNotWhole, field)
 		}
 	}
 	parsed, err := strconv.ParseInt(value, 10, strconv.IntSize)
 	if err != nil {
 		maximum := int64(^uint(0) >> 1)
-		return 0, fmt.Errorf("%s is too large. Enter a whole number no greater than %d pixels.", field, maximum)
+		return 0, fmt.Errorf(DimensionTooLarge, field, maximum)
 	}
 	if parsed == 0 {
-		return 0, fmt.Errorf("%s must be greater than 0 pixels.", field)
+		return 0, fmt.Errorf(DimensionZero, field)
 	}
 	return int(parsed), nil
 }
 
 func FormatDimensions(width, height int) string {
-	return fmt.Sprintf("%d × %d px", width, height)
+	return fmt.Sprintf(DimensionsFormat, width, height)
 }

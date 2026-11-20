@@ -333,6 +333,38 @@ func TestPresetPlacementCentersAndClamps(t *testing.T) {
 	}
 }
 
+// TestTypedSelectionCentersTypedSize pins how a Free Rectangle selection is
+// created from typed dimensions (SCR-015): exactly that size, centered on the
+// cursor display and kept inside the virtual desktop, and refused when it
+// has no pixel or does not fit the desktop, including a size beyond int32
+// that ParseDimension accepts.
+func TestTypedSelectionCentersTypedSize(t *testing.T) {
+	desktop := display.Rect{Left: -1920, Top: 0, Right: 1920, Bottom: 1080}
+	anchor := display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1040}
+	tests := []struct {
+		name          string
+		width, height int
+		want          display.Rect
+		ok            bool
+	}{
+		{name: "centers on the cursor display", width: 640, height: 480, want: display.Rect{Left: 640, Top: 280, Right: 1280, Bottom: 760}, ok: true},
+		{name: "spans displays when wider than one", width: 3000, height: 100, want: display.Rect{Left: -1080, Top: 470, Right: 1920, Bottom: 570}, ok: true},
+		{name: "fills the whole desktop", width: 3840, height: 1080, want: desktop, ok: true},
+		{name: "refuses a width beyond the desktop", width: 3841, height: 100},
+		{name: "refuses a height beyond the desktop", width: 100, height: 1081},
+		{name: "refuses an empty rectangle", width: 0, height: 100},
+		{name: "refuses a size beyond int32", width: 1 << 40, height: 1 << 40},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := typedSelection(anchor, desktop, test.width, test.height)
+			if ok != test.ok || got != test.want {
+				t.Fatalf("typedSelection = %v, %v; want %v, %v", got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
 func TestRevalidatedSelection(t *testing.T) {
 	desktop := display.Rect{Left: 0, Top: 0, Right: 1280, Bottom: 720}
 

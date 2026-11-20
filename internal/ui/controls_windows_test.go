@@ -181,7 +181,7 @@ func TestStatusAreaRevisionIdentifiesTheNotice(t *testing.T) {
 }
 
 func TestStatusAreaReportsTimerFailure(t *testing.T) {
-	area := &StatusArea{Label: &Label{Control{hwnd: 1}}, parent: 1}
+	area := &StatusArea{Label: &Label{Control: Control{hwnd: 1}}, parent: 1}
 	if err := area.Show(Notice{Message: "Saved"}, time.Second); err == nil {
 		t.Fatal("Show() error = nil for an invalid parent window")
 	}

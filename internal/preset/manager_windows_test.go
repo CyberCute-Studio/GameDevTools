@@ -17,6 +17,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
 func TestNativeManagerCRUDIndependenceAndRestart(t *testing.T) {
@@ -222,6 +223,46 @@ func TestNativeManagerValidationAndBuiltInProtection(t *testing.T) {
 	manager.NativeCommand(200+presetDeleteCommand, 0)
 	if len(manager.manager.library.Presets()) != 4 || !strings.Contains(manager.status.Text(), "built-in") {
 		t.Fatalf("built-in mutation result = %q, presets = %+v", manager.status.Text(), manager.manager.library.Presets())
+	}
+}
+
+// TestNativeManagerAnnouncesEachRefusal pins that a refused Create has a
+// screen reader read the field's message each time (UX-003), as the focus
+// moves to the field: the message a field shows as it is typed is not
+// announced again when Create refuses the same text, and a message Create
+// itself sets is announced once.
+func TestNativeManagerAnnouncesEachRefusal(t *testing.T) {
+	parent := newPresetTestParent(t)
+	value := settings.Default()
+	manager := newNativeManagerForTest(t, shell.ModuleScreenshot, settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")}), &value, parent)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	// Typing validates the field as it changes, which announces the message.
+	setNativeForm(manager, "Typed", "12a", "480", -1)
+	manager.NativeCommand(200+presetWidthCommand, ui.NotificationEditChange)
+	if got := watch.Count(manager.width.Error.Handle()); got != 1 {
+		t.Fatalf("announcements of the typed width's message = %d, want 1", got)
+	}
+	manager.NativeCommand(200+presetCreateCommand, 0)
+	manager.NativeCommand(200+presetCreateCommand, 0)
+	if got := watch.Count(manager.width.Error.Handle()); got != 3 {
+		t.Fatalf("announcements after Create refused the width twice = %d, want 3", got)
+	}
+
+	// A message Create's own validation sets, as for a height emptied
+	// without its field validating, is announced once, not twice.
+	manager.width.Edit.SetText("640")
+	manager.height.Edit.SetText("")
+	manager.NativeCommand(200+presetCreateCommand, 0)
+	if got := watch.Count(manager.height.Error.Handle()); got != 1 {
+		t.Fatalf("announcements of the empty height Create refused = %d, want 1", got)
+	}
+	if len(manager.manager.library.Custom()) != 0 {
+		t.Fatalf("a refused Create added %+v", manager.manager.library.Custom())
 	}
 }
 

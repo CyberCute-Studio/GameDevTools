@@ -14,6 +14,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
 var procGetWindowLongW = testUser32.NewProc("GetWindowLongW")
@@ -100,7 +101,7 @@ func TestDisplayListItemDescribesDisplay(t *testing.T) {
 		DPIX:       144,
 		DPIY:       144,
 	}
-	if got := displayListItem(item); got != "2 — Dell U2415 — 1920 × 1200 (150%)" {
+	if got := displayListItem(item); got != "2 — Dell U2415 — 1920 × 1200 px (150%)" {
 		t.Fatalf("secondary item = %q", got)
 	}
 	primary := display.Display{
@@ -111,7 +112,7 @@ func TestDisplayListItemDescribesDisplay(t *testing.T) {
 		DPIX:       96,
 		DPIY:       96,
 	}
-	if got := displayListItem(primary); got != `1 — \\.\DISPLAY1 — 3840 × 2160 (100%, primary)` {
+	if got := displayListItem(primary); got != `1 — \\.\DISPLAY1 — 3840 × 2160 px (100%, primary)` {
 		t.Fatalf("primary item = %q", got)
 	}
 }
@@ -502,6 +503,40 @@ func TestNativeViewCaptureRejectsUnsavedInvalidQuality(t *testing.T) {
 	}
 	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") {
 		t.Fatalf("status for invalid quality = %q", got)
+	}
+}
+
+// TestNativeViewAnnouncesARefusedQualityOnce pins that Start Capture's
+// refusal of quality text the field has not yet validated, shown both beside
+// the field and in the status area, is announced once, by the status area,
+// rather than read twice in a row.
+func TestNativeViewAnnouncesARefusedQualityOnce(t *testing.T) {
+	parent := newViewTestParent(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, testFolder(t), parent)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.quality.Edit.SetText("0")
+	view.capture = func(CaptureRequest) CaptureResult {
+		t.Fatal("capture ran with invalid quality text")
+		return CaptureResult{}
+	}
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+
+	view.NativeAction()
+	if view.quality.Error.Text() == "" {
+		t.Fatal("quality field shows no validation error")
+	}
+	if got := watch.Count(view.status.Handle()); got != 1 {
+		t.Fatalf("status announcements of the refusal = %d, want 1", got)
+	}
+	if got := watch.Count(view.quality.Error.Handle()); got != 0 {
+		t.Fatalf("field announcements of the refusal = %d, want 0, as the status area announces it", got)
 	}
 }
 

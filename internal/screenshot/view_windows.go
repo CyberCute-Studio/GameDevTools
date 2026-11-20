@@ -70,6 +70,11 @@ type NativeView struct {
 	savedPath        string
 	shown            bool
 	font             windows.Handle
+	// shortcutNotice is the status area's revision once
+	// presentShortcutFailure last showed a failure there, which
+	// NativeAnnounceNotice compares to tell whether a later notice replaced
+	// it.
+	shortcutNotice uint64
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -122,7 +127,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.modeFull, err = ui.NewButton(parent, ui.CaptureModeFullDisplay, ui.ButtonOptions{ID: base + modeFullCommand, Radio: true}); err != nil {
 		return err
 	}
-	if n.displayLabel, err = ui.NewMnemonicLabel(parent, ui.DisplayLabel); err != nil {
+	// The display label starts a group, ending the capture modes' radio
+	// group at Full Display, so the arrow keys wrap between the modes
+	// (ui.NewGroupLabel).
+	if n.displayLabel, err = ui.NewGroupMnemonicLabel(parent, ui.DisplayLabel); err != nil {
 		return err
 	}
 	if n.displayCombo, err = ui.NewComboBox(parent, base+displayCommand); err != nil {
@@ -192,6 +200,20 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 // the GUI thread.
 func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 	n.dispatcher = dispatcher
+}
+
+// NativeAnnounceNotice asks a screen reader to read the status area's
+// notice, if any, once the view is first shown in the visible main window: a
+// startup shortcut conflict or display failure is shown while the window, or
+// the view, is still hidden, where its announcement goes unheard. A shortcut
+// failure that a later notice replaced in the status area, as a display
+// failure at startup in Full Display mode replaces a conflict, is still
+// shown beside the field, and is announced from there.
+func (n *NativeView) NativeAnnounceNotice() {
+	n.status.Announce()
+	if n.status.Revision() != n.shortcutNotice {
+		n.shortcut.Error.Announce()
+	}
 }
 
 func (n *NativeView) NativeFont(font windows.Handle) {
@@ -420,10 +442,13 @@ func (n *NativeView) NativeAction() {
 	}
 	// The quality field otherwise commits only when it loses focus, and
 	// keyboard activation of Start Capture never moves focus; the capture
-	// must not run with stale or invalid quality text.
+	// must not run with stale or invalid quality text. The refusal is shown
+	// beside the field quietly, as the status area announces the same
+	// message, which would otherwise be read twice in a row when the field's
+	// message was not already shown.
 	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
 	if err != nil {
-		n.quality.Error.SetText(ui.FormatError(ui.ErrorValidation, err))
+		n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
 		return
 	}
@@ -513,7 +538,7 @@ func (n *NativeView) NativeShutdown() {
 // rectangle and the main-window restore to startRectangleCapture.
 func (n *NativeView) beginOverlay() {
 	if n.sessions == nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New("the overlay service is unavailable"))}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New(ui.OverlayServiceUnavailable))}, 0)
 		return
 	}
 	mode := overlay.ModeFreeRectangle
@@ -556,7 +581,7 @@ func (n *NativeView) beginOverlay() {
 func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) {
 	if n.captureRectangle == nil {
 		restore()
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New("the capture service is unavailable"))}, 0)
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New(ui.CaptureServiceUnavailable))}, 0)
 		return
 	}
 	options := n.options.Options()
@@ -666,7 +691,7 @@ func (n *NativeView) refreshDisplays() {
 	}
 	previous := n.selectedDeviceName()
 	if n.displays == nil {
-		n.displayErr = errors.New("the display service is unavailable")
+		n.displayErr = errors.New(ui.DisplayServiceUnavailable)
 		n.displayList = nil
 		n.displayCombo.Reset()
 		return
@@ -792,10 +817,14 @@ func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 
 // presentShortcutFailure reports a registration problem beside the shortcut
 // field and in the status area, categorized as a shortcut-registration
-// failure (UX-010).
+// failure (UX-010). The status area announces it, so the field shows it
+// quietly: a screen reader would otherwise read the same failure twice in a
+// row.
 func (n *NativeView) presentShortcutFailure(err error) {
-	n.shortcut.Error.SetText(ui.FormatError(ui.ErrorShortcutRegistration, err))
-	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorShortcutRegistration, err)}, 0)
+	message := ui.FormatError(ui.ErrorShortcutRegistration, err)
+	n.shortcut.Error.SetTextQuietly(message)
+	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: message}, 0)
+	n.shortcutNotice = n.status.Revision()
 }
 
 func (n *NativeView) commitQuality() {

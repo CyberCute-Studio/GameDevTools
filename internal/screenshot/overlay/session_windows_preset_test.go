@@ -60,11 +60,11 @@ func TestPresetFrameExactSizeAndSurface(t *testing.T) {
 	if got := at(native.border+10, native.border+10); got != 0 {
 		t.Fatalf("interior pixel = %#08x, want fully transparent for click-through", got)
 	}
-	if got := at(0, native.pixelHeight/2); got != 0xff000000 {
-		t.Fatalf("outer border pixel = %#08x, want the opaque dark outline", got)
+	if got := at(0, native.pixelHeight/2); got != native.edgePx {
+		t.Fatalf("outer border pixel = %#08x, want the opaque edge %#08x", got, native.edgePx)
 	}
 	if got := at(native.border/2, native.pixelHeight/2); native.border > 2 && got != native.borderPx {
-		t.Fatalf("border ring pixel = %#08x, want the opaque highlight %#08x", got, native.borderPx)
+		t.Fatalf("border ring pixel = %#08x, want the opaque core %#08x", got, native.borderPx)
 	}
 
 	// The toolbar offers Capture and Cancel with live dimensions and the

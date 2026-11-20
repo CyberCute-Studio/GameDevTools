@@ -1,8 +1,8 @@
 # GameDevTools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.0\
-**Last updated:** 2026-11-10\
+**Version:** 1.1\
+**Last updated:** 2026-11-20\
 **Product name:** GameDevTools (working name)\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
@@ -229,6 +229,8 @@ The exact built-in list can change during implementation without changing the re
 **SCR-013 (P0):** The user must be able to type exact width and height values for the current free rectangle.
 
 **SCR-014 (P0):** Capture must produce an image matching the final rectangle's dimensions and screen contents exactly, excluding the overlay and selection controls.
+
+**SCR-015 (P1):** The user should be able to complete Free Rectangle capture without a pointer: typing a width and height before drawing creates a rectangle of exactly that size centered on the cursor display, and the arrow keys move the rectangle by one physical pixel, or ten with Shift.
 
 ### 9.4 Preset Rectangle mode
 
@@ -693,6 +695,7 @@ These are not commitments for the initial release:
 - Watch folders, command-line batch operation, and automation profiles.
 - Additional GameDevTools modules using the same shell and settings infrastructure.
 - Localization beyond English.
+- Following the Windows dark app mode with a dark theme.
 - Signed installer, automatic updates, and enterprise deployment controls.
 
 ## 19. Open decisions
@@ -703,8 +706,7 @@ The following decisions do not block initial implementation but must be resolved
 2. Installer, portable ZIP, or both.
 3. Code-signing approach and release identity.
 4. Whether an automatic update mechanism is needed.
-5. Exact default light/dark theme support based on the selected GUI framework.
-6. Support policy for future Windows 10 updates after Microsoft ends general support.
+5. Support policy for future Windows 10 updates after Microsoft ends general support.
 
 ## 20. Confirmed product decisions
 
@@ -719,9 +721,11 @@ For clarity, the following choices have been made and should not be reopened wit
 - Resizing writes new files and preserves originals by default.
 - Initial image format support is PNG and JPEG only.
 - Screenshots can be started from the main window or a configurable global shortcut.
+- The initial release draws every window in the Windows system colors, so it follows the Windows contrast (high-contrast) themes, and does not follow the Windows dark app mode, which the standard Win32 controls it uses have no documented way to render; the application stays light and legible when Windows apps are set to dark (UX-008).
 
 ## 21. Revision history
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-11-10 | Initial detailed PRD for the Windows Go application, Screenshot module, and Image Resizer module. |
+| 1.1 | 2026-11-20 | QLT-01: resolved the theme open decision — system colors and contrast themes, no dark app mode in the initial release (section 20, a future consideration in section 18) — and added SCR-015, keyboard completion of Free Rectangle capture. |

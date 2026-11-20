@@ -61,8 +61,13 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	native := nativeOf(t, controller)
 	t.Cleanup(controller.Shutdown)
 
-	if editsEnabled(native) {
-		t.Fatal("dimension fields were editable without a selection")
+	// The fields are usable before anything is drawn, and the session
+	// starts in the width field, so the size can be typed (SCR-015).
+	if !editsEnabled(native) {
+		t.Fatal("dimension fields were disabled without a selection, so no size could be typed")
+	}
+	if focus, _, _ := procGetFocus.Call(); focus != uintptr(native.widthEdit.Handle()) {
+		t.Fatal("a Free Rectangle session did not start in the width field")
 	}
 	sendMouse(native.overlay, wmLButtonDown, 60, 40)
 	sendMouse(native.overlay, wmMouseMove, 460, 340)
@@ -115,7 +120,16 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 		t.Fatalf("toolbar top = %d, want %d just below the selection", toolbar.Top, selectionBottom+native.margin)
 	}
 
-	procSendMessageW.Call(uintptr(native.toolbar), wmCommand, toolbarCaptureCommand, 0)
+	// Drawing hands the focus from the width field to the toolbar, so Enter
+	// presses Capture rather than applying the field.
+	focus, _, _ := procGetFocus.Call()
+	if native.isDimensionEdit(focus) {
+		t.Fatal("the focus stayed in a dimension field after a pointer draw")
+	}
+	enter := windowMessage{HWND: native.toolbar, Message: wmKeyDown, WParam: vkReturn}
+	if !controller.FilterMessage(unsafe.Pointer(&enter)) {
+		t.Fatal("the filter did not take Enter on the toolbar")
+	}
 	if captured != want {
 		t.Fatalf("captured region = %v, want %v (SCR-014)", captured, want)
 	}
@@ -158,17 +172,19 @@ func TestOverlayClickWithoutDragLeavesNoSelection(t *testing.T) {
 		t.Fatalf("stationary move created a selection: %v", native.selection)
 	}
 
-	// Clearing an existing selection disables the dimension fields again.
+	// Clearing an existing selection empties the dimension fields but keeps
+	// them usable, so a new size can be typed (SCR-015).
 	sendMouse(native.overlay, wmLButtonDown, 100, 100)
 	sendMouse(native.overlay, wmMouseMove, 300, 240)
 	sendMouse(native.overlay, wmLButtonUp, 300, 240)
-	if !editsEnabled(native) {
-		t.Fatal("dimension fields stayed disabled with a selection on screen")
-	}
 	sendMouse(native.overlay, wmLButtonDown, 500, 400)
 	sendMouse(native.overlay, wmLButtonUp, 500, 400)
-	if editsEnabled(native) {
-		t.Fatal("dimension fields stayed editable after the selection was cleared")
+	if !native.selection.Empty() {
+		t.Fatalf("a click outside the selection kept it: %v", native.selection)
+	}
+	if !editsEnabled(native) || native.widthEdit.Text() != "" || native.heightEdit.Text() != "" {
+		t.Fatalf("after the selection was cleared: fields enabled = %v, width %q, height %q; want enabled and empty",
+			editsEnabled(native), native.widthEdit.Text(), native.heightEdit.Text())
 	}
 }
 

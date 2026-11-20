@@ -30,12 +30,12 @@ import (
 
 // ErrSessionActive rejects starting a second rectangle selection while one
 // is already on screen (SCR-053).
-var ErrSessionActive = errors.New("a rectangle selection session is already active")
+var ErrSessionActive = errors.New(ui.SelectionSessionActive)
 
 // ErrPresetTooLarge rejects a Preset Rectangle session whose frame cannot
 // fit inside the virtual desktop (SCR-031). A frame larger than one
 // individual display is still allowed while it fits the virtual desktop.
-var ErrPresetTooLarge = errors.New("the preset rectangle does not fit the virtual desktop")
+var ErrPresetTooLarge = errors.New(ui.PresetRectangleNoFit)
 
 // Mode selects the session behavior: Free Rectangle draws and adjusts a
 // selection by mouse and typed dimensions (SCR-010 through SCR-013); Preset
@@ -307,7 +307,7 @@ func (c *Controller) endDisplayChangeSession(s *session, reason string) {
 // input-capturing surface behind (SCR-052).
 func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, size display.Point, events Events) error {
 	if c.Monitor == nil || c.DesktopBounds == nil {
-		return errors.New("the display service is unavailable")
+		return errors.New(ui.DisplayServiceUnavailable)
 	}
 	c.mu.Lock()
 	busy := c.session != nil
@@ -320,12 +320,12 @@ func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, size display
 		return fmt.Errorf("enumerate displays: %w", err)
 	}
 	if bounds.Empty() {
-		return errors.New("the virtual desktop has no area to select from")
+		return errors.New(ui.VirtualDesktopEmpty)
 	}
 	if mode == ModePresetRectangle {
 		width, height := size.X, size.Y
 		if width < 1 || height < 1 {
-			return errors.New("the preset rectangle needs a width and height of at least one pixel")
+			return errors.New(ui.PresetRectangleEmpty)
 		}
 		if width > bounds.Width() || height > bounds.Height() {
 			return fmt.Errorf("%w: "+ui.PresetRectangleTooLarge, ErrPresetTooLarge, width, height, bounds.Width(), bounds.Height())

@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	vkTab             = 0x09
 	wmGetFont         = 0x0031
 	gwlExStyle        = ^uintptr(19) // -20 as a uintptr
 	wsExLayeredBit    = 0x00080000
@@ -23,13 +22,12 @@ const (
 )
 
 var (
-	procGetWindowLongW  = user32.NewProc("GetWindowLongW")
-	procGetWindowRect   = user32.NewProc("GetWindowRect")
-	procIsWindow        = user32.NewProc("IsWindow")
-	procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
-	procGetDlgItem      = user32.NewProc("GetDlgItem")
-	procSendMessageW    = user32.NewProc("SendMessageW")
-	procGetStockObject  = gdi32.NewProc("GetStockObject")
+	procGetWindowLongW = user32.NewProc("GetWindowLongW")
+	procGetWindowRect  = user32.NewProc("GetWindowRect")
+	procIsWindow       = user32.NewProc("IsWindow")
+	procGetDlgItem     = user32.NewProc("GetDlgItem")
+	procSendMessageW   = user32.NewProc("SendMessageW")
+	procGetStockObject = gdi32.NewProc("GetStockObject")
 )
 
 type win32Rect struct {
@@ -315,4 +313,84 @@ func TestNativeSessionAttentionForegroundsToolbar(t *testing.T) {
 	controller.Cancel()
 	// Attention without a session is a no-op and must not panic.
 	controller.Attention()
+}
+
+// TestRingColorsFollowASystemColorChange pins that a contrast theme switched
+// on or off during a session redraws the selection ring and handles in the
+// new theme's colors (UX-007): Windows sends WM_SYSCOLORCHANGE to every
+// top-level window, and the toolbar chooses the ring colors again. A test
+// cannot switch the theme, which is a system setting, so it paints the ring
+// in stale colors and sends the change.
+func TestRingColorsFollowASystemColorChange(t *testing.T) {
+	core, edge := systemRingColors()
+	const staleCore, staleEdge = 0xff102030, 0xff405060
+	for _, test := range []struct {
+		name  string
+		mode  Mode
+		paint func(*testing.T, *windowsSession)
+		// ring returns the local coordinates of a core and an edge pixel of
+		// the ring's left side, clear of the handles.
+		ring func(*windowsSession) (coreX, edgeX, y int32)
+	}{
+		{
+			name: "preset frame",
+			mode: ModePresetRectangle,
+			paint: func(t *testing.T, native *windowsSession) {
+				if err := native.renderFrame(); err != nil {
+					t.Fatal(err)
+				}
+			},
+			ring: func(native *windowsSession) (int32, int32, int32) {
+				return native.border / 2, 0, native.pixelHeight / 2
+			},
+		},
+		{
+			name: "free rectangle",
+			mode: ModeFreeRectangle,
+			paint: func(t *testing.T, native *windowsSession) {
+				if err := native.renderSelection(native.visualBounds()); err != nil {
+					t.Fatal(err)
+				}
+			},
+			ring: func(native *windowsSession) (int32, int32, int32) {
+				sel := native.toLocal(native.selection)
+				return sel.Left - native.border + native.border/2, sel.Left - native.border, sel.Top + native.handleSize
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller, _ := newNativeSessionController(t)
+			if err := controller.Begin(42, 0, test.mode, display.Point{X: 320, Y: 240}, Events{}); err != nil {
+				t.Fatal(err)
+			}
+			native := nativeOf(t, controller)
+			if test.mode == ModeFreeRectangle {
+				sendMouse(native.overlay, wmLButtonDown, 100, 100)
+				sendMouse(native.overlay, wmMouseMove, 300, 240)
+				sendMouse(native.overlay, wmLButtonUp, 300, 240)
+			}
+			if native.border <= 2 {
+				t.Skipf("a %d-pixel ring has no core between its edges", native.border)
+			}
+			at := func(x, y int32) uint32 {
+				return native.pixelSlice()[int(y)*int(native.pixelWidth)+int(x)]
+			}
+			coreX, edgeX, y := test.ring(native)
+			native.borderPx, native.edgePx = staleCore, staleEdge
+			test.paint(t, native)
+			if got := at(coreX, y); got != staleCore {
+				t.Fatalf("ring core painted in the stale colors = %#08x, want %#08x", got, uint32(staleCore))
+			}
+			procSendMessageW.Call(uintptr(native.toolbar), wmSysColorChange, 0, 0)
+			if native.borderPx != core || native.edgePx != edge {
+				t.Fatalf("ring colors after WM_SYSCOLORCHANGE = %#08x and %#08x, want the system's %#08x and %#08x", native.borderPx, native.edgePx, core, edge)
+			}
+			if got := at(coreX, y); got != core {
+				t.Fatalf("ring core after WM_SYSCOLORCHANGE = %#08x, want %#08x", got, core)
+			}
+			if got := at(edgeX, y); got != edge {
+				t.Fatalf("ring edge after WM_SYSCOLORCHANGE = %#08x, want %#08x", got, edge)
+			}
+		})
+	}
 }

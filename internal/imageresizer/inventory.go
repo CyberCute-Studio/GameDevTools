@@ -107,7 +107,7 @@ func (s SourceItem) DetailText() string {
 	case StatusChecking:
 		return ui.SourceCheckingDetail
 	}
-	return s.Status.Label() + ": " + s.Detail
+	return s.Status.Label() + ui.LabelSeparator + s.Detail
 }
 
 func readyDetail(item SourceItem) string {

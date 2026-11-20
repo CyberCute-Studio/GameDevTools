@@ -12,6 +12,9 @@ import (
 const (
 	wmDestroy        = 0x0002
 	wmSize           = 0x0005
+	wmActivate       = 0x0006
+	wmSetFocus       = 0x0007
+	wmGetDlgCode     = 0x0087
 	wmClose          = 0x0010
 	wmCommand        = 0x0111
 	wmHotkey         = 0x0312
@@ -23,19 +26,34 @@ const (
 	wmDisplayChange  = 0x007e
 	wmDPIChanged     = 0x02e0
 	wmDropFiles      = 0x0233
-	wmUser           = 0x0400
-	wmAppDispatch    = wmUser + 1
+	// The shell's own messages are in the WM_APP range, as the capture
+	// toolbar's are. The dialog manager, which the shell's message loop runs,
+	// sends the window DM_GETDEFID (WM_USER) as it handles Tab, Enter, the
+	// arrow keys, and access keys, and the codes after it are the dialog
+	// messages DM_SETDEFID and DM_REPOSITION.
+	wmApp         = 0x8000
+	wmAppDispatch = wmApp + 1
+	// wmAppRestoreFocus asks the shell to give the focus back once a click
+	// that activated the window has been handled, as wmActivate describes.
+	wmAppRestoreFocus = wmApp + 2
 
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000
 	wsVScroll          = 0x00200000
 
-	bmSetCheck  = 0x00f1
+	bmGetCheck  = 0x00f0
 	bstChecked  = 1
 	bnSetFocus  = 6
 	enSetFocus  = 0x0100
 	cbnSetFocus = 3
 	lbnSetFocus = 4
+
+	// waInactive and waClickActive are WM_ACTIVATE's codes for a window
+	// being deactivated and being activated by a mouse click, and
+	// dlgcRadioButton the WM_GETDLGCODE flag of a radio button.
+	waInactive      = 0
+	waClickActive   = 2
+	dlgcRadioButton = 0x0040
 
 	sbVert          = 1
 	sbLineUp        = 0
@@ -116,6 +134,10 @@ var (
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
 	procSetFocus                      = user32.NewProc("SetFocus")
+	procGetFocus                      = user32.NewProc("GetFocus")
+	procIsChild                       = user32.NewProc("IsChild")
+	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
+	procIsWindowEnabled               = user32.NewProc("IsWindowEnabled")
 	procGetNextDlgTabItem             = user32.NewProc("GetNextDlgTabItem")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")

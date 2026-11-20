@@ -172,6 +172,7 @@ func TestShellWindowProcScrollsFocusedComboIntoView(t *testing.T) {
 	combo.Move(0, 500, 200, 200)
 	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
 	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	combo.Focus()
 	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(201)|uintptr(cbnSetFocus)<<16, uintptr(combo.Handle()))
 	if shell.scrollY == 0 {
 		t.Fatal("combo focus did not scroll the control into view")
@@ -403,7 +404,7 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 		navigator:   navigator,
 		hwnd:        windows.Handle(hwnd),
 		dpi:         96,
-		navButtons:  make(map[core.ModuleID]windows.Handle),
+		navButtons:  make(map[core.ModuleID]*ui.Button),
 		navIDs:      make(map[uint16]core.ModuleID),
 		nativeViews: make(map[core.ModuleID]nativeView),
 		action:      action,
@@ -553,13 +554,57 @@ func TestShellWindowProcScrollsFocusedListIntoView(t *testing.T) {
 	list.Move(0, 500, 200, 140)
 	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
 	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	list.Focus()
 	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(601)|uintptr(lbnSetFocus)<<16, uintptr(list.Handle()))
 	if shell.scrollY == 0 {
 		t.Fatal("list focus did not scroll the control into view")
 	}
 }
 
-var procIsWindowEnabled = user32.NewProc("IsWindowEnabled")
+// TestShellWindowProcIgnoresAComboLosingFocus pins that a combo box's
+// CBN_KILLFOCUS, whose code LBN_SETFOCUS shares, neither scrolls the combo
+// box into view nor makes it the control restoreFocus gives the focus back
+// to: the focus has already left it.
+func TestShellWindowProcIgnoresAComboLosingFocus(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	combo, err := ui.NewComboBox(shell.hwnd, 201)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo.Move(0, 500, 200, 200)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	const cbnKillFocus = 4
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(201)|uintptr(cbnKillFocus)<<16, uintptr(combo.Handle()))
+	if shell.scrollY != 0 {
+		t.Fatalf("a combo box losing the focus scrolled the view to %d", shell.scrollY)
+	}
+	if shell.focus == combo.Handle() {
+		t.Fatal("a combo box losing the focus became the control to give the focus back to")
+	}
+}
+
+// TestShellWindowProcIgnoresAListCancellingItsSelection pins the same for a
+// list box's LBN_SELCANCEL, whose code CBN_SETFOCUS shares: a list box that
+// does not hold the focus did not gain it.
+func TestShellWindowProcIgnoresAListCancellingItsSelection(t *testing.T) {
+	shell := newCommandTestShell(t, &recordingNativeView{height: 1000})
+	list, err := ui.NewListBox(shell.hwnd, 601)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list.Move(0, 500, 200, 140)
+	info := scrollInfo{CbSize: uint32(unsafe.Sizeof(scrollInfo{})), FMask: sifRange | sifPage, NMax: 1000, NPage: 200}
+	procSetScrollInfo.Call(uintptr(shell.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
+	const lbnSelCancel = 3
+	procSendMessageW.Call(uintptr(shell.hwnd), wmCommand, uintptr(601)|uintptr(lbnSelCancel)<<16, uintptr(list.Handle()))
+	if shell.scrollY != 0 {
+		t.Fatalf("a list box cancelling its selection scrolled the view to %d", shell.scrollY)
+	}
+	if shell.focus == list.Handle() {
+		t.Fatal("a list box cancelling its selection became the control to give the focus back to")
+	}
+}
 
 type actionTestView struct{}
 
@@ -632,6 +677,30 @@ func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
 	shell.layout()
 	if isEnabled() {
 		t.Fatal("a primary action no view runs was enabled")
+	}
+}
+
+// TestShellHandsAnUnavailableActionsFocusToTheWindow pins that a primary
+// action disabled while it holds the focus, in a shell with no other control
+// and no navigation button to take it, hands the focus to the window itself
+// rather than keeping it, where the keyboard would be stranded (AC-A03).
+func TestShellHandsAnUnavailableActionsFocusToTheWindow(t *testing.T) {
+	native := &availabilityView{available: true}
+	shell := newCommandTestShell(t, native)
+	navigator := core.NewNavigator()
+	if err := navigator.Register(actionTestModule{}); err != nil {
+		t.Fatal(err)
+	}
+	shell.navigator = navigator
+	shell.layout()
+	native.available = false
+	shell.action.Focus()
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), nil)
+	if result, _, _ := procIsWindowEnabled.Call(uintptr(shell.action.Handle())); result != 0 {
+		t.Fatal("the unavailable primary action stayed enabled")
+	}
+	if focus, _, _ := procGetFocus.Call(); windows.Handle(focus) != shell.hwnd {
+		t.Fatalf("the disabled primary action handed the focus to %#x, want the window (%#x)", focus, uintptr(shell.hwnd))
 	}
 }
 

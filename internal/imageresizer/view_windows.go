@@ -172,10 +172,14 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 		return err
 	}
 	var err error
-	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
+	// The hint is created ahead of the label, though laid out below it, so
+	// the label directly precedes the list: Windows names a list box after
+	// the static text just before it, which a screen reader announces with
+	// the list, and the label's mnemonic focuses the next tab stop.
+	if n.sourceHint, err = ui.NewLabel(parent, ui.SourceImagesHint); err != nil {
 		return err
 	}
-	if n.sourceHint, err = ui.NewLabel(parent, ui.SourceImagesHint); err != nil {
+	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
 		return err
 	}
 	if n.list, err = ui.NewListBox(parent, sources+sourceListCommand); err != nil {
@@ -187,7 +191,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.path, err = ui.NewReadOnlyText(parent, sources+sourcePathCommand); err != nil {
 		return err
 	}
-	if n.pathDetail, err = ui.NewLabel(parent, ""); err != nil {
+	// The detail line says why the selected image cannot be used or how its
+	// resize ended, which its row abbreviates, so a screen reader announces
+	// it as the selection moves.
+	if n.pathDetail, err = ui.NewLiveLabel(parent, ""); err != nil {
 		return err
 	}
 	if n.addButton, err = ui.NewButton(parent, ui.AddImagesAction, ui.ButtonOptions{ID: sources + addImagesCommand, Group: true}); err != nil {
@@ -241,7 +248,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.collisionOver, err = ui.NewButton(parent, ui.ResizeCollisionOverwrite, ui.ButtonOptions{ID: base + collisionOverwriteCommand, Radio: true}); err != nil {
 		return err
 	}
-	if n.collisionNote, err = ui.NewLabel(parent, ""); err != nil {
+	// The note starts a group, ending the collision policies' radio group at
+	// Overwrite, so the arrow keys wrap between the policies
+	// (ui.NewGroupLabel).
+	if n.collisionNote, err = ui.NewGroupLabel(parent, ""); err != nil {
 		return err
 	}
 	if n.namingLabel, err = ui.NewLabel(parent, ui.ResizeNamingLabel); err != nil {
@@ -971,15 +981,33 @@ func (n *NativeView) refreshSources() {
 	n.refreshSourceSelection()
 }
 
+// refreshSourceSelection shows the selected item's path and detail and
+// enables the source list's commands for the selection, announcing a changed
+// detail, as when the selection moves or the selected image's content check
+// ends (showSourceSelection).
 func (n *NativeView) refreshSourceSelection() {
+	n.showSourceSelection(true)
+}
+
+// showSourceSelection is refreshSourceSelection, where announce is whether
+// the detail line announces a changed detail (ui.NewLiveLabel). A resize
+// job's changes to it are shown quietly, as the job announces only its
+// start, its Cancel, and its summary (showJobProgress): the selected image's
+// Pending, Processing, and final state would otherwise queue beside them,
+// its final state just ahead of the summary.
+func (n *NativeView) showSourceSelection(announce bool) {
+	setDetail := n.pathDetail.SetTextQuietly
+	if announce {
+		setDetail = n.pathDetail.SetText
+	}
 	selection := n.list.SelectedIndices()
 	if len(selection) == 0 {
 		n.path.SetText("")
-		n.pathDetail.SetText("")
+		setDetail("")
 	} else {
 		item := n.inventory.Item(selection[0])
 		n.path.SetText(item.Path)
-		n.pathDetail.SetText(item.DetailText())
+		setDetail(item.DetailText())
 	}
 	// The source list cannot change while a job runs, as its rows are the
 	// job's items.

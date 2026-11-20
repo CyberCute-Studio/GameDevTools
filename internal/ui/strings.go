@@ -1,5 +1,50 @@
 package ui
 
+// Every sentence and label the application presents is defined here
+// (UX-009), so a translation replaces this file rather than searching the
+// feature packages. An error's own text is not: an error value's message —
+// from Windows, the Go libraries, or the application's own lower layers,
+// such as the Image Resizer's decode, encode, output, and job packages, whose
+// messages are English — and the operation a layer names around it appear
+// only as the detail after one of these sentences or labels. A typed
+// error's kind, not its text, chooses the sentence, its category, and any
+// recovery hint, so a translation can replace such a detail by its kind
+// (errors.Is, errors.As) without changing the layer that reports it.
+
+// Severity, error-category, and dimension-validation text shared by every
+// module's presentation.
+const (
+	NoticeInfoLabel    = "Information"
+	NoticeSuccessLabel = "Success"
+	NoticeWarningLabel = "Warning"
+	NoticeErrorLabel   = "Error"
+	// LabelSeparator joins a severity or error-category label to its
+	// message.
+	LabelSeparator = ": "
+
+	ErrorValidationLabel           = "Validation error"
+	ErrorUnsupportedFormatLabel    = "Unsupported format"
+	ErrorReadDecodeLabel           = "Read/decode error"
+	ErrorWriteEncodeLabel          = "Write/encode error"
+	ErrorClipboardLabel            = "Clipboard error"
+	ErrorShortcutRegistrationLabel = "Shortcut registration error"
+	ErrorCaptureLabel              = "Capture error"
+	ErrorUnexpectedLabel           = "Unexpected error"
+	ErrorOtherLabel                = "Error"
+
+	// DimensionWidthName and DimensionHeightName name the two dimensions in
+	// validation messages.
+	DimensionWidthName  = "Width"
+	DimensionHeightName = "Height"
+	// DimensionUnitSuffix labels a dimension field's pixel unit (UX-004).
+	DimensionUnitSuffix = " (px)"
+	DimensionsFormat    = "%d × %d px"
+	DimensionRequired   = "%s is required. Enter a whole number of pixels greater than 0."
+	DimensionNotWhole   = "%s must be a whole number of pixels greater than 0."
+	DimensionTooLarge   = "%s is too large. Enter a whole number no greater than %d pixels."
+	DimensionZero       = "%s must be greater than 0 pixels."
+)
+
 const (
 	AppName         = "GameDevTools"
 	ToolsHeading    = "TOOLS"
@@ -63,6 +108,14 @@ const (
 	PresetSaveFailed         = "The preset change remains in memory, but settings could not be saved: %v"
 	PresetOperationFailed    = "Preset operation failed: %v"
 
+	PresetNameHD     = "HD"
+	PresetNameFullHD = "Full HD"
+	PresetNameQHD    = "QHD"
+	PresetName4KUHD  = "4K UHD"
+	// PresetNameDimensions names a built-in Image Resizer preset after its
+	// width and height.
+	PresetNameDimensions = "%d × %d"
+
 	ResizeModeFit        = "Fit"
 	ResizeModeStretch    = "Stretch"
 	ResizeModeCropToFill = "Crop to Fill"
@@ -87,6 +140,8 @@ const (
 	JPEGQualityRange        = "JPEG quality must be between 1 and 100. Enter a whole number in that range."
 	ShortcutInvalid         = "Enter a shortcut such as Ctrl+Alt+S: at least one of Ctrl, Alt, Shift, or Win, plus a letter, digit, or function key (F1–F24)."
 	ShortcutConflictAction  = "Choose a different shortcut."
+	ShortcutConflict        = "the shortcut is already registered by another application"
+	ShortcutConflictDetail  = "%w: %s. " + ShortcutConflictAction
 	ShortcutRegisterFailed  = "The shortcut %s could not be registered: %v"
 	OutputFolderRequired    = "An output folder is required. Choose a folder with Browse."
 	OutputFolderInvalid     = "The output folder contains characters that are not valid text. Choose the folder again."
@@ -109,8 +164,8 @@ const (
 	OptionsOperationFailed = "Capture setting operation failed: %v"
 
 	DisplayLabel           = "&Display"
-	DisplayListItem        = "%d — %s — %d × %d (%d%%)"
-	DisplayListItemPrimary = "%d — %s — %d × %d (%d%%, primary)"
+	DisplayListItem        = "%d — %s — %d × %d px (%d%%)"
+	DisplayListItemPrimary = "%d — %s — %d × %d px (%d%%, primary)"
 	DisplayUnavailable     = "The display list is unavailable: %v"
 	DisplayRequired        = "Choose a display before capturing."
 	OpenFolderAction       = "Open Folder"
@@ -128,19 +183,30 @@ const (
 	OverlayWindowTitle        = "GameDevTools rectangle selection overlay"
 	PresetFrameWindowTitle    = "GameDevTools preset rectangle frame"
 	OverlayToolbarTitle       = "GameDevTools rectangle selection toolbar"
-	OverlayInstructions       = "Drag to draw the capture rectangle. Drag inside the selection to move it, drag a handle to resize it, or type exact dimensions. Escape cancels."
+	OverlayInstructions       = "Drag to draw a rectangle, or type its size and press Enter. Move it with a drag or the arrow keys; resize it with a handle. Escape cancels."
 	OverlayPresetInstructions = "Drag the frame's border to move it, or nudge it with the arrow keys (Shift for ten pixels). Type exact dimensions to resize it. Escape cancels."
 	SelectionWidthLabel       = "&W (px)"
 	SelectionHeightLabel      = "&H (px)"
 	SelectionPositionFormat   = "X: %d, Y: %d"
 	SelectionFitInvalid       = "The typed dimensions do not fit at the selection's position. Move the selection or enter smaller dimensions."
+	SelectionTooLarge         = "The typed dimensions do not fit on the desktop. Enter smaller dimensions."
 	SelectionResizeFailed     = "The frame could not be resized: %v. The previous dimensions were kept."
-	PresetRectangleTooLarge   = "the preset rectangle (%d × %d physical pixels) is larger than the entire virtual desktop (%d × %d). Choose or create a smaller preset"
+	PresetRectangleTooLarge   = "the preset rectangle (%d × %d physical pixels) is larger than the entire virtual desktop (%d × %d physical pixels). Choose or create a smaller preset"
 	CaptureOverlayFailed      = "The selection overlay could not be shown: %v"
 	CaptureSessionActive      = "A rectangle selection is already on screen. Finish or cancel it before starting another."
 	CaptureSelectionEnded     = "Rectangle selection cancelled. Nothing was captured."
 	CaptureSessionDisplayLost = "The display layout changed and the selection could not be kept in the new layout. Nothing was captured; start the capture again."
 	CaptureSessionDisplayGone = "The display layout could not be read after a display change. Nothing was captured; start the capture again."
+
+	// The reasons the Screenshot module gives, after one of the sentences
+	// above, for a session or capture that could not start.
+	SelectionSessionActive    = "a rectangle selection session is already active"
+	PresetRectangleNoFit      = "the preset rectangle does not fit the virtual desktop"
+	PresetRectangleEmpty      = "the preset rectangle needs a width and height of at least one pixel"
+	VirtualDesktopEmpty       = "the virtual desktop has no area to select from"
+	DisplayServiceUnavailable = "the display service is unavailable"
+	OverlayServiceUnavailable = "the overlay service is unavailable"
+	CaptureServiceUnavailable = "the capture service is unavailable"
 
 	SelectionCaptureFailed          = "The selection could not be captured: %v"
 	SelectionCaptureSucceeded       = "Selection captured. Saved to %s and copied to the clipboard."
@@ -149,9 +215,9 @@ const (
 	SelectionCaptureOutputsFailed   = "Selection captured, but saving failed (%v) and copying to the clipboard failed (%v)."
 
 	ResizeModeSummaryLabel       = "Selected fitting mode"
-	ResizeModeFitDescription     = "Fit (%d × %d): the image is scaled uniformly to fit inside these dimensions without cropping or padding. Proportions are preserved, so one side can end up smaller than the preset."
-	ResizeModeStretchDescription = "Stretch (%d × %d): width and height are scaled independently to exactly these dimensions. Sources with a different aspect ratio will look distorted."
-	ResizeModeCropDescription    = "Crop to Fill (%d × %d): the image is scaled uniformly until it covers these dimensions, then cropped evenly from opposite sides to exactly this size. Content at the trimmed edges is lost."
+	ResizeModeFitDescription     = "Fit (%d × %d px): the image is scaled uniformly to fit inside these dimensions without cropping or padding. Proportions are preserved, so one side can end up smaller than the preset."
+	ResizeModeStretchDescription = "Stretch (%d × %d px): width and height are scaled independently to exactly these dimensions. Sources with a different aspect ratio will look distorted."
+	ResizeModeCropDescription    = "Crop to Fill (%d × %d px): the image is scaled uniformly until it covers these dimensions, then cropped evenly from opposite sides to exactly this size. Content at the trimmed edges is lost."
 
 	ResizeFormatLabel        = "Output for&mat"
 	ResizeFormatKeepSource   = "Keep Source Format"
