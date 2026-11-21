@@ -3,6 +3,7 @@ package preset
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 )
@@ -74,6 +75,24 @@ func (m *Manager) Select(id string) error {
 		return err
 	}
 	return m.save()
+}
+
+// Reload replaces the library with the one the shared settings value
+// stores, when that is not the library held, and reports whether it did.
+// Restoring the default settings keeps the preset libraries the settings it
+// replaces store, which are not the session's when the session started from
+// the defaults because the settings file could not be read (SET-005).
+// Nothing is saved: the restore saved the value.
+func (m *Manager) Reload() (bool, error) {
+	library, err := m.repository.Load(*m.settings)
+	if err != nil {
+		return false, err
+	}
+	if library.SelectedID() == m.library.SelectedID() && slices.Equal(library.Custom(), m.library.Custom()) {
+		return false, nil
+	}
+	m.library = library
+	return true, nil
 }
 
 func (m *Manager) save() error {

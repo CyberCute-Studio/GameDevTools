@@ -173,7 +173,8 @@ func (n *NativeView) jobRequest() (jobStart, bool) {
 	options := n.options.Options()
 	background, err := jobBackground(options)
 	if err != nil {
-		return refuse(ui.ErrorValidation, err.Error())
+		n.refuseOptions(ui.FormatError(ui.ErrorValidation, err))
+		return jobStart{}, false
 	}
 	confirmed := false
 	if options.Collision == CollisionOverwrite {
@@ -210,14 +211,14 @@ func (n *NativeView) commitJobFields() bool {
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
 		n.quality.Error.SetTextQuietly(message)
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
+		n.refuseOptions(message)
 		return false
 	}
 	background, err := ParseBackground(n.background.Edit.Text())
 	if err != nil {
 		message := ui.FormatError(ui.ErrorValidation, err)
 		n.background.Error.SetTextQuietly(message)
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
+		n.refuseOptions(message)
 		return false
 	}
 	applied := func(err error) bool {
@@ -228,7 +229,7 @@ func (n *NativeView) commitJobFields() bool {
 			n.presentResult(err, "")
 			return true
 		}
-		n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)})
+		n.refuseOptions(ui.FormatError(ui.ErrorValidation, err))
 		return false
 	}
 	if quality != options.JPEGQuality && !applied(n.options.SetJPEGQuality(quality)) {
@@ -551,6 +552,15 @@ func (n *NativeView) showJobNotice(notice ui.Notice) {
 	_ = n.jobStatus.Show(notice, 0)
 }
 
+// refuseOptions shows Start Resize's refusal of the resize options, or of a
+// JPEG field's text the options would take, in the job section, and records
+// it as the options refusal (optionsRefusal), as the restore of the default
+// settings replaces what it refuses.
+func (n *NativeView) refuseOptions(message string) {
+	n.showJobNotice(ui.Notice{Kind: ui.NoticeError, Message: message})
+	n.optionsRefusal = n.jobStatus.Revision()
+}
+
 // openOutputFolder opens the folder the latest job saved its results in,
 // only on the user's request (RSZ-047, RSZ-048). Looking at the folder and
 // handing it to the shell each block for as long as its drive does not
@@ -627,9 +637,9 @@ func (n *NativeView) jobCommand(id int32, notification uint16) bool {
 }
 
 // NativeShutdown waits, within JobShutdownWait, for the jobs NativeDestroy
-// cancelled, and any the view let go, to stop. The shell calls it only after
-// the message loop has ended and the window is destroyed, so no job's
-// goroutine waits on the GUI thread here; their final dispatcher posts fail
+// cancelled, and any the view let go, to stop. The shell calls it only once
+// the window is destroyed, on a goroutine of its own, so no job's goroutine
+// waits on the GUI thread here; their final dispatcher posts fail
 // harmlessly. When the wait runs out, the goroutine waiting for the jobs is
 // left to the process's exit. Content checks are not waited for: a check
 // only reads its source, so nothing is lost when the process exits around

@@ -311,14 +311,33 @@ func (m *OptionsManager) SetBackground(background string) error {
 	return m.save()
 }
 
+// SetOutputFolder selects the output folder the user chose. The choice
+// settles a stored folder the default folder replaced at startup: the folder
+// in use is now the user's, not the default, so FolderWarning no longer
+// reports the replaced one, whether or not the choice could be saved, as the
+// session uses it either way.
 func (m *OptionsManager) SetOutputFolder(folder string) error {
 	updated := m.options
 	updated.OutputFolder = folder
 	if err := updated.Validate(); err != nil {
 		return err
 	}
-	m.options = updated
+	m.options, m.replaced = updated, ""
 	return m.save()
+}
+
+// Reload replaces the options with those the shared settings value stores,
+// or the defaults where it stores none, as restoring the default settings
+// leaves them (SET-005), and forgets a stored folder the default folder
+// replaced at startup unless the value still stores it. Nothing is saved:
+// the restore saved the value.
+func (m *OptionsManager) Reload() error {
+	options, replaced, err := m.store.Load(*m.settings)
+	if err != nil {
+		return err
+	}
+	m.options, m.replaced = options, replaced
+	return nil
 }
 
 func (m *OptionsManager) save() error {

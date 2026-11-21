@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "shell": {
+    "selectedModule": "image-resizer",
+    "window": {
+      "x": -1600,
+      "y": 80,
+      "width": 1280,
+      "height": 800,
+      "maximized": false,
+      "hasPosition": true
+    }
+  },
+  "modules": {
+    "image-resizer": {
+      "presets": {
+        "version": 1,
+        "custom": [
+          {
+            "id": "custom.262a71ccf142e16c18a09b64bb38cc1d",
+            "name": "Icon",
+            "width": 512,
+            "height": 512,
+            "resizeMode": "crop-to-fill"
+          }
+        ]
+      }
+    },
+    "screenshot": {
+      "presets": {
+        "version": 1,
+        "custom": [
+          {
+            "id": "custom.049dbfd633a82946137052417b1dfe8c",
+            "name": "Store thumbnail",
+            "width": 640,
+            "height": 480
+          }
+        ]
+      }
+    }
+  }
+}

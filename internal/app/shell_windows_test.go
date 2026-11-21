@@ -58,6 +58,31 @@ func TestFitStartupBounds(t *testing.T) {
 	}
 }
 
+// TestWorkspaceOffset pins how a window's saved bounds are turned from the
+// workspace coordinates GetWindowPlacement gives into screen coordinates
+// (recordWindow): by the offset of the monitor's work area from its corner,
+// which a taskbar docked at its top or left makes, and which a taskbar at
+// its bottom or right does not.
+func TestWorkspaceOffset(t *testing.T) {
+	primary := rect{Right: 1920, Bottom: 1080}
+	secondary := rect{Left: 1920, Top: -200, Right: 3840, Bottom: 880}
+	for _, test := range []struct {
+		name          string
+		monitor, work rect
+		want          point
+	}{
+		{"taskbar at the bottom", primary, rect{Right: 1920, Bottom: 1032}, point{}},
+		{"taskbar at the top", primary, rect{Top: 48, Right: 1920, Bottom: 1080}, point{Y: 48}},
+		{"taskbar at the left", primary, rect{Left: 60, Right: 1920, Bottom: 1080}, point{X: 60}},
+		{"secondary monitor without a taskbar", secondary, secondary, point{}},
+		{"secondary monitor with a taskbar at the top", secondary, rect{Left: 1920, Top: -152, Right: 3840, Bottom: 880}, point{Y: 48}},
+	} {
+		if got := workspaceOffset(monitorInfo{Monitor: test.monitor, Work: test.work}); got != test.want {
+			t.Errorf("%s: workspaceOffset = %+v, want %+v", test.name, got, test.want)
+		}
+	}
+}
+
 func TestStaticTextBrushUsesSystemColors(t *testing.T) {
 	dc, _, err := procGetDC.Call(0)
 	if dc == 0 {
@@ -367,6 +392,51 @@ func TestWaitForBackgroundWorkWaitsForNativeShutdown(t *testing.T) {
 	}
 }
 
+// TestWaitForBackgroundWorkWaitsForEveryViewAtOnce pins that the shutdown
+// waits for every module view's background work at the same time, so a
+// capture still delivering its outputs does not hold up the start of a
+// cancelled job's bounded wait, and the exit takes the longest of the waits
+// rather than their sum; it returns only once every view's work finished.
+func TestWaitForBackgroundWorkWaitsForEveryViewAtOnce(t *testing.T) {
+	views := []*shutdownRecordingView{
+		{started: make(chan struct{}), release: make(chan struct{})},
+		{started: make(chan struct{}), release: make(chan struct{})},
+	}
+	releases := make([]func(), len(views))
+	for index, view := range views {
+		var once sync.Once
+		releases[index] = func() { once.Do(func() { close(view.release) }) }
+		t.Cleanup(releases[index])
+	}
+	shell := newCommandTestShell(t, views[0])
+	shell.nativeViews[core.ModuleImageResizer] = views[1]
+
+	done := make(chan struct{})
+	go func() {
+		shell.waitForBackgroundWork()
+		close(done)
+	}()
+	for index, view := range views {
+		select {
+		case <-view.started:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("view %d's wait did not start while the other's was still running", index)
+		}
+	}
+	releases[0]()
+	select {
+	case <-done:
+		t.Fatal("waitForBackgroundWork returned while a view's work was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releases[1]()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForBackgroundWork did not return once every view's work finished")
+	}
+}
+
 func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 	t.Helper()
 	runtime.LockOSThread()
@@ -409,6 +479,12 @@ func newCommandTestShell(t *testing.T, native nativeView) *nativeShell {
 		nativeViews: make(map[core.ModuleID]nativeView),
 		action:      action,
 		note:        note,
+		// A test that expects a question substitutes its own answer; any
+		// other would block on a real message box.
+		confirm: func(_ windows.Handle, title, message string) bool {
+			t.Errorf("unexpected question %q: %q", title, message)
+			return false
+		},
 	}
 	if native != nil {
 		shell.nativeViews[core.ModuleScreenshot] = native

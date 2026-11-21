@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "shell": {
+    "selectedModule": "image-resizer",
+    "window": {
+      "x": -1600,
+      "y": 80,
+      "width": 1280,
+      "height": 800,
+      "maximized": false,
+      "hasPosition": true
+    }
+  }
+}

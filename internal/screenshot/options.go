@@ -190,6 +190,18 @@ func (m *OptionsManager) SetShortcut(shortcut Shortcut) error {
 	return m.save()
 }
 
+// Reload replaces the options with those the shared settings value stores,
+// or the defaults where it stores none, as restoring the default settings
+// leaves them (SET-005). Nothing is saved: the restore saved the value.
+func (m *OptionsManager) Reload() error {
+	options, err := m.store.Load(*m.settings)
+	if err != nil {
+		return err
+	}
+	m.options = options
+	return nil
+}
+
 func (m *OptionsManager) save() error {
 	if err := m.store.Save(m.settings, m.options); err != nil {
 		return fmt.Errorf("%w: %w", ErrPersistence, err)

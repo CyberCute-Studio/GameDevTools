@@ -600,6 +600,14 @@ func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
 	return &StatusArea{Label: label, parent: parent}, nil
 }
 
+// Height returns the status area's height at width, as a view lays it out:
+// its notice's, as measure measures text, and room for two lines while the
+// notice is shorter or there is none, so the controls below it move only
+// for a longer notice. scale scales a 96-DPI length to the window's DPI.
+func (s *StatusArea) Height(width int32, scale func(int32) int32, measure func(string, int32) int32) int32 {
+	return max(scale(48), measure(s.Text(), width))
+}
+
 // Show replaces the notice and announces it to a screen reader — even when
 // its text equals the notice it replaces, as an identical result is still a
 // new one — and, with a positive timeout, clears it once the timeout
@@ -647,6 +655,19 @@ func (s *StatusArea) Clear() {
 	s.Update(Notice{})
 }
 
+// ClearShown removes the notice when it is still one of those whose
+// revisions a caller recorded once it showed them (Revision), as when the
+// setting a notice reports was replaced, and keeps any notice shown since.
+// A revision of 0, recorded before anything was shown, matches none.
+func (s *StatusArea) ClearShown(revisions ...uint64) {
+	for _, revision := range revisions {
+		if revision != 0 && revision == s.revision {
+			s.Clear()
+			return
+		}
+	}
+}
+
 func (s *StatusArea) HandleTimer(id uintptr) bool {
 	if id == 0 || id != s.timer {
 		return false
@@ -666,6 +687,15 @@ func (s *StatusArea) stopTimer() {
 	}
 }
 
+// Confirm asks the user a yes-or-no question about the parent window, its
+// safe answer No the default (UX-002), and reports whether the answer was
+// Yes. The question's modal loop dispatches the window's messages, so the
+// window can be destroyed while it is open — as the end of the Windows
+// session destroys the main window (WM_ENDSESSION) — and the answer is then
+// No, even one given just before, so the caller does nothing more with a
+// window that is gone. Windows ends the question with no answer once its
+// owner is destroyed; the parent is also checked once it returns, so every
+// caller has that guarantee whatever the question's answer.
 func Confirm(parent windows.Handle, title, message string) bool {
 	answer, _, _ := procMessageBoxW.Call(
 		uintptr(parent),
@@ -673,6 +703,11 @@ func Confirm(parent windows.Handle, title, message string) bool {
 		uintptr(unsafe.Pointer(utf16(title))),
 		mbYesNo|mbIconWarning|mbDefButton2,
 	)
+	if parent != 0 {
+		if alive, _, _ := procIsWindow.Call(uintptr(parent)); alive == 0 {
+			return false
+		}
+	}
 	return answer == idYes
 }
 

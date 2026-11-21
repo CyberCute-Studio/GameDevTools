@@ -28,6 +28,11 @@ type Repository struct {
 	store  *settings.Store
 }
 
+// RegisterValidators registers both modules' preset library validators with
+// the store, for a store that loads its file before, or without, building a
+// repository for each module, as the module tests' restarted stores do. The
+// application builds both repositories before it loads the file, and
+// NewRepository registers each one's validator.
 func RegisterValidators(store *settings.Store) {
 	for _, module := range []shell.ModuleID{shell.ModuleScreenshot, shell.ModuleImageResizer} {
 		store.RegisterModuleValidator(string(module), validatorFor(module))
@@ -274,6 +279,96 @@ func encodeSection(module shell.ModuleID, section json.RawMessage, custom []Pres
 	return section, nil
 }
 
+// LibrarySection returns a module settings section that holds only the
+// section's preset library — its custom presets and the module's selected
+// preset — as stored, or nil when the section holds none. Restoring the
+// default settings keeps it and resets the rest of the section (SET-005):
+// custom presets are deleted only by their explicit Delete. Only the
+// presets object is kept, so another field the section gives twice is no
+// reason to refuse the restore: this build's section validators refuse one
+// as the file loads, but nothing checks the section of a module this build
+// does not know, such as one a hand edit gave a duplicate field. A presets
+// object given twice is refused, as which of them is the library is not
+// known.
+func LibrarySection(section json.RawMessage) (json.RawMessage, error) {
+	fields := make(map[string]json.RawMessage)
+	if len(section) != 0 {
+		var err error
+		fields, err = decodeFields(section, func(name string) bool { return name == sectionKey })
+		if err != nil {
+			return nil, fmt.Errorf("decode module preset section: %w", err)
+		}
+	}
+	library, exists := fields[sectionKey]
+	if !exists {
+		return nil, nil
+	}
+	kept, err := json.Marshal(map[string]json.RawMessage{sectionKey: library})
+	if err != nil {
+		return nil, fmt.Errorf("encode module preset section: %w", err)
+	}
+	return kept, nil
+}
+
+// KeptSection returns what restoring the default settings keeps of replaced,
+// the module's section in the settings the restore replaces (SET-005): only
+// its preset library, with its selected preset, as LibrarySection returns
+// it, joined by the custom presets of session, the module's section in the
+// running session's settings, that replaced does not hold, or nil when
+// neither holds a library. The two differ when the
+// session started from the defaults because the settings file could not be
+// read and the restore keeps the file's presets: the presets the session
+// created meanwhile, which could not be saved, are kept with them, as a
+// custom preset is deleted only by its explicit Delete. One whose name a
+// kept preset already uses is kept under the name Duplicate would give a
+// copy of it; the selected preset stays replaced's. A section session holds
+// as replaced does adds nothing, and neither does the section of a module
+// this build has no presets for, such as one a newer build added, whose
+// library is kept as stored: no session of this build creates presets in
+// it, and only that build can decode them.
+func KeptSection(module shell.ModuleID, replaced, session json.RawMessage) (json.RawMessage, error) {
+	kept, err := LibrarySection(replaced)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := BuiltIns(module); err != nil || bytes.Equal(replaced, session) {
+		return kept, nil
+	}
+	running, err := decodeSection(module, session)
+	if err != nil {
+		return nil, fmt.Errorf("decode the session's presets: %w", err)
+	}
+	if len(running.Custom) == 0 {
+		return kept, nil
+	}
+	stored, err := decodeSection(module, replaced)
+	if err != nil {
+		return nil, err
+	}
+	library, err := NewLibrary(module, stored.Custom)
+	if err != nil {
+		return nil, err
+	}
+	selected := stored.SelectedID
+	if selected == "" {
+		selected = library.SelectedID()
+	}
+	added := false
+	for _, candidate := range running.Custom {
+		if _, exists := library.Get(candidate.ID); exists {
+			continue
+		}
+		if err := library.adopt(candidate); err != nil {
+			return nil, fmt.Errorf("keep the session's preset %q: %w", candidate.Name, err)
+		}
+		added = true
+	}
+	if !added {
+		return kept, nil
+	}
+	return encodeSection(module, nil, library.custom, selected)
+}
+
 func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, error) {
 	if len(section) == 0 {
 		return make(map[string]json.RawMessage), nil
@@ -286,6 +381,13 @@ func decodeSectionFields(section json.RawMessage) (map[string]json.RawMessage, e
 }
 
 func decodeObjectFields(data json.RawMessage) (map[string]json.RawMessage, error) {
+	return decodeFields(data, func(string) bool { return true })
+}
+
+// decodeFields decodes data, a JSON object, into its fields, refusing a
+// field given twice whose name unique reports must be given once; of any
+// other field given twice, the last value is kept.
+func decodeFields(data json.RawMessage, unique func(name string) bool) (map[string]json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return nil, errors.New("preset data must be a JSON object")
@@ -304,7 +406,7 @@ func decodeObjectFields(data json.RawMessage) (map[string]json.RawMessage, error
 		if !ok {
 			return nil, errors.New("preset object field name must be a string")
 		}
-		if _, exists := fields[name]; exists {
+		if _, exists := fields[name]; exists && unique(name) {
 			return nil, fmt.Errorf("duplicate preset object field %q", name)
 		}
 		var value json.RawMessage

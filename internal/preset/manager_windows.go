@@ -213,7 +213,7 @@ func (n *NativeManager) metrics(width int32, scale func(int32) int32, measure fu
 	dimensionMetrics := baseMetrics
 	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.width.Error.Text(), dimensionWidth))
 	dimensionMetrics.ErrorHeight = max(dimensionMetrics.ErrorHeight, measure(n.height.Error.Text(), dimensionWidth))
-	statusHeight := max(scale(48), measure(n.status.Text(), width))
+	statusHeight := n.status.Height(width, scale, measure)
 	return nameMetrics, dimensionMetrics, statusHeight
 }
 
@@ -312,6 +312,26 @@ func (n *NativeManager) NativeDestroy() {
 	if n.status != nil {
 		n.status.Destroy()
 	}
+}
+
+// Reload shows the preset library the shared settings value stores once the
+// default settings are restored (SET-005), when it is not the library shown,
+// as when the session started from the defaults because the settings file
+// could not be read and the restore kept the file's presets. A library that
+// did not change is left as it is shown, with the form's unsaved edits
+// (APP-004). A library that cannot be loaded is reported in the status area
+// and returned, for the restore's outcome to report too, as the status area
+// is hidden while the Settings view is shown.
+func (n *NativeManager) Reload() error {
+	changed, err := n.manager.Reload()
+	if err != nil {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.PresetOperationFailed, err)}, 0)
+		return err
+	}
+	if changed {
+		n.refresh()
+	}
+	return nil
 }
 
 func (n *NativeManager) refresh() {
