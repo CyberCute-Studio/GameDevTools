@@ -173,6 +173,9 @@ const (
 	// OutputFolderNotAbsoluteReason is why the default Screenshot folder is
 	// unavailable when the Pictures folder it lies under has a relative path.
 	OutputFolderNotAbsoluteReason = "its path is not absolute"
+	// OutputFolderTextReason is why the default Screenshot folder is
+	// unavailable when its path holds text no capture could save under.
+	OutputFolderTextReason = "its path contains characters that are not valid text"
 	// OutputFolderStoredRefused is the startup warning about a saved
 	// Screenshot folder every capture would refuse.
 	OutputFolderStoredRefused = "The saved output folder for screenshots, %s, cannot be used: " + outputFolderNameRule + ". Captures are still copied to the clipboard, but are not saved until you choose another folder with Browse."

@@ -63,11 +63,15 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 // Windows drops, gives a folder in the Pictures folder Windows opens for it.
 // A path that is not absolute is refused rather than resolved, as it would
 // lead under whatever folder the application was started from, and so is one
-// Windows resolves to a device, as it does a last name such as NUL.
+// Options.Validate refuses for its text, which no capture could start with,
+// and one Windows resolves to a device, as it does a last name such as NUL.
 func defaultFolderIn(pictures string) (string, error) {
 	named := pathform.Join(pictures, "GameDevTools", "Screenshots")
 	if !pathform.IsAbs(pictures) {
 		return "", fmt.Errorf("%s: %s", named, ui.OutputFolderNotAbsoluteReason)
+	}
+	if validateOutputFolder(named) != nil {
+		return "", fmt.Errorf("%s: %s", named, ui.OutputFolderTextReason)
 	}
 	if full, err := windows.FullPath(pictures); err == nil {
 		if strings.HasPrefix(pathform.VolumeName(full), `\\.\`) && !strings.HasPrefix(pathform.VolumeName(pictures), `\\.\`) {

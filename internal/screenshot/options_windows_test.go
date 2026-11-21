@@ -79,8 +79,8 @@ func TestDefaultFolderIsOneACaptureCanUse(t *testing.T) {
 		{`D:\Pics\NUL`, nil, profile, `C:\Users\me\Pictures` + suffix},
 		{`D:\Pics\NUL.`, nil, profile, `C:\Users\me\Pictures` + suffix},
 		{`Pictures`, nil, profile, `C:\Users\me\Pictures` + suffix},
-		// Go 1.27's filepath.Join would move this path to the current drive.
-		{"", errors.New("not known"), func() (string, error) { return `\\server\..\me`, nil }, `\\server\..\me\Pictures` + suffix},
+		// Validate refuses this text, so every capture would.
+		{"D:\\Pict\uFFFDres", nil, profile, `C:\Users\me\Pictures` + suffix},
 	} {
 		if got, err := defaultFolder(test.known, test.err, test.home); err != nil || got != test.want {
 			t.Errorf("defaultFolder(%q) = %q, %v, want %q", test.known, got, err, test.want)
@@ -89,6 +89,16 @@ func TestDefaultFolderIsOneACaptureCanUse(t *testing.T) {
 	got, err := defaultFolder(`D:\COM1\Pictures`, nil, refusedProfile)
 	if err == nil || got != "" || !strings.Contains(err.Error(), `D:\COM1\Pictures`+suffix) {
 		t.Errorf("defaultFolder with both refused = %q, %v, want the known folder's refusal", got, err)
+	}
+	if got, err := defaultFolder("D:\\Pict\uFFFDres", nil, noProfile); err == nil || got != "" || !strings.Contains(err.Error(), ui.OutputFolderTextReason) {
+		t.Errorf("defaultFolder with invalid text and no profile = %q, %v, want the text refusal", got, err)
+	}
+	// Go 1.27's filepath.Join would move this path to the current drive, where
+	// it would be accepted. Its share, "..", ends in a period, so it is refused
+	// under its own name.
+	serverDots := func() (string, error) { return `\\server\..\me`, nil }
+	if got, err := defaultFolder("", errors.New("not known"), serverDots); err == nil || got != "" || !strings.Contains(err.Error(), `\\server\..\me\Pictures`+suffix) {
+		t.Errorf("defaultFolder under a share named .. = %q, %v, want a refusal naming that path", got, err)
 	}
 	// A profile path that is not absolute must not resolve under the folder
 	// the application was started from.

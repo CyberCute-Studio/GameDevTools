@@ -533,15 +533,7 @@ func (s *nativeShell) updateView() {
 	setWindowText(s.title, view.Title())
 	setWindowText(s.description, view.Description())
 	s.action.SetText(view.PrimaryAction())
-	// Only a warning is news. The placeholder note of a module without a
-	// native view belongs to its view, as the view's title and description
-	// do, so it is shown quietly: switching to the module would otherwise
-	// announce it on every visit.
-	if s.notice != "" {
-		s.note.SetText(s.noteText())
-	} else {
-		s.note.SetTextQuietly(s.noteText())
-	}
+	s.showNote()
 	s.action.Show(view.PrimaryAction() != "")
 	s.refreshAction()
 	// SetChecked keeps the current module's button the navigation's only
@@ -554,6 +546,33 @@ func (s *nativeShell) updateView() {
 	}
 	s.announceModuleNotice()
 	s.updateDropAcceptance()
+}
+
+// showNote puts the shell's note on display. Only a warning is news. The
+// placeholder note of a module without a native view belongs to its view, as
+// the view's title and description do, so it is shown quietly: switching to
+// the module would otherwise announce it on every visit.
+func (s *nativeShell) showNote() {
+	if s.notice != "" {
+		s.note.SetText(s.noteText())
+	} else {
+		s.note.SetTextQuietly(s.noteText())
+	}
+}
+
+// settleStartupNotice brings the note up to date after a module command, given
+// the startup warnings as they stood before it, so that an output folder's
+// warning leaves as soon as the user chooses a folder rather than go on saying
+// captures are not saved. A note showing anything else, such as a failed
+// save, stays. The command's relayout fits the note's new height.
+func (s *nativeShell) settleStartupNotice(before string) {
+	if s.notice != before {
+		return
+	}
+	if after := s.startup.text(); after != before {
+		s.notice = after
+		s.showNote()
+	}
 }
 
 // refreshAction enables the primary action button only while the current
@@ -1179,9 +1198,9 @@ func (s *nativeShell) scale(value int32) int32 {
 // when captureWindow, its placement (recordWindow), and shows the outcome in
 // the note: the warning of a failed save, or the startup warnings that still
 // apply — the warning that the settings the session started from could not
-// be written is gone, as they now are, and so is an output folder's warning
-// the user has since resolved by choosing a folder, as the options now give
-// them.
+// be written is gone, as they now are, and an output folder's warning follows
+// the options as they now are, as it does after the module command that
+// chooses a folder (settleStartupNotice).
 func (s *nativeShell) saveSettings(captureWindow bool) error {
 	s.recordWindow(captureWindow)
 	err := s.store.Save(*s.settings)
@@ -1514,9 +1533,13 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			}
 		}
 		if shell != nil {
-			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists && native.NativeCommand(int32(lowWord(wParam)), notification) {
-				shell.layout()
-				return 0
+			if native, exists := shell.nativeViews[shell.navigator.Current().ID()]; exists {
+				before := shell.startup.text()
+				if native.NativeCommand(int32(lowWord(wParam)), notification) {
+					shell.settleStartupNotice(before)
+					shell.layout()
+					return 0
+				}
 			}
 		}
 	case wmActivate:

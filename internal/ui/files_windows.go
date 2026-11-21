@@ -5,10 +5,11 @@ package ui
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 )
 
 const (
@@ -118,7 +119,7 @@ func parsePickedPaths(buffer []uint16) []string {
 		if name == "" {
 			return paths
 		}
-		paths = append(paths, filepath.Join(first, name))
+		paths = append(paths, pathform.Join(first, name))
 		next = after
 	}
 }

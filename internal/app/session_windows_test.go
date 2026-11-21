@@ -236,14 +236,6 @@ func TestOpenSessionUpgradesEverySettingsFormat(t *testing.T) {
 	}
 }
 
-// TestOpenSessionRecoversFromMalformedSettings pins recovery with every
-// section owner's validator registered, as the application starts (SET-006,
-// PRESET-008): settings malformed anywhere — the file, the shell, the
-// capture options, either preset library, or the resize options — are
-// backed up byte for byte, reported once with the backup's path, and
-// replaced by defaults that keep both modules' built-in presets, which a
-// restart then loads without a warning. Saved images beside the settings
-// and in the output folders are not touched.
 // TestRefusedScreenshotFolderAloneRecordsNoRecovery pins that a sound settings
 // file storing a Screenshot folder captures refuse warns the user without
 // logging a settings recovery at every start, while any other startup warning
@@ -268,6 +260,14 @@ func TestRefusedScreenshotFolderAloneRecordsNoRecovery(t *testing.T) {
 	}
 }
 
+// TestOpenSessionRecoversFromMalformedSettings pins recovery with every
+// section owner's validator registered, as the application starts (SET-006,
+// PRESET-008): settings malformed anywhere — the file, the shell, the
+// capture options, either preset library, or the resize options — are
+// backed up byte for byte, reported once with the backup's path, and
+// replaced by defaults that keep both modules' built-in presets, which a
+// restart then loads without a warning. Saved images beside the settings
+// and in the output folders are not touched.
 func TestOpenSessionRecoversFromMalformedSettings(t *testing.T) {
 	valid := string(readFixture(t, "rsz-01"))
 	replace := func(old, new string) string {

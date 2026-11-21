@@ -220,12 +220,29 @@ func holdsStream(clean string) bool {
 	if strings.Contains(clean[len(volume):], ":") {
 		return true
 	}
+	return slices.ContainsFunc(shareNames(volume), func(name string) bool { return strings.Contains(name, ":") })
+}
+
+// shareNames is the server and share that a volume name of the form
+// \\server\share or \\.\UNC\server\share holds, or nil for any other volume
+// name. One trailing period on the server's name is left off, as it is the
+// root of a fully qualified name, nas.example.com., and leads to the same
+// server. The name "." alone is a device prefix, never a server, so it stays.
+func shareNames(volume string) []string {
+	var held string
 	switch {
 	case hasPrefixFold(volume, `\\.\UNC`):
+		held = strings.TrimPrefix(volume[len(`\\.\UNC`):], `\`)
 	case strings.HasPrefix(volume, `\\.\`), strings.HasPrefix(volume, `\\?\`), !strings.HasPrefix(volume, `\\`):
-		return false
+		return nil
+	default:
+		held = volume[len(`\\`):]
 	}
-	return strings.Contains(volume, ":")
+	names := strings.Split(held, `\`)
+	if len(names[0]) > 1 {
+		names[0] = strings.TrimSuffix(names[0], ".")
+	}
+	return names
 }
 
 // NamesOneFolder reports whether Windows reads a folder's path as exactly the
@@ -239,10 +256,12 @@ func holdsStream(clean string) bool {
 // This is the Image Resizer's output folder rule made stricter in one way:
 // that rule keeps a name Windows keeps where it falls, such as "Photos " or
 // COM1 before another name, and this one refuses every name that ends in a
-// space or a period or is reserved for a device, wherever it falls. A path
-// marked \\?\ or \??\ is one Windows takes verbatim, so it names one folder
-// unless it holds a stream or Clean would rewrite it. A path through a device
-// other than a drive, such as \\.\pipe\x, is not judged here.
+// space or a period, a server's or share's included but for the one period
+// that ends a server's fully qualified name, and every name after the volume
+// name that is reserved for a device, wherever it falls. A path marked \\?\
+// or \??\ is one Windows takes verbatim, so it names one folder unless it
+// holds a stream or Clean would rewrite it. A path through a device other
+// than a drive, such as \\.\pipe\x, is not judged here.
 func NamesOneFolder(folder string) bool {
 	clean := Clean(folder)
 	if holdsStream(clean) {
@@ -251,7 +270,8 @@ func NamesOneFolder(folder string) bool {
 	if strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
 		return strings.TrimRight(folder, `\`) == strings.TrimRight(clean, `\`)
 	}
-	for name := range strings.SplitSeq(clean[len(VolumeName(clean)):], `\`) {
+	volume := VolumeName(clean)
+	for _, name := range append(shareNames(volume), strings.Split(clean[len(volume):], `\`)...) {
 		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
 			return false
 		}
