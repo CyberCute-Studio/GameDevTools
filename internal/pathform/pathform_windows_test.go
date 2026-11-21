@@ -4,6 +4,7 @@ package pathform
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -117,6 +118,50 @@ func TestSaveFolderRefusesANameItsSpellingWouldShorten(t *testing.T) {
 	}
 	if got, ok := SaveFolder(root + `\x `); !ok || got != root+`\x \` {
 		t.Errorf("SaveFolder of the folder ending in a space = %q, %v", got, ok)
+	}
+}
+
+// TestSaveFolderTellsABrokenLinkFromAMissingName pins that a folder behind a
+// junction whose target is gone, which may come back, keeps its spelling so
+// the save reports the failure, while a name missing under a live junction or
+// blocked by a file has none.
+func TestSaveFolderTellsABrokenLinkFromAMissingName(t *testing.T) {
+	root := t.TempDir()
+	link := func(path, target string) {
+		t.Helper()
+		if output, err := exec.Command("cmd", "/c", "mklink", "/J", path, target).CombinedOutput(); err != nil {
+			t.Skipf("the volume cannot hold a junction: %v: %s", err, output)
+		}
+		t.Cleanup(func() { os.Remove(path) })
+	}
+	for _, name := range []string{"gone", "live"} {
+		if err := os.Mkdir(root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(root+`\broken`, root+`\gone`)
+	link(root+`\working`, root+`\live`)
+	// mklink drops a trailing space, so that name is given by a rename.
+	link(root+`\spaced`, root+`\gone`)
+	if err := os.Rename(root+`\spaced`, `\\?\`+root+`\broken `); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(`\\?\` + root + `\broken `) })
+	if err := os.Remove(root + `\gone`); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root+`\Plain`, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{root + `\broken\Shots `, root + `\broken\In\Deep `, root + `\broken `} {
+		if got, ok := SaveFolder(folder); !ok || got != folder+`\` {
+			t.Errorf("SaveFolder(%q) = %q, %v, want %q", folder, got, ok, folder+`\`)
+		}
+	}
+	for _, folder := range []string{root + `\working\Shots `, root + `\working\In\Deep `, root + `\Plain\Shots `} {
+		if got, ok := SaveFolder(folder); ok {
+			t.Errorf("SaveFolder(%q) = %q, want no spelling", folder, got)
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -370,6 +371,39 @@ func TestSaveReportsAnUnavailableFolderAsUnavailable(t *testing.T) {
 		return
 	}
 	t.Skip("every drive letter is in use")
+}
+
+// TestSaveReportsAFolderBehindABrokenLinkAsUnavailable pins that a folder
+// through a junction whose target is gone fails with that failure rather than
+// as a path to replace, and that the save recreates nothing behind the link.
+func TestSaveReportsAFolderBehindABrokenLinkAsUnavailable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows has directory junctions")
+	}
+	root := t.TempDir()
+	target := root + `\target`
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := root + `\link`
+	if output, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Skipf("the volume cannot hold a junction: %v: %s", err, output)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	_, err := save(sampleImage(2, 2), optionsFor(link+`\Shots `, screenshot.FormatPNG), time.Now())
+	assertKind(t, err, KindFolder)
+	if errors.Is(err, errFolderReadTwoWays) {
+		t.Fatalf("save = %v, want the broken link's own failure", err)
+	}
+	if text := err.Error(); strings.Contains(text, `\\?\`) {
+		t.Fatalf("the failure reads %q, want the folder as written", text)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the junction's target after the save: %v, want it still missing", err)
+	}
 }
 
 // TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder

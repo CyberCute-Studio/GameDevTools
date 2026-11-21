@@ -195,14 +195,19 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	// and final files, or the folder created for them, land apart. SaveFolder
 	// gives the spelling that reaches one place. A folder with none is refused
 	// here rather than by option validation, which would reject the whole
-	// settings file for it.
+	// settings file for it. Any other spelling than the folder as written is
+	// for a folder that already exists, so when it cannot be reached the look
+	// below reports why, and nothing is created under a name SaveFolder would
+	// refuse to create.
 	folder, reachable := pathform.SaveFolder(options.OutputFolder)
 	if !reachable {
 		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
 	}
-	creation := pathform.CreationPath(folder)
-	if err := os.MkdirAll(creation, 0o755); err != nil {
-		return "", kindError(KindFolder, "create output folder", namedAsWritten(err, creation, folder))
+	if folder == options.OutputFolder {
+		creation := pathform.CreationPath(folder)
+		if err := os.MkdirAll(creation, 0o755); err != nil {
+			return "", kindError(KindFolder, "create output folder", namedAsWritten(err, creation, folder))
+		}
 	}
 	info, err := os.Stat(folder)
 	if err != nil {

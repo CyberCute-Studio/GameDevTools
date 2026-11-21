@@ -227,8 +227,11 @@ func ReadsAsOneFolder(folder string) bool {
 // written would make the folder without those characters. A name ending in a
 // space and then one period has none either: Windows drops that period even
 // before a separator, so the spelling would lead to the folder without it.
-// A folder that cannot be looked at, as when its share is offline, keeps the
-// spelling, so that the save fails with the reason rather than as a bad path.
+// A folder that cannot be looked at, as when its share is offline or a
+// junction on its path has lost its target, keeps the spelling, so that the
+// save fails with the reason rather than as a bad path. A spelling other than
+// the folder as written is for a folder that already exists, so a save must
+// not create it.
 func SaveFolder(folder string) (string, bool) {
 	if ReadsAsOneFolder(folder) {
 		return folder, true
@@ -256,17 +259,46 @@ func SaveFolder(folder string) (string, bool) {
 // there, rather than that it could not be reached. A file of that name says
 // so with ERROR_DIRECTORY. A missing name says so with the two not-found
 // codes, not with everything fs.ErrNotExist covers, which includes a server
-// that does not answer, and only on a volume that answers, as a drive that is
-// gone reports a missing path.
+// that does not answer, and only below something that answers, as a drive
+// that is gone and a junction that has lost its target report a missing path
+// too. So the nearest name on the path that exists decides, looked at without
+// following it, by the extended-length path that keeps every name: a link
+// there must still lead somewhere. Only with no such name does the volume
+// root decide, as a share may refuse to describe its root while its folders
+// can be read.
 func noSuchFolder(folder string, err error) bool {
 	if errors.Is(err, windows.ERROR_DIRECTORY) {
 		return true
 	}
-	if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+	if !nameNotFound(err) {
 		return false
 	}
-	_, rootErr := os.Stat(VolumeName(folder) + `\`)
-	return rootErr == nil
+	full, err := resolved(folder)
+	if err != nil {
+		return false
+	}
+	full = strings.TrimRight(full, `\`)
+	volume := VolumeName(full)
+	for path := full; len(path) > len(volume); path = path[:strings.LastIndexByte(path, '\\')] {
+		_, err := os.Lstat(extended(path))
+		switch {
+		case err == nil:
+			_, err = os.Stat(extended(path))
+			return err == nil
+		case errors.Is(err, windows.ERROR_DIRECTORY):
+			return true
+		case !nameNotFound(err):
+			return false
+		}
+	}
+	_, err = os.Stat(volume + `\`)
+	return err == nil
+}
+
+// nameNotFound reports whether a failed look at a path says a name on it is
+// missing.
+func nameNotFound(err error) bool {
+	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
 }
 
 // CreationPath is the spelling of a folder to give os.MkdirAll. MkdirAll
@@ -287,10 +319,17 @@ func CreationPath(folder string) string {
 	for name := range strings.SplitSeq(full[len(VolumeName(full)):], `\`) {
 		shortened = shortened || strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".")
 	}
-	switch {
-	case !shortened:
+	if !shortened {
 		return folder
-	case strings.HasPrefix(full, `\\?\`):
+	}
+	return extended(full)
+}
+
+// extended is the extended-length spelling of a path Windows has resolved,
+// which Windows takes verbatim.
+func extended(full string) string {
+	switch {
+	case strings.HasPrefix(full, `\\?\`), strings.HasPrefix(full, `\??\`):
 		return full
 	case strings.HasPrefix(full, `\\.\`):
 		return `\\?\` + full[4:]
