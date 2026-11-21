@@ -2,7 +2,10 @@
 
 package pathform
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // TestReadsAsOneFolder pins which output folders Windows reads as one place
 // whether a save names the folder itself, a file after it, or a file through
@@ -52,9 +55,47 @@ func TestCreationPathKeepsNamesWindowsWouldShorten(t *testing.T) {
 		{`C:\Art\v2..\Shots`, `\\?\C:\Art\v2..\Shots`},
 		{`\\server\share\Photos \Shots`, `\\?\UNC\server\share\Photos \Shots`},
 		{`\\.\C:\Art\Photos \Shots`, `\\?\C:\Art\Photos \Shots`},
+		{`\\.\C:\Art\Shots`, `\\.\C:\Art\Shots`},
+		{`\\server\..\x`, `\\server\..\x`},
 	} {
 		if got := CreationPath(test.folder); got != test.want {
 			t.Errorf("CreationPath(%q) = %q, want %q", test.folder, got, test.want)
+		}
+	}
+}
+
+// TestSaveFolderReachesARealFolderByItsOwnName pins that a folder whose own
+// name ends in a space or a second period is used through a spelling every
+// step reads whole while it exists, and that a path read two ways with no
+// such folder has no spelling.
+func TestSaveFolderReachesARealFolderByItsOwnName(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"Shots ", "v2.."} {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		folder := root + `\` + name
+		if got, ok := SaveFolder(folder); !ok || got != folder+`\` {
+			t.Errorf("SaveFolder(%q) = %q, %v, want %q", folder, got, ok, folder+`\`)
+		}
+	}
+	if err := os.WriteFile(`\\?\`+root+`\File `, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{root, root + `\`, root + `\Missing\Shots`} {
+		if got, ok := SaveFolder(folder); !ok || got != folder {
+			t.Errorf("SaveFolder(%q) = %q, %v, want it as written", folder, got, ok)
+		}
+	}
+	for _, folder := range []string{
+		"",
+		root + `\Missing `,
+		root + `\File `,
+		`\\.\UNC\server\share\..\x`,
+		`\\?\C:\Art\..\Shots`,
+	} {
+		if got, ok := SaveFolder(folder); ok {
+			t.Errorf("SaveFolder(%q) = %q, want no spelling", folder, got)
 		}
 	}
 }

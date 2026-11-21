@@ -289,6 +289,74 @@ func TestSaveCreatesAFolderThroughANameWindowsWouldShorten(t *testing.T) {
 	}
 }
 
+// TestSaveReachesAFolderWhoseOwnNameEndsInASpaceOrPeriods pins that a real
+// folder of such a name, as the picker returns for one ending in a space,
+// keeps receiving captures, with no stray folder without those characters
+// beside it.
+func TestSaveReachesAFolderWhoseOwnNameEndsInASpaceOrPeriods(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows reads a name differently by where it falls in a path")
+	}
+	root := t.TempDir()
+	names := []string{"Shots ", "v2.."}
+	for _, name := range names {
+		folder := root + `\` + name
+		if err := os.Mkdir(`\\?\`+folder, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
+		if err != nil {
+			t.Fatalf("save to %q: %v", folder, err)
+		}
+		if !strings.HasPrefix(path, folder+`\`) {
+			t.Fatalf("saved to %q, want a file in %q", path, folder)
+		}
+		decodeFile(t, path)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(names) {
+		t.Fatalf("the output root holds %v, want only %q", entries, names)
+	}
+}
+
+// TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder
+// with no name Windows would shorten is created as written.
+func TestSaveCreatesAMissingFolderThroughADevicePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows has device paths")
+	}
+	root := t.TempDir()
+	path, err := save(sampleImage(2, 2), optionsFor(`\\.\`+root+`\New\Shots`, screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	decodeFile(t, path)
+	if info, err := os.Stat(filepath.Join(root, "New", "Shots", filepath.Base(path))); err != nil || info.IsDir() {
+		t.Fatalf("the saved file is not in the created folder: %v", err)
+	}
+}
+
+// TestSaveFolderFailureNamesTheFolderAsWritten pins that a folder created
+// through its extended-length spelling is named as the user knows it when
+// that fails.
+func TestSaveFolderFailureNamesTheFolderAsWritten(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows has extended-length paths")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(`\\?\`+root+`\Blocked `, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := save(sampleImage(2, 2), optionsFor(root+`\Blocked \Inner`, screenshot.FormatPNG), time.Now())
+	assertKind(t, err, KindFolder)
+	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, root+`\Blocked `) {
+		t.Fatalf("the failure reads %q, want the folder as written", text)
+	}
+}
+
 func TestSaveEncodeFailureLeavesNoFiles(t *testing.T) {
 	folder := t.TempDir()
 	failing := func(writer io.Writer, img *image.RGBA, options screenshot.CaptureOptions) error {

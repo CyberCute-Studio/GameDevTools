@@ -216,6 +216,31 @@ func ReadsAsOneFolder(folder string) bool {
 	return true
 }
 
+// SaveFolder is the spelling a save should use for an output folder, and
+// whether it has one. A folder Windows reads as one place is used as written.
+// One read two ways because its last name ends in a space or a second period
+// can be a real folder, and the folder picker returns one ending in a space
+// under that name, so while a folder of exactly that name exists it is used
+// through a trailing separator, which makes every step read the name whole.
+// Without such a folder there is no spelling to use, as creating the path as
+// written would make the folder without those characters.
+func SaveFolder(folder string) (string, bool) {
+	if ReadsAsOneFolder(folder) {
+		return folder, true
+	}
+	if folder == "" || os.IsPathSeparator(folder[len(folder)-1]) {
+		return "", false
+	}
+	whole := folder + `\`
+	if !ReadsAsOneFolder(whole) {
+		return "", false
+	}
+	if info, err := os.Stat(whole); err != nil || !info.IsDir() {
+		return "", false
+	}
+	return whole, true
+}
+
 // CreationPath is the spelling of a folder to give os.MkdirAll. MkdirAll
 // creates each missing folder by a path that ends at its name, where Windows
 // drops trailing spaces and periods, so for a folder through a name that
@@ -229,7 +254,9 @@ func CreationPath(folder string) string {
 		return folder
 	}
 	shortened := false
-	for name := range strings.SplitSeq(full, `\`) {
+	// Only names after the volume count: the "." of a \\.\ prefix is not one
+	// Windows would shorten.
+	for name := range strings.SplitSeq(full[len(VolumeName(full)):], `\`) {
 		shortened = shortened || strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".")
 	}
 	switch {

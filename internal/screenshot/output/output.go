@@ -31,7 +31,9 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
@@ -189,16 +191,18 @@ func save(img *image.RGBA, options screenshot.CaptureOptions, now time.Time) (st
 func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now time.Time,
 	encoder func(io.Writer, *image.RGBA, screenshot.CaptureOptions) error,
 ) (string, error) {
-	folder := options.OutputFolder
 	// A stored folder Windows reads as two places would have its temporary
-	// and final files, or the folder created for them, land apart. It is
-	// refused here rather than by option validation, which would reject the
-	// whole settings file for it.
-	if !pathform.ReadsAsOneFolder(folder) {
+	// and final files, or the folder created for them, land apart. SaveFolder
+	// gives the spelling that reaches one place. A folder with none is refused
+	// here rather than by option validation, which would reject the whole
+	// settings file for it.
+	folder, reachable := pathform.SaveFolder(options.OutputFolder)
+	if !reachable {
 		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
 	}
-	if err := os.MkdirAll(pathform.CreationPath(folder), 0o755); err != nil {
-		return "", kindError(KindFolder, "create output folder", err)
+	creation := pathform.CreationPath(folder)
+	if err := os.MkdirAll(creation, 0o755); err != nil {
+		return "", kindError(KindFolder, "create output folder", namedAsWritten(err, creation, folder))
 	}
 	info, err := os.Stat(folder)
 	if err != nil {
@@ -258,4 +262,17 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	return "", kindError(KindWrite, "choose filename",
 		fmt.Errorf("no unused filename found after %d attempts for %s", maxSuffixAttempts,
 			base+options.Format.Extension()))
+}
+
+// namedAsWritten puts a failed folder creation's path back in the folder's
+// own spelling, as it may have been created through its extended-length one,
+// so the failure names the folder as the user knows it.
+func namedAsWritten(err error, creation, folder string) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && strings.HasPrefix(creation, pathErr.Path) {
+		if rest := creation[len(pathErr.Path):]; strings.HasSuffix(folder, rest) {
+			pathErr.Path = folder[:len(folder)-len(rest)]
+		}
+	}
+	return err
 }
