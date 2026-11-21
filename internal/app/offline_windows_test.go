@@ -418,10 +418,20 @@ func checkNetworkDenied(t *testing.T) {
 	if !errors.Is(err, windows.WSAEACCES) && !errors.Is(err, windows.WSAENETUNREACH) && !errors.Is(err, windows.WSAEHOSTUNREACH) {
 		t.Fatalf("a remote connection failed with %v, want the sandbox's access error or no route", err)
 	}
-	connection, err = dialer.Dial("tcp4", net.JoinHostPort("127.0.0.1", os.Getenv(offlinePortEnv)))
+	port := os.Getenv(offlinePortEnv)
+	if number, err := strconv.ParseUint(port, 10, 16); err != nil || number == 0 {
+		t.Fatalf("the loopback listener's port is %q, want a port number", port)
+	}
+	connection, err = dialer.Dial("tcp4", net.JoinHostPort("127.0.0.1", port))
 	if err == nil {
 		connection.Close()
 		t.Fatal("a connection to the loopback listener succeeded")
+	}
+	// The sandbox drops a loopback connection, which Windows reports as timed
+	// out, sooner than the dialer's own deadline and as a different error. A
+	// refused connection, or any other failure, would not show the sandbox.
+	if !errors.Is(err, windows.WSAETIMEDOUT) && !errors.Is(err, windows.WSAEACCES) {
+		t.Fatalf("a loopback connection failed with %v, want the sandbox's denial", err)
 	}
 }
 

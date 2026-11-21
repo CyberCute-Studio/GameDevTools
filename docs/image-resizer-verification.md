@@ -71,7 +71,7 @@ Results below were recorded on 2026-11-20:
 | OS | Windows 11 Home 26H2, build 26300 (ARM64) |
 | Device | HP OmniBook 5 Laptop 14-he0xxx, Snapdragon X Plus X1P42100 (8 Oryon cores, 8 threads, up to 3.24 GHz), 32 GB RAM |
 | Storage | NVMe SSD (SN5000S, 1 TB) |
-| Go | go1.26.5 windows/arm64, for every result below: the test binaries run natively, and those for the AMD64 figures were built with `GOARCH=amd64` and ran under Windows' x64 emulation. CI builds the release executable with the Go version `go.mod` names, Go 1.24.0, which was not measured (see [what these results do not cover](#what-these-results-do-not-cover)) |
+| Go | go1.26.5 windows/arm64, for every result below: the test binaries run natively, and those for the AMD64 figures were built with `GOARCH=amd64` and ran under Windows' x64 emulation. CI builds the release executable with the toolchain `go.mod` pins, go1.27.4 since QLT-03, which was not measured (see [what these results do not cover](#what-these-results-do-not-cover)) |
 | Display | The primary display at 100% scaling; the acceptance suite does not depend on the display configuration |
 
 ## Acceptance matrix

@@ -219,7 +219,14 @@ func shellPath(path string) (string, error) {
 			return "", errShellReadsAnotherName
 		}
 	}
-	for name := range strings.SplitSeq(target, `\`) {
+	names := strings.Split(target, `\`)
+	// One trailing period on a server's name is the root of its fully
+	// qualified name, nas.example.com., and leads to the same server. The name
+	// "." alone is a device prefix, never a server, so it stays refused.
+	if strings.HasPrefix(target, `\\`) && !strings.HasPrefix(target, `\\?\`) && len(names[2]) > 1 {
+		names[2] = strings.TrimSuffix(names[2], ".")
+	}
+	for _, name := range names {
 		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
 			return "", errShellReadsAnotherName
 		}
