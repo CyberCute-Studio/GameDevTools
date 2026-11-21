@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path/filepath"
 	"strings"
 	"time"
 	"unsafe"
@@ -311,7 +310,7 @@ func checkHeld(files *heldFile, item Item) error {
 // returns that name.
 func moveAside(held windows.Handle, destination string) (string, error) {
 	name := func() string { return asideName(destination) }
-	return unusedName(filepath.Dir(destination), name, func(aside string) error {
+	return unusedName(parentPath(destination), name, func(aside string) error {
 		if err := renameHandle(held, aside); err != nil {
 			return &fs.PathError{Op: "rename", Path: aside, Err: err}
 		}

@@ -14,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 )
 
@@ -24,6 +26,7 @@ var (
 	procGetDesktopWindow           = user32.NewProc("GetDesktopWindow")
 	procGetClipboardData           = user32.NewProc("GetClipboardData")
 	procGetClipboardSequenceNumber = user32.NewProc("GetClipboardSequenceNumber")
+	procIsClipboardFormatAvailable = user32.NewProc("IsClipboardFormatAvailable")
 	procGlobalSize                 = kernel32.NewProc("GlobalSize")
 )
 
@@ -210,6 +213,80 @@ func TestSetClipboardImageRoundTrip(t *testing.T) {
 	verifyClipboardImage(t, func() error {
 		return setClipboardImage(0, img)
 	}, img)
+}
+
+// clipboardUploadMarkers reads, under one open, whether the clipboard holds
+// an image, the value of its CanUploadToCloudClipboard marker, if any, and
+// whether it opts out of the local clipboard history.
+func clipboardUploadMarkers() (hasImage, marked bool, value uint32, historyFormat bool, err error) {
+	registered := func(name string) (uintptr, error) {
+		text, err := windows.UTF16PtrFromString(name)
+		if err != nil {
+			return 0, err
+		}
+		format, _, callErr := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(text)))
+		if format == 0 {
+			return 0, callError(callErr)
+		}
+		return format, nil
+	}
+	upload, err := registered(cloudUploadFormat)
+	if err != nil {
+		return false, false, 0, false, err
+	}
+	history, err := registered("CanIncludeInClipboardHistory")
+	if err != nil {
+		return false, false, 0, false, err
+	}
+	if err := openClipboardWithRetry(0); err != nil {
+		return false, false, 0, false, err
+	}
+	defer procCloseClipboard.Call()
+	available := func(format uintptr) bool {
+		r, _, _ := procIsClipboardFormatAvailable.Call(format)
+		return r != 0
+	}
+	hasImage, historyFormat = available(cfDIB), available(history)
+	if !available(upload) {
+		return hasImage, false, 0, historyFormat, nil
+	}
+	allocation, _, callErr := procGetClipboardData.Call(upload)
+	if allocation == 0 {
+		return hasImage, false, 0, historyFormat, callError(callErr)
+	}
+	data, err := lockGlobalMemory(allocation)
+	if err != nil {
+		return hasImage, false, 0, historyFormat, err
+	}
+	defer procGlobalUnlock.Call(allocation)
+	procRtlMoveMemory.Call(uintptr(unsafe.Pointer(&value)), data, unsafe.Sizeof(value))
+	return hasImage, true, value, historyFormat, nil
+}
+
+// TestSetClipboardImageOptsOutOfCloudUploadOnly pins NFR-031 at the
+// clipboard: the image carries a zero CanUploadToCloudClipboard marker, so
+// Windows clipboard sync does not upload it, and no history format, so it
+// stays in the local clipboard history. Other test binaries share the
+// clipboard, so a read another writer disturbed is made again.
+func TestSetClipboardImageOptsOutOfCloudUploadOnly(t *testing.T) {
+	img := sampleImage(3, 2)
+	var last string
+	for range 5 {
+		if err := setClipboardImage(0, img); err != nil {
+			t.Fatalf("place image on the clipboard: %v", err)
+		}
+		before := clipboardSequence()
+		hasImage, marked, value, history, err := clipboardUploadMarkers()
+		if after := clipboardSequence(); err != nil || before != after {
+			last = fmt.Sprintf("the read was disturbed (err = %v)", err)
+			continue
+		}
+		if hasImage && marked && value == 0 && !history {
+			return
+		}
+		last = fmt.Sprintf("image = %v, marker = %v with value %d, history format = %v", hasImage, marked, value, history)
+	}
+	t.Fatalf("the clipboard never held the marked image: %s", last)
 }
 
 func TestDeliverClipboardAndSave(t *testing.T) {

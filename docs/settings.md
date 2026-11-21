@@ -150,6 +150,6 @@ A session whose saving was disabled because recovery could not read or back up t
 
 Diagnostic events contain only a UTC timestamp, severity, a fixed operation identifier, and a fixed result code. The logging API has no message, path, filename, image, clipboard, or arbitrary-metadata field. User-facing local error details may contain a settings or backup path when needed for recovery; those details are not copied into the diagnostic event.
 
-The settings events are `settings.load` with `recovered-with-warnings`, `settings.save` with `write-failed`, and `settings.restore` with `restored`, `not-restored`, or `write-failed`; the end of the Windows session records `app.end-session` with `stopped`.
+The settings events are `settings.load` with `recovered-with-warnings`, `settings.save` with `write-failed`, and `settings.restore` with `restored`, `not-restored`, or `write-failed`; the end of the Windows session records `app.end-session` with `stopped`. `audit.TestDiagnosticEventsAreFixed` fails on any event outside this list or whose operation or code is not a constant; see [Offline, privacy, file access, and dependency verification](privacy-verification.md#log-privacy-review).
 
 The active log rotates before it exceeds 1 MiB. Up to three numbered backups are retained (`gamedevtools.log.1` through `.3`), with older events discarded first. Logging is local and does not transmit data.

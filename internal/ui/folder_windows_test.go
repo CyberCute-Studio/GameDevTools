@@ -3,9 +3,14 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestInitializeCOMBalancesEverySuccessfulCall pins the COM rule the folder
@@ -52,6 +57,26 @@ func TestInitializeCOMBalancesEverySuccessfulCall(t *testing.T) {
 		t.Skip("the test thread already had a COM apartment")
 	default:
 		t.Fatal(message)
+	}
+}
+
+// TestExplorerPathIsTheWindowsFoldersExplorer pins that RevealInFolder runs
+// Explorer by its full path in the Windows folder, so no explorer.exe in the
+// application's or the current folder can be run in its place.
+func TestExplorerPathIsTheWindowsFoldersExplorer(t *testing.T) {
+	path, err := explorerPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	folder, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(path) || !strings.EqualFold(filepath.Dir(path), filepath.Clean(folder)) || !strings.EqualFold(filepath.Base(path), "explorer.exe") {
+		t.Fatalf("explorerPath = %q, want explorer.exe in %q", path, folder)
+	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("explorerPath %q is not a file: %v", path, err)
 	}
 }
 

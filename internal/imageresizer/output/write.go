@@ -184,7 +184,7 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 	if err := item.checkDestination(); err != nil {
 		return "", err
 	}
-	temp, err := createTemp(filepath.Dir(item.Destination))
+	temp, err := createTemp(parentPath(item.Destination))
 	if err != nil {
 		return "", resultFailure("create temporary file", item.Destination, err)
 	}
@@ -285,7 +285,7 @@ func (i Item) checkSaves() error {
 	if !i.Writes() {
 		return kindError(KindValidation, "write result", fmt.Errorf("%w: its action is %v", ErrNotWritten, i.Action))
 	}
-	if !filepath.IsAbs(i.Destination) {
+	if !isAbsolute(i.Destination) {
 		return kindError(KindValidation, "write result", fmt.Errorf("the destination %q is not an absolute path", i.Destination))
 	}
 	return nil

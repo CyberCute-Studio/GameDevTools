@@ -157,7 +157,89 @@ func windowsPath(op, path string) (*uint16, error) {
 // //?/ device path, which Windows resolves, as the \\?\ path it takes
 // verbatim.
 func resolvedPath(path string) string {
-	return filepath.Clean(extendedPath(path))
+	return cleanPath(extendedPath(path))
+}
+
+// extendedUNCPrefix returns the length of the \\?\UNC or \??\UNC prefix a
+// path starts with, in either slash and any letter case, or 0 if it has
+// neither. Go 1.27 changed how package filepath reads such a path, taking
+// its server and share into the volume name, as it always has for
+// \\server\share and \\.\UNC\server\share. The folder rules are written for
+// a volume name that stops at the prefix, where ".." can leave a share, as it
+// can when Windows reads the path, so volumeName, isAbsolute, cleanPath,
+// parentPath, and baseName keep that reading on every Go release.
+func extendedUNCPrefix(path string) int {
+	const size = len(`\\?\UNC`)
+	if len(path) < size || !os.IsPathSeparator(path[0]) || path[2] != '?' || !os.IsPathSeparator(path[3]) ||
+		!(os.IsPathSeparator(path[1]) || path[1] == '?') || !strings.EqualFold(path[4:size], "UNC") {
+		return 0
+	}
+	if len(path) > size && !os.IsPathSeparator(path[size]) {
+		return 0
+	}
+	return size
+}
+
+// rootedRest is what follows an extended-length UNC path's prefix, of the
+// given size, as a path on a drive root. The drive root stands in for the
+// prefix so package filepath reads the rest as names under a root, and does
+// not read a first name such as ?? as a device prefix of its own.
+func rootedRest(path string, size int) string {
+	return uncStandIn + `\` + strings.TrimLeft(path[size:], `\/`)
+}
+
+// uncStandIn is the volume rootedRest puts in place of the prefix.
+const uncStandIn = `C:`
+
+// volumeName is filepath.VolumeName, ending an extended-length UNC path's
+// volume name at its prefix on every Go release.
+func volumeName(path string) string {
+	if size := extendedUNCPrefix(path); size > 0 {
+		return filepath.FromSlash(path[:size])
+	}
+	return filepath.VolumeName(path)
+}
+
+// isAbsolute is filepath.IsAbs, reading an extended-length UNC path by its
+// prefix on every Go release: a path that starts with two separators is
+// absolute, and \??\UNC is when a separator follows it.
+func isAbsolute(path string) bool {
+	if size := extendedUNCPrefix(path); size > 0 {
+		return path[1] != '?' || len(path) > size
+	}
+	return filepath.IsAbs(path)
+}
+
+// cleanPath is filepath.Clean, cleaning what follows an extended-length UNC
+// path's prefix as a rooted path on every Go release, so ".." can leave a
+// share and a share's root gains no trailing separator or period.
+func cleanPath(path string) string {
+	size := extendedUNCPrefix(path)
+	if size == 0 || len(path) == size {
+		return filepath.Clean(path)
+	}
+	return filepath.FromSlash(path[:size]) + filepath.Clean(rootedRest(path, size))[len(uncStandIn):]
+}
+
+// parentPath is filepath.Dir, whose parent of an extended-length UNC path is
+// the next name up on every Go release: a share's is its server's, and the
+// prefix's root is its own.
+func parentPath(path string) string {
+	size := extendedUNCPrefix(path)
+	if size == 0 {
+		return filepath.Dir(path)
+	}
+	return filepath.FromSlash(path[:size]) + filepath.Dir(rootedRest(path, size))[len(uncStandIn):]
+}
+
+// baseName is filepath.Base, whose last element of an extended-length UNC
+// path is its last name on every Go release, a share's own name included.
+func baseName(path string) string {
+	size := extendedUNCPrefix(path)
+	if size == 0 {
+		return filepath.Base(path)
+	}
+	return filepath.Base(rootedRest(path, size))
 }
 
 // resolvesAsWritten reports whether Windows resolves a cleaned absolute path,
@@ -180,7 +262,7 @@ func resolvesAsWritten(clean string) bool {
 // a share puts both names after its volume name, so every spelling of one
 // path gets one answer.
 func namesStream(clean string) bool {
-	volume := filepath.VolumeName(clean)
+	volume := volumeName(clean)
 	if strings.ContainsRune(clean[len(volume):], ':') {
 		return true
 	}
@@ -231,7 +313,7 @@ func extendedPath(path string) string {
 	if strings.HasPrefix(path, `\??\`) {
 		return `\\?\` + path[4:]
 	}
-	if strings.HasPrefix(path, `\\?\`) || !filepath.IsAbs(path) {
+	if strings.HasPrefix(path, `\\?\`) || !isAbsolute(path) {
 		return path
 	}
 	full, err := windows.FullPath(path)

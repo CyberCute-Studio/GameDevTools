@@ -5,6 +5,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"unsafe"
 
@@ -135,9 +136,25 @@ func OpenFolder(folder string) error {
 
 // RevealInFolder opens File Explorer with the given file selected. It runs
 // only on explicit user request: the application never opens folders on its
-// own after an operation completes.
+// own after an operation completes. Explorer is named by its full path, as a
+// bare name would be looked up through a search path that can include the
+// application's and the current folder, where another explorer.exe could be
+// waiting.
 func RevealInFolder(path string) error {
-	return shellExecute("explorer.exe", nil, utf16("explorer.exe"), utf16(`/select,"`+path+`"`))
+	explorer, err := explorerPath()
+	if err != nil {
+		return err
+	}
+	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+path+`"`))
+}
+
+// explorerPath returns File Explorer's full path in the Windows folder.
+func explorerPath() (string, error) {
+	folder, err := windows.GetSystemWindowsDirectory()
+	if err != nil {
+		return "", fmt.Errorf("locate the Windows folder: %w", err)
+	}
+	return filepath.Join(folder, "explorer.exe"), nil
 }
 
 // shellExecute runs ShellExecuteExW with no owner window for the verb, which

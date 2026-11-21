@@ -14,6 +14,14 @@ import (
 const (
 	cfDIB        = 8
 	gmemMoveable = 0x0002
+	gmemZeroInit = 0x0040
+
+	// cloudUploadFormat is the registered clipboard format through which an
+	// application tells Windows whether the clipboard's contents may be
+	// synced to the user's other devices through the cloud: a DWORD, zero
+	// for no. Leaving it off allows the upload when the user has turned
+	// clipboard sync on.
+	cloudUploadFormat = "CanUploadToCloudClipboard"
 
 	clipboardOpenAttempts  = 5
 	clipboardOpenRetryWait = 50 * time.Millisecond
@@ -23,15 +31,16 @@ var (
 	user32   = windows.NewLazySystemDLL("user32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
-	procOpenClipboard    = user32.NewProc("OpenClipboard")
-	procEmptyClipboard   = user32.NewProc("EmptyClipboard")
-	procSetClipboardData = user32.NewProc("SetClipboardData")
-	procCloseClipboard   = user32.NewProc("CloseClipboard")
-	procGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
-	procGlobalFree       = kernel32.NewProc("GlobalFree")
-	procGlobalLock       = kernel32.NewProc("GlobalLock")
-	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
-	procRtlMoveMemory    = kernel32.NewProc("RtlMoveMemory")
+	procOpenClipboard            = user32.NewProc("OpenClipboard")
+	procEmptyClipboard           = user32.NewProc("EmptyClipboard")
+	procSetClipboardData         = user32.NewProc("SetClipboardData")
+	procCloseClipboard           = user32.NewProc("CloseClipboard")
+	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
+	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
+	procGlobalFree               = kernel32.NewProc("GlobalFree")
+	procGlobalLock               = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock             = kernel32.NewProc("GlobalUnlock")
+	procRtlMoveMemory            = kernel32.NewProc("RtlMoveMemory")
 )
 
 type bitmapInfoHeader struct {
@@ -53,6 +62,12 @@ type bitmapInfoHeader struct {
 // accept. The image is encoded as a bottom-up 32-bit BGRA bitmap with
 // opaque alpha. The owner window may be zero; the system takes ownership
 // of the clipboard data once SetClipboardData succeeds.
+//
+// The image is marked as not for cloud upload, so Windows clipboard sync
+// does not send it to the user's other devices (NFR-031), and stays in the
+// local clipboard history (Win+V). An image that cannot be marked is not
+// placed at all: the failure is reported as a clipboard failure, and the
+// saved file is unaffected (SCR-060).
 //
 // OpenClipboard fails while another application holds the clipboard open,
 // so the open is retried briefly before the attempt is reported as a
@@ -123,11 +138,38 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	if r == 0 {
 		return kindError(KindClipboard, "EmptyClipboard", callError(err))
 	}
+	if err := markNotForCloudUpload(); err != nil {
+		return err
+	}
 	r, _, err = procSetClipboardData.Call(cfDIB, allocation)
 	if r == 0 {
+		// The marker is not left on the clipboard without its image.
+		procEmptyClipboard.Call()
 		return kindError(KindClipboard, "SetClipboardData(CF_DIB)", callError(err))
 	}
 	ownedByClipboard = true
+	return nil
+}
+
+// markNotForCloudUpload places the cloudUploadFormat marker, a zero DWORD,
+// on the clipboard, which the caller holds open and has emptied.
+func markNotForCloudUpload() error {
+	name, err := windows.UTF16PtrFromString(cloudUploadFormat)
+	if err != nil {
+		return kindError(KindClipboard, "RegisterClipboardFormat", err)
+	}
+	format, _, err := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(name)))
+	if format == 0 {
+		return kindError(KindClipboard, "RegisterClipboardFormat", callError(err))
+	}
+	marker, _, err := procGlobalAlloc.Call(gmemMoveable|gmemZeroInit, unsafe.Sizeof(uint32(0)))
+	if marker == 0 {
+		return kindError(KindClipboard, "GlobalAlloc", callError(err))
+	}
+	if r, _, err := procSetClipboardData.Call(format, marker); r == 0 {
+		procGlobalFree.Call(marker)
+		return kindError(KindClipboard, "SetClipboardData("+cloudUploadFormat+")", callError(err))
+	}
 	return nil
 }
 
