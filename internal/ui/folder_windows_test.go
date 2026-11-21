@@ -80,6 +80,41 @@ func TestExplorerPathIsTheWindowsFoldersExplorer(t *testing.T) {
 	}
 }
 
+// TestRevealTargetIsAPathTheShellCanParse pins that Reveal in Explorer names
+// a file saved under an extended-length or device folder by its ordinary
+// spelling, which the shell's parser accepts where it refuses the prefixed
+// one, and keeps the prefix when removing it would name another file.
+func TestRevealTargetIsAPathTheShellCanParse(t *testing.T) {
+	for _, test := range []struct{ path, want string }{
+		{`C:\Shots\a.png`, `C:\Shots\a.png`},
+		{`\\server\share\a.png`, `\\server\share\a.png`},
+		{`\\?\C:\Shots\a.png`, `C:\Shots\a.png`},
+		{`\??\C:\Shots\a.png`, `C:\Shots\a.png`},
+		{`\\.\C:\Shots\a.png`, `C:\Shots\a.png`},
+		{`\\?\UNC\server\share\a.png`, `\\server\share\a.png`},
+		{`\??\unc\server\share\a.png`, `\\server\share\a.png`},
+		{`\\.\UNC\server\share\a.png`, `\\server\share\a.png`},
+		{`\\?\C:\Shots.\a.png`, `\\?\C:\Shots.\a.png`},
+		{`\\?\C:\Shots\a.png.`, `\\?\C:\Shots\a.png.`},
+		{`\\?\Volume{00000000-0000-0000-0000-000000000000}\a.png`, `\\?\Volume{00000000-0000-0000-0000-000000000000}\a.png`},
+	} {
+		if got := revealTarget(test.path); got != test.want {
+			t.Errorf("revealTarget(%q) = %q, want %q", test.path, got, test.want)
+		}
+	}
+	explorer, err := explorerPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parse := shell32.NewProc("SHParseDisplayName")
+	var list uintptr
+	result, _, _ := parse.Call(uintptr(unsafe.Pointer(utf16(revealTarget(`\\?\`+explorer)))), 0, uintptr(unsafe.Pointer(&list)), 0, 0)
+	if result != 0 || list == 0 {
+		t.Fatalf("the shell could not parse the target for %q: HRESULT %#x", explorer, uint32(result))
+	}
+	procCoTaskMemFree.Call(list)
+}
+
 // TestShellExecuteInfoMatchesTheWindowsLayout pins shellExecuteInfo to
 // SHELLEXECUTEINFOW's layout: ShellExecuteExW refuses a call whose cbSize it
 // does not know, and reads and writes its fields at their C offsets.

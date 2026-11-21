@@ -77,8 +77,10 @@ var programProcedures = set("CreateProcessA", "CreateProcessW", "CreateProcessAs
 // when the user asks, open File Explorer.
 var reviewedProgramSites = []string{"internal/ui/folder_windows.go ShellExecuteExW"}
 
-// reviewedLibraries are the Windows libraries the application loads, none
-// of which is a network, download, or telemetry API.
+// reviewedLibraries are the Windows libraries the application's own code
+// binds, none of which is a network, download, or telemetry API. The Go
+// runtime and standard library load others for themselves, among them
+// ws2_32.dll, which net brings in.
 var reviewedLibraries = []string{
 	"comdlg32.dll", "dwmapi.dll", "gdi32.dll", "kernel32.dll", "ole32.dll",
 	"oleacc.dll", "shcore.dll", "shell32.dll", "user32.dll",
@@ -444,7 +446,7 @@ func TestApplicationCallsNoNetworkOrProgramFunction(t *testing.T) {
 					t.Errorf("%s: %s starts a program through %s.%s", source.name, function, pkg.Name, value.Sel.Name)
 				}
 			case *ast.CallExpr:
-				if name, ok := boundProcedure(value); ok && programProcedures[name] {
+				if name, ok := boundProcedure(t, source, value); ok && programProcedures[name] {
 					sites[source.name+" "+name] = true
 				}
 			}
@@ -460,22 +462,30 @@ func TestApplicationCallsNoNetworkOrProgramFunction(t *testing.T) {
 	}
 }
 
-// boundProcedure is the Windows function a NewProc call binds, when its name
-// is a constant.
-func boundProcedure(call *ast.CallExpr) (string, bool) {
+// boundProcedure is the Windows function a NewProc call binds. A name that is
+// not a string literal cannot be checked, so it fails the test rather than
+// passing as no binding.
+func boundProcedure(t *testing.T, source sourceFile, call *ast.CallExpr) (string, bool) {
+	t.Helper()
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || selector.Sel.Name != "NewProc" || len(call.Args) == 0 {
 		return "", false
 	}
-	return stringLiteral(call.Args[0])
+	name, ok := stringLiteral(call.Args[0])
+	if !ok {
+		t.Errorf("%s binds a Windows function whose name is not a string literal", source.name)
+	}
+	return name, ok
 }
 
-// TestApplicationLoadsOnlyReviewedLibraries pins that the application loads
-// only the reviewed Windows libraries, each from the system folder: nothing
-// that speaks HTTP, DNS, or sockets, and no library a planted file of the
-// same name could stand in for.
+// TestApplicationLoadsOnlyReviewedLibraries pins that the application's own
+// code loads only the reviewed Windows libraries, each from the system
+// folder: nothing that speaks HTTP, DNS, or sockets, and no library a planted
+// file of the same name could stand in for. It also binds no function by
+// address, which the checks on NewProc could not read.
 func TestApplicationLoadsOnlyReviewedLibraries(t *testing.T) {
 	loaders := set("NewLazyDLL", "LoadDLL", "MustLoadDLL", "LoadLibrary", "LoadLibraryEx")
+	lookups := set("GetProcAddress", "GetProcAddressByOrdinal")
 	found := map[string]bool{}
 	for _, source := range applicationSources(t) {
 		names := importNames(source.file)
@@ -494,6 +504,9 @@ func TestApplicationLoadsOnlyReviewedLibraries(t *testing.T) {
 			}
 			if loaders[selector.Sel.Name] {
 				t.Errorf("%s calls %s, which is not limited to the system folder", source.name, selector.Sel.Name)
+			}
+			if lookups[selector.Sel.Name] {
+				t.Errorf("%s calls %s, which binds a Windows function past the NewProc checks", source.name, selector.Sel.Name)
 			}
 			if selector.Sel.Name != "NewLazySystemDLL" {
 				return
@@ -556,7 +569,7 @@ func TestFileChangesStayAtReviewedSites(t *testing.T) {
 					t.Errorf("%s: %s uses the system's temporary folder", source.name, function)
 				}
 			case *ast.CallExpr:
-				if name, ok := boundProcedure(value); ok && rawFileProcedures[name] {
+				if name, ok := boundProcedure(t, source, value); ok && rawFileProcedures[name] {
 					t.Errorf("%s binds %s directly", source.name, name)
 				}
 				selector, ok := value.Fun.(*ast.SelectorExpr)
@@ -583,10 +596,12 @@ func TestFileChangesStayAtReviewedSites(t *testing.T) {
 	}
 }
 
-// TestDiagnosticEventsAreFixed pins SET-007: every event the application
-// logs has a constant operation and result code from the catalog, so no
-// path, file name, or image or clipboard data can reach the log, and the
-// catalog lists no event that is gone.
+// TestDiagnosticEventsAreFixed pins SET-007: every call to the logger passes
+// a diagnostics.Event literal with a constant operation and result code from
+// the catalog, directly or through the shell's logEvent, so no path, file
+// name, or image or clipboard data can reach the log, and the catalog lists
+// no event that is gone. An event built any other way, or the logger's method
+// taken as a value, fails the test.
 func TestDiagnosticEventsAreFixed(t *testing.T) {
 	found := map[string]bool{}
 	record := func(source sourceFile, function string, operation, code ast.Expr) {
@@ -603,37 +618,44 @@ func TestDiagnosticEventsAreFixed(t *testing.T) {
 			continue
 		}
 		names := importNames(source.file)
+		// A call is visited before the selector it calls, so a selector not
+		// marked here is the method taken as a value.
+		called := map[*ast.SelectorExpr]bool{}
 		inspectFunctions(source.file, func(function string, node ast.Node) {
 			switch value := node.(type) {
-			case *ast.CompositeLit:
-				selector, ok := value.Type.(*ast.SelectorExpr)
-				if !ok || selector.Sel.Name != "Event" {
-					return
-				}
-				if pkg, ok := selector.X.(*ast.Ident); !ok || !strings.HasSuffix(names[pkg.Name], "/internal/diagnostics") {
-					return
-				}
-				// logEvent is the shell's wrapper, whose callers are checked below.
-				if strings.HasSuffix(function, ".logEvent") {
-					return
-				}
-				var operation, code ast.Expr
-				for _, element := range value.Elts {
-					if pair, ok := element.(*ast.KeyValueExpr); ok {
-						if key, ok := pair.Key.(*ast.Ident); ok {
-							switch key.Name {
-							case "Operation":
-								operation = pair.Value
-							case "Code":
-								code = pair.Value
-							}
-						}
-					}
-				}
-				record(source, function, operation, code)
 			case *ast.CallExpr:
-				if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "logEvent" && len(value.Args) == 3 {
+				selector, ok := value.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return
+				}
+				switch selector.Sel.Name {
+				case "Record":
+					called[selector] = true
+					// logEvent is the shell's wrapper, whose callers are checked below.
+					if function == "nativeShell.logEvent" {
+						return
+					}
+					if len(value.Args) != 1 {
+						t.Errorf("%s: %s calls Record with %d arguments", source.name, function, len(value.Args))
+						return
+					}
+					operation, code, ok := eventLiteral(value.Args[0], names)
+					if !ok {
+						t.Errorf("%s: %s logs an event that is not a diagnostics.Event literal", source.name, function)
+						return
+					}
+					record(source, function, operation, code)
+				case "logEvent":
+					called[selector] = true
+					if len(value.Args) != 3 {
+						t.Errorf("%s: %s calls logEvent with %d arguments", source.name, function, len(value.Args))
+						return
+					}
 					record(source, function, value.Args[1], value.Args[2])
+				}
+			case *ast.SelectorExpr:
+				if (value.Sel.Name == "Record" || value.Sel.Name == "logEvent") && !called[value] {
+					t.Errorf("%s: %s uses %s other than by calling it", source.name, function, value.Sel.Name)
 				}
 			}
 		})
@@ -646,6 +668,35 @@ func TestDiagnosticEventsAreFixed(t *testing.T) {
 	if !slices.Equal(events, reviewedEvents) {
 		t.Errorf("the application logs %v, the catalog lists %v", events, reviewedEvents)
 	}
+}
+
+// eventLiteral is the Operation and Code of an expression that is a
+// diagnostics.Event literal.
+func eventLiteral(expression ast.Expr, names map[string]string) (operation, code ast.Expr, ok bool) {
+	literal, ok := expression.(*ast.CompositeLit)
+	if !ok {
+		return nil, nil, false
+	}
+	selector, ok := literal.Type.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "Event" {
+		return nil, nil, false
+	}
+	if pkg, ok := selector.X.(*ast.Ident); !ok || !strings.HasSuffix(names[pkg.Name], "/internal/diagnostics") {
+		return nil, nil, false
+	}
+	for _, element := range literal.Elts {
+		if pair, ok := element.(*ast.KeyValueExpr); ok {
+			if key, ok := pair.Key.(*ast.Ident); ok {
+				switch key.Name {
+				case "Operation":
+					operation = pair.Value
+				case "Code":
+					code = pair.Value
+				}
+			}
+		}
+	}
+	return operation, code, true
 }
 
 func stringLiteral(expression ast.Expr) (string, bool) {

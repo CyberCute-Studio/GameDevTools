@@ -12,8 +12,8 @@
 // accepted must keep its meaning: read as relative it would fail the whole
 // file's validation, and joined with a file name it would lead somewhere
 // else. VolumeName, IsAbs, Clean, Dir, Base, and Join therefore keep the
-// reading of Go 1.26 and earlier, and are package filepath's own for every
-// path the two readings agree on.
+// reading of Go 1.26 and earlier. Clean and Base are package filepath's own
+// for every path the two readings agree on.
 package pathform
 
 import (
@@ -128,17 +128,24 @@ func Clean(path string) string {
 	return path + "."
 }
 
-// Dir is filepath.Dir: a share's parent under \\?\UNC is its server, and the
-// parent of a path that is only a volume name is that name.
+// Dir is Go 1.26's filepath.Dir: the volume name and the cleaned part of the
+// rest up to its last separator. A share's parent under \\?\UNC is its
+// server, and the parent of a path that is only a volume name is that name.
+// It is written out rather than handed to package filepath for a path both
+// read alike, because the part it cleans can be read differently even then:
+// after \\x\y, a rest of //../ is itself a path with a volume name to Go 1.26.
 func Dir(path string) string {
-	volume, rest, differs := split(path)
-	switch {
-	case !differs:
-		return filepath.Dir(path)
-	case rest == "":
+	size := volumeLen(path)
+	volume := filepath.FromSlash(path[:size])
+	index := len(path) - 1
+	for index >= size && !os.IsPathSeparator(path[index]) {
+		index--
+	}
+	dir := Clean(path[size : index+1])
+	if dir == "." && size > 2 {
 		return volume
 	}
-	return volume + filepath.Dir(standIn + rest)[len(standIn):]
+	return volume + dir
 }
 
 // Base is filepath.Base: the last name after the volume name, which under

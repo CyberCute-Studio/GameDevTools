@@ -97,6 +97,9 @@ func TestPathsReadAlikeOnEveryGoRelease(t *testing.T) {
 		{`\\server\..\y.png`, `\\server\..\`},
 		{`\\server\..`, `\\server\..`},
 		{`\??\..\x\y.png`, `\??\..\x`},
+		{`//x/x//../`, `\\x\x\\..\`},
+		{`\\x\y\\z\w`, `\\x\y\\z\`},
+		{`C:\\x\y`, `C:\\x\`},
 	} {
 		if got := Dir(test.path); got != test.want {
 			t.Errorf("Dir(%q) = %q, want %q", test.path, got, test.want)
@@ -106,6 +109,7 @@ func TestPathsReadAlikeOnEveryGoRelease(t *testing.T) {
 		{`\\?\UNC\server\share\x.png`, `x.png`},
 		{`\\?\UNC\server\share`, `share`},
 		{`\??\UNC\server\share`, `share`},
+		{`//?/UNC/server/share`, `share`},
 		{`C:\a\b.png`, `b.png`},
 		{`\\server\..\x\y.png`, `y.png`},
 		{`\\server\..\x\`, `x`},

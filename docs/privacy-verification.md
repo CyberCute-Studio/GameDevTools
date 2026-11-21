@@ -18,7 +18,7 @@ go test -count=1 ./...
 go test -count=1 -v ./internal/audit
 go test -count=1 -v -run 'TestCoreWorkflowsRunOffline' ./internal/app
 go test -count=1 -v -run 'TestSetClipboardImageOptsOutOfCloudUploadOnly' ./internal/screenshot/output
-go test -count=1 -v -run 'TestExplorerPath' ./internal/ui
+go test -count=1 -v -run 'TestExplorerPath|TestRevealTarget' ./internal/ui
 ```
 
 The offline test opens the real main window, captures the real screen, and replaces the clipboard, so run it in an interactive desktop session, as the module suites are run. It needs no administrator rights and leaves the machine's network untouched.
@@ -68,10 +68,10 @@ The application has no network code, account, sign-in, activation, update check,
 | `net` is imported only by `golang.org/x/sys/windows`, for a few types | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
 | The built executable holds no function, in `net`, `syscall`, or `x/sys/windows`, that opens, connects, or listens on a socket or resolves a name | `audit.TestExecutableContainsNoNetworkCode` | Pass |
 | No application code calls a socket or name-resolution function, or starts a program through `os`, `syscall`, or `x/sys/windows`. The only program it starts is File Explorer, through one reviewed `ShellExecuteExW` binding, for Open Folder and Reveal in Explorer when the user asks | `audit.TestApplicationCallsNoNetworkOrProgramFunction` | Pass |
-| Only nine reviewed Windows libraries are loaded, each from the system folder, none of them a network API | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
+| The application's own code loads only nine reviewed Windows libraries, each from the system folder, none of them a network API, and binds no function by address | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
 | No string in the application is a URL | `audit.TestApplicationNamesNoNetworkEndpoint` | Pass |
 
-The nine libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, and `user32`. Every Go program on Windows also links the runtime's Winsock start-up for its I/O poller, which opens no socket.
+The nine libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, and `user32`. The process also holds libraries the Go runtime and standard library load for themselves, which this check does not list. Among them is the Winsock library `ws2_32.dll`, loaded because `golang.org/x/sys/windows` imports `net`; the checks above show that nothing in the application can open a socket through it.
 
 ### What Windows does with a copied screenshot
 
@@ -79,7 +79,7 @@ Windows can sync the clipboard to a user's other devices through their Microsoft
 
 ## Filesystem access review
 
-`audit.TestFileChangesStayAtReviewedSites` checks every use of the functions in `os`, `io/ioutil`, `syscall`, and `x/sys/windows` that can create, change, move, or remove a file, and fails on any site not reviewed here. It also fails if code binds a file-changing Windows function by name around that list, or uses the system's temporary folder.
+`audit.TestFileChangesStayAtReviewedSites` checks every use of the functions in `os`, `io/ioutil`, `syscall`, and `x/sys/windows` that can create, change, move, or remove a file, and fails on any site not reviewed here. It also fails if code binds a file-changing Windows function by name around that list, binds any Windows function by a name it cannot read, or uses the system's temporary folder.
 
 | Location | What is written | Code |
 |---|---|---|
@@ -94,7 +94,7 @@ The file picker asks Windows not to add picked files to Recent Items (`OFN_DONTA
 
 ## Log privacy review
 
-Every diagnostic event is a UTC timestamp, a severity, a fixed operation, and a fixed result code. The logging API has no field that could hold a message, path, file name, or image or clipboard data, and it rejects an operation or code that is not short lowercase metadata. `audit.TestDiagnosticEventsAreFixed` fails on an event whose operation or code is not a constant, or that is not in this catalog:
+Every diagnostic event is a UTC timestamp, a severity, a fixed operation, and a fixed result code. The logging API has no field that could hold a message, path, file name, or image or clipboard data, and it rejects an operation or code that is not short lowercase metadata. `audit.TestDiagnosticEventsAreFixed` fails unless every call to the logger passes an event literal whose operation and code are constants in this catalog:
 
 | Operation | Codes |
 |---|---|
@@ -134,7 +134,9 @@ Before this item, the release was built with Go 1.24.0, a release line Go no lon
 | The release was built with Go 1.24.0, which no longer receives security fixes. | `go.mod` pins the go1.27.4 toolchain, and a CI step fails if the release executable was built with any other. |
 | `x/sys` v0.38.0 carried GO-2026-5024, in a function the application does not link. | Moved to `x/sys` v0.47.0 and `go 1.25.0`. |
 | Reveal in Explorer ran `explorer.exe` by its bare name, which Windows looks up through a search path that can include the application's and the current folder. | It now runs Explorer by its full path in the Windows folder. |
-| Moving to Go 1.27 broke the output-folder rules of both modules. Go 1.27's `path/filepath` takes the server and share of a `\\?\UNC` or `\??\UNC` path into its volume name, so every share was refused as naming only a volume, and `Clean` appended a period to a `\??\UNC` share's root, which would have named another folder. It also calls a path with `..` where a server or share belongs, such as `\\server\..\x`, relative, so a stored folder of either kind would have failed the settings file's validation and reset every module, and `Join` would have moved such a folder to the current drive. | Both modules read output folders through `internal/pathform`, whose `VolumeName`, `IsAbs`, `Clean`, `Dir`, `Base`, and `Join` give the same answer on Go 1.26 and 1.27 (`pathform.TestPathsReadAlikeOnEveryGoRelease`). |
+| Reveal in Explorer passed a file saved under an extended-length or device output folder to Explorer as written. The shell's parser refuses that spelling, so Explorer would not select the file. | It names the file by its ordinary drive or UNC spelling whenever that spelling reaches the same file. |
+| The clipboard calls for a copied screenshot could move between OS threads, which could fail the copy and leave the clipboard open, so no other application could copy or paste until GameDevTools exited. | The copy stays on one OS thread from opening the clipboard through closing it. |
+| Moving to Go 1.27 broke the output-folder rules of both modules. Go 1.27's `path/filepath` takes the server and share of a `\\?\UNC` or `\??\UNC` path into its volume name, so every share was refused as naming only a volume, and `Clean` appended a period to a `\??\UNC` share's root, which would have named another folder. It also calls a path with `..` where a server or share belongs, such as `\\server\..\x`, relative, so a stored folder of either kind would have failed the settings file's validation and reset every module, and `Join` would have moved such a folder to the current drive. | Both modules read output folders, and the Image Resizer its source names, through `internal/pathform`, whose `VolumeName`, `IsAbs`, `Clean`, `Dir`, `Base`, and `Join` give the same answer on Go 1.26 and 1.27 (`pathform.TestPathsReadAlikeOnEveryGoRelease`). |
 | A clipboard marker that could not be prepared left the clipboard already emptied, losing what the user had copied. | The marker is prepared before the clipboard is opened. |
 
 The logs, the file writes, and the dependency set needed no change.

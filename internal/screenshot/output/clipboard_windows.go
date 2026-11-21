@@ -5,6 +5,7 @@ package output
 import (
 	"errors"
 	"image"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -76,6 +77,11 @@ type bitmapInfoHeader struct {
 // KindClipboard failure. Retrying forever is not an option: SCR-060
 // requires the save destination to proceed even when the clipboard stays
 // unavailable.
+//
+// An open clipboard belongs to the OS thread that opened it: only that thread
+// can change or close it, and until it does, no other application can copy or
+// paste. The goroutine therefore stays on one thread from the open through
+// the close.
 func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
@@ -132,6 +138,9 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	}
 	procRtlMoveMemory.Call(destination+unsafe.Sizeof(header), uintptr(unsafe.Pointer(&pixels[0])), uintptr(len(pixels)))
 	procGlobalUnlock.Call(allocation)
+	// Deferred before CloseClipboard, so it runs after it.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	var opened bool
 	for attempt := 0; attempt < clipboardOpenAttempts; attempt++ {
 		r, _, _ := procOpenClipboard.Call(owner)

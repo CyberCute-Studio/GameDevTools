@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -139,13 +140,44 @@ func OpenFolder(folder string) error {
 // own after an operation completes. Explorer is named by its full path, as a
 // bare name would be looked up through a search path that can include the
 // application's and the current folder, where another explorer.exe could be
-// waiting.
+// waiting. The file is named as revealTarget spells it.
 func RevealInFolder(path string) error {
 	explorer, err := explorerPath()
 	if err != nil {
 		return err
 	}
-	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+path+`"`))
+	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+revealTarget(path)+`"`))
+}
+
+// revealTarget is the path's ordinary drive or UNC spelling when it has one
+// that names the same file, since the shell's parser refuses a path through
+// \\?\, \??\, or \\.\, so Explorer would open a default folder instead. A
+// path Windows would resolve differently without the prefix, such as one
+// through a name that ends in a period, and a path with no ordinary spelling,
+// such as one through a volume GUID, are returned as they are. Resolving the
+// spelling reads no disk or network.
+func revealTarget(path string) string {
+	if len(path) < 4 {
+		return path
+	}
+	switch path[:4] {
+	case `\\?\`, `\??\`, `\\.\`:
+	default:
+		return path
+	}
+	rest, ordinary := path[4:], ""
+	switch {
+	case len(rest) > 4 && strings.EqualFold(rest[:4], `UNC\`):
+		ordinary = `\\` + rest[4:]
+	case len(rest) > 3 && rest[1] == ':' && rest[2] == '\\':
+		ordinary = rest
+	default:
+		return path
+	}
+	if resolved, err := windows.FullPath(ordinary); err != nil || resolved != ordinary {
+		return path
+	}
+	return ordinary
 }
 
 // explorerPath returns File Explorer's full path in the Windows folder.

@@ -91,6 +91,8 @@ func clipboardSequence() uint32 {
 // one open, so concurrent clipboard users get a single narrow window to
 // disturb the verification instead of one per pixel.
 func clipboardImage() (*image.RGBA, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if err := openClipboardWithRetry(0); err != nil {
 		return nil, fmt.Errorf("OpenClipboard: %w", err)
 	}
@@ -238,6 +240,8 @@ func clipboardUploadMarkers() (hasImage, marked bool, value uint32, historyForma
 	if err != nil {
 		return false, false, 0, false, err
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if err := openClipboardWithRetry(0); err != nil {
 		return false, false, 0, false, err
 	}
