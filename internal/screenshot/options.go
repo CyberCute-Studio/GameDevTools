@@ -188,6 +188,17 @@ func (m *OptionsManager) SetOutputFolder(folder string) error {
 	return m.save()
 }
 
+// FolderWarning returns the startup warning about a stored output folder that
+// every capture would refuse, or "" when there is none. Such a folder stays
+// selected, as Validate accepts it, so the user learns before the first
+// capture that its file would not be saved.
+func (m *OptionsManager) FolderWarning() string {
+	if folder := m.options.OutputFolder; folder != "" && !pathform.NamesOneFolder(folder) {
+		return fmt.Sprintf(ui.OutputFolderStoredRefused, folder)
+	}
+	return ""
+}
+
 func (m *OptionsManager) SetShortcut(shortcut Shortcut) error {
 	updated := m.options
 	updated.Shortcut = shortcut

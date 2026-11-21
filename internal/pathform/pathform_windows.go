@@ -19,6 +19,7 @@ package pathform
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -186,17 +187,67 @@ func Join(folder string, names ...string) string {
 	return Clean(joined)
 }
 
+// deviceNames are the names Windows reserves for devices, as the shell's
+// parser refuses them. A name with an extension, such as con.d, is not one
+// here: only Windows 10 reads it as a device, and only as a path's last name,
+// which NamesOneFolder compares with Windows' own resolution.
+var deviceNames = []string{
+	"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+	"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "COM¹", "COM²", "COM³",
+	"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³",
+}
+
+// HasDeviceName reports whether any name after the path's volume name is one
+// Windows reserves for a device, in any letter case. Windows can keep such a
+// name for a folder a longer path leads through, but File Explorer's parser
+// refuses a path through one wherever it falls.
+func HasDeviceName(path string) bool {
+	separator := func(character rune) bool { return character == '\\' || character == '/' }
+	for name := range strings.FieldsFuncSeq(path[volumeLen(path):], separator) {
+		if slices.ContainsFunc(deviceNames, func(device string) bool { return strings.EqualFold(name, device) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdsStream reports whether a cleaned path has a colon after its volume
+// name, which NTFS reads as naming a stream of the file or folder before it,
+// verbatim paths included, or in the server or share name of a share's volume
+// name, which neither name may hold.
+func holdsStream(clean string) bool {
+	volume := VolumeName(clean)
+	if strings.Contains(clean[len(volume):], ":") {
+		return true
+	}
+	switch {
+	case hasPrefixFold(volume, `\\.\UNC`):
+	case strings.HasPrefix(volume, `\\.\`), strings.HasPrefix(volume, `\\?\`), !strings.HasPrefix(volume, `\\`):
+		return false
+	}
+	return strings.Contains(volume, ":")
+}
+
 // NamesOneFolder reports whether Windows reads a folder's path as exactly the
 // folder its cleaned form names, so that a save can create it, write into it,
 // and name a file in it without any of those reaching another place. Windows
 // drops trailing spaces and periods from some names by where they fall in a
-// path, reads names such as NUL as devices, and resolves a ".." after
-// \\.\UNC\server\share differently from Clean, so a path that depends on any
-// of these is refused, as the Image Resizer's output folder rules refuse it.
-// A path marked \\?\ or \??\ is one Windows takes verbatim, so it names one
-// folder unless Clean would rewrite it.
+// path, reads names such as NUL as devices, reads a colon after the volume
+// name as a file stream, and resolves a ".." after \\.\UNC\server\share
+// differently from Clean, so a path that depends on any of these is refused.
+//
+// This is the Image Resizer's output folder rule made stricter in one way:
+// that rule keeps a name Windows keeps where it falls, such as "Photos " or
+// COM1 before another name, and this one refuses every name that ends in a
+// space or a period or is reserved for a device, wherever it falls. A path
+// marked \\?\ or \??\ is one Windows takes verbatim, so it names one folder
+// unless it holds a stream or Clean would rewrite it. A path through a device
+// other than a drive, such as \\.\pipe\x, is not judged here.
 func NamesOneFolder(folder string) bool {
 	clean := Clean(folder)
+	if holdsStream(clean) {
+		return false
+	}
 	if strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
 		return strings.TrimRight(folder, `\`) == strings.TrimRight(clean, `\`)
 	}
@@ -204,6 +255,9 @@ func NamesOneFolder(folder string) bool {
 		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
 			return false
 		}
+	}
+	if HasDeviceName(clean) {
+		return false
 	}
 	written, err := windows.FullPath(folder)
 	if err != nil {

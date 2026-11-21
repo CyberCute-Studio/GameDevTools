@@ -105,6 +105,9 @@ func TestShellPathIsWhatTheShellReads(t *testing.T) {
 		{volume, volume},
 		{`\??\Volume{00000000-0000-0000-0000-000000000000}\a.png`, volume},
 		{`\\.\Volume{00000000-0000-0000-0000-000000000000}\a.png`, volume},
+		{`C:\t\COM10\a.png`, `C:\t\COM10\a.png`},
+		{`C:\t\con.d\a.png`, `C:\t\con.d\a.png`},
+		{`\\aux\share\a.png`, `\\aux\share\a.png`},
 	} {
 		if got, err := shellPath(test.path); err != nil || got != test.want {
 			t.Errorf("shellPath(%q) = %q, %v, want %q", test.path, got, err, test.want)
@@ -127,6 +130,12 @@ func TestShellPathIsWhatTheShellReads(t *testing.T) {
 		`\\?\Volume{00000000-0000-0000-0000-000000000000}\v2..\a.png`,
 		`\\?\GLOBALROOT\Device\HarddiskVolume1\a.png`,
 		`\\.\pipe\a`,
+		`C:\t\COM1\a.png`,
+		`C:\t\con\a.png`,
+		`C:\t\CONOUT$\a.png`,
+		`\\?\C:\t\AUX\a.png`,
+		`\\server\share\LPT1\a.png`,
+		`\\?\Volume{00000000-0000-0000-0000-000000000000}\COM1\a.png`,
 	} {
 		if got, err := shellPath(path); err == nil {
 			t.Errorf("shellPath(%q) = %q, want an error", path, got)

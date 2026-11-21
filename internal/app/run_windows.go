@@ -192,13 +192,17 @@ func (state *session) startupWarnings() startupWarnings {
 
 // folderWarnings returns the warnings the output folders give as the
 // options now hold them: the Screenshot default folder that could not be
-// resolved while no folder is chosen, and the Image Resizer's folder
-// warning, such as a stored folder the default one replaced
-// (imageresizer.OptionsManager.FolderWarning).
+// resolved while no folder is chosen, a stored Screenshot folder every
+// capture would refuse (screenshot.OptionsManager.FolderWarning), and the
+// Image Resizer's folder warning, such as a stored folder the default one
+// replaced (imageresizer.OptionsManager.FolderWarning).
 func (state *session) folderWarnings() []string {
 	var warnings []string
 	if state.folders.screenshotErr != nil && state.capture.Options().OutputFolder == "" {
 		warnings = append(warnings, fmt.Sprintf(ui.OutputFolderUnavailable, state.folders.screenshotErr))
+	}
+	if warning := state.capture.FolderWarning(); warning != "" {
+		warnings = append(warnings, warning)
 	}
 	if warning := state.resize.FolderWarning(state.folders.resizerErr); warning != "" {
 		warnings = append(warnings, warning)

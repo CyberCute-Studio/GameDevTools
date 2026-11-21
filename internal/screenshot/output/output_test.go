@@ -241,8 +241,9 @@ func TestSaveRejectsFolderBlockedByFile(t *testing.T) {
 
 // TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace pins NFR-032 for a
 // stored folder: a path through a name ending in a space or a period, which
-// Windows may shorten by where it falls, is refused before anything is
-// created, and a real folder of that name and its neighbor receive nothing.
+// Windows may shorten by where it falls, through a reserved device name, or
+// naming a file stream is refused before anything is created, and a real
+// folder of that name and its neighbor receive nothing.
 func TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows reads a name differently by where it falls in a path")
@@ -256,6 +257,7 @@ func TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace(t *testing.T) {
 	}
 	for _, rest := range []string{
 		`\x `, `\x .`, `\x .\`, `\x .\Shots`, `\v2..`, `\v2..\Shots`, `\Missing `, `\Missing.`, `\Photos \Shots`,
+		`\COM1\Shots`, `\CON\Shots`, `\NUL\Shots`, `\Shots::$INDEX_ALLOCATION`, `\x:y\Shots`,
 	} {
 		_, err := save(sampleImage(2, 2), optionsFor(root+rest, screenshot.FormatPNG), time.Now())
 		assertKind(t, err, KindFolder)

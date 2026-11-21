@@ -12,6 +12,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 )
 
 const (
@@ -183,11 +185,13 @@ var (
 //
 // The shell's parser drops trailing spaces and periods from every name in a
 // path, even under \\?\, while Windows keeps them in a name a longer path
-// leads through, so C:\t\v2..\a.png would select C:\t\v2\a.png. Such a path,
-// one that the ordinary spelling would resolve to something else, as with a
-// reserved name such as NUL, and one through any other device are refused
-// with an error, since Explorer would otherwise show the wrong place without
-// reporting a failure. Resolving the spelling reads no disk or network.
+// leads through, so C:\t\v2..\a.png would select C:\t\v2\a.png. It also
+// refuses a reserved name such as COM1 wherever it falls, though Windows keeps
+// one in a name a longer path leads through. Such a path, one that the
+// ordinary spelling would resolve to something else, and one through any
+// other device are refused with an error, since Explorer would otherwise show
+// the wrong place without reporting a failure. Resolving the spelling reads
+// no disk or network.
 func shellPath(path string) (string, error) {
 	full := path
 	switch {
@@ -230,6 +234,9 @@ func shellPath(path string) (string, error) {
 		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
 			return "", errShellReadsAnotherName
 		}
+	}
+	if pathform.HasDeviceName(target) {
+		return "", errShellReadsAnotherName
 	}
 	return target, nil
 }
