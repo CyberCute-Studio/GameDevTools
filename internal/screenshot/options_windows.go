@@ -5,7 +5,7 @@ package screenshot
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/windows"
 
@@ -40,7 +40,7 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 	}
 	profile, homeErr := home()
 	if homeErr == nil {
-		folder, err := defaultFolderIn(filepath.Join(profile, "Pictures"))
+		folder, err := defaultFolderIn(pathform.Join(profile, "Pictures"))
 		if err == nil {
 			return folder, nil
 		}
@@ -61,8 +61,18 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 // why a capture could not use it. The Pictures folder's path is first resolved
 // as Windows resolves it, so one that ends in a period or a space, which
 // Windows drops, gives a folder in the Pictures folder Windows opens for it.
+// A path that is not absolute is refused rather than resolved, as it would
+// lead under whatever folder the application was started from, and so is one
+// Windows resolves to a device, as it does a last name such as NUL.
 func defaultFolderIn(pictures string) (string, error) {
+	named := pathform.Join(pictures, "GameDevTools", "Screenshots")
+	if !pathform.IsAbs(pictures) {
+		return "", fmt.Errorf("%s: %s", named, ui.OutputFolderNotAbsoluteReason)
+	}
 	if full, err := windows.FullPath(pictures); err == nil {
+		if strings.HasPrefix(pathform.VolumeName(full), `\\.\`) && !strings.HasPrefix(pathform.VolumeName(pictures), `\\.\`) {
+			return "", fmt.Errorf("%s: %s", named, ui.OutputFolderNameReason)
+		}
 		pictures = full
 	}
 	folder := pathform.Join(pictures, "GameDevTools", "Screenshots")

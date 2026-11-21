@@ -73,7 +73,7 @@ func runNative() error {
 		return err
 	}
 	startup := state.startupWarnings()
-	warned := startup.text() != ""
+	warned := state.recordsRecovery(startup)
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
 		startup.other = append(startup.other, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
@@ -188,6 +188,16 @@ func (state *session) startupWarnings() startupWarnings {
 		}
 	}
 	return warnings
+}
+
+// recordsRecovery reports whether the startup warnings call for the
+// settings.load event in the diagnostic log. A saved Screenshot folder that
+// captures refuse is warned about at every start until another is chosen,
+// though the settings file is sound and nothing was recovered, so that
+// warning alone records no event.
+func (state *session) recordsRecovery(startup startupWarnings) bool {
+	text := startup.text()
+	return text != "" && text != state.capture.FolderWarning()
 }
 
 // folderWarnings returns the warnings the output folders give as the

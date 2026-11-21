@@ -72,16 +72,21 @@ type securityCapabilities struct {
 	reserved        uint32
 }
 
-// holdOfflineLock makes a concurrent run of this test, from another worktree
-// or terminal, wait for this one: they share one AppContainer profile, which
-// each run removes when it ends. Windows releases the mutex of a run that is
-// killed. A mutex belongs to the thread that took it, so the test stays on
-// that thread until the lock is released.
+// holdOfflineLock makes a concurrent run of this test by the same user, from
+// another worktree, terminal, or logon session, wait for this one: they share
+// one AppContainer profile, which is per user and which each run removes when
+// it ends, so the mutex is global and named for the user. Windows releases
+// the mutex of a run that is killed. A mutex belongs to the thread that took
+// it, so the test stays on that thread until the lock is released.
 func holdOfflineLock(t *testing.T) {
 	t.Helper()
 	runtime.LockOSThread()
 	t.Cleanup(runtime.UnlockOSThread)
-	name, err := windows.UTF16PtrFromString(`Local\` + offlineContainerName)
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(`Global\` + offlineContainerName + "." + user.User.Sid.String())
 	if err != nil {
 		t.Fatal(err)
 	}
