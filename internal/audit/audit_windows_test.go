@@ -86,6 +86,37 @@ var reviewedLibraries = []string{
 	"oleacc.dll", "shcore.dll", "shell32.dll", "user32.dll",
 }
 
+// reviewedProcedures is every Windows function the application's own code
+// binds by name, sorted. None of them changes a file, and only
+// ShellExecuteExW starts a program. Any other binding fails
+// TestApplicationBindsOnlyReviewedProcedures until it is reviewed here, so
+// the lists of functions that must not be bound do not have to name every
+// one Windows has.
+var reviewedProcedures = []string{
+	"BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance", "CoInitializeEx",
+	"CoTaskMemFree", "CoUninitialize", "CommDlgExtendedError", "CreateCompatibleDC", "CreateDIBSection",
+	"CreateFontIndirectW", "CreateMutexW", "CreateWindowExW", "DefWindowProcW", "DeleteDC", "DeleteObject",
+	"DestroyWindow", "DispatchMessageW", "DragAcceptFiles", "DragFinish", "DragQueryFileW", "DrawTextW",
+	"DwmFlush", "EmptyClipboard", "EnableWindow", "EnumChildWindows", "EnumDisplayDevicesW",
+	"EnumDisplayMonitors", "FindWindowW", "GetAncestor", "GetClientRect", "GetCursorPos", "GetDC",
+	"GetDpiForMonitor", "GetDpiForWindow", "GetFocus", "GetKeyState", "GetMessageW", "GetModuleHandleW",
+	"GetMonitorInfoW", "GetNextDlgTabItem", "GetOpenFileNameW", "GetScrollInfo", "GetSysColor",
+	"GetSysColorBrush", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW",
+	"GlobalAlloc", "GlobalFree", "GlobalLock", "GlobalUnlock", "InvalidateRect", "IsChild",
+	"IsDialogMessageW", "IsIconic", "IsWindow", "IsWindowEnabled", "IsWindowVisible", "IsZoomed", "KillTimer",
+	"LoadCursorW", "MapWindowPoints", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
+	"OpenClipboard", "PostMessageW", "PostQuitMessage", "RegisterClassExW", "RegisterClipboardFormatW",
+	"RegisterHotKey", "ReleaseCapture", "ReleaseDC", "RtlMoveMemory", "SHBrowseForFolderW",
+	"SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkMode", "SetCapture", "SetClipboardData",
+	"SetCursor", "SetFocus", "SetForegroundWindow", "SetProcessDpiAwarenessContext", "SetScrollInfo",
+	"SetTextColor", "SetTimer", "SetWindowLongPtrW", "SetWindowPos", "SetWindowTextW", "ShellExecuteExW",
+	"ShowWindow", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
+}
+
+// auditedImports are the packages the source checks recognize by their
+// qualified names, which a dot import would remove.
+var auditedImports = set("os", "io/ioutil", "syscall", "golang.org/x/sys/windows")
+
 // fileMutators are the functions through which the application could
 // create, change, move, or remove a file.
 var fileMutators = map[string]map[string]bool{
@@ -105,8 +136,10 @@ var fileMutators = map[string]map[string]bool{
 		"NtSetEaFile"),
 }
 
-// rawFileProcedures are Windows functions that change files, which the
-// application must not bind by name past the checks on fileMutators.
+// rawFileProcedures are common Windows functions that change files, which the
+// application must not bind by name past the checks on fileMutators. The list
+// need not be complete: reviewedProcedures admits no binding that was not
+// reviewed.
 var rawFileProcedures = set("CreateFileW", "CreateFileA", "WriteFile", "DeleteFileW", "DeleteFileA",
 	"MoveFileW", "MoveFileA", "MoveFileExW", "MoveFileExA", "CopyFileW", "CopyFileA", "CopyFileExW",
 	"ReplaceFileW", "CreateDirectoryW", "CreateDirectoryA", "RemoveDirectoryW", "CreateHardLinkW",
@@ -197,6 +230,9 @@ type listedModule struct {
 	Version string
 	Main    bool
 	Dir     string
+	// Replace is set when go.mod replaces the module with other code, which
+	// still reports the original path and version.
+	Replace *listedModule
 }
 
 type listedPackage struct {
@@ -329,8 +365,9 @@ func inspectFunctions(file *ast.File, visit func(function string, node ast.Node)
 }
 
 // TestDependenciesAreInventoried pins NFR-033 and TECH-007: the application
-// links only the modules in the inventory, at the reviewed version and with
-// the reviewed license text, and builds without cgo.
+// links only the modules in the inventory, at the reviewed version, not
+// replaced with other code, and with the reviewed license text, and builds
+// without cgo.
 func TestDependenciesAreInventoried(t *testing.T) {
 	linked := map[string]listedModule{}
 	for _, item := range applicationPackages(t) {
@@ -356,6 +393,9 @@ func TestDependenciesAreInventoried(t *testing.T) {
 		}
 		if module.Version != review.version {
 			t.Errorf("module %s is at %s, but %s was the version reviewed", path, module.Version, review.version)
+		}
+		if module.Replace != nil {
+			t.Errorf("module %s is replaced by %s %s, which was not reviewed", path, module.Replace.Path, module.Replace.Version)
 		}
 		license, err := os.ReadFile(filepath.Join(module.Dir, "LICENSE"))
 		if err != nil {
@@ -482,42 +522,54 @@ func boundProcedure(t *testing.T, source sourceFile, call *ast.CallExpr) (string
 // code loads only the reviewed Windows libraries, each from the system
 // folder: nothing that speaks HTTP, DNS, or sockets, and no library a planted
 // file of the same name could stand in for. It also binds no function by
-// address, which the checks on NewProc could not read.
+// address, which the checks on NewProc could not read, and builds no library
+// handle other than by calling NewLazySystemDLL with a constant name: naming
+// a loader, a lookup, or a DLL type in any other way fails the test, whether
+// the name is called, taken as a value, or used to build a literal.
 func TestApplicationLoadsOnlyReviewedLibraries(t *testing.T) {
 	loaders := set("NewLazyDLL", "LoadDLL", "MustLoadDLL", "LoadLibrary", "LoadLibraryEx")
 	lookups := set("GetProcAddress", "GetProcAddressByOrdinal")
+	handles := set("LazyDLL", "DLL")
 	found := map[string]bool{}
 	for _, source := range applicationSources(t) {
 		names := importNames(source.file)
-		inspectFunctions(source.file, func(_ string, node ast.Node) {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return
-			}
+		loaderPackage := func(selector *ast.SelectorExpr) bool {
 			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || (names[pkg.Name] != "golang.org/x/sys/windows" && names[pkg.Name] != "syscall") {
-				return
+			return ok && (names[pkg.Name] == "golang.org/x/sys/windows" || names[pkg.Name] == "syscall")
+		}
+		// A call is visited before the selector it calls, so a loader's
+		// selector not marked here is the loader taken as a value.
+		called := map[*ast.SelectorExpr]bool{}
+		inspectFunctions(source.file, func(_ string, node ast.Node) {
+			switch value := node.(type) {
+			case *ast.CallExpr:
+				selector, ok := value.Fun.(*ast.SelectorExpr)
+				if !ok || !loaderPackage(selector) || selector.Sel.Name != "NewLazySystemDLL" {
+					return
+				}
+				called[selector] = true
+				literal, ok := value.Args[0].(*ast.BasicLit)
+				if !ok {
+					t.Errorf("%s loads a library whose name is not a constant", source.name)
+					return
+				}
+				library, _ := strconv.Unquote(literal.Value)
+				found[strings.ToLower(library)] = true
+			case *ast.SelectorExpr:
+				if !loaderPackage(value) {
+					return
+				}
+				switch name := value.Sel.Name; {
+				case loaders[name]:
+					t.Errorf("%s uses %s, which is not limited to the system folder", source.name, name)
+				case lookups[name]:
+					t.Errorf("%s uses %s, which binds a Windows function past the NewProc checks", source.name, name)
+				case handles[name]:
+					t.Errorf("%s uses the type %s, which can name a library past the loader checks", source.name, name)
+				case name == "NewLazySystemDLL" && !called[value]:
+					t.Errorf("%s uses NewLazySystemDLL other than by calling it", source.name)
+				}
 			}
-			if loaders[selector.Sel.Name] {
-				t.Errorf("%s calls %s, which is not limited to the system folder", source.name, selector.Sel.Name)
-			}
-			if lookups[selector.Sel.Name] {
-				t.Errorf("%s calls %s, which binds a Windows function past the NewProc checks", source.name, selector.Sel.Name)
-			}
-			if selector.Sel.Name != "NewLazySystemDLL" {
-				return
-			}
-			literal, ok := call.Args[0].(*ast.BasicLit)
-			if !ok {
-				t.Errorf("%s loads a library whose name is not a constant", source.name)
-				return
-			}
-			library, _ := strconv.Unquote(literal.Value)
-			found[strings.ToLower(library)] = true
 		})
 	}
 	var libraries []string
@@ -527,6 +579,62 @@ func TestApplicationLoadsOnlyReviewedLibraries(t *testing.T) {
 	slices.Sort(libraries)
 	if !slices.Equal(libraries, reviewedLibraries) {
 		t.Errorf("the application loads %v, the review covers %v", libraries, reviewedLibraries)
+	}
+}
+
+// TestApplicationBindsOnlyReviewedProcedures pins that every Windows function
+// the application's own code binds by name is in the review, and that the
+// review lists none it no longer binds. NewProc taken as a value, which the
+// name checks could not read, fails the test.
+func TestApplicationBindsOnlyReviewedProcedures(t *testing.T) {
+	found := map[string]bool{}
+	for _, source := range applicationSources(t) {
+		// A call is visited before the selector it calls.
+		called := map[*ast.SelectorExpr]bool{}
+		inspectFunctions(source.file, func(function string, node ast.Node) {
+			switch value := node.(type) {
+			case *ast.CallExpr:
+				if selector, ok := value.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "NewProc" {
+					called[selector] = true
+				}
+				if name, ok := boundProcedure(t, source, value); ok {
+					found[name] = true
+				}
+			case *ast.SelectorExpr:
+				if value.Sel.Name == "NewProc" && !called[value] {
+					t.Errorf("%s: %s uses NewProc other than by calling it", source.name, function)
+				}
+			}
+		})
+	}
+	bound := make([]string, 0, len(found))
+	for name := range found {
+		bound = append(bound, name)
+	}
+	slices.Sort(bound)
+	for _, name := range bound {
+		if !slices.Contains(reviewedProcedures, name) {
+			t.Errorf("the application binds %s, which is not in the review", name)
+		}
+	}
+	for _, name := range reviewedProcedures {
+		if !found[name] {
+			t.Errorf("the review lists %s, which the application no longer binds", name)
+		}
+	}
+}
+
+// TestAuditedPackagesAreNotDotImported pins what the source checks rely on:
+// they recognize os, io/ioutil, syscall, and golang.org/x/sys/windows by the
+// names code qualifies them with, which a dot import would remove.
+func TestAuditedPackagesAreNotDotImported(t *testing.T) {
+	for _, source := range applicationSources(t) {
+		for _, spec := range source.file.Imports {
+			path, err := strconv.Unquote(spec.Path.Value)
+			if err == nil && spec.Name != nil && spec.Name.Name == "." && auditedImports[path] {
+				t.Errorf("%s dot-imports %s, which the source checks could not read", source.name, path)
+			}
+		}
 	}
 }
 

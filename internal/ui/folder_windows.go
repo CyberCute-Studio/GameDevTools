@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,7 +113,9 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 // completes (RSZ-047). A path that is not a folder now — the folder was
 // deleted, or a file took its name — is refused rather than handed to the
 // shell, and the shell's explore verb, which only folders have, is used, so
-// a file is never opened or run in a folder's place. Looking at the folder
+// a file is never opened or run in a folder's place. The folder is named as
+// shellPath spells it, and one Explorer would show as another place is
+// refused with an error. Looking at the folder
 // and the shell's call each block for as long as its drive does not
 // respond, so the GUI thread calls it on a goroutine of its own; it keeps
 // that goroutine on one thread while it holds the COM apartment it
@@ -127,12 +130,16 @@ func OpenFolder(folder string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a folder", folder)
 	}
+	target, err := shellPath(folder)
+	if err != nil {
+		return err
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	// As for the folder picker, shell extensions the verb may load expect an
 	// initialized COM apartment.
 	defer initializeCOM()()
-	return shellExecute("explore", utf16("explore"), utf16(folder), nil)
+	return shellExecute("explore", utf16("explore"), utf16(target), nil)
 }
 
 // RevealInFolder opens File Explorer with the given file selected. It runs
@@ -140,44 +147,84 @@ func OpenFolder(folder string) error {
 // own after an operation completes. Explorer is named by its full path, as a
 // bare name would be looked up through a search path that can include the
 // application's and the current folder, where another explorer.exe could be
-// waiting. The file is named as revealTarget spells it.
+// waiting. The file is named as shellPath spells it. Explorer's /select does
+// not read a path through a volume GUID, opening another folder without
+// reporting a failure, so such a file is refused with an error.
 func RevealInFolder(path string) error {
+	target, err := shellPath(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(target, `\\?\`) {
+		return errNoDriveOrShare
+	}
 	explorer, err := explorerPath()
 	if err != nil {
 		return err
 	}
-	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+revealTarget(path)+`"`))
+	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
 
-// revealTarget is the path's ordinary drive or UNC spelling when it has one
-// that names the same file, since the shell's parser refuses a path through
-// \\?\, \??\, or \\.\, so Explorer would open a default folder instead. A
-// path Windows would resolve differently without the prefix, such as one
-// through a name that ends in a period, and a path with no ordinary spelling,
-// such as one through a volume GUID, are returned as they are. Resolving the
-// spelling reads no disk or network.
-func revealTarget(path string) string {
-	if len(path) < 4 {
-		return path
-	}
-	switch path[:4] {
-	case `\\?\`, `\??\`, `\\.\`:
-	default:
-		return path
-	}
-	rest, ordinary := path[4:], ""
+var (
+	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a
+	// path File Explorer cannot be pointed at, as it has no drive or share.
+	errNoDriveOrShare = errors.New("File Explorer cannot show a path that has no drive letter or network share")
+	// errShellReadsAnotherName is shellPath's failure for a path the shell
+	// would read as another file or folder.
+	errShellReadsAnotherName = errors.New("File Explorer would show another location, because a name in the path ends in a space or a period or is reserved by Windows")
+)
+
+// shellPath is the spelling of a path that File Explorer reads as the same
+// file or folder: the ordinary drive or UNC spelling, which the shell's
+// parser accepts where it refuses \\?\, \??\, and \\.\, or, for a path
+// through a volume GUID, which has no ordinary spelling, the \\?\ spelling
+// the explore verb accepts. A plain path is first resolved as Windows
+// resolves it, which is where the file was saved.
+//
+// The shell's parser drops trailing spaces and periods from every name in a
+// path, even under \\?\, while Windows keeps them in a name a longer path
+// leads through, so C:\t\v2..\a.png would select C:\t\v2\a.png. Such a path,
+// one that the ordinary spelling would resolve to something else, as with a
+// reserved name such as NUL, and one through any other device are refused
+// with an error, since Explorer would otherwise show the wrong place without
+// reporting a failure. Resolving the spelling reads no disk or network.
+func shellPath(path string) (string, error) {
+	full := path
 	switch {
-	case len(rest) > 4 && strings.EqualFold(rest[:4], `UNC\`):
-		ordinary = `\\` + rest[4:]
-	case len(rest) > 3 && rest[1] == ':' && rest[2] == '\\':
-		ordinary = rest
+	case strings.HasPrefix(path, `\\?\`):
+	case strings.HasPrefix(path, `\??\`):
+		full = `\\?\` + path[4:]
 	default:
-		return path
+		resolved, err := windows.FullPath(path)
+		if err != nil {
+			return "", err
+		}
+		full = resolved
 	}
-	if resolved, err := windows.FullPath(ordinary); err != nil || resolved != ordinary {
-		return path
+	target := full
+	if strings.HasPrefix(full, `\\?\`) || strings.HasPrefix(full, `\\.\`) {
+		switch rest := full[4:]; {
+		case len(rest) > 4 && strings.EqualFold(rest[:4], `UNC\`):
+			target = `\\` + rest[4:]
+		case len(rest) >= 3 && rest[1] == ':' && rest[2] == '\\':
+			target = rest
+		case len(rest) > 7 && strings.EqualFold(rest[:7], `Volume{`):
+			target = `\\?\` + rest
+		default:
+			return "", errNoDriveOrShare
+		}
 	}
-	return ordinary
+	if !strings.HasPrefix(target, `\\?\`) {
+		if resolved, err := windows.FullPath(target); err != nil || resolved != target {
+			return "", errShellReadsAnotherName
+		}
+	}
+	for name := range strings.SplitSeq(target, `\`) {
+		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
+			return "", errShellReadsAnotherName
+		}
+	}
+	return target, nil
 }
 
 // explorerPath returns File Explorer's full path in the Windows folder.

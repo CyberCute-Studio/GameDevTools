@@ -26,6 +26,9 @@ const (
 
 	clipboardOpenAttempts  = 5
 	clipboardOpenRetryWait = 50 * time.Millisecond
+
+	// hwndMessage is HWND_MESSAGE, -3, the parent of a message-only window.
+	hwndMessage = ^uintptr(2)
 )
 
 var (
@@ -37,6 +40,8 @@ var (
 	procSetClipboardData         = user32.NewProc("SetClipboardData")
 	procCloseClipboard           = user32.NewProc("CloseClipboard")
 	procRegisterClipboardFormatW = user32.NewProc("RegisterClipboardFormatW")
+	procCreateWindowExW          = user32.NewProc("CreateWindowExW")
+	procDestroyWindow            = user32.NewProc("DestroyWindow")
 	procGlobalAlloc              = kernel32.NewProc("GlobalAlloc")
 	procGlobalFree               = kernel32.NewProc("GlobalFree")
 	procGlobalLock               = kernel32.NewProc("GlobalLock")
@@ -61,16 +66,23 @@ type bitmapInfoHeader struct {
 // setClipboardImage replaces the clipboard contents with a CF_DIB image,
 // the device-independent bitmap format common Windows image destinations
 // accept. The image is encoded as a bottom-up 32-bit BGRA bitmap with
-// opaque alpha. The owner window may be zero; the system takes ownership
-// of the clipboard data once SetClipboardData succeeds.
+// opaque alpha. The system takes ownership of the clipboard data once
+// SetClipboardData succeeds.
+//
+// The clipboard is opened for a hidden message-only window that lives only
+// for this call, because Windows documents that EmptyClipboard on a clipboard
+// opened with no window leaves it with no owner, which makes SetClipboardData
+// fail. The data stays on the clipboard after the window is destroyed.
 //
 // The image is marked as not for cloud upload, so Windows clipboard sync
 // does not send it to the user's other devices (NFR-031), and stays in the
 // local clipboard history (Win+V). An image that cannot be marked is not
 // placed at all: the failure is reported as a clipboard failure, and the
-// saved file is unaffected (SCR-060). The marker and the image are both
-// prepared before the clipboard is opened, so a failure to prepare either
-// leaves what the user had copied in place.
+// saved file is unaffected (SCR-060). The marker, the image, and the window
+// are all prepared before the clipboard is opened, so a failure to prepare
+// any of them leaves what the user had copied in place. Placing them has to
+// follow EmptyClipboard, so a failure to place either leaves the clipboard
+// empty, and what the user had copied is gone.
 //
 // OpenClipboard fails while another application holds the clipboard open,
 // so the open is retried briefly before the attempt is reported as a
@@ -81,8 +93,9 @@ type bitmapInfoHeader struct {
 // An open clipboard belongs to the OS thread that opened it: only that thread
 // can change or close it, and until it does, no other application can copy or
 // paste. The goroutine therefore stays on one thread from the open through
-// the close.
-func setClipboardImage(owner uintptr, img *image.RGBA) error {
+// the close, and the window it opens the clipboard for is created and
+// destroyed on that thread.
+func setClipboardImage(img *image.RGBA) error {
 	bounds := img.Bounds()
 	width, height := bounds.Dx(), bounds.Dy()
 	header := bitmapInfoHeader{
@@ -138,9 +151,15 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	}
 	procRtlMoveMemory.Call(destination+unsafe.Sizeof(header), uintptr(unsafe.Pointer(&pixels[0])), uintptr(len(pixels)))
 	procGlobalUnlock.Call(allocation)
-	// Deferred before CloseClipboard, so it runs after it.
+	// Deferred before CloseClipboard, so they run after it: the clipboard is
+	// closed, then its owner window destroyed, then the thread released.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	owner, err := newClipboardOwner()
+	if err != nil {
+		return err
+	}
+	defer procDestroyWindow.Call(owner)
 	var opened bool
 	for attempt := 0; attempt < clipboardOpenAttempts; attempt++ {
 		r, _, _ := procOpenClipboard.Call(owner)
@@ -174,6 +193,21 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	}
 	ownedByClipboard = true
 	return nil
+}
+
+// newClipboardOwner creates the hidden message-only window the clipboard is
+// opened for, of the system's STATIC class, so no class is registered for it.
+// The calling thread must destroy it.
+func newClipboardOwner() (uintptr, error) {
+	class, err := windows.UTF16PtrFromString("STATIC")
+	if err != nil {
+		return 0, kindError(KindClipboard, "CreateWindowEx", err)
+	}
+	window, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(class)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
+	if window == 0 {
+		return 0, kindError(KindClipboard, "CreateWindowEx", callError(err))
+	}
+	return window, nil
 }
 
 // uploadMarker is the cloudUploadFormat marker, a zero DWORD, ready to place

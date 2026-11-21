@@ -18,7 +18,7 @@ go test -count=1 ./...
 go test -count=1 -v ./internal/audit
 go test -count=1 -v -run 'TestCoreWorkflowsRunOffline' ./internal/app
 go test -count=1 -v -run 'TestSetClipboardImageOptsOutOfCloudUploadOnly' ./internal/screenshot/output
-go test -count=1 -v -run 'TestExplorerPath|TestRevealTarget' ./internal/ui
+go test -count=1 -v -run 'TestExplorerPath|TestShellPath' ./internal/ui
 ```
 
 The offline test opens the real main window, captures the real screen, and replaces the clipboard, so run it in an interactive desktop session, as the module suites are run. It needs no administrator rights and leaves the machine's network untouched.
@@ -69,17 +69,19 @@ The application has no network code, account, sign-in, activation, update check,
 | The built executable holds no function, in `net`, `syscall`, or `x/sys/windows`, that opens, connects, or listens on a socket or resolves a name | `audit.TestExecutableContainsNoNetworkCode` | Pass |
 | No application code calls a socket or name-resolution function, or starts a program through `os`, `syscall`, or `x/sys/windows`. The only program it starts is File Explorer, through one reviewed `ShellExecuteExW` binding, for Open Folder and Reveal in Explorer when the user asks | `audit.TestApplicationCallsNoNetworkOrProgramFunction` | Pass |
 | The application's own code loads only nine reviewed Windows libraries, each from the system folder, none of them a network API, and binds no function by address | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
+| Every Windows function the application's own code binds by name is on a reviewed list, so a new binding fails until it is reviewed | `audit.TestApplicationBindsOnlyReviewedProcedures` | Pass |
+| No application file dot-imports `os`, `io/ioutil`, `syscall`, or `x/sys/windows`, which would hide its calls from these source checks | `audit.TestAuditedPackagesAreNotDotImported` | Pass |
 | No string in the application is a URL | `audit.TestApplicationNamesNoNetworkEndpoint` | Pass |
 
 The nine libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, and `user32`. The process also holds libraries the Go runtime and standard library load for themselves, which this check does not list. Among them is the Winsock library `ws2_32.dll`, loaded because `golang.org/x/sys/windows` imports `net`; the checks above show that nothing in the application can open a socket through it.
 
 ### What Windows does with a copied screenshot
 
-Windows can sync the clipboard to a user's other devices through their Microsoft account, when the user has turned that on. A screenshot placed on the clipboard without an opt-out would be uploaded by that feature, which NFR-031 does not allow. Each screenshot now carries the documented `CanUploadToCloudClipboard` format with the value zero. It stays in the local clipboard history (Win+V), as decided in [PRD section 20](../PRD.md#20-confirmed-product-decisions). If the marker cannot be placed, the image is not placed either: the outcome reports a clipboard failure and the saved file is kept.
+Windows can sync the clipboard to a user's other devices through their Microsoft account, when the user has turned that on. A screenshot placed on the clipboard without an opt-out would be uploaded by that feature, which NFR-031 does not allow. Each screenshot now carries the documented `CanUploadToCloudClipboard` format with the value zero. It stays in the local clipboard history (Win+V), as decided in [PRD section 20](../PRD.md#20-confirmed-product-decisions). If the marker cannot be placed, the image is not placed either: the outcome reports a clipboard failure and the saved file is kept. A failure while preparing the marker or image leaves what the user had copied in place. Placing them has to follow emptying the clipboard, so a failure at that last step leaves the clipboard empty.
 
 ## Filesystem access review
 
-`audit.TestFileChangesStayAtReviewedSites` checks every use of the functions in `os`, `io/ioutil`, `syscall`, and `x/sys/windows` that can create, change, move, or remove a file, and fails on any site not reviewed here. It also fails if code binds a file-changing Windows function by name around that list, binds any Windows function by a name it cannot read, or uses the system's temporary folder.
+`audit.TestFileChangesStayAtReviewedSites` checks every use of the functions in `os`, `io/ioutil`, `syscall`, and `x/sys/windows` that can create, change, move, or remove a file, and fails on any site not reviewed here. It also fails if code binds a common file-changing Windows function by name around that list, binds any Windows function by a name it cannot read, or uses the system's temporary folder. Any other Windows function, file-changing or not, fails `audit.TestApplicationBindsOnlyReviewedProcedures` until it is reviewed. These are source checks of ordinary code, not proof against code written to evade them.
 
 | Location | What is written | Code |
 |---|---|---|
@@ -107,7 +109,7 @@ The offline test checks a real run's log against this format. User-facing error 
 
 ## Dependency and license inventory
 
-`audit.TestDependenciesAreInventoried` fails if the application links a module that is not listed here, a different version, or a changed license text.
+`audit.TestDependenciesAreInventoried` fails if the application links a module that is not listed here, a different version, a module `go.mod` replaces with other code, or a changed license text.
 
 | Component | Version | License | Why it is used |
 |---|---|---|---|
@@ -135,11 +137,16 @@ Before this item, the release was built with Go 1.24.0, a release line Go no lon
 | `x/sys` v0.38.0 carried GO-2026-5024, in a function the application does not link. | Moved to `x/sys` v0.47.0 and `go 1.25.0`. |
 | Reveal in Explorer ran `explorer.exe` by its bare name, which Windows looks up through a search path that can include the application's and the current folder. | It now runs Explorer by its full path in the Windows folder. |
 | Reveal in Explorer passed a file saved under an extended-length or device output folder to Explorer as written. The shell's parser refuses that spelling, so Explorer would not select the file. | It names the file by its ordinary drive or UNC spelling whenever that spelling reaches the same file. |
+| The shell drops trailing spaces and periods from every name in a path, so Reveal in Explorer and Open Folder could show a different file or folder for a path through a name such as `v2..` or `Photos `, and Reveal could open an unrelated folder for a path through a volume GUID, each without reporting a failure. Open Folder also failed for a `\??\` folder and opened nothing for a `\\.\` one. | Both give Explorer a spelling it reads as the same place, and report an error when there is none. Open Folder still opens a folder through a volume GUID, which the explore verb accepts; Reveal reports an error for one. |
+| A Screenshot output folder Windows reads as two places, such as one whose last name ends in a space, or `\\.\UNC\server\share\..\x`, could leave a stray folder and fail the save, or put the temporary and final files in different places. A missing folder through a name such as `Photos ` was created without the space, and the save then failed. | Such a folder is refused before anything is created, and a missing folder through such a name is created under that name. |
+| The clipboard was opened with no owner window, for which Microsoft documents that `SetClipboardData` fails after `EmptyClipboard`. It worked on the environment of record. | The clipboard is opened for a hidden message-only window that lasts only for the copy. |
+| The dependency check accepted a module `go.mod` replaced with other code at the same version. | It fails on any replaced module. |
+| The source checks missed some file-changing and process-starting Windows functions, a library handle built without a loader call, and calls through a dot import. | Every bound function must be on a reviewed list, library handles can be made only through the checked loader, and dot imports of the audited packages fail. |
 | The clipboard calls for a copied screenshot could move between OS threads, which could fail the copy and leave the clipboard open, so no other application could copy or paste until GameDevTools exited. | The copy stays on one OS thread from opening the clipboard through closing it. |
 | Moving to Go 1.27 broke the output-folder rules of both modules. Go 1.27's `path/filepath` takes the server and share of a `\\?\UNC` or `\??\UNC` path into its volume name, so every share was refused as naming only a volume, and `Clean` appended a period to a `\??\UNC` share's root, which would have named another folder. It also calls a path with `..` where a server or share belongs, such as `\\server\..\x`, relative, so a stored folder of either kind would have failed the settings file's validation and reset every module, and `Join` would have moved such a folder to the current drive. | Both modules read output folders, and the Image Resizer its source names, through `internal/pathform`, whose `VolumeName`, `IsAbs`, `Clean`, `Dir`, `Base`, and `Join` give the same answer on Go 1.26 and 1.27 (`pathform.TestPathsReadAlikeOnEveryGoRelease`). |
 | A clipboard marker that could not be prepared left the clipboard already emptied, losing what the user had copied. | The marker is prepared before the clipboard is opened. |
 
-The logs, the file writes, and the dependency set needed no change.
+The logs and the dependency set needed no change.
 
 ## Requirement results
 
@@ -149,7 +156,7 @@ The logs, the file writes, and the dependency set needed no change.
 | NFR-030 | Pass | Both workflows complete in a sandbox with no network, and no network code is linked. |
 | NFR-031 | Pass | No account, telemetry, or upload code exists, and copied screenshots opt out of clipboard sync. |
 | NFR-032 | Pass | Every file-changing site is reviewed, and a real run wrote only to approved folders. |
-| NFR-033 | Pass | The inventory above, enforced by version and license text. |
+| NFR-033 | Pass | The inventory above, enforced by version, license text, and the absence of any replacement. |
 | TECH-007 | Pass | `x/sys` is maintained, compatible with Go and Windows, and BSD-3-Clause; the scan is clean. |
 | AC-A02 | Pass | `app.TestCoreWorkflowsRunOffline`. |
 

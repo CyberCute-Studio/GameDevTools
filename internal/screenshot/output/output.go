@@ -100,6 +100,10 @@ func kindError(kind Kind, op string, err error) *Error {
 	return &Error{Kind: kind, Op: op, Err: err}
 }
 
+// errFolderReadTwoWays is the cause of the KindFolder error for an output
+// folder whose path Windows reads as more than one place.
+var errFolderReadTwoWays = errors.New("Windows reads this folder's path as more than one place, as it does when a name ends in a space or a period. Choose another folder")
+
 // Result reports the two independent outcomes of one delivery (SCR-060).
 // A nil Clipboard or Save field means that destination succeeded. Path is
 // the final saved file. It is set whenever the file was fully written and
@@ -129,7 +133,7 @@ func Deliver(img *image.RGBA, options screenshot.CaptureOptions) Result {
 		return Result{Clipboard: err, Save: err}
 	}
 	result := Result{}
-	if err := setClipboardImage(0, img); err != nil {
+	if err := setClipboardImage(img); err != nil {
 		result.Clipboard = err
 	}
 	path, err := save(img, options, time.Now())
@@ -186,7 +190,14 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	encoder func(io.Writer, *image.RGBA, screenshot.CaptureOptions) error,
 ) (string, error) {
 	folder := options.OutputFolder
-	if err := os.MkdirAll(folder, 0o755); err != nil {
+	// A stored folder Windows reads as two places would have its temporary
+	// and final files, or the folder created for them, land apart. It is
+	// refused here rather than by option validation, which would reject the
+	// whole settings file for it.
+	if !pathform.ReadsAsOneFolder(folder) {
+		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
+	}
+	if err := os.MkdirAll(pathform.CreationPath(folder), 0o755); err != nil {
 		return "", kindError(KindFolder, "create output folder", err)
 	}
 	info, err := os.Stat(folder)

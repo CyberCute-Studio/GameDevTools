@@ -14,6 +14,14 @@ func Clean(path string) string      { return filepath.Clean(path) }
 func Dir(path string) string        { return filepath.Dir(path) }
 func Base(path string) string       { return filepath.Base(path) }
 
+// ReadsAsOneFolder is always true: only Windows reads a name differently by
+// where it falls in a path.
+func ReadsAsOneFolder(string) bool { return true }
+
+// CreationPath is the folder as written: only Windows shortens a name by
+// where it falls in a path.
+func CreationPath(folder string) string { return folder }
+
 // Join is filepath.Join for a folder and the names under it.
 func Join(folder string, names ...string) string {
 	return filepath.Join(append([]string{folder}, names...)...)

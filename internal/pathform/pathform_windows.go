@@ -20,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/windows"
 )
 
 // standIn is the volume a path's rest is put on for package filepath to read
@@ -182,4 +184,72 @@ func Join(folder string, names ...string) string {
 		joined += name
 	}
 	return Clean(joined)
+}
+
+// ReadsAsOneFolder reports whether Windows reads a folder's path as one place
+// however a save reaches it: as written, as os.MkdirAll and os.Stat take it;
+// with a file's name after it, as os.CreateTemp writes it; and through Join.
+// These can differ. Windows drops trailing spaces and periods from a path's
+// last name but keeps a space or a second period in a name a longer path
+// leads through, so C:\Art\Shots followed by a space is the folder Shots as
+// written and a folder with the space once a file follows it. Clean folds a
+// ".." that Windows reads as leaving the share, so \\.\UNC\server\share\..\x
+// is the share x as written and a folder in the share through Join. A path
+// marked \\?\ or \??\ is one Windows takes verbatim. A single trailing period,
+// which Windows drops in both positions, reads as one folder.
+func ReadsAsOneFolder(folder string) bool {
+	const name = "name"
+	written, err := resolved(folder)
+	if err != nil {
+		return false
+	}
+	inside := folder + `\` + name
+	if os.IsPathSeparator(folder[len(folder)-1]) {
+		inside = folder + name
+	}
+	want := strings.TrimRight(written, `\`) + `\` + name
+	for _, path := range []string{inside, Join(folder, name)} {
+		if got, err := resolved(path); err != nil || got != want {
+			return false
+		}
+	}
+	return true
+}
+
+// CreationPath is the spelling of a folder to give os.MkdirAll. MkdirAll
+// creates each missing folder by a path that ends at its name, where Windows
+// drops trailing spaces and periods, so for a folder through a name that
+// keeps them, such as "Photos " or "v2..", it would create a stray folder
+// without them and then fail. Such a folder is given by its extended-length
+// path, which keeps every name, and any other as written, so a failure names
+// it as the user knows it.
+func CreationPath(folder string) string {
+	full, err := resolved(folder)
+	if err != nil || strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
+		return folder
+	}
+	shortened := false
+	for name := range strings.SplitSeq(full, `\`) {
+		shortened = shortened || strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".")
+	}
+	switch {
+	case !shortened:
+		return folder
+	case strings.HasPrefix(full, `\\?\`):
+		return full
+	case strings.HasPrefix(full, `\\.\`):
+		return `\\?\` + full[4:]
+	case strings.HasPrefix(full, `\\`):
+		return `\\?\UNC\` + full[2:]
+	}
+	return `\\?\` + full
+}
+
+// resolved is the path as Windows resolves it, unchanged when it is marked
+// to be taken verbatim.
+func resolved(path string) (string, error) {
+	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`) {
+		return path, nil
+	}
+	return windows.FullPath(path)
 }

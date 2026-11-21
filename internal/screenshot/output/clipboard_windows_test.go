@@ -213,7 +213,7 @@ func verifyClipboardImage(t *testing.T, set func() error, want *image.RGBA) {
 func TestSetClipboardImageRoundTrip(t *testing.T) {
 	img := sampleImage(5, 3)
 	verifyClipboardImage(t, func() error {
-		return setClipboardImage(0, img)
+		return setClipboardImage(img)
 	}, img)
 }
 
@@ -276,7 +276,7 @@ func TestSetClipboardImageOptsOutOfCloudUploadOnly(t *testing.T) {
 	img := sampleImage(3, 2)
 	var last string
 	for range 5 {
-		if err := setClipboardImage(0, img); err != nil {
+		if err := setClipboardImage(img); err != nil {
 			t.Fatalf("place image on the clipboard: %v", err)
 		}
 		before := clipboardSequence()
@@ -303,7 +303,7 @@ func TestSetClipboardImageKeepsContentsWhenTheMarkerFails(t *testing.T) {
 	t.Cleanup(func() { prepareUploadMarker = newUploadMarker })
 	for range 5 {
 		before := clipboardSequence()
-		err := setClipboardImage(0, sampleImage(3, 2))
+		err := setClipboardImage(sampleImage(3, 2))
 		if !errors.Is(err, failure) {
 			t.Fatalf("setClipboardImage = %v, want the marker's failure", err)
 		}

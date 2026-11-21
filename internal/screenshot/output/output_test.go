@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,56 @@ func TestSaveRejectsFolderBlockedByFile(t *testing.T) {
 	}
 	_, err := save(sampleImage(2, 2), optionsFor(blocker, screenshot.FormatPNG), time.Now())
 	assertKind(t, err, KindFolder)
+}
+
+// TestSaveRefusesAFolderWindowsReadsTwoWays pins that a folder whose last name
+// ends in a space, which Windows drops there but keeps once a file follows it,
+// fails before anything is created, rather than leaving a stray folder behind
+// and failing the write, and that one ending in a single period, which Windows
+// drops in both places, still saves.
+func TestSaveRefusesAFolderWindowsReadsTwoWays(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows reads a name differently by where it falls in a path")
+	}
+	root := t.TempDir()
+	_, err := save(sampleImage(2, 2), optionsFor(filepath.Join(root, "Shots")+" ", screenshot.FormatPNG), time.Now())
+	assertKind(t, err, KindFolder)
+	if !errors.Is(err, errFolderReadTwoWays) {
+		t.Fatalf("save = %v, want %v", err, errFolderReadTwoWays)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("the refused save left %v (read error %v)", entries, err)
+	}
+	path, err := save(sampleImage(2, 2), optionsFor(filepath.Join(root, "Dotted")+".", screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save to a folder ending in a period: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "Dotted", filepath.Base(path))); err != nil || info.IsDir() {
+		t.Fatalf("the saved file is not in the folder Windows resolved: %v", err)
+	}
+}
+
+// TestSaveCreatesAFolderThroughANameWindowsWouldShorten pins that a missing
+// folder through a name ending in a space is created under that name, with
+// no stray folder without the space beside it.
+func TestSaveCreatesAFolderThroughANameWindowsWouldShorten(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows reads a name differently by where it falls in a path")
+	}
+	root := t.TempDir()
+	folder := root + `\Photos \Shots`
+	path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	decodeFile(t, path)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "Photos " {
+		t.Fatalf("the output root holds %v, want only the folder %q", entries, "Photos ")
+	}
 }
 
 func TestSaveEncodeFailureLeavesNoFiles(t *testing.T) {

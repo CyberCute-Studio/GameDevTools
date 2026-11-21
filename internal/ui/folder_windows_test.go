@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -80,35 +81,64 @@ func TestExplorerPathIsTheWindowsFoldersExplorer(t *testing.T) {
 	}
 }
 
-// TestRevealTargetIsAPathTheShellCanParse pins that Reveal in Explorer names
-// a file saved under an extended-length or device folder by its ordinary
-// spelling, which the shell's parser accepts where it refuses the prefixed
-// one, and keeps the prefix when removing it would name another file.
-func TestRevealTargetIsAPathTheShellCanParse(t *testing.T) {
+// TestShellPathIsWhatTheShellReads pins that File Explorer is given a file or
+// folder by a spelling its parser reads as that same place: the ordinary one
+// where there is one, the \\?\ one for a volume GUID, and an error for a path
+// it would show as another place.
+func TestShellPathIsWhatTheShellReads(t *testing.T) {
+	const volume = `\\?\Volume{00000000-0000-0000-0000-000000000000}\a.png`
 	for _, test := range []struct{ path, want string }{
 		{`C:\Shots\a.png`, `C:\Shots\a.png`},
+		{`C:/Shots/a.png`, `C:\Shots\a.png`},
+		{`C:\Shots.\a.png`, `C:\Shots\a.png`},
+		{`C:\`, `C:\`},
 		{`\\server\share\a.png`, `\\server\share\a.png`},
 		{`\\?\C:\Shots\a.png`, `C:\Shots\a.png`},
 		{`\??\C:\Shots\a.png`, `C:\Shots\a.png`},
 		{`\\.\C:\Shots\a.png`, `C:\Shots\a.png`},
+		{`\\?\C:\`, `C:\`},
 		{`\\?\UNC\server\share\a.png`, `\\server\share\a.png`},
 		{`\??\unc\server\share\a.png`, `\\server\share\a.png`},
 		{`\\.\UNC\server\share\a.png`, `\\server\share\a.png`},
-		{`\\?\C:\Shots.\a.png`, `\\?\C:\Shots.\a.png`},
-		{`\\?\C:\Shots\a.png.`, `\\?\C:\Shots\a.png.`},
-		{`\\?\Volume{00000000-0000-0000-0000-000000000000}\a.png`, `\\?\Volume{00000000-0000-0000-0000-000000000000}\a.png`},
+		{volume, volume},
+		{`\??\Volume{00000000-0000-0000-0000-000000000000}\a.png`, volume},
+		{`\\.\Volume{00000000-0000-0000-0000-000000000000}\a.png`, volume},
 	} {
-		if got := revealTarget(test.path); got != test.want {
-			t.Errorf("revealTarget(%q) = %q, want %q", test.path, got, test.want)
+		if got, err := shellPath(test.path); err != nil || got != test.want {
+			t.Errorf("shellPath(%q) = %q, %v, want %q", test.path, got, err, test.want)
 		}
+	}
+	for _, path := range []string{
+		`C:\t\v2..\a.png`,
+		`C:\t\Photos \a.png`,
+		`\\?\C:\t\v2..\a.png`,
+		`\\?\C:\t\Photos \a.png`,
+		`\\?\C:\Shots.\a.png`,
+		`\\?\C:\Shots\a.png.`,
+		`\\?\C:\Shots\NUL`,
+		`\\?\UNC\server\share\v2..\a.png`,
+		`\\?\Volume{00000000-0000-0000-0000-000000000000}\v2..\a.png`,
+		`\\?\GLOBALROOT\Device\HarddiskVolume1\a.png`,
+		`\\.\pipe\a`,
+	} {
+		if got, err := shellPath(path); err == nil {
+			t.Errorf("shellPath(%q) = %q, want an error", path, got)
+		}
+	}
+	if err := RevealInFolder(volume); !errors.Is(err, errNoDriveOrShare) {
+		t.Errorf("RevealInFolder through a volume GUID = %v, want %v", err, errNoDriveOrShare)
 	}
 	explorer, err := explorerPath()
 	if err != nil {
 		t.Fatal(err)
 	}
+	target, err := shellPath(`\\?\` + explorer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	parse := shell32.NewProc("SHParseDisplayName")
 	var list uintptr
-	result, _, _ := parse.Call(uintptr(unsafe.Pointer(utf16(revealTarget(`\\?\`+explorer)))), 0, uintptr(unsafe.Pointer(&list)), 0, 0)
+	result, _, _ := parse.Call(uintptr(unsafe.Pointer(utf16(target))), 0, uintptr(unsafe.Pointer(&list)), 0, 0)
 	if result != 0 || list == 0 {
 		t.Fatalf("the shell could not parse the target for %q: HRESULT %#x", explorer, uint32(result))
 	}

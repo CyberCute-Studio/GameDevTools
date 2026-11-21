@@ -4,6 +4,61 @@ package pathform
 
 import "testing"
 
+// TestReadsAsOneFolder pins which output folders Windows reads as one place
+// whether a save names the folder itself, a file after it, or a file through
+// Join.
+func TestReadsAsOneFolder(t *testing.T) {
+	for _, test := range []struct {
+		folder string
+		want   bool
+	}{
+		{`C:\Art\Shots`, true},
+		{`C:\Art\Shots\`, true},
+		{`C:/Art/Shots`, true},
+		{`C:\`, true},
+		{`C:\Art\Shots.`, true},
+		{`C:\Art\Photos \Shots`, true},
+		{`C:\Art\v2..\Shots`, true},
+		{`\\server\share`, true},
+		{`\\server\share\Shots`, true},
+		{`\\?\C:\Art\Shots`, true},
+		{`\\?\C:\Art\Shots `, true},
+		{`\??\C:\Art\Shots`, true},
+		{`\\?\UNC\server\share\Shots`, true},
+		{`\\.\UNC\server\share\Shots`, true},
+		{`C:\Art\Shots `, false},
+		{`C:\Art\Shots..`, false},
+		{`\\.\UNC\server\share\..\x`, false},
+		{`\\?\C:\Art\..\Shots`, false},
+	} {
+		if got := ReadsAsOneFolder(test.folder); got != test.want {
+			t.Errorf("ReadsAsOneFolder(%q) = %v, want %v", test.folder, got, test.want)
+		}
+	}
+}
+
+// TestCreationPathKeepsNamesWindowsWouldShorten pins that a folder through a
+// name ending in a space or a period is created by its extended-length path,
+// where os.MkdirAll cannot lose those characters, and any other folder by its
+// path as written, so a failure names it as the user knows it.
+func TestCreationPathKeepsNamesWindowsWouldShorten(t *testing.T) {
+	for _, test := range []struct{ folder, want string }{
+		{`C:\Art\Shots`, `C:\Art\Shots`},
+		{`C:\Art\Shots\`, `C:\Art\Shots\`},
+		{`C:\Art\Shots.`, `C:\Art\Shots.`},
+		{`\\server\share\Shots`, `\\server\share\Shots`},
+		{`\\?\C:\Art\Photos \Shots`, `\\?\C:\Art\Photos \Shots`},
+		{`C:\Art\Photos \Shots`, `\\?\C:\Art\Photos \Shots`},
+		{`C:\Art\v2..\Shots`, `\\?\C:\Art\v2..\Shots`},
+		{`\\server\share\Photos \Shots`, `\\?\UNC\server\share\Photos \Shots`},
+		{`\\.\C:\Art\Photos \Shots`, `\\?\C:\Art\Photos \Shots`},
+	} {
+		if got := CreationPath(test.folder); got != test.want {
+			t.Errorf("CreationPath(%q) = %q, want %q", test.folder, got, test.want)
+		}
+	}
+}
+
 // TestPathsReadAlikeOnEveryGoRelease pins how a Windows path is read. Go
 // 1.27's package filepath takes a \\?\UNC or \??\UNC path's server and share
 // into its volume name, which would make a share's root look like a bare
