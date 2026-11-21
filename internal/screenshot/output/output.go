@@ -273,14 +273,21 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 // own spelling, as it may have been created through its extended-length one,
 // so the failure names the folder as the user knows it. The extended-length
 // spelling has only backslashes, and the folder may be written with either
-// separator.
+// separator. When the failed part cannot be matched to the folder's own text,
+// as Windows may have dropped a period from its last name, the failure names
+// the whole folder.
 func namedAsWritten(err error, creation, folder string) error {
 	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) && strings.HasPrefix(creation, pathErr.Path) {
+	if creation == folder || !errors.As(err, &pathErr) {
+		return err
+	}
+	written := folder
+	if strings.HasPrefix(creation, pathErr.Path) {
 		rest := creation[len(pathErr.Path):]
 		if strings.HasSuffix(strings.ReplaceAll(folder, "/", `\`), rest) {
-			pathErr.Path = folder[:len(folder)-len(rest)]
+			written = folder[:len(folder)-len(rest)]
 		}
 	}
+	pathErr.Path = written
 	return err
 }

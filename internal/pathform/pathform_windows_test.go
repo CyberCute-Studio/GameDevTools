@@ -119,6 +119,27 @@ func TestSaveFolderRefusesANameItsSpellingWouldShorten(t *testing.T) {
 	if got, ok := SaveFolder(root + `\x `); !ok || got != root+`\x \` {
 		t.Errorf("SaveFolder of the folder ending in a space = %q, %v", got, ok)
 	}
+	// The name loses its period wherever it falls on the path.
+	for _, rest := range []string{
+		`\x .\`, `\x .\Shots`, `/x ./Shots`, `\x. .\Shots`, `\x  .\Shots`, `\ .\Shots`,
+		`\x . .\Shots`, `\Deep\x .\In\Shots`, `\x .\In\..\Shots`,
+	} {
+		if got, ok := SaveFolder(root + rest); ok {
+			t.Errorf("SaveFolder(%q) = %q, which leads through the name without the period", root+rest, got)
+		}
+	}
+	// A name a ".." removes, one Windows keeps whole, and a verbatim path
+	// are not that name.
+	for _, folder := range []string{
+		root + `\x .\..\Shots`,
+		root + `\x ..\Shots`,
+		root + `\x .  \Shots`,
+		`\\?\` + root + `\x .\Shots`,
+	} {
+		if got, ok := SaveFolder(folder); !ok || got != folder {
+			t.Errorf("SaveFolder(%q) = %q, %v, want it as written", folder, got, ok)
+		}
+	}
 }
 
 // TestSaveFolderTellsABrokenLinkFromAMissingName pins that a folder behind a

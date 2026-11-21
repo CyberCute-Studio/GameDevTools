@@ -323,9 +323,10 @@ func TestSaveReachesAFolderWhoseOwnNameEndsInASpaceOrPeriods(t *testing.T) {
 	}
 }
 
-// TestSaveRefusesAFolderItWouldReachAsItsNeighbor pins that a folder whose
-// name ends in a space and then a period is refused, rather than having its
-// capture land in the folder of the same name without the period.
+// TestSaveRefusesAFolderItWouldReachAsItsNeighbor pins that a folder through
+// a name ending in a space and then a period, wherever that name falls, is
+// refused, rather than having its capture land under the name without the
+// period.
 func TestSaveRefusesAFolderItWouldReachAsItsNeighbor(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows reads a name differently by where it falls in a path")
@@ -336,13 +337,15 @@ func TestSaveRefusesAFolderItWouldReachAsItsNeighbor(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_, err := save(sampleImage(2, 2), optionsFor(root+`\x .`, screenshot.FormatPNG), time.Now())
-	if !errors.Is(err, errFolderReadTwoWays) {
-		t.Fatalf("save = %v, want %v", err, errFolderReadTwoWays)
-	}
-	for _, name := range []string{"x .", "x "} {
-		if entries, err := os.ReadDir(`\\?\` + root + `\` + name); err != nil || len(entries) != 0 {
-			t.Fatalf("the refused save left %v in %q (read error %v)", entries, name, err)
+	for _, rest := range []string{`\x .`, `\x .\`, `\x .\Shots`} {
+		_, err := save(sampleImage(2, 2), optionsFor(root+rest, screenshot.FormatPNG), time.Now())
+		if !errors.Is(err, errFolderReadTwoWays) {
+			t.Fatalf("save to %q = %v, want %v", rest, err, errFolderReadTwoWays)
+		}
+		for _, name := range []string{"x .", "x "} {
+			if entries, err := os.ReadDir(`\\?\` + root + `\` + name); err != nil || len(entries) != 0 {
+				t.Fatalf("the save to %q left %v in %q (read error %v)", rest, entries, name, err)
+			}
 		}
 	}
 }
@@ -444,6 +447,14 @@ func TestSaveFolderFailureNamesTheFolderAsWritten(t *testing.T) {
 	_, err = save(sampleImage(2, 2), optionsFor(slashed+"/In/Deep", screenshot.FormatPNG), time.Now())
 	assertKind(t, err, KindFolder)
 	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, slashed) {
+		t.Fatalf("the failure reads %q, want the folder as written", text)
+	}
+	// A last name Windows shortens leaves no text to match the failed part
+	// to, so the failure names the whole folder.
+	shortened := root + `\Blocked \Inner.`
+	_, err = save(sampleImage(2, 2), optionsFor(shortened, screenshot.FormatPNG), time.Now())
+	assertKind(t, err, KindFolder)
+	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, shortened) {
 		t.Fatalf("the failure reads %q, want the folder as written", text)
 	}
 }

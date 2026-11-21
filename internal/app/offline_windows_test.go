@@ -352,7 +352,9 @@ func containerProfile(t *testing.T, sid *windows.SID) string {
 }
 
 // profileFiles lists every file in the AppContainer's folder with its size
-// and last write, so a file a run added or changed shows.
+// and last write, and every folder by its name alone, as a folder's last
+// write moves with what the system does inside it, so a file a run added or
+// changed, or a folder it added, shows.
 func profileFiles(t *testing.T, profile string) map[string]string {
 	t.Helper()
 	files := map[string]string{}
@@ -361,6 +363,7 @@ func profileFiles(t *testing.T, profile string) map[string]string {
 			return err
 		}
 		if entry.IsDir() {
+			files[path] = "folder"
 			return nil
 		}
 		info, err := entry.Info()
@@ -645,10 +648,12 @@ func checkOfflineLog(t *testing.T, path, workspace string) {
 
 // checkOfflineWrites pins NFR-032 on a real run: every file in the
 // workspace is in the settings or log folder, an output folder, or the
-// test's own sources. The settings and log folders are taken from the paths
-// the application resolved, as Windows points a container's per-user folders
-// into its own profile. TestCoreWorkflowsRunOffline checks that profile, the
-// only other place the container can write, from outside the container.
+// test's own sources, and every folder is one of those, inside one, on the
+// way to one, or the empty Temp folder the test made. The settings and log
+// folders are taken from the paths the application resolved, as Windows
+// points a container's per-user folders into its own profile.
+// TestCoreWorkflowsRunOffline checks that profile, the only other place the
+// container can write, from outside the container.
 func checkOfflineWrites(t *testing.T, workspace string, paths settings.Paths) {
 	t.Helper()
 	approved := []string{
@@ -658,11 +663,18 @@ func checkOfflineWrites(t *testing.T, workspace string, paths settings.Paths) {
 		filepath.Join(workspace, "Pictures", "GameDevTools", "Resized"),
 		filepath.Join(workspace, "Sources"),
 	}
+	folders := append([]string{filepath.Join(workspace, "Temp")}, approved...)
 	err := filepath.WalkDir(workspace, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() || path == filepath.Join(workspace, "offline.test.exe") {
+		if entry.IsDir() {
+			if path != workspace && !onApprovedPath(path, folders) {
+				t.Errorf("the run made the folder %s, outside the approved folders", path)
+			}
+			return nil
+		}
+		if path == filepath.Join(workspace, "offline.test.exe") {
 			return nil
 		}
 		for _, root := range approved {
@@ -679,4 +691,16 @@ func checkOfflineWrites(t *testing.T, workspace string, paths settings.Paths) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// onApprovedPath reports whether a folder is an approved one, leads to one,
+// or is inside one.
+func onApprovedPath(folder string, approved []string) bool {
+	separator := string(filepath.Separator)
+	for _, root := range approved {
+		if folder == root || strings.HasPrefix(root, folder+separator) || strings.HasPrefix(folder, root+separator) {
+			return true
+		}
+	}
+	return false
 }

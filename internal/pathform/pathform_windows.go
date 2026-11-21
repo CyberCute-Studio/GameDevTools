@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -224,15 +225,17 @@ func ReadsAsOneFolder(folder string) bool {
 // under that name, so while a folder of exactly that name exists it is used
 // through a trailing separator, which makes every step read the name whole.
 // Without such a folder there is no spelling to use, as creating the path as
-// written would make the folder without those characters. A name ending in a
-// space and then one period has none either: Windows drops that period even
-// before a separator, so the spelling would lead to the folder without it.
-// A folder that cannot be looked at, as when its share is offline or a
-// junction on its path has lost its target, keeps the spelling, so that the
-// save fails with the reason rather than as a bad path. A spelling other than
-// the folder as written is for a folder that already exists, so a save must
-// not create it.
+// written would make the folder without those characters. A path through a
+// name ending in a space and then one period has none either, wherever that
+// name falls: see throughNameLosingPeriod. A folder that cannot be looked at,
+// as when its share is offline or a junction on its path has lost its target,
+// keeps the spelling, so that the save fails with the reason rather than as a
+// bad path. A spelling other than the folder as written is for a folder that
+// already exists, so a save must not create it.
 func SaveFolder(folder string) (string, bool) {
+	if throughNameLosingPeriod(folder) {
+		return "", false
+	}
 	if ReadsAsOneFolder(folder) {
 		return folder, true
 	}
@@ -253,6 +256,32 @@ func SaveFolder(folder string) (string, bool) {
 		return "", false
 	}
 	return whole, true
+}
+
+// throughNameLosingPeriod reports whether a name that stays on the folder's
+// path ends in a space and then one period. Windows drops that period
+// wherever the name falls, even before a separator, so C:\x .\Shots is read
+// as C:\x \Shots at every step: one place, but not the folder it names. A
+// name a later ".." removes does not count, and a path marked \\?\ or \??\ is
+// taken verbatim.
+func throughNameLosingPeriod(folder string) bool {
+	if strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
+		return false
+	}
+	var loses []bool
+	rest := strings.ReplaceAll(folder[volumeLen(folder):], "/", `\`)
+	for name := range strings.SplitSeq(rest, `\`) {
+		switch name {
+		case "", ".":
+		case "..":
+			if len(loses) > 0 {
+				loses = loses[:len(loses)-1]
+			}
+		default:
+			loses = append(loses, strings.HasSuffix(name, " ."))
+		}
+	}
+	return slices.Contains(loses, true)
 }
 
 // noSuchFolder reports whether a failed look at a folder means no folder is
