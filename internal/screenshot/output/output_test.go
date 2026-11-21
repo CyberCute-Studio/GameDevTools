@@ -355,6 +355,13 @@ func TestSaveFolderFailureNamesTheFolderAsWritten(t *testing.T) {
 	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, root+`\Blocked `) {
 		t.Fatalf("the failure reads %q, want the folder as written", text)
 	}
+	// A folder stored with forward slashes, failing two names above its end.
+	slashed := filepath.ToSlash(root) + "/Blocked "
+	_, err = save(sampleImage(2, 2), optionsFor(slashed+"/In/Deep", screenshot.FormatPNG), time.Now())
+	assertKind(t, err, KindFolder)
+	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, slashed) {
+		t.Fatalf("the failure reads %q, want the folder as written", text)
+	}
 }
 
 func TestSaveEncodeFailureLeavesNoFiles(t *testing.T) {

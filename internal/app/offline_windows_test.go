@@ -72,6 +72,37 @@ type securityCapabilities struct {
 	reserved        uint32
 }
 
+// holdOfflineLock makes a concurrent run of this test, from another worktree
+// or terminal, wait for this one: they share one AppContainer profile, which
+// each run removes when it ends. Windows releases the mutex of a run that is
+// killed. A mutex belongs to the thread that took it, so the test stays on
+// that thread until the lock is released.
+func holdOfflineLock(t *testing.T) {
+	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+	name, err := windows.UTF16PtrFromString(`Local\` + offlineContainerName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CreateMutex also reports ERROR_ALREADY_EXISTS with a usable handle when
+	// another run holds the mutex.
+	mutex, err := windows.CreateMutex(nil, false, name)
+	if mutex == 0 {
+		t.Fatalf("create the offline test's lock: %v", err)
+	}
+	t.Cleanup(func() { windows.CloseHandle(mutex) })
+	const limit = 5 * time.Minute
+	event, err := windows.WaitForSingleObject(mutex, uint32(limit/time.Millisecond))
+	if err != nil {
+		t.Fatalf("wait for the offline test's lock: %v", err)
+	}
+	if event != windows.WAIT_OBJECT_0 && event != windows.WAIT_ABANDONED {
+		t.Fatalf("another run of the offline test held its lock for %v", limit)
+	}
+	t.Cleanup(func() { windows.ReleaseMutex(mutex) })
+}
+
 // offlineContainer creates the AppContainer profile the test runs in, and
 // removes it when the test ends.
 func offlineContainer(t *testing.T) *windows.SID {
@@ -247,6 +278,7 @@ func runInContainer(t *testing.T, sid *windows.SID, workspace, executable, test 
 // takes neither administrator rights nor switching off the machine's network
 // adapters.
 func TestCoreWorkflowsRunOffline(t *testing.T) {
+	holdOfflineLock(t)
 	sid := offlineContainer(t)
 	workspace := t.TempDir()
 	grantContainer(t, workspace, sid)
@@ -427,10 +459,14 @@ func checkNetworkDenied(t *testing.T) {
 		connection.Close()
 		t.Fatal("a connection to the loopback listener succeeded")
 	}
-	// The sandbox drops a loopback connection, which Windows reports as timed
-	// out, sooner than the dialer's own deadline and as a different error. A
-	// refused connection, or any other failure, would not show the sandbox.
-	if !errors.Is(err, windows.WSAETIMEDOUT) && !errors.Is(err, windows.WSAEACCES) {
+	// The sandbox drops a loopback connection. Windows reports that as timed
+	// out, as its own error if that comes before the dialer's deadline and as
+	// the dialer's timeout if it does not. A refused connection, or any other
+	// failure, would not show the sandbox, and the parent test checks that the
+	// listener accepted nothing.
+	var timeout net.Error
+	timedOut := errors.Is(err, windows.WSAETIMEDOUT) || errors.As(err, &timeout) && timeout.Timeout()
+	if !timedOut && !errors.Is(err, windows.WSAEACCES) {
 		t.Fatalf("a loopback connection failed with %v, want the sandbox's denial", err)
 	}
 }

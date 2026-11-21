@@ -63,7 +63,9 @@ var networkFunctions = []string{
 var networkSymbols = regexp.MustCompile(`^(net\.(Dial|Listen|Lookup|Resolve|FileConn)|net\.\(\*(Dialer|Resolver|ListenConfig|TCPConn|UDPConn|IPConn|UnixConn|TCPListener|UnixListener|sysDialer)\)\.|(syscall|golang\.org/x/sys/windows)\.(` + strings.Join(networkFunctions, "|") + `)($|\.)|internal/poll\.\(\*FD\)\.(ConnectEx|AcceptEx|Accept|WriteTo|ReadFrom))`)
 
 // programFunctions are the functions of os, syscall, and
-// golang.org/x/sys/windows that start another program.
+// golang.org/x/sys/windows that start another program. The list need not
+// name every one of the last two packages, such as StartService:
+// reviewedSystemFunctions admits none that was not reviewed.
 var programFunctions = []string{"StartProcess", "CreateProcess", "CreateProcessAsUser", "ShellExecute"}
 
 // programProcedures are the Windows functions that start another program,
@@ -113,12 +115,33 @@ var reviewedProcedures = []string{
 	"ShowWindow", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
 }
 
+// reviewedSystemFunctions is every function of syscall and
+// golang.org/x/sys/windows the application's own code uses, sorted. Those
+// packages hold hundreds of functions, some of which change the file system
+// or start a program without saying so in their names, such as
+// DeleteVolumeMountPoint or StartService. Any function not listed here fails
+// TestApplicationUsesOnlyReviewedSystemFunctions until it is reviewed, so
+// fileMutators, programFunctions, and networkFunctions do not have to name
+// every one.
+var reviewedSystemFunctions = []string{
+	"syscall.SyscallN",
+	"windows.CloseHandle", "windows.CreateFile", "windows.DeleteFile", "windows.FindClose",
+	"windows.FindFirstFile", "windows.FlushFileBuffers", "windows.FullPath",
+	"windows.GetFileInformationByHandle", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
+	"windows.NewCallback", "windows.NewLazySystemDLL", "windows.NtSetInformationFile",
+	"windows.SetFileInformationByHandle", "windows.UTF16FromString", "windows.UTF16PtrFromString",
+	"windows.UTF16ToString", "windows.WriteFile",
+}
+
 // auditedImports are the packages the source checks recognize by their
 // qualified names, which a dot import would remove.
 var auditedImports = set("os", "io/ioutil", "syscall", "golang.org/x/sys/windows")
 
 // fileMutators are the functions through which the application could
-// create, change, move, or remove a file.
+// create, change, move, or remove a file, each use of which is a site in
+// reviewedFileSites. The os and io/ioutil lists are complete. Those of
+// syscall and golang.org/x/sys/windows need not be: reviewedSystemFunctions
+// admits no other function of theirs that was not reviewed.
 var fileMutators = map[string]map[string]bool{
 	"os": set("Create", "CreateTemp", "WriteFile", "OpenFile", "OpenRoot", "OpenInRoot", "Rename", "Remove",
 		"RemoveAll", "Mkdir", "MkdirAll", "MkdirTemp", "Chmod", "Chown", "Lchown", "Chtimes", "Symlink", "Link",
@@ -620,6 +643,68 @@ func TestApplicationBindsOnlyReviewedProcedures(t *testing.T) {
 	for _, name := range reviewedProcedures {
 		if !found[name] {
 			t.Errorf("the review lists %s, which the application no longer binds", name)
+		}
+	}
+}
+
+// TestApplicationUsesOnlyReviewedSystemFunctions pins that every function of
+// syscall and golang.org/x/sys/windows the application's own code names,
+// called or taken as a value, is in the review, and that the review lists
+// none it no longer uses. The functions are read from those packages' own
+// source for the release target, so a constant or type is not mistaken for
+// one.
+func TestApplicationUsesOnlyReviewedSystemFunctions(t *testing.T) {
+	declared := map[string]map[string]bool{}
+	for _, item := range applicationPackages(t) {
+		if item.ImportPath != "syscall" && item.ImportPath != "golang.org/x/sys/windows" {
+			continue
+		}
+		functions := map[string]bool{}
+		fileSet := token.NewFileSet()
+		for _, name := range item.GoFiles {
+			file, err := parser.ParseFile(fileSet, filepath.Join(item.Dir, name), nil, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, declaration := range file.Decls {
+				if decl, ok := declaration.(*ast.FuncDecl); ok && decl.Recv == nil && decl.Name.IsExported() {
+					functions[decl.Name.Name] = true
+				}
+			}
+		}
+		declared[item.ImportPath] = functions
+	}
+	for _, path := range []string{"syscall", "golang.org/x/sys/windows"} {
+		if len(declared[path]) < 100 {
+			t.Fatalf("read %d functions of %s; its source was not read", len(declared[path]), path)
+		}
+	}
+	found := map[string]bool{}
+	for _, source := range applicationSources(t) {
+		names := importNames(source.file)
+		inspectFunctions(source.file, func(function string, node ast.Node) {
+			selector, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			pkg, ok := selector.X.(*ast.Ident)
+			if !ok {
+				return
+			}
+			path := names[pkg.Name]
+			if !declared[path][selector.Sel.Name] {
+				return
+			}
+			used := path[strings.LastIndex(path, "/")+1:] + "." + selector.Sel.Name
+			found[used] = true
+			if !slices.Contains(reviewedSystemFunctions, used) {
+				t.Errorf("%s: %s uses %s, which is not in the review", source.name, function, used)
+			}
+		})
+	}
+	for _, name := range reviewedSystemFunctions {
+		if !found[name] {
+			t.Errorf("the review lists %s, which the application no longer uses", name)
 		}
 	}
 }
