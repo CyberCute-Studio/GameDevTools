@@ -70,9 +70,47 @@ func TestNamesOneFolder(t *testing.T) {
 		{`\\server\sh:are\Shots`, false},
 		{`\\.\UNC\ser:ver\share\Shots`, false},
 		{`\\?\UNC\ser:ver\share\Shots`, false},
+		// A final . or .. that resolves to a share's or drive's root.
+		{`\\server\share\old\..`, true},
+		{`\\server\share\.`, true},
+		{`\\server\share\x\..\..`, true},
+		{`\\.\C:\x\..`, true},
+		{`\\.\UNC\server\share\.`, true},
+		{`\\.\UNC\server\share\x\..\..`, false},
+		// A doubled separator, which Windows reads as one.
+		{`\\server\\share\Shots`, true},
+		{`\\server\\share`, true},
+		{`//server//share/Shots`, true},
+		{`\\.\UNC\\server\share\Shots`, true},
+		{`\\.\UNC\server\\share\Shots`, true},
+		{`\\.\\C:\Art`, true},
+		{`\\server\\con\Shots`, true},
+		{`\\server\\share.\Shots`, false},
+		{`\\server\\share \Shots`, false},
+		{`\\server\\..\Shots`, false},
+		{`\\.\UNC\\server\..\x`, false},
+		{`\\?\C:\\Art`, false},
 	} {
 		if got := NamesOneFolder(test.folder); got != test.want {
 			t.Errorf("NamesOneFolder(%q) = %v, want %v", test.folder, got, test.want)
+		}
+	}
+}
+
+// TestSaveFolder pins the one spelling a save uses for a folder.
+func TestSaveFolder(t *testing.T) {
+	for _, test := range []struct{ folder, want string }{
+		{`C:\Art\In\..\Shots\`, `C:\Art\Shots`},
+		{`\\server\share\old\..`, `\\server\share\`},
+		{`\\server\\share\Shots`, `\\server\share\Shots`},
+		{`//server//share/Shots`, `\\server\share\Shots`},
+		{`\\.\UNC\\server\\share\Shots`, `\\.\UNC\server\share\Shots`},
+		{`\\.\\C:\Art`, `\\.\C:\Art`},
+		{`\\?\C:\Art\Shots\`, `\\?\C:\Art\Shots`},
+		{`\??\C:\Art`, `\??\C:\Art`},
+	} {
+		if got := SaveFolder(test.folder); got != test.want {
+			t.Errorf("SaveFolder(%q) = %q, want %q", test.folder, got, test.want)
 		}
 	}
 }

@@ -192,12 +192,12 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 ) (string, error) {
 	// A stored folder Windows would read as another place is refused here
 	// rather than by option validation, which would reject the whole settings
-	// file for it. The folder is used as cleaned, so that creating it, the
-	// temporary file, and the final name all take one spelling.
+	// file for it. Creating the folder, the temporary file, and the final
+	// name all take the one spelling pathform.SaveFolder gives.
 	if !pathform.NamesOneFolder(options.OutputFolder) {
 		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
 	}
-	folder := pathform.Clean(options.OutputFolder)
+	folder := pathform.SaveFolder(options.OutputFolder)
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return "", kindError(KindFolder, "create output folder", err)
 	}

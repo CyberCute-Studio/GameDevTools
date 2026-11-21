@@ -245,9 +245,29 @@ func shareNames(volume string) []string {
 	return names
 }
 
+// SaveFolder is the one spelling of an output folder a save uses: its cleaned
+// form, with every doubled separator after the path's leading ones reduced to
+// one, as Windows reads it. Clean alone keeps one that falls inside a volume
+// name, as between a server and its share. A path marked \\?\ or \??\ is only
+// cleaned, as Windows takes its separators verbatim.
+func SaveFolder(folder string) string {
+	if strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
+		return Clean(folder)
+	}
+	lead := len(folder) - len(strings.TrimLeft(folder, `\/`))
+	reduced := []byte(folder[:lead])
+	for index := lead; index < len(folder); index++ {
+		if !os.IsPathSeparator(folder[index]) || !os.IsPathSeparator(folder[index-1]) {
+			reduced = append(reduced, folder[index])
+		}
+	}
+	return Clean(string(reduced))
+}
+
 // NamesOneFolder reports whether Windows reads a folder's path as exactly the
-// folder its cleaned form names, so that a save can create it, write into it,
-// and name a file in it without any of those reaching another place. Windows
+// folder SaveFolder spells, a trailing separator aside, so that a save can
+// create it, write into it, and name a file in it without any of those
+// reaching another place. Windows
 // drops trailing spaces and periods from some names by where they fall in a
 // path, reads names such as NUL as devices, reads a colon after the volume
 // name as a file stream, and resolves a ".." after \\.\UNC\server\share
@@ -263,7 +283,7 @@ func shareNames(volume string) []string {
 // holds a stream or Clean would rewrite it. A path through a device other
 // than a drive, such as \\.\pipe\x, is not judged here.
 func NamesOneFolder(folder string) bool {
-	clean := Clean(folder)
+	clean := SaveFolder(folder)
 	if holdsStream(clean) {
 		return false
 	}
@@ -284,5 +304,9 @@ func NamesOneFolder(folder string) bool {
 		return false
 	}
 	full, err := windows.FullPath(clean)
-	return err == nil && full == clean && Clean(written) == clean
+	if err != nil {
+		return false
+	}
+	named := strings.TrimRight(clean, `\`)
+	return strings.TrimRight(written, `\`) == named && strings.TrimRight(full, `\`) == named
 }

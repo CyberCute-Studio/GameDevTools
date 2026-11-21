@@ -14,6 +14,9 @@ func Clean(path string) string      { return filepath.Clean(path) }
 func Dir(path string) string        { return filepath.Dir(path) }
 func Base(path string) string       { return filepath.Base(path) }
 
+// SaveFolder is the one spelling of an output folder a save uses.
+func SaveFolder(folder string) string { return filepath.Clean(folder) }
+
 // NamesOneFolder is always true: only Windows reads a name differently by
 // where it falls in a path.
 func NamesOneFolder(string) bool { return true }

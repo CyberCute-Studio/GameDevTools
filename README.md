@@ -6,7 +6,7 @@ The production application provides a native Win32 main window with Screenshot, 
 
 ## Production application
 
-The module targets Go 1.25 and pins the Go 1.27.4 toolchain in `go.mod`, which the `go` command downloads and uses automatically unless `GOTOOLCHAIN=local` is set. No C compiler or CGO is needed. Built executables run without a Go installation or development toolchain.
+The module targets Go 1.25 and names the Go 1.27.4 toolchain in `go.mod`. The `go` command downloads and uses that toolchain automatically, unless a newer Go is already installed, which it uses instead, or `GOTOOLCHAIN=local` is set. Set `GOTOOLCHAIN=go1.27.4` to build with exactly the release toolchain; CI fails a release executable built with any other. No C compiler or CGO is needed. Built executables run without a Go installation or development toolchain.
 
 Start the application shell with:
 
