@@ -549,12 +549,16 @@ var exits = []struct {
 // window, or the end of the Windows session — while a Free Rectangle or
 // Preset Rectangle selection is on screen and the main window is hidden
 // asks nothing, removes every session window, releases the global
-// shortcut, and saves the settings, which a restart loads.
+// shortcut, and saves the settings, which a restart loads. The selected
+// preset is a small custom one, as a CI desktop can be smaller than every
+// built-in, the smallest being 1280 × 720, and a frame that does not fit
+// opens no session (SCR-031).
 func TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut(t *testing.T) {
+	const smallPreset = `{"version":1,"shell":{"selectedModule":"screenshot","window":{"width":1100,"height":700}},"modules":{"screenshot":{"presets":{"version":1,"custom":[{"id":"custom.0123456789abcdef0123456789abcdef","name":"Small frame","width":320,"height":240}],"selectedPresetId":"custom.0123456789abcdef0123456789abcdef"}}}}`
 	for _, mode := range []screenshot.CaptureMode{screenshot.ModeFreeRectangle, screenshot.ModePresetRectangle} {
 		for _, exit := range exits {
 			t.Run(fmt.Sprintf("%s, %s", mode, exit.name), func(t *testing.T) {
-				shell := newAuditShell(t)
+				shell := newAuditShellOn(t, []byte(smallPreset))
 				shell.confirm = func(windows.Handle, string, string) bool {
 					t.Error("exiting asked a question")
 					return false
