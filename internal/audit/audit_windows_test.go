@@ -44,12 +44,38 @@ var reviewedModules = map[string]struct {
 // separately, as golang.org/x/sys/windows imports it for a few types.
 var forbiddenPackages = regexp.MustCompile(`^(net/(http|rpc|smtp|mail|textproto)(/.*)?|crypto/tls|crypto/x509(/.*)?|os/exec|plugin|expvar|log/syslog|runtime/pprof)$`)
 
+// networkFunctions are the functions of syscall and golang.org/x/sys/windows
+// that create, connect, or accept a socket, send to an address, or resolve a
+// name, with the unexported wrappers an inlined call leaves in the
+// executable. The WSA functions every Go program on Windows links for its
+// I/O poller are not among them: they do nothing without a socket, and the
+// functions that create or connect one are.
+var networkFunctions = []string{
+	"Socket", "socket", "WSASocket", "Bind", "bind", "Connect", "connect", "ConnectEx", "LoadConnectEx",
+	"Listen", "listen", "Accept", "AcceptEx", "Recvfrom", "recvfrom", "Sendto", "sendto",
+	"WSARecvFrom", "WSASendTo", "WSASendto", "WSALookupServiceBegin", "WSALookupServiceNext",
+	"GetAddrInfoW", "DnsQuery", "GetHostByName", "GetServByName", "GetProtoByName",
+}
+
 // networkSymbols match the code that opens a connection, listens, or
 // resolves a name. The linker drops what nothing can call, so a match means
-// the application can reach it. The WSA functions every Go program on
-// Windows links for its I/O poller are not matched: they do nothing without
-// a socket, and the functions that create or connect one are.
-var networkSymbols = regexp.MustCompile(`^(net\.(Dial|Listen|Lookup|Resolve|FileConn)|net\.\(\*(Dialer|Resolver|ListenConfig|TCPConn|UDPConn|IPConn|UnixConn|TCPListener|UnixListener|sysDialer)\)\.|syscall\.(Socket|Connect|ConnectEx|Bind|Listen|AcceptEx|GetAddrInfoW|DnsQuery|GetHostByName)|internal/poll\.\(\*FD\)\.(ConnectEx|AcceptEx|Accept|WriteTo|ReadFrom))`)
+// the application can reach it.
+var networkSymbols = regexp.MustCompile(`^(net\.(Dial|Listen|Lookup|Resolve|FileConn)|net\.\(\*(Dialer|Resolver|ListenConfig|TCPConn|UDPConn|IPConn|UnixConn|TCPListener|UnixListener|sysDialer)\)\.|(syscall|golang\.org/x/sys/windows)\.(` + strings.Join(networkFunctions, "|") + `)($|\.)|internal/poll\.\(\*FD\)\.(ConnectEx|AcceptEx|Accept|WriteTo|ReadFrom))`)
+
+// programFunctions are the functions of os, syscall, and
+// golang.org/x/sys/windows that start another program.
+var programFunctions = []string{"StartProcess", "CreateProcess", "CreateProcessAsUser", "ShellExecute"}
+
+// programProcedures are the Windows functions that start another program,
+// which code could bind by name past programFunctions.
+var programProcedures = set("CreateProcessA", "CreateProcessW", "CreateProcessAsUserA", "CreateProcessAsUserW",
+	"CreateProcessWithLogonW", "CreateProcessWithTokenW", "WinExec", "ShellExecuteA", "ShellExecuteW",
+	"ShellExecuteExA", "ShellExecuteExW")
+
+// reviewedProgramSites is every binding of a programProcedures function.
+// ShellExecuteExW is how Open Folder and Reveal in Explorer, which run only
+// when the user asks, open File Explorer.
+var reviewedProgramSites = []string{"internal/ui/folder_windows.go ShellExecuteExW"}
 
 // reviewedLibraries are the Windows libraries the application loads, none
 // of which is a network, download, or telemetry API.
@@ -61,13 +87,20 @@ var reviewedLibraries = []string{
 // fileMutators are the functions through which the application could
 // create, change, move, or remove a file.
 var fileMutators = map[string]map[string]bool{
-	"os": set("Create", "CreateTemp", "WriteFile", "OpenFile", "Rename", "Remove", "RemoveAll",
-		"Mkdir", "MkdirAll", "MkdirTemp", "Chmod", "Chown", "Lchown", "Chtimes", "Symlink", "Link",
+	"os": set("Create", "CreateTemp", "WriteFile", "OpenFile", "OpenRoot", "OpenInRoot", "Rename", "Remove",
+		"RemoveAll", "Mkdir", "MkdirAll", "MkdirTemp", "Chmod", "Chown", "Lchown", "Chtimes", "Symlink", "Link",
 		"Truncate", "CopyFS"),
-	"golang.org/x/sys/windows": set("CreateFile", "DeleteFile", "MoveFile", "MoveFileEx",
-		"CreateDirectory", "RemoveDirectory", "SetFileInformationByHandle", "SetFileAttributes",
-		"SetEndOfFile", "WriteFile", "CreateHardLink", "CreateSymbolicLink", "SetFileTime",
-		"NtCreateFile", "NtSetInformationFile"),
+	"io/ioutil": set("WriteFile", "TempFile", "TempDir"),
+	"syscall": set("CreateFile", "Open", "Write", "WriteFile", "DeleteFile", "MoveFile", "Rename", "Unlink",
+		"CreateDirectory", "RemoveDirectory", "Mkdir", "Rmdir", "SetFileAttributes", "SetEndOfFile", "Ftruncate",
+		"Chmod", "Fchmod", "Chown", "Lchown", "Fchown", "Utimes", "UtimesNano", "SetFileTime",
+		"CreateHardLink", "CreateSymbolicLink", "Link", "Symlink"),
+	"golang.org/x/sys/windows": set("CreateFile", "Open", "Write", "WriteFile", "DeleteFile", "MoveFile",
+		"MoveFileEx", "Rename", "Unlink", "CreateDirectory", "RemoveDirectory", "Mkdir", "Rmdir",
+		"SetFileInformationByHandle", "SetFileAttributes", "SetEndOfFile", "SetFileValidData", "Ftruncate",
+		"Chmod", "Fchmod", "Chown", "Lchown", "Fchown", "Utimes", "UtimesNano", "SetFileTime",
+		"CreateHardLink", "CreateSymbolicLink", "Link", "Symlink", "NtCreateFile", "NtSetInformationFile",
+		"NtSetEaFile"),
 }
 
 // rawFileProcedures are Windows functions that change files, which the
@@ -387,6 +420,56 @@ func TestExecutableContainsNoNetworkCode(t *testing.T) {
 	}
 }
 
+// TestApplicationCallsNoNetworkOrProgramFunction pins NFR-030 and NFR-031 in
+// the source, where a call the compiler inlines still shows: no code uses a
+// socket or name-resolution function, none starts a program through os,
+// syscall, or golang.org/x/sys/windows, and the only binding of a Windows
+// function that starts one is the reviewed Explorer call.
+func TestApplicationCallsNoNetworkOrProgramFunction(t *testing.T) {
+	network, program := set(networkFunctions...), set(programFunctions...)
+	sites := map[string]bool{}
+	for _, source := range applicationSources(t) {
+		names := importNames(source.file)
+		inspectFunctions(source.file, func(function string, node ast.Node) {
+			switch value := node.(type) {
+			case *ast.SelectorExpr:
+				pkg, ok := value.X.(*ast.Ident)
+				if !ok {
+					return
+				}
+				switch path := names[pkg.Name]; {
+				case (path == "syscall" || path == "golang.org/x/sys/windows") && network[value.Sel.Name]:
+					t.Errorf("%s: %s uses the network function %s.%s", source.name, function, pkg.Name, value.Sel.Name)
+				case (path == "os" || path == "syscall" || path == "golang.org/x/sys/windows") && program[value.Sel.Name]:
+					t.Errorf("%s: %s starts a program through %s.%s", source.name, function, pkg.Name, value.Sel.Name)
+				}
+			case *ast.CallExpr:
+				if name, ok := boundProcedure(value); ok && programProcedures[name] {
+					sites[source.name+" "+name] = true
+				}
+			}
+		})
+	}
+	found := make([]string, 0, len(sites))
+	for site := range sites {
+		found = append(found, site)
+	}
+	slices.Sort(found)
+	if !slices.Equal(found, reviewedProgramSites) {
+		t.Errorf("the application binds %v to start a program, the review covers %v", found, reviewedProgramSites)
+	}
+}
+
+// boundProcedure is the Windows function a NewProc call binds, when its name
+// is a constant.
+func boundProcedure(call *ast.CallExpr) (string, bool) {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "NewProc" || len(call.Args) == 0 {
+		return "", false
+	}
+	return stringLiteral(call.Args[0])
+}
+
 // TestApplicationLoadsOnlyReviewedLibraries pins that the application loads
 // only the reviewed Windows libraries, each from the system folder: nothing
 // that speaks HTTP, DNS, or sockets, and no library a planted file of the
@@ -473,16 +556,12 @@ func TestFileChangesStayAtReviewedSites(t *testing.T) {
 					t.Errorf("%s: %s uses the system's temporary folder", source.name, function)
 				}
 			case *ast.CallExpr:
+				if name, ok := boundProcedure(value); ok && rawFileProcedures[name] {
+					t.Errorf("%s binds %s directly", source.name, name)
+				}
 				selector, ok := value.Fun.(*ast.SelectorExpr)
 				if !ok || len(value.Args) == 0 {
 					return
-				}
-				if selector.Sel.Name == "NewProc" {
-					if literal, ok := value.Args[0].(*ast.BasicLit); ok {
-						if name, err := strconv.Unquote(literal.Value); err == nil && rawFileProcedures[name] {
-							t.Errorf("%s binds %s directly", source.name, name)
-						}
-					}
 				}
 				if pkg, ok := selector.X.(*ast.Ident); ok && names[pkg.Name] == "os" && (selector.Sel.Name == "CreateTemp" || selector.Sel.Name == "MkdirTemp") {
 					if literal, ok := value.Args[0].(*ast.BasicLit); ok && literal.Value == `""` {

@@ -60,6 +60,7 @@ var (
 	procCreateAppContainerProfile  = userenv.NewProc("CreateAppContainerProfile")
 	procDeleteAppContainerProfile  = userenv.NewProc("DeleteAppContainerProfile")
 	procDeriveAppContainerSidNamed = userenv.NewProc("DeriveAppContainerSidFromAppContainerName")
+	procGetAppContainerFolderPath  = userenv.NewProc("GetAppContainerFolderPath")
 )
 
 // securityCapabilities is SECURITY_CAPABILITIES with no capabilities, which
@@ -95,8 +96,9 @@ func offlineContainer(t *testing.T) *windows.SID {
 }
 
 // grantContainer gives the container full access to folder and everything
-// created in it. It is the only part of the file system the container can
-// write to.
+// created in it. Besides the container's own profile folder, which
+// containerProfile locates, it is the only part of the file system the
+// container can write to.
 func grantContainer(t *testing.T, folder string, sid *windows.SID) {
 	t.Helper()
 	descriptor, err := windows.GetNamedSecurityInfo(folder, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
@@ -240,8 +242,10 @@ func runInContainer(t *testing.T, sid *windows.SID, workspace, executable, test 
 // complete with no network available. The test runs them on the real main
 // window in a child process inside an AppContainer holding no capabilities,
 // which Windows denies every network connection, loopback included, and
-// every write outside the workspace this test grants it. That takes neither
-// administrator rights nor switching off the machine's network adapters.
+// every write outside the workspace this test grants it and the container's
+// own profile folder, which the test checks the run left unchanged. That
+// takes neither administrator rights nor switching off the machine's network
+// adapters.
 func TestCoreWorkflowsRunOffline(t *testing.T) {
 	sid := offlineContainer(t)
 	workspace := t.TempDir()
@@ -281,6 +285,8 @@ func TestCoreWorkflowsRunOffline(t *testing.T) {
 		}
 	}()
 
+	profile := containerProfile(t, sid)
+	before := profileFiles(t, profile)
 	code, output := runInContainer(t, sid, workspace, executable, "TestOfflineWorkflowsInContainer", listener.Addr().(*net.TCPAddr).Port)
 	if code != 0 || !strings.Contains(output, offlineDone) {
 		t.Fatalf("the sandboxed workflows exited with %d:\n%s", code, output)
@@ -288,6 +294,54 @@ func TestCoreWorkflowsRunOffline(t *testing.T) {
 	if count := accepted.Load(); count != 0 {
 		t.Fatalf("the sandboxed process reached this machine's loopback listener %d time(s)", count)
 	}
+	for path, state := range profileFiles(t, profile) {
+		if before[path] != state {
+			t.Errorf("the run wrote %s, in the AppContainer's own folder", path)
+		}
+	}
+}
+
+// containerProfile is the AppContainer's own folder, the one place outside
+// the workspace that it can write to. Windows redirects a container's
+// per-user folders there, so a write through one would land in it, and the
+// profile's removal would erase the evidence.
+func containerProfile(t *testing.T, sid *windows.SID) string {
+	t.Helper()
+	text, err := windows.UTF16PtrFromString(sid.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folder *uint16
+	if result, _, _ := procGetAppContainerFolderPath.Call(uintptr(unsafe.Pointer(text)), uintptr(unsafe.Pointer(&folder))); result != 0 {
+		t.Fatalf("locate the AppContainer's folder: HRESULT %#x", uint32(result))
+	}
+	defer windows.CoTaskMemFree(unsafe.Pointer(folder))
+	return windows.UTF16PtrToString(folder)
+}
+
+// profileFiles lists every file in the AppContainer's folder with its size
+// and last write, so a file a run added or changed shows.
+func profileFiles(t *testing.T, profile string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(profile, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		files[path] = fmt.Sprintf("%d %d", info.Size(), info.ModTime().UnixNano())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
 }
 
 // TestOfflineWorkflowsInContainer is TestCoreWorkflowsRunOffline's child:
@@ -333,8 +387,11 @@ func TestOfflineWorkflowsInContainer(t *testing.T) {
 // checkNetworkDenied proves the process runs in a capability-less
 // AppContainer and that connections fail by policy. 192.0.2.1 is reserved
 // for documentation (RFC 5737) and routes nowhere, so the probe can reach
-// nothing even if the sandbox were to let it through, and only the access
-// error shows that the sandbox refused it.
+// nothing even if the sandbox were to let it through, and the access error
+// shows that the sandbox refused it. A machine with no network at all may
+// report that it has no route before the sandbox is consulted; nothing left
+// the machine then either, and the token and loopback checks still prove the
+// sandbox.
 func checkNetworkDenied(t *testing.T) {
 	t.Helper()
 	token := windows.GetCurrentProcessToken()
@@ -358,8 +415,8 @@ func checkNetworkDenied(t *testing.T) {
 		connection.Close()
 		t.Fatal("a connection to a remote address succeeded")
 	}
-	if !errors.Is(err, windows.WSAEACCES) {
-		t.Fatalf("a remote connection failed with %v, want the sandbox's access error", err)
+	if !errors.Is(err, windows.WSAEACCES) && !errors.Is(err, windows.WSAENETUNREACH) && !errors.Is(err, windows.WSAEHOSTUNREACH) {
+		t.Fatalf("a remote connection failed with %v, want the sandbox's access error or no route", err)
 	}
 	connection, err = dialer.Dial("tcp4", net.JoinHostPort("127.0.0.1", os.Getenv(offlinePortEnv)))
 	if err == nil {
@@ -504,7 +561,11 @@ func checkOfflineLog(t *testing.T, path, workspace string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{offlineSentinel, filepath.Base(workspace), "Screenshot_", ".png", ".jpg", `:\\`} {
+	// The workspace's own name, 001 from t.TempDir, could be digits of a
+	// timestamp, so the log is searched for its whole path, raw and as JSON
+	// escapes it, and for the test's uniquely named folder that holds it.
+	for _, forbidden := range []string{offlineSentinel, workspace, strings.ReplaceAll(workspace, `\`, `\\`),
+		filepath.Base(filepath.Dir(workspace)), "Screenshot_", ".png", ".jpg", `:\\`} {
 		if bytes.Contains(data, []byte(forbidden)) {
 			t.Fatalf("the log contains %q:\n%s", forbidden, data)
 		}
@@ -537,10 +598,11 @@ func checkOfflineLog(t *testing.T, path, workspace string) {
 }
 
 // checkOfflineWrites pins NFR-032 on a real run: every file in the
-// workspace, the only place the container can write, is in the settings or
-// log folder, an output folder, or the test's own sources. The settings and
-// log folders are taken from the paths the application resolved, as Windows
-// points a container's per-user folders into its own profile.
+// workspace is in the settings or log folder, an output folder, or the
+// test's own sources. The settings and log folders are taken from the paths
+// the application resolved, as Windows points a container's per-user folders
+// into its own profile. TestCoreWorkflowsRunOffline checks that profile, the
+// only other place the container can write, from outside the container.
 func checkOfflineWrites(t *testing.T, workspace string, paths settings.Paths) {
 	t.Helper()
 	approved := []string{

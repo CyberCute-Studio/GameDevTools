@@ -3,10 +3,10 @@ package screenshot
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -110,7 +110,7 @@ func validateOutputFolder(folder string) error {
 	if strings.ContainsRune(folder, 0) || strings.ContainsRune(folder, '�') {
 		return errors.New(ui.OutputFolderInvalid)
 	}
-	if !filepath.IsAbs(folder) {
+	if !pathform.IsAbs(folder) {
 		return errors.New(ui.OutputFolderNotAbsolute)
 	}
 	return nil

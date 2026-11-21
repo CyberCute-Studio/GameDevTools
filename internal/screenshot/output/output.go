@@ -32,9 +32,9 @@ import (
 	"image/png"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
 )
 
@@ -227,7 +227,7 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 		if suffix > 1 {
 			name = fmt.Sprintf("%s_%d", base, suffix)
 		}
-		final := filepath.Join(folder, name+options.Format.Extension())
+		final := pathform.Join(folder, name+options.Format.Extension())
 		if err := os.Link(temporaryPath, final); err != nil {
 			if os.IsExist(err) {
 				continue

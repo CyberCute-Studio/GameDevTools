@@ -31,15 +31,6 @@ func resolvedPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// volumeName, isAbsolute, cleanPath, parentPath, and baseName are package
-// filepath's own outside Windows, where no path has an extended-length
-// prefix.
-func volumeName(path string) string { return filepath.VolumeName(path) }
-func isAbsolute(path string) bool   { return filepath.IsAbs(path) }
-func cleanPath(path string) string  { return filepath.Clean(path) }
-func parentPath(path string) string { return filepath.Dir(path) }
-func baseName(path string) string   { return filepath.Base(path) }
-
 // resolvesAsWritten reports whether the system resolves a cleaned absolute
 // path to exactly that path. Outside Windows every name is kept as written.
 func resolvesAsWritten(string) bool { return true }

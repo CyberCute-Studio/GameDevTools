@@ -43,12 +43,12 @@ Results below were recorded on 2026-11-21:
 
 ## Offline operation
 
-`app.TestCoreWorkflowsRunOffline` runs both core workflows with no network available. Switching the machine's adapters off would need administrator rights and would cut off everything else on it, so the test starts a child process inside a Windows **AppContainer** that holds no capabilities. Windows denies such a process every network connection, loopback included, and every write outside the folders granted to it. The test grants it one temporary workspace and removes the container's profile afterward.
+`app.TestCoreWorkflowsRunOffline` runs both core workflows with no network available. Switching the machine's adapters off would need administrator rights and would cut off everything else on it, so the test starts a child process inside a Windows **AppContainer** that holds no capabilities. Windows denies such a process every network connection, loopback included, and every write outside the folders granted to it and the container's own profile folder. The test grants it one temporary workspace, checks that the run left the profile folder unchanged, and removes the profile afterward.
 
 | Step in the sandbox | Result |
 |---|---|
 | The process token is an AppContainer with zero capabilities | Pass |
-| A TCP connection to `192.0.2.1`, an address reserved for documentation that routes nowhere, fails with the sandbox's access error | Pass |
+| A TCP connection to `192.0.2.1`, an address reserved for documentation that routes nowhere, fails with the sandbox's access error (the test also accepts a no-route error, which a machine with no network may report first; that case has not been run) | Pass |
 | A TCP connection to a listener the parent test holds on loopback fails, and the listener accepts nothing | Pass |
 | Full Display capture through Start Capture on the real main window saves a complete PNG and reports the clipboard copy as successful | Pass |
 | A real Image Resizer job through Start Resize saves every result and leaves every source byte-identical | Pass |
@@ -56,6 +56,7 @@ Results below were recorded on 2026-11-21:
 | The log holds only well-formed events and no file name, folder, or workspace path | Pass |
 | The settings file records no source image's name | Pass |
 | Every file in the workspace is in the settings folder, the log folder, an output folder, or the test's own sources, with no temporary file left | Pass |
+| The container's own profile folder, the only other place it can write, holds no file the run added or changed | Pass |
 
 ## Network, account, and telemetry audit
 
@@ -63,9 +64,10 @@ The application has no network code, account, sign-in, activation, update check,
 
 | Check | Test | Result |
 |---|---|---|
-| No HTTP, mail, RPC, or TLS client, no way to run another program or load code, and no profiling endpoint is linked | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
+| No HTTP, mail, RPC, or TLS client, no package for running another program or loading code, and no profiling endpoint is linked | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
 | `net` is imported only by `golang.org/x/sys/windows`, for a few types | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
-| The built executable holds no function that opens, connects, or listens on a socket or resolves a name | `audit.TestExecutableContainsNoNetworkCode` | Pass |
+| The built executable holds no function, in `net`, `syscall`, or `x/sys/windows`, that opens, connects, or listens on a socket or resolves a name | `audit.TestExecutableContainsNoNetworkCode` | Pass |
+| No application code calls a socket or name-resolution function, or starts a program through `os`, `syscall`, or `x/sys/windows`. The only program it starts is File Explorer, through one reviewed `ShellExecuteExW` binding, for Open Folder and Reveal in Explorer when the user asks | `audit.TestApplicationCallsNoNetworkOrProgramFunction` | Pass |
 | Only nine reviewed Windows libraries are loaded, each from the system folder, none of them a network API | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
 | No string in the application is a URL | `audit.TestApplicationNamesNoNetworkEndpoint` | Pass |
 
@@ -77,7 +79,7 @@ Windows can sync the clipboard to a user's other devices through their Microsoft
 
 ## Filesystem access review
 
-`audit.TestFileChangesStayAtReviewedSites` lists every function that can create, change, move, or remove a file, and fails on any site not reviewed here. It also fails if code binds a file-changing Windows function by name around that list, or uses the system's temporary folder.
+`audit.TestFileChangesStayAtReviewedSites` checks every use of the functions in `os`, `io/ioutil`, `syscall`, and `x/sys/windows` that can create, change, move, or remove a file, and fails on any site not reviewed here. It also fails if code binds a file-changing Windows function by name around that list, or uses the system's temporary folder.
 
 | Location | What is written | Code |
 |---|---|---|
@@ -132,7 +134,8 @@ Before this item, the release was built with Go 1.24.0, a release line Go no lon
 | The release was built with Go 1.24.0, which no longer receives security fixes. | `go.mod` pins the go1.27.4 toolchain, and a CI step fails if the release executable was built with any other. |
 | `x/sys` v0.38.0 carried GO-2026-5024, in a function the application does not link. | Moved to `x/sys` v0.47.0 and `go 1.25.0`. |
 | Reveal in Explorer ran `explorer.exe` by its bare name, which Windows looks up through a search path that can include the application's and the current folder. | It now runs Explorer by its full path in the Windows folder. |
-| Moving to Go 1.27 broke the Image Resizer's output-folder rules for network shares. Go 1.27's `path/filepath` takes the server and share of a `\\?\UNC` or `\??\UNC` path into its volume name, so every share was refused as naming only a volume, and `Clean` appended a period to a `\??\UNC` share's root, which would have named another folder. | The `output` package reads these paths through its own `volumeName`, `isAbsolute`, `cleanPath`, `parentPath`, and `baseName`, which give the same answer on Go 1.26 and 1.27 (`output.TestExtendedUNCPathsReadAlikeOnEveryGoRelease`). |
+| Moving to Go 1.27 broke the output-folder rules of both modules. Go 1.27's `path/filepath` takes the server and share of a `\\?\UNC` or `\??\UNC` path into its volume name, so every share was refused as naming only a volume, and `Clean` appended a period to a `\??\UNC` share's root, which would have named another folder. It also calls a path with `..` where a server or share belongs, such as `\\server\..\x`, relative, so a stored folder of either kind would have failed the settings file's validation and reset every module, and `Join` would have moved such a folder to the current drive. | Both modules read output folders through `internal/pathform`, whose `VolumeName`, `IsAbs`, `Clean`, `Dir`, `Base`, and `Join` give the same answer on Go 1.26 and 1.27 (`pathform.TestPathsReadAlikeOnEveryGoRelease`). |
+| A clipboard marker that could not be prepared left the clipboard already emptied, losing what the user had copied. | The marker is prepared before the clipboard is opened. |
 
 The logs, the file writes, and the dependency set needed no change.
 
@@ -150,7 +153,7 @@ The logs, the file writes, and the dependency set needed no change.
 
 ## What these results do not cover
 
-- **A machine with its adapters off.** The offline test denies the network to the application's process. Before release, turn on airplane mode and run a capture and a resize job by hand.
+- **A machine with its adapters off.** The offline test denies the network to the application's process, and has not itself been run with the adapters off. Before release, turn on airplane mode and run a capture and a resize job by hand.
 - **Name resolution inside the sandbox.** Windows resolves names in a system service, so the sandbox is not shown to block a lookup. That path is covered by the executable holding no name-resolution code.
 - **A write the sandbox refused.** A denied write outside the workspace leaves no trace the test can read, so the review of every file-changing site is what covers it.
 - **Real clipboard sync.** The marker is the documented opt-out, and the test reads it back, but no signed-in account was used to observe that nothing was uploaded. A third-party clipboard manager may ignore the marker.

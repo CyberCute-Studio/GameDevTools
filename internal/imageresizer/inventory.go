@@ -11,6 +11,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -363,7 +364,7 @@ func (v *Inventory) addFolder(folder string, summary *AddSummary) {
 		if entry.IsDir() || !SupportedExtension(entry.Name()) {
 			continue
 		}
-		v.addFile(filepath.Join(folder, entry.Name()), summary)
+		v.addFile(pathform.Join(folder, entry.Name()), summary)
 	}
 }
 

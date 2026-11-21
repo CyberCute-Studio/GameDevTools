@@ -67,7 +67,9 @@ type bitmapInfoHeader struct {
 // does not send it to the user's other devices (NFR-031), and stays in the
 // local clipboard history (Win+V). An image that cannot be marked is not
 // placed at all: the failure is reported as a clipboard failure, and the
-// saved file is unaffected (SCR-060).
+// saved file is unaffected (SCR-060). The marker and the image are both
+// prepared before the clipboard is opened, so a failure to prepare either
+// leaves what the user had copied in place.
 //
 // OpenClipboard fails while another application holds the clipboard open,
 // so the open is retried briefly before the attempt is reported as a
@@ -85,6 +87,18 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 		BitCount:  32,
 		SizeImage: uint32(width * height * 4),
 	}
+	marker, err := prepareUploadMarker()
+	if err != nil {
+		return err
+	}
+	// Like the image's allocation, the marker's belongs to the system once
+	// SetClipboardData accepts it.
+	markerOwnedByClipboard := false
+	defer func() {
+		if !markerOwnedByClipboard {
+			procGlobalFree.Call(marker.handle)
+		}
+	}()
 	allocationSize := unsafe.Sizeof(header) + uintptr(width*height*4)
 	allocation, _, err := procGlobalAlloc.Call(gmemMoveable, allocationSize)
 	if allocation == 0 {
@@ -138,9 +152,11 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	if r == 0 {
 		return kindError(KindClipboard, "EmptyClipboard", callError(err))
 	}
-	if err := markNotForCloudUpload(); err != nil {
-		return err
+	// The marker goes first, so the clipboard never holds the image without it.
+	if r, _, err := procSetClipboardData.Call(marker.format, marker.handle); r == 0 {
+		return kindError(KindClipboard, "SetClipboardData("+cloudUploadFormat+")", callError(err))
 	}
+	markerOwnedByClipboard = true
 	r, _, err = procSetClipboardData.Call(cfDIB, allocation)
 	if r == 0 {
 		// The marker is not left on the clipboard without its image.
@@ -151,26 +167,33 @@ func setClipboardImage(owner uintptr, img *image.RGBA) error {
 	return nil
 }
 
-// markNotForCloudUpload places the cloudUploadFormat marker, a zero DWORD,
-// on the clipboard, which the caller holds open and has emptied.
-func markNotForCloudUpload() error {
+// uploadMarker is the cloudUploadFormat marker, a zero DWORD, ready to place
+// on the clipboard.
+type uploadMarker struct {
+	format uintptr
+	handle uintptr
+}
+
+// prepareUploadMarker is newUploadMarker, replaceable by a test that needs
+// the marker to fail.
+var prepareUploadMarker = newUploadMarker
+
+// newUploadMarker registers the marker's format and allocates its value,
+// which the caller frees unless the clipboard takes it.
+func newUploadMarker() (uploadMarker, error) {
 	name, err := windows.UTF16PtrFromString(cloudUploadFormat)
 	if err != nil {
-		return kindError(KindClipboard, "RegisterClipboardFormat", err)
+		return uploadMarker{}, kindError(KindClipboard, "RegisterClipboardFormat", err)
 	}
 	format, _, err := procRegisterClipboardFormatW.Call(uintptr(unsafe.Pointer(name)))
 	if format == 0 {
-		return kindError(KindClipboard, "RegisterClipboardFormat", callError(err))
+		return uploadMarker{}, kindError(KindClipboard, "RegisterClipboardFormat", callError(err))
 	}
-	marker, _, err := procGlobalAlloc.Call(gmemMoveable|gmemZeroInit, unsafe.Sizeof(uint32(0)))
-	if marker == 0 {
-		return kindError(KindClipboard, "GlobalAlloc", callError(err))
+	handle, _, err := procGlobalAlloc.Call(gmemMoveable|gmemZeroInit, unsafe.Sizeof(uint32(0)))
+	if handle == 0 {
+		return uploadMarker{}, kindError(KindClipboard, "GlobalAlloc", callError(err))
 	}
-	if r, _, err := procSetClipboardData.Call(format, marker); r == 0 {
-		procGlobalFree.Call(marker)
-		return kindError(KindClipboard, "SetClipboardData("+cloudUploadFormat+")", callError(err))
-	}
-	return nil
+	return uploadMarker{format: format, handle: handle}, nil
 }
 
 func lockGlobalMemory(handle uintptr) (uintptr, error) {

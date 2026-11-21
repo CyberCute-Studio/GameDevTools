@@ -4,9 +4,10 @@ package imageresizer
 
 import (
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 )
 
 // DefaultOutputFolder resolves the per-user Pictures folder and appends the
@@ -24,7 +25,7 @@ func DefaultOutputFolder() (string, error) {
 // drop. A path it cannot resolve is returned as it is, for the folder rules
 // to judge.
 func resolveFolder(path string) string {
-	if !filepath.IsAbs(path) {
+	if !pathform.IsAbs(path) {
 		return path
 	}
 	full, err := windows.FullPath(path)

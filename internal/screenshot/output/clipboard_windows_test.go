@@ -289,6 +289,28 @@ func TestSetClipboardImageOptsOutOfCloudUploadOnly(t *testing.T) {
 	t.Fatalf("the clipboard never held the marked image: %s", last)
 }
 
+// TestSetClipboardImageKeepsContentsWhenTheMarkerFails pins that a marker
+// that cannot be prepared leaves what the user had copied on the clipboard.
+// Other test binaries share the clipboard, so a run another writer disturbed
+// is made again.
+func TestSetClipboardImageKeepsContentsWhenTheMarkerFails(t *testing.T) {
+	failure := kindError(KindClipboard, "RegisterClipboardFormat", errors.New("no atoms left"))
+	prepareUploadMarker = func() (uploadMarker, error) { return uploadMarker{}, failure }
+	t.Cleanup(func() { prepareUploadMarker = newUploadMarker })
+	for range 5 {
+		before := clipboardSequence()
+		err := setClipboardImage(0, sampleImage(3, 2))
+		if !errors.Is(err, failure) {
+			t.Fatalf("setClipboardImage = %v, want the marker's failure", err)
+		}
+		if clipboardSequence() == before {
+			return
+		}
+		time.Sleep(clipboardOpenRetryWait)
+	}
+	t.Fatal("the clipboard changed on every attempt")
+}
+
 func TestDeliverClipboardAndSave(t *testing.T) {
 	folder := t.TempDir()
 	img := sampleImage(4, 2)

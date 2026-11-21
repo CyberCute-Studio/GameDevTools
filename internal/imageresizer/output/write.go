@@ -10,6 +10,8 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 )
 
 // tempPrefix and tempSuffix frame the names of the temporary files Write
@@ -184,7 +186,7 @@ func write(ctx context.Context, item Item, encode func(io.Writer) error, steps w
 	if err := item.checkDestination(); err != nil {
 		return "", err
 	}
-	temp, err := createTemp(parentPath(item.Destination))
+	temp, err := createTemp(pathform.Dir(item.Destination))
 	if err != nil {
 		return "", resultFailure("create temporary file", item.Destination, err)
 	}
@@ -285,7 +287,7 @@ func (i Item) checkSaves() error {
 	if !i.Writes() {
 		return kindError(KindValidation, "write result", fmt.Errorf("%w: its action is %v", ErrNotWritten, i.Action))
 	}
-	if !isAbsolute(i.Destination) {
+	if !pathform.IsAbs(i.Destination) {
 		return kindError(KindValidation, "write result", fmt.Errorf("the destination %q is not an absolute path", i.Destination))
 	}
 	return nil
@@ -367,7 +369,7 @@ func asideName(destination string) string {
 // it is.
 func unusedName(folder string, name func() string, try func(path string) error) (string, error) {
 	for range tempAttempts {
-		path := filepath.Join(folder, name())
+		path := pathform.Join(folder, name())
 		err := try(path)
 		if err == nil {
 			return path, nil
