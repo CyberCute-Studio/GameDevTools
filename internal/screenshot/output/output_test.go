@@ -322,6 +322,56 @@ func TestSaveReachesAFolderWhoseOwnNameEndsInASpaceOrPeriods(t *testing.T) {
 	}
 }
 
+// TestSaveRefusesAFolderItWouldReachAsItsNeighbor pins that a folder whose
+// name ends in a space and then a period is refused, rather than having its
+// capture land in the folder of the same name without the period.
+func TestSaveRefusesAFolderItWouldReachAsItsNeighbor(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows reads a name differently by where it falls in a path")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"x .", "x "} {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := save(sampleImage(2, 2), optionsFor(root+`\x .`, screenshot.FormatPNG), time.Now())
+	if !errors.Is(err, errFolderReadTwoWays) {
+		t.Fatalf("save = %v, want %v", err, errFolderReadTwoWays)
+	}
+	for _, name := range []string{"x .", "x "} {
+		if entries, err := os.ReadDir(`\\?\` + root + `\` + name); err != nil || len(entries) != 0 {
+			t.Fatalf("the refused save left %v in %q (read error %v)", entries, name, err)
+		}
+	}
+}
+
+// TestSaveReportsAnUnavailableFolderAsUnavailable pins that a folder through a
+// name ending in a space, on a drive that is gone, fails with the reason
+// rather than as a path to replace, since it works again once the drive is
+// back.
+func TestSaveReportsAnUnavailableFolderAsUnavailable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows has drive letters")
+	}
+	for letter := 'Z'; letter >= 'D'; letter-- {
+		if _, err := os.Stat(string(letter) + `:\`); err == nil {
+			continue
+		}
+		folder := string(letter) + `:\Art\Shots `
+		_, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
+		assertKind(t, err, KindFolder)
+		if errors.Is(err, errFolderReadTwoWays) {
+			t.Fatalf("save = %v, want the drive's own failure", err)
+		}
+		if text := err.Error(); strings.Contains(text, `\\?\`) {
+			t.Fatalf("the failure reads %q, want the folder as written", text)
+		}
+		return
+	}
+	t.Skip("every drive letter is in use")
+}
+
 // TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder
 // with no name Windows would shorten is created as written.
 func TestSaveCreatesAMissingFolderThroughADevicePath(t *testing.T) {

@@ -5,6 +5,8 @@ package pathform
 import (
 	"os"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestReadsAsOneFolder pins which output folders Windows reads as one place
@@ -96,6 +98,56 @@ func TestSaveFolderReachesARealFolderByItsOwnName(t *testing.T) {
 	} {
 		if got, ok := SaveFolder(folder); ok {
 			t.Errorf("SaveFolder(%q) = %q, want no spelling", folder, got)
+		}
+	}
+}
+
+// TestSaveFolderRefusesANameItsSpellingWouldShorten pins that a name ending
+// in a space and then a period gets no spelling, even beside a folder without
+// the period, which is where a separator after that name leads.
+func TestSaveFolderRefusesANameItsSpellingWouldShorten(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"x .", "x "} {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, ok := SaveFolder(root + `\x .`); ok {
+		t.Errorf("SaveFolder = %q, which leads to the folder without the period", got)
+	}
+	if got, ok := SaveFolder(root + `\x `); !ok || got != root+`\x \` {
+		t.Errorf("SaveFolder of the folder ending in a space = %q, %v", got, ok)
+	}
+}
+
+// TestNoSuchFolderTellsMissingFromUnreachable pins that only a folder missing
+// from a volume that answers counts as missing, so an offline share or a
+// removed drive is reported as what it is.
+func TestNoSuchFolderTellsMissingFromUnreachable(t *testing.T) {
+	root := t.TempDir()
+	for _, code := range []windows.Errno{windows.ERROR_FILE_NOT_FOUND, windows.ERROR_PATH_NOT_FOUND, windows.ERROR_DIRECTORY} {
+		if !noSuchFolder(root+`\Missing \`, &os.PathError{Op: "stat", Path: root, Err: code}) {
+			t.Errorf("error %d on a drive that answers does not count as missing", code)
+		}
+	}
+	for _, code := range []windows.Errno{
+		windows.ERROR_BAD_NETPATH, windows.ERROR_BAD_NET_NAME, windows.ERROR_ACCESS_DENIED, windows.ERROR_NOT_READY,
+	} {
+		if noSuchFolder(root+`\Missing \`, &os.PathError{Op: "stat", Path: root, Err: code}) {
+			t.Errorf("error %d counts as a missing folder", code)
+		}
+	}
+	drives, err := windows.GetLogicalDrives()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for letter := 25; letter >= 2; letter-- {
+		if drives&(1<<letter) == 0 {
+			folder := string(rune('A'+letter)) + `:\Art\Shots \`
+			if noSuchFolder(folder, &os.PathError{Op: "stat", Path: folder, Err: windows.ERROR_PATH_NOT_FOUND}) {
+				t.Errorf("a folder on the absent drive %s counts as missing", folder[:2])
+			}
+			return
 		}
 	}
 }

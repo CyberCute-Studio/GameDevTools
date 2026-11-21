@@ -17,6 +17,7 @@
 package pathform
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,7 +224,11 @@ func ReadsAsOneFolder(folder string) bool {
 // under that name, so while a folder of exactly that name exists it is used
 // through a trailing separator, which makes every step read the name whole.
 // Without such a folder there is no spelling to use, as creating the path as
-// written would make the folder without those characters.
+// written would make the folder without those characters. A name ending in a
+// space and then one period has none either: Windows drops that period even
+// before a separator, so the spelling would lead to the folder without it.
+// A folder that cannot be looked at, as when its share is offline, keeps the
+// spelling, so that the save fails with the reason rather than as a bad path.
 func SaveFolder(folder string) (string, bool) {
 	if ReadsAsOneFolder(folder) {
 		return folder, true
@@ -232,13 +237,36 @@ func SaveFolder(folder string) (string, bool) {
 		return "", false
 	}
 	whole := folder + `\`
-	if !ReadsAsOneFolder(whole) {
+	full, err := resolved(whole)
+	name := folder[strings.LastIndexAny(folder, `\/`)+1:]
+	if err != nil || !strings.HasSuffix(full, `\`+name+`\`) || !ReadsAsOneFolder(whole) {
 		return "", false
 	}
-	if info, err := os.Stat(whole); err != nil || !info.IsDir() {
+	info, err := os.Stat(whole)
+	switch {
+	case err == nil && info.IsDir():
+		return whole, true
+	case err == nil || noSuchFolder(whole, err):
 		return "", false
 	}
 	return whole, true
+}
+
+// noSuchFolder reports whether a failed look at a folder means no folder is
+// there, rather than that it could not be reached. A file of that name says
+// so with ERROR_DIRECTORY. A missing name says so with the two not-found
+// codes, not with everything fs.ErrNotExist covers, which includes a server
+// that does not answer, and only on a volume that answers, as a drive that is
+// gone reports a missing path.
+func noSuchFolder(folder string, err error) bool {
+	if errors.Is(err, windows.ERROR_DIRECTORY) {
+		return true
+	}
+	if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return false
+	}
+	_, rootErr := os.Stat(VolumeName(folder) + `\`)
+	return rootErr == nil
 }
 
 // CreationPath is the spelling of a folder to give os.MkdirAll. MkdirAll
