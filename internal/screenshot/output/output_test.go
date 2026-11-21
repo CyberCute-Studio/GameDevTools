@@ -9,7 +9,6 @@ import (
 	"image/png"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -240,177 +239,67 @@ func TestSaveRejectsFolderBlockedByFile(t *testing.T) {
 	assertKind(t, err, KindFolder)
 }
 
-// TestSaveRefusesAFolderWindowsReadsTwoWays pins that a folder whose last name
-// ends in a space, which Windows drops there but keeps once a file follows it,
-// fails before anything is created, rather than leaving a stray folder behind
-// and failing the write, and that one ending in a single period, which Windows
-// drops in both places, still saves.
-func TestSaveRefusesAFolderWindowsReadsTwoWays(t *testing.T) {
+// TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace pins NFR-032 for a
+// stored folder: a path through a name ending in a space or a period, which
+// Windows may shorten by where it falls, is refused before anything is
+// created, and a real folder of that name and its neighbor receive nothing.
+func TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows reads a name differently by where it falls in a path")
 	}
 	root := t.TempDir()
-	_, err := save(sampleImage(2, 2), optionsFor(filepath.Join(root, "Shots")+" ", screenshot.FormatPNG), time.Now())
-	assertKind(t, err, KindFolder)
-	if !errors.Is(err, errFolderReadTwoWays) {
-		t.Fatalf("save = %v, want %v", err, errFolderReadTwoWays)
-	}
-	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
-		t.Fatalf("the refused save left %v (read error %v)", entries, err)
-	}
-	path, err := save(sampleImage(2, 2), optionsFor(filepath.Join(root, "Dotted")+".", screenshot.FormatPNG), time.Now())
-	if err != nil {
-		t.Fatalf("save to a folder ending in a period: %v", err)
-	}
-	if info, err := os.Stat(filepath.Join(root, "Dotted", filepath.Base(path))); err != nil || info.IsDir() {
-		t.Fatalf("the saved file is not in the folder Windows resolved: %v", err)
-	}
-}
-
-// TestSaveCreatesAFolderThroughANameWindowsWouldShorten pins that a missing
-// folder through a name ending in a space is created under that name, with
-// no stray folder without the space beside it.
-func TestSaveCreatesAFolderThroughANameWindowsWouldShorten(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only Windows reads a name differently by where it falls in a path")
-	}
-	root := t.TempDir()
-	folder := root + `\Photos \Shots`
-	path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
-	if err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	decodeFile(t, path)
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "Photos " {
-		t.Fatalf("the output root holds %v, want only the folder %q", entries, "Photos ")
-	}
-}
-
-// TestSaveReachesAFolderWhoseOwnNameEndsInASpaceOrPeriods pins that a real
-// folder of such a name, as the picker returns for one ending in a space,
-// keeps receiving captures, with no stray folder without those characters
-// beside it.
-func TestSaveReachesAFolderWhoseOwnNameEndsInASpaceOrPeriods(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only Windows reads a name differently by where it falls in a path")
-	}
-	root := t.TempDir()
-	names := []string{"Shots ", "v2.."}
-	for _, name := range names {
-		folder := root + `\` + name
-		if err := os.Mkdir(`\\?\`+folder, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
-		if err != nil {
-			t.Fatalf("save to %q: %v", folder, err)
-		}
-		if !strings.HasPrefix(path, folder+`\`) {
-			t.Fatalf("saved to %q, want a file in %q", path, folder)
-		}
-		decodeFile(t, path)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != len(names) {
-		t.Fatalf("the output root holds %v, want only %q", entries, names)
-	}
-}
-
-// TestSaveRefusesAFolderItWouldReachAsItsNeighbor pins that a folder through
-// a name ending in a space and then a period, wherever that name falls, is
-// refused, rather than having its capture land under the name without the
-// period.
-func TestSaveRefusesAFolderItWouldReachAsItsNeighbor(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only Windows reads a name differently by where it falls in a path")
-	}
-	root := t.TempDir()
-	for _, name := range []string{"x .", "x "} {
+	real := []string{"x .", "x ", "x", "v2..", "v2"}
+	for _, name := range real {
 		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, rest := range []string{`\x .`, `\x .\`, `\x .\Shots`} {
+	for _, rest := range []string{
+		`\x `, `\x .`, `\x .\`, `\x .\Shots`, `\v2..`, `\v2..\Shots`, `\Missing `, `\Missing.`, `\Photos \Shots`,
+	} {
 		_, err := save(sampleImage(2, 2), optionsFor(root+rest, screenshot.FormatPNG), time.Now())
+		assertKind(t, err, KindFolder)
 		if !errors.Is(err, errFolderReadTwoWays) {
 			t.Fatalf("save to %q = %v, want %v", rest, err, errFolderReadTwoWays)
 		}
-		for _, name := range []string{"x .", "x "} {
-			if entries, err := os.ReadDir(`\\?\` + root + `\` + name); err != nil || len(entries) != 0 {
-				t.Fatalf("the save to %q left %v in %q (read error %v)", rest, entries, name, err)
-			}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(real) {
+		t.Fatalf("the refused saves left %v in the output root", entries)
+	}
+	for _, name := range real {
+		if inside, err := os.ReadDir(`\\?\` + root + `\` + name); err != nil || len(inside) != 0 {
+			t.Fatalf("a refused save left %v in %q (read error %v)", inside, name, err)
 		}
 	}
 }
 
-// TestSaveReportsAnUnavailableFolderAsUnavailable pins that a folder through a
-// name ending in a space, on a drive that is gone, fails with the reason
-// rather than as a path to replace, since it works again once the drive is
-// back.
-func TestSaveReportsAnUnavailableFolderAsUnavailable(t *testing.T) {
+// TestSaveUsesTheCleanedFolder pins that a stored folder with a ".." is
+// created and written as Windows reads it, leaving no stray folder for the
+// name the ".." removes.
+func TestSaveUsesTheCleanedFolder(t *testing.T) {
 	if runtime.GOOS != "windows" {
-		t.Skip("only Windows has drive letters")
-	}
-	for letter := 'Z'; letter >= 'D'; letter-- {
-		if _, err := os.Stat(string(letter) + `:\`); err == nil {
-			continue
-		}
-		folder := string(letter) + `:\Art\Shots `
-		_, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
-		assertKind(t, err, KindFolder)
-		if errors.Is(err, errFolderReadTwoWays) {
-			t.Fatalf("save = %v, want the drive's own failure", err)
-		}
-		if text := err.Error(); strings.Contains(text, `\\?\`) {
-			t.Fatalf("the failure reads %q, want the folder as written", text)
-		}
-		return
-	}
-	t.Skip("every drive letter is in use")
-}
-
-// TestSaveReportsAFolderBehindABrokenLinkAsUnavailable pins that a folder
-// through a junction whose target is gone fails with that failure rather than
-// as a path to replace, and that the save recreates nothing behind the link.
-func TestSaveReportsAFolderBehindABrokenLinkAsUnavailable(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only Windows has directory junctions")
+		t.Skip("the stored spelling is a Windows path")
 	}
 	root := t.TempDir()
-	target := root + `\target`
-	if err := os.Mkdir(target, 0o755); err != nil {
-		t.Fatal(err)
+	path, err := save(sampleImage(2, 2), optionsFor(root+`\Missing\Old\..\New`, screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save: %v", err)
 	}
-	link := root + `\link`
-	if output, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
-		t.Skipf("the volume cannot hold a junction: %v: %s", err, output)
+	if want := filepath.Join(root, "Missing", "New", filepath.Base(path)); path != want {
+		t.Fatalf("saved to %q, want %q", path, want)
 	}
-	t.Cleanup(func() { os.Remove(link) })
-	if err := os.Remove(target); err != nil {
-		t.Fatal(err)
-	}
-	_, err := save(sampleImage(2, 2), optionsFor(link+`\Shots `, screenshot.FormatPNG), time.Now())
-	assertKind(t, err, KindFolder)
-	if errors.Is(err, errFolderReadTwoWays) {
-		t.Fatalf("save = %v, want the broken link's own failure", err)
-	}
-	if text := err.Error(); strings.Contains(text, `\\?\`) {
-		t.Fatalf("the failure reads %q, want the folder as written", text)
-	}
-	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the junction's target after the save: %v, want it still missing", err)
+	decodeFile(t, path)
+	if _, err := os.Stat(filepath.Join(root, "Missing", "Old")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the name the .. removes: %v, want it never created", err)
 	}
 }
 
-// TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder
-// with no name Windows would shorten is created as written.
+// TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder is
+// created as written.
 func TestSaveCreatesAMissingFolderThroughADevicePath(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("only Windows has device paths")
@@ -423,39 +312,6 @@ func TestSaveCreatesAMissingFolderThroughADevicePath(t *testing.T) {
 	decodeFile(t, path)
 	if info, err := os.Stat(filepath.Join(root, "New", "Shots", filepath.Base(path))); err != nil || info.IsDir() {
 		t.Fatalf("the saved file is not in the created folder: %v", err)
-	}
-}
-
-// TestSaveFolderFailureNamesTheFolderAsWritten pins that a folder created
-// through its extended-length spelling is named as the user knows it when
-// that fails.
-func TestSaveFolderFailureNamesTheFolderAsWritten(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("only Windows has extended-length paths")
-	}
-	root := t.TempDir()
-	if err := os.WriteFile(`\\?\`+root+`\Blocked `, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	_, err := save(sampleImage(2, 2), optionsFor(root+`\Blocked \Inner`, screenshot.FormatPNG), time.Now())
-	assertKind(t, err, KindFolder)
-	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, root+`\Blocked `) {
-		t.Fatalf("the failure reads %q, want the folder as written", text)
-	}
-	// A folder stored with forward slashes, failing two names above its end.
-	slashed := filepath.ToSlash(root) + "/Blocked "
-	_, err = save(sampleImage(2, 2), optionsFor(slashed+"/In/Deep", screenshot.FormatPNG), time.Now())
-	assertKind(t, err, KindFolder)
-	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, slashed) {
-		t.Fatalf("the failure reads %q, want the folder as written", text)
-	}
-	// A last name Windows shortens leaves no text to match the failed part
-	// to, so the failure names the whole folder.
-	shortened := root + `\Blocked \Inner.`
-	_, err = save(sampleImage(2, 2), optionsFor(shortened, screenshot.FormatPNG), time.Now())
-	assertKind(t, err, KindFolder)
-	if text := err.Error(); strings.Contains(text, `\\?\`) || !strings.Contains(text, shortened) {
-		t.Fatalf("the failure reads %q, want the folder as written", text)
 	}
 }
 

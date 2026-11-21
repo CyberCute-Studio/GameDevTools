@@ -17,10 +17,8 @@
 package pathform
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -188,191 +186,29 @@ func Join(folder string, names ...string) string {
 	return Clean(joined)
 }
 
-// ReadsAsOneFolder reports whether Windows reads a folder's path as one place
-// however a save reaches it: as written, as os.MkdirAll and os.Stat take it;
-// with a file's name after it, as os.CreateTemp writes it; and through Join.
-// These can differ. Windows drops trailing spaces and periods from a path's
-// last name but keeps a space or a second period in a name a longer path
-// leads through, so C:\Art\Shots followed by a space is the folder Shots as
-// written and a folder with the space once a file follows it. Clean folds a
-// ".." that Windows reads as leaving the share, so \\.\UNC\server\share\..\x
-// is the share x as written and a folder in the share through Join. A path
-// marked \\?\ or \??\ is one Windows takes verbatim. A single trailing period,
-// which Windows drops in both positions, reads as one folder.
-func ReadsAsOneFolder(folder string) bool {
-	const name = "name"
-	written, err := resolved(folder)
-	if err != nil {
-		return false
-	}
-	inside := folder + `\` + name
-	if os.IsPathSeparator(folder[len(folder)-1]) {
-		inside = folder + name
-	}
-	want := strings.TrimRight(written, `\`) + `\` + name
-	for _, path := range []string{inside, Join(folder, name)} {
-		if got, err := resolved(path); err != nil || got != want {
-			return false
-		}
-	}
-	return true
-}
-
-// SaveFolder is the spelling a save should use for an output folder, and
-// whether it has one. A folder Windows reads as one place is used as written.
-// One read two ways because its last name ends in a space or a second period
-// can be a real folder, and the folder picker returns one ending in a space
-// under that name, so while a folder of exactly that name exists it is used
-// through a trailing separator, which makes every step read the name whole.
-// Without such a folder there is no spelling to use, as creating the path as
-// written would make the folder without those characters. A path through a
-// name ending in a space and then one period has none either, wherever that
-// name falls: see throughNameLosingPeriod. A folder that cannot be looked at,
-// as when its share is offline or a junction on its path has lost its target,
-// keeps the spelling, so that the save fails with the reason rather than as a
-// bad path. A spelling other than the folder as written is for a folder that
-// already exists, so a save must not create it.
-func SaveFolder(folder string) (string, bool) {
-	if throughNameLosingPeriod(folder) {
-		return "", false
-	}
-	if ReadsAsOneFolder(folder) {
-		return folder, true
-	}
-	if folder == "" || os.IsPathSeparator(folder[len(folder)-1]) {
-		return "", false
-	}
-	whole := folder + `\`
-	full, err := resolved(whole)
-	name := folder[strings.LastIndexAny(folder, `\/`)+1:]
-	if err != nil || !strings.HasSuffix(full, `\`+name+`\`) || !ReadsAsOneFolder(whole) {
-		return "", false
-	}
-	info, err := os.Stat(whole)
-	switch {
-	case err == nil && info.IsDir():
-		return whole, true
-	case err == nil || noSuchFolder(whole, err):
-		return "", false
-	}
-	return whole, true
-}
-
-// throughNameLosingPeriod reports whether a name that stays on the folder's
-// path ends in a space and then one period. Windows drops that period
-// wherever the name falls, even before a separator, so C:\x .\Shots is read
-// as C:\x \Shots at every step: one place, but not the folder it names. A
-// name a later ".." removes does not count, and a path marked \\?\ or \??\ is
-// taken verbatim.
-func throughNameLosingPeriod(folder string) bool {
+// NamesOneFolder reports whether Windows reads a folder's path as exactly the
+// folder its cleaned form names, so that a save can create it, write into it,
+// and name a file in it without any of those reaching another place. Windows
+// drops trailing spaces and periods from some names by where they fall in a
+// path, reads names such as NUL as devices, and resolves a ".." after
+// \\.\UNC\server\share differently from Clean, so a path that depends on any
+// of these is refused, as the Image Resizer's output folder rules refuse it.
+// A path marked \\?\ or \??\ is one Windows takes verbatim, so it names one
+// folder unless Clean would rewrite it.
+func NamesOneFolder(folder string) bool {
+	clean := Clean(folder)
 	if strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
-		return false
+		return strings.TrimRight(folder, `\`) == strings.TrimRight(clean, `\`)
 	}
-	var loses []bool
-	rest := strings.ReplaceAll(folder[volumeLen(folder):], "/", `\`)
-	for name := range strings.SplitSeq(rest, `\`) {
-		switch name {
-		case "", ".":
-		case "..":
-			if len(loses) > 0 {
-				loses = loses[:len(loses)-1]
-			}
-		default:
-			loses = append(loses, strings.HasSuffix(name, " ."))
-		}
-	}
-	return slices.Contains(loses, true)
-}
-
-// noSuchFolder reports whether a failed look at a folder means no folder is
-// there, rather than that it could not be reached. A file of that name says
-// so with ERROR_DIRECTORY. A missing name says so with the two not-found
-// codes, not with everything fs.ErrNotExist covers, which includes a server
-// that does not answer, and only below something that answers, as a drive
-// that is gone and a junction that has lost its target report a missing path
-// too. So the nearest name on the path that exists decides, looked at without
-// following it, by the extended-length path that keeps every name: a link
-// there must still lead somewhere. Only with no such name does the volume
-// root decide, as a share may refuse to describe its root while its folders
-// can be read.
-func noSuchFolder(folder string, err error) bool {
-	if errors.Is(err, windows.ERROR_DIRECTORY) {
-		return true
-	}
-	if !nameNotFound(err) {
-		return false
-	}
-	full, err := resolved(folder)
-	if err != nil {
-		return false
-	}
-	full = strings.TrimRight(full, `\`)
-	volume := VolumeName(full)
-	for path := full; len(path) > len(volume); path = path[:strings.LastIndexByte(path, '\\')] {
-		_, err := os.Lstat(extended(path))
-		switch {
-		case err == nil:
-			_, err = os.Stat(extended(path))
-			return err == nil
-		case errors.Is(err, windows.ERROR_DIRECTORY):
-			return true
-		case !nameNotFound(err):
+	for name := range strings.SplitSeq(clean[len(VolumeName(clean)):], `\`) {
+		if strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".") {
 			return false
 		}
 	}
-	_, err = os.Stat(volume + `\`)
-	return err == nil
-}
-
-// nameNotFound reports whether a failed look at a path says a name on it is
-// missing.
-func nameNotFound(err error) bool {
-	return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
-}
-
-// CreationPath is the spelling of a folder to give os.MkdirAll. MkdirAll
-// creates each missing folder by a path that ends at its name, where Windows
-// drops trailing spaces and periods, so for a folder through a name that
-// keeps them, such as "Photos " or "v2..", it would create a stray folder
-// without them and then fail. Such a folder is given by its extended-length
-// path, which keeps every name, and any other as written, so a failure names
-// it as the user knows it.
-func CreationPath(folder string) string {
-	full, err := resolved(folder)
-	if err != nil || strings.HasPrefix(folder, `\\?\`) || strings.HasPrefix(folder, `\??\`) {
-		return folder
+	written, err := windows.FullPath(folder)
+	if err != nil {
+		return false
 	}
-	shortened := false
-	// Only names after the volume count: the "." of a \\.\ prefix is not one
-	// Windows would shorten.
-	for name := range strings.SplitSeq(full[len(VolumeName(full)):], `\`) {
-		shortened = shortened || strings.HasSuffix(name, " ") || strings.HasSuffix(name, ".")
-	}
-	if !shortened {
-		return folder
-	}
-	return extended(full)
-}
-
-// extended is the extended-length spelling of a path Windows has resolved,
-// which Windows takes verbatim.
-func extended(full string) string {
-	switch {
-	case strings.HasPrefix(full, `\\?\`), strings.HasPrefix(full, `\??\`):
-		return full
-	case strings.HasPrefix(full, `\\.\`):
-		return `\\?\` + full[4:]
-	case strings.HasPrefix(full, `\\`):
-		return `\\?\UNC\` + full[2:]
-	}
-	return `\\?\` + full
-}
-
-// resolved is the path as Windows resolves it, unchanged when it is marked
-// to be taken verbatim.
-func resolved(path string) (string, error) {
-	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`) {
-		return path, nil
-	}
-	return windows.FullPath(path)
+	full, err := windows.FullPath(clean)
+	return err == nil && full == clean && Clean(written) == clean
 }

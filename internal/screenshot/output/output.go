@@ -31,13 +31,12 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
-	"io/fs"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 // timestampLayout renders the date and time portion of the SCR-064
@@ -103,8 +102,8 @@ func kindError(kind Kind, op string, err error) *Error {
 }
 
 // errFolderReadTwoWays is the cause of the KindFolder error for an output
-// folder whose path Windows reads as more than one place.
-var errFolderReadTwoWays = errors.New("Windows reads this folder's path as more than one place, as it does when a name ends in a space or a period. Choose another folder")
+// folder whose path Windows would read as another place.
+var errFolderReadTwoWays = errors.New(ui.OutputFolderNameInvalid)
 
 // Result reports the two independent outcomes of one delivery (SCR-060).
 // A nil Clipboard or Save field means that destination succeeded. Path is
@@ -191,23 +190,16 @@ func save(img *image.RGBA, options screenshot.CaptureOptions, now time.Time) (st
 func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now time.Time,
 	encoder func(io.Writer, *image.RGBA, screenshot.CaptureOptions) error,
 ) (string, error) {
-	// A stored folder Windows reads as two places would have its temporary
-	// and final files, or the folder created for them, land apart. SaveFolder
-	// gives the spelling that reaches one place. A folder with none is refused
-	// here rather than by option validation, which would reject the whole
-	// settings file for it. Any other spelling than the folder as written is
-	// for a folder that already exists, so when it cannot be reached the look
-	// below reports why, and nothing is created under a name SaveFolder would
-	// refuse to create.
-	folder, reachable := pathform.SaveFolder(options.OutputFolder)
-	if !reachable {
+	// A stored folder Windows would read as another place is refused here
+	// rather than by option validation, which would reject the whole settings
+	// file for it. The folder is used as cleaned, so that creating it, the
+	// temporary file, and the final name all take one spelling.
+	if !pathform.NamesOneFolder(options.OutputFolder) {
 		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
 	}
-	if folder == options.OutputFolder {
-		creation := pathform.CreationPath(folder)
-		if err := os.MkdirAll(creation, 0o755); err != nil {
-			return "", kindError(KindFolder, "create output folder", namedAsWritten(err, creation, folder))
-		}
+	folder := pathform.Clean(options.OutputFolder)
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		return "", kindError(KindFolder, "create output folder", err)
 	}
 	info, err := os.Stat(folder)
 	if err != nil {
@@ -267,27 +259,4 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	return "", kindError(KindWrite, "choose filename",
 		fmt.Errorf("no unused filename found after %d attempts for %s", maxSuffixAttempts,
 			base+options.Format.Extension()))
-}
-
-// namedAsWritten puts a failed folder creation's path back in the folder's
-// own spelling, as it may have been created through its extended-length one,
-// so the failure names the folder as the user knows it. The extended-length
-// spelling has only backslashes, and the folder may be written with either
-// separator. When the failed part cannot be matched to the folder's own text,
-// as Windows may have dropped a period from its last name, the failure names
-// the whole folder.
-func namedAsWritten(err error, creation, folder string) error {
-	var pathErr *fs.PathError
-	if creation == folder || !errors.As(err, &pathErr) {
-		return err
-	}
-	written := folder
-	if strings.HasPrefix(creation, pathErr.Path) {
-		rest := creation[len(pathErr.Path):]
-		if strings.HasSuffix(strings.ReplaceAll(folder, "/", `\`), rest) {
-			written = folder[:len(folder)-len(rest)]
-		}
-	}
-	pathErr.Path = written
-	return err
 }

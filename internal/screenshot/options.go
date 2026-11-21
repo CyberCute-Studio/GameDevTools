@@ -170,11 +170,19 @@ func (m *OptionsManager) SetJPEGQuality(quality int) error {
 	return m.save()
 }
 
+// SetOutputFolder selects a new output folder. Beyond what Validate requires
+// of every stored folder, it refuses one Windows would read as another place,
+// which every capture would then refuse too, so the choice fails where the
+// user made it. Validate does not refuse it, as that would reject a whole
+// settings file over one stored folder.
 func (m *OptionsManager) SetOutputFolder(folder string) error {
 	updated := m.options
 	updated.OutputFolder = folder
 	if err := updated.Validate(); err != nil {
 		return err
+	}
+	if !pathform.NamesOneFolder(folder) {
+		return errors.New(ui.OutputFolderNameInvalid)
 	}
 	m.options = updated
 	return m.save()
