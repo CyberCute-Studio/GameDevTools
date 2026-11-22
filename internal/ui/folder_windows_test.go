@@ -4,11 +4,13 @@ package ui
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -61,34 +63,91 @@ func TestInitializeCOMBalancesEverySuccessfulCall(t *testing.T) {
 	}
 }
 
-// TestShellShortenedNameFindsAFolderTheShellMisnames pins the picker's check.
-// The shell reports a folder without the periods its name ends in, so each
-// path below is what it gives for the folder in the comment.
-func TestShellShortenedNameFindsAFolderTheShellMisnames(t *testing.T) {
+// TestCheckShellNameFindsAFolderTheShellMisnames pins the picker's check. The
+// shell reports a folder without the periods its name ends in, so each path
+// below is what it gives for the folder in the comment.
+func TestCheckShellNameFindsAFolderTheShellMisnames(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{`v2..`, `Real.`, `both`, `both..`, `Mid.`, `Mid.\Sub`, `plain`, `plain.d`, `Shots `, `x .`} {
+	for _, name := range []string{`v2..`, `Real.`, `both`, `both..`, `Mid.`, `Mid.\Sub`, `plain`, `plain.d`, `Shots `, `x .`, `dots`, `dots\...`, `dots\beside`} {
 		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, test := range []struct {
 		path string
-		want bool
+		want error
 	}{
-		{root + `\v2`, true},      // v2.., with no v2 beside it
-		{root + `\Real`, true},    // Real.
-		{root + `\both`, true},    // both.. or both, which cannot be told apart
-		{root + `\Mid\Sub`, true}, // Sub, inside Mid.
-		{root + `\x `, true},      // x .
-		{root + `\plain`, false},  // a sibling with an extension is another name
-		{root + `\plain.d`, false},
-		{root + `\Shots `, false}, // reported whole; the output rules refuse it
-		{root, false},
-		{filepath.VolumeName(root) + `\`, false},
+		{root + `\v2`, errShellShortenedName},      // v2.., with no v2 beside it
+		{root + `\Real`, errShellShortenedName},    // Real.
+		{root + `\both`, errShellShortenedName},    // both.. or both, which cannot be told apart
+		{root + `\Mid\Sub`, errShellShortenedName}, // Sub, inside Mid.
+		{root + `\x `, errShellShortenedName},      // x .
+		{root + `\dots\`, errShellShortenedName},   // ..., which it gives as its parent
+		{root + `\plain`, nil},                     // a sibling with an extension is another name
+		{root + `\plain.d`, nil},
+		{root + `\Shots `, nil}, // reported whole; the output rules refuse it
+		{root + `\dots`, nil},   // the parent itself, reported without a separator
+		{root + `\dots\beside`, nil},
+		{root, nil},
+		{filepath.VolumeName(root) + `\`, nil},
+		{root + `\deleted`, errChosenFolderGone}, // no name in the path ends in a period
+		{root + `\deleted\inner`, errChosenFolderGone},
 	} {
-		if got := shellShortenedName(test.path); got != test.want {
-			t.Errorf("shellShortenedName(%q) = %v, want %v", test.path, got, test.want)
+		if got := checkShellName(test.path); !errors.Is(got, test.want) {
+			t.Errorf("checkShellName(%q) = %v, want %v", test.path, got, test.want)
 		}
+	}
+}
+
+// TestCheckShellNameReadsAVolumeGUIDPath pins that a path the shell gives
+// through a volume GUID is checked as it is written, rather than rewritten as
+// a server's, which no name in it could then be found under.
+func TestCheckShellNameReadsAVolumeGUIDPath(t *testing.T) {
+	root := t.TempDir()
+	mount, err := windows.UTF16PtrFromString(filepath.VolumeName(root) + `\`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guid := make([]uint16, windows.MAX_PATH)
+	if err := windows.GetVolumeNameForVolumeMountPoint(mount, &guid[0], uint32(len(guid))); err != nil {
+		t.Skipf("the volume has no GUID name: %v", err)
+	}
+	volume := strings.TrimSuffix(windows.UTF16ToString(guid), `\`)
+	if err := os.Mkdir(`\\?\`+root+`\v2..`, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(root+`\plain`, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	below := root[len(filepath.VolumeName(root)):]
+	if got := checkShellName(volume + below + `\v2`); !errors.Is(got, errShellShortenedName) {
+		t.Errorf("a shortened name through a volume GUID = %v, want %v", got, errShellShortenedName)
+	}
+	if got := checkShellName(volume + below + `\plain`); got != nil {
+		t.Errorf("an ordinary folder through a volume GUID = %v, want none", got)
+	}
+}
+
+// TestAwaitShellNameCheckDoesNotWaitForAStalledDrive pins that the GUI thread
+// is released when a drive does not answer, and that the choice is refused
+// rather than stored unconfirmed.
+func TestAwaitShellNameCheckDoesNotWaitForAStalledDrive(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	stalled := func(string) error {
+		<-release
+		return nil
+	}
+	if err := awaitShellNameCheck(`C:\Shots`, stalled, 10*time.Millisecond); !errors.Is(err, errFolderNotResponding) {
+		t.Errorf("a stalled check = %v, want %v", err, errFolderNotResponding)
+	}
+	refused := func(string) error { return errShellShortenedName }
+	if err := awaitShellNameCheck(`C:\Shots`, refused, time.Minute); !errors.Is(err, errShellShortenedName) {
+		t.Errorf("a finished check = %v, want its own result", err)
+	}
+	accepted := func(string) error { return nil }
+	if err := awaitShellNameCheck(`C:\Shots`, accepted, time.Minute); err != nil {
+		t.Errorf("a passing check = %v, want none", err)
 	}
 }
 
@@ -100,6 +159,32 @@ func TestRevealRefusesAFileThatHasGone(t *testing.T) {
 	for _, path := range []string{filepath.Join(folder, "gone.png"), filepath.Join(folder, "gone", "a.png"), folder} {
 		if err := RevealInFolder(path); !errors.Is(err, errSavedFileGone) {
 			t.Errorf("RevealInFolder(%q) = %v, want %v", path, err, errSavedFileGone)
+		}
+	}
+}
+
+// TestSavedFileGoneDoesNotBlameAnOfflineServer pins that a server that cannot
+// be reached is not reported as the file having been moved or deleted, though
+// Go counts its error as fs.ErrNotExist: the file may be intact there.
+func TestSavedFileGoneDoesNotBlameAnOfflineServer(t *testing.T) {
+	failure := func(code windows.Errno) error {
+		return &fs.PathError{Op: "CreateFile", Path: `\\nas\art\a.png`, Err: code}
+	}
+	if !errors.Is(failure(windows.ERROR_BAD_NETPATH), fs.ErrNotExist) {
+		t.Fatal("Go no longer counts ERROR_BAD_NETPATH as fs.ErrNotExist; this test no longer pins anything")
+	}
+	for _, test := range []struct {
+		code windows.Errno
+		want bool
+	}{
+		{windows.ERROR_FILE_NOT_FOUND, true},
+		{windows.ERROR_PATH_NOT_FOUND, true},
+		{windows.ERROR_BAD_NETPATH, false},
+		{windows.ERROR_BAD_NET_NAME, false},
+		{windows.ERROR_ACCESS_DENIED, false},
+	} {
+		if got := savedFileGone(nil, failure(test.code)); got != test.want {
+			t.Errorf("savedFileGone(%v) = %v, want %v", test.code, got, test.want)
 		}
 	}
 }

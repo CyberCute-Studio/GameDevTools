@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -88,8 +89,10 @@ func initializeCOM() (uninitialize func()) {
 // BrowseForFolder opens the modal folder picker and returns the chosen
 // absolute folder. It reports false without an error when the user cancels.
 // The shell reports a folder without the periods its name ends in, so a
-// folder named v2.. comes back as v2, which is another folder or none. Such a
-// choice is refused with an error rather than returned.
+// folder named v2.. comes back as v2, which is another folder or none, and
+// one named only periods comes back as its parent. Such a choice is refused
+// with an error rather than returned, as is one that has since gone or whose
+// drive does not answer within shellNameWait.
 func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) {
 	// The picker requires an initialized COM apartment on the calling thread.
 	defer initializeCOM()()
@@ -111,41 +114,78 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 		return "", false, callError("SHGetPathFromIDListW", err)
 	}
 	folder := windows.UTF16ToString(path)
-	if shellShortenedName(folder) {
-		return "", false, errShellShortenedName
+	if err := awaitShellNameCheck(folder, checkShellName, shellNameWait); err != nil {
+		return "", false, err
 	}
 	return folder, true, nil
 }
 
-// shellShortenedName reports whether a path the shell gave for a chosen
-// folder may have lost periods from a name. The shell does not say, and
-// reports the same path for both folders when v2 and v2.. stand side by side,
-// so a path that does not exist, or that has a name with such a sibling, is
-// one it may have shortened. A path that cannot be inspected for another
-// reason, such as a denied folder, is left for the save to report.
-func shellShortenedName(folder string) bool {
-	// The verbatim spelling keeps a name's trailing space, which any other
-	// spelling would lose.
-	prefix, rest := `\\?\`, folder
-	if strings.HasPrefix(folder, `\\`) {
-		prefix, rest = `\\?\UNC\`, folder[2:]
+// shellNameWait is how long the GUI thread, which the picker runs on, waits
+// for checkShellName. The picker has just read the folder, so its drive
+// answers at once unless it has stopped responding, and the wait stays short
+// of the five seconds after which Windows reports the window as hung.
+const shellNameWait = 2 * time.Second
+
+// awaitShellNameCheck runs the check on a goroutine of its own, as looking at
+// a drive blocks for as long as the drive does not respond, and waits for it
+// no longer than wait. A check still running then is abandoned, and the
+// choice is refused, since its name was not confirmed.
+func awaitShellNameCheck(folder string, check func(string) error, wait time.Duration) error {
+	result := make(chan error, 1)
+	go func() { result <- check(folder) }()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(wait):
+		return errFolderNotResponding
 	}
-	verbatim := prefix + rest
-	if _, err := os.Stat(verbatim); errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
-		return true
+}
+
+// verbatimFolder is a path the shell gave in the verbatim spelling, which
+// keeps a name's trailing space that any other spelling would lose, and the
+// length of its volume name there. A path through a volume GUID is already
+// in that spelling.
+func verbatimFolder(folder string) (string, int) {
+	volume := len(pathform.VolumeName(folder))
+	switch {
+	case strings.HasPrefix(folder, `\\?\`):
+		return folder, volume
+	case strings.HasPrefix(folder, `\\`):
+		return `\\?\UNC\` + folder[len(`\\`):], len(`\\?\UNC\`) + volume - len(`\\`)
 	}
-	volume := len(prefix) + len(pathform.VolumeName(folder)) - (len(folder) - len(rest))
+	return `\\?\` + folder, len(`\\?\`) + volume
+}
+
+// checkShellName reports why a path the shell gave for a chosen folder cannot
+// be stored. The shell does not say when it has shortened a name, and reports
+// the same path for both folders when v2 and v2.. stand side by side, so a
+// path with a name that has such a sibling is refused as one it may have
+// shortened, and so is a path with an empty name, which is how it reports a
+// folder named only periods: as its parent with a separator after it. A path
+// that does not exist and has no such name is a folder that has gone. A path
+// that cannot be inspected for another reason, such as a denied folder, is
+// left for the save to report.
+func checkShellName(folder string) error {
+	verbatim, volume := verbatimFolder(folder)
+	rest := verbatim[volume:]
+	if len(rest) > 1 && (strings.HasSuffix(rest, `\`) || strings.Contains(rest, `\\`)) {
+		return errShellShortenedName
+	}
+	_, statErr := os.Stat(verbatim)
 	parent := verbatim[:volume]
-	for name := range strings.SplitSeq(verbatim[volume:], `\`) {
+	for name := range strings.SplitSeq(rest, `\`) {
 		if name == "" {
 			continue
 		}
 		if hasPeriodSibling(parent, name) {
-			return true
+			return errShellShortenedName
 		}
 		parent += `\` + name
 	}
-	return false
+	if errors.Is(statErr, windows.ERROR_FILE_NOT_FOUND) || errors.Is(statErr, windows.ERROR_PATH_NOT_FOUND) {
+		return errChosenFolderGone
+	}
+	return nil
 }
 
 // hasPeriodSibling reports whether the folder holds an entry named name with
@@ -230,7 +270,7 @@ func RevealInFolder(path string) error {
 	}
 	info, err := os.Stat(path)
 	switch {
-	case errors.Is(err, fs.ErrNotExist), err == nil && info.IsDir():
+	case savedFileGone(info, err):
 		return errSavedFileGone
 	case err != nil:
 		return err
@@ -245,10 +285,27 @@ func RevealInFolder(path string) error {
 	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
 
+// savedFileGone reports whether looking at a saved file found it gone: no such
+// name, or a folder in its place. An unreachable server is not that, though
+// Go counts ERROR_BAD_NETPATH as fs.ErrNotExist: the file may be intact there,
+// so that failure is reported as it is.
+func savedFileGone(info fs.FileInfo, err error) bool {
+	if err != nil {
+		return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
+	}
+	return info.IsDir()
+}
+
 var (
 	// errShellShortenedName is BrowseForFolder's failure for a folder whose
 	// exact name the shell did not report.
 	errShellShortenedName = errors.New("Windows does not report the exact name of this folder, because a name in its path ends in a period. Choose another folder")
+	// errChosenFolderGone is BrowseForFolder's failure for a folder no longer
+	// there when the picker closed.
+	errChosenFolderGone = errors.New("the chosen folder no longer exists. Choose another folder")
+	// errFolderNotResponding is BrowseForFolder's failure for a folder whose
+	// drive did not answer in time for its name to be confirmed.
+	errFolderNotResponding = errors.New("the drive of the chosen folder is not responding. Try again, or choose another folder")
 	// errSavedFileGone is RevealInFolder's failure for a file no longer there.
 	errSavedFileGone = errors.New("the saved file has been moved or deleted")
 	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a

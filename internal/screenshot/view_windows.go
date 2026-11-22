@@ -69,6 +69,7 @@ type NativeView struct {
 	displayErr       error
 	inProgress       bool
 	savedPath        string
+	revealing        string // the file whose reveal is running, on the GUI thread
 	shown            bool
 	font             windows.Handle
 	// shortcutNotice is the status area's revision once
@@ -430,15 +431,27 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 // request. Looking at the file and handing it to the shell each block for as
 // long as its drive does not respond, as a network share that went offline
 // after the capture, so they run on a goroutine of their own, which must not
-// freeze the window (TECH-005). A failure is shown through the dispatcher.
+// freeze the window (TECH-005). Its outcome returns through the dispatcher,
+// so without one nothing is started. A click while the same file's reveal is
+// still running is ignored, or a drive that recovers would open one Explorer
+// window for each. A failure is shown only while this file is still the
+// latest capture's, so that it cannot replace a newer capture's result.
 func (n *NativeView) revealSaved() {
 	path, reveal := n.savedPath, n.reveal
+	if n.dispatcher == nil || path == n.revealing {
+		return
+	}
+	n.revealing = path
 	go func() {
-		if err := reveal(path); err != nil {
-			n.post(func() {
+		err := reveal(path)
+		n.post(func() {
+			if n.revealing == path {
+				n.revealing = ""
+			}
+			if err != nil && n.savedPath == path {
 				_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
-			})
-		}
+			}
+		})
 	}()
 }
 

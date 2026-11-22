@@ -72,10 +72,11 @@ func ShareRoot(volume string) bool {
 // NamesNoFolder reports whether an output folder's path names only a drive,
 // volume, device, or server rather than a folder on it, or leads through a
 // device other than a drive, a volume, or a share, such as the named pipe
-// \\.\pipe\x, which creating the folder would open.
+// \\.\pipe\x, which creating the folder would open, or the same pipe on a
+// server, \\localhost\pipe\x (leadsThroughIPCShare).
 func NamesNoFolder(folder string) bool {
 	clean := SaveFolder(folder)
-	if RootDepth(clean) < 0 {
+	if RootDepth(clean) < 0 || leadsThroughIPCShare(clean) {
 		return true
 	}
 	for _, prefix := range []string{`\\.\`, `\??\`} {
@@ -85,4 +86,35 @@ func NamesNoFolder(folder string) bool {
 		}
 	}
 	return NamesDevice(clean)
+}
+
+// leadsThroughIPCShare reports whether a cleaned path's share, in any UNC
+// spelling and letter case, is a server's pipe, mailslot, or IPC$. Windows
+// reads those as its named pipes and mailslots rather than as folders, so
+// creating \\localhost\pipe\x connects to the program serving that pipe. Only
+// the share is judged: a folder named pipe on an ordinary share is a folder.
+func leadsThroughIPCShare(clean string) bool {
+	unc, found := "", false
+	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`, `\\.\UNC\`} {
+		if len(clean) >= len(prefix) && strings.EqualFold(clean[:len(prefix)], prefix) {
+			unc, found = clean[len(prefix):], true
+			break
+		}
+	}
+	if !found {
+		if !strings.HasPrefix(clean, `\\`) || strings.HasPrefix(clean, `\\?\`) || strings.HasPrefix(clean, `\\.\`) {
+			return false
+		}
+		unc = clean[len(`\\`):]
+	}
+	names := strings.Split(unc, `\`)
+	if len(names) < 2 {
+		return false
+	}
+	for _, share := range []string{"pipe", "mailslot", "IPC$"} {
+		if strings.EqualFold(names[1], share) {
+			return true
+		}
+	}
+	return false
 }
