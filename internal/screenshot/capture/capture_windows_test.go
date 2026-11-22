@@ -400,6 +400,112 @@ func TestCaptureSpanningDisplayBoundary(t *testing.T) {
 	}
 }
 
+// TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries is AC-S02 on the
+// displays connected now: a preset-sized region centered on each display and
+// across each edge two displays share comes back at exactly its physical
+// size. It logs each display's scaling, so a run on a mixed-DPI or
+// negative-coordinate arrangement records what it covered.
+func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
+	const presetWidth, presetHeight = 1280, 720
+	monitor := display.NewMonitor()
+	displays, err := monitor.Displays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(t *testing.T, region display.Rect) {
+		t.Helper()
+		img, err := CaptureRect(monitor, region)
+		if err != nil {
+			t.Fatalf("CaptureRect(%v): %v", region, err)
+		}
+		if got := img.Bounds(); got.Dx() != int(region.Width()) || got.Dy() != int(region.Height()) {
+			t.Fatalf("capture of %v is %d × %d, want %d × %d", region, got.Dx(), got.Dy(), region.Width(), region.Height())
+		}
+	}
+	for _, item := range displays {
+		t.Run(item.DeviceName, func(t *testing.T) {
+			t.Logf("%s at (%d, %d), %d × %d, %d%% scaling", item.DeviceName, item.Bounds.Left, item.Bounds.Top, item.Bounds.Width(), item.Bounds.Height(), item.ScalePercent())
+			width, height := min(presetWidth, item.Bounds.Width()), min(presetHeight, item.Bounds.Height())
+			left := item.Bounds.Left + (item.Bounds.Width()-width)/2
+			top := item.Bounds.Top + (item.Bounds.Height()-height)/2
+			check(t, display.Rect{Left: left, Top: top, Right: left + width, Bottom: top + height})
+		})
+	}
+	for i, a := range displays {
+		for _, b := range displays[i+1:] {
+			region, shared := regionAcrossSharedEdge(a.Bounds, b.Bounds, presetWidth, presetHeight)
+			if !shared {
+				continue
+			}
+			t.Run(a.DeviceName+" to "+b.DeviceName, func(t *testing.T) {
+				t.Logf("across %d%% and %d%% scaling: %v", a.ScalePercent(), b.ScalePercent(), region)
+				check(t, region)
+			})
+		}
+	}
+}
+
+// regionAcrossSharedEdge returns a region of at most width × height centered
+// on the edge a and b share, inside the two displays, and whether they share
+// one.
+func regionAcrossSharedEdge(a, b display.Rect, width, height int32) (display.Rect, bool) {
+	across := func(edge, spanStart, spanEnd, reachA, reachB, along, thick int32) (start, end, crossStart, crossEnd int32, ok bool) {
+		if spanEnd <= spanStart {
+			return 0, 0, 0, 0, false
+		}
+		half := min(along/2, reachA, reachB)
+		size := min(thick, spanEnd-spanStart)
+		crossStart = spanStart + (spanEnd-spanStart-size)/2
+		return edge - half, edge + half, crossStart, crossStart + size, half > 0
+	}
+	switch {
+	case a.Right == b.Left || b.Right == a.Left:
+		edge, left, right := a.Right, a, b
+		if b.Right == a.Left {
+			edge, left, right = a.Left, b, a
+		}
+		x0, x1, y0, y1, ok := across(edge, max(a.Top, b.Top), min(a.Bottom, b.Bottom), left.Width(), right.Width(), width, height)
+		return display.Rect{Left: x0, Top: y0, Right: x1, Bottom: y1}, ok
+	case a.Bottom == b.Top || b.Bottom == a.Top:
+		edge, upper, lower := a.Bottom, a, b
+		if b.Bottom == a.Top {
+			edge, upper, lower = a.Top, b, a
+		}
+		y0, y1, x0, x1, ok := across(edge, max(a.Left, b.Left), min(a.Right, b.Right), upper.Height(), lower.Height(), height, width)
+		return display.Rect{Left: x0, Top: y0, Right: x1, Bottom: y1}, ok
+	}
+	return display.Rect{}, false
+}
+
+func TestRegionAcrossSharedEdge(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		a, b   display.Rect
+		want   display.Rect
+		shared bool
+	}{
+		{"side by side", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Right: 3840, Bottom: 1080},
+			display.Rect{Left: 1280, Top: 180, Right: 2560, Bottom: 900}, true},
+		{"b left of a, negative coordinates", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: -1920, Right: 0, Bottom: 1080},
+			display.Rect{Left: -640, Top: 180, Right: 640, Bottom: 900}, true},
+		{"stacked", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Top: 1080, Right: 1920, Bottom: 2160},
+			display.Rect{Left: 320, Top: 720, Right: 1600, Bottom: 1440}, true},
+		{"narrow neighbor limits the reach", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Right: 2020, Bottom: 1080},
+			display.Rect{Left: 1820, Top: 180, Right: 2020, Bottom: 900}, true},
+		{"short overlap limits the height", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Top: 980, Right: 3840, Bottom: 2060},
+			display.Rect{Left: 1280, Top: 980, Right: 2560, Bottom: 1080}, true},
+		{"touching only at a corner", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Top: 1080, Right: 3840, Bottom: 2160}, display.Rect{}, false},
+		{"apart", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 2000, Right: 3920, Bottom: 1080}, display.Rect{}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, shared := regionAcrossSharedEdge(test.a, test.b, 1280, 720)
+			if shared != test.shared || (shared && got != test.want) {
+				t.Fatalf("got %v, %v; want %v, %v", got, shared, test.want, test.shared)
+			}
+		})
+	}
+}
+
 func TestHideExcludesWindowFromCapture(t *testing.T) {
 	monitor := display.NewMonitor()
 	want := color.RGBA{R: 0x21, G: 0x9F, B: 0x53, A: 0xFF}

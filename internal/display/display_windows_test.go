@@ -3,6 +3,7 @@
 package display
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -39,6 +40,50 @@ func TestMain(m *testing.M) {
 // The tests below exercise the real Windows display stack on the machine
 // running them, including every connected display, its effective DPI, and
 // the live cursor position. They need no window or message loop.
+
+// validationDisplaysEnv names the file TestRecordDisplayLayout writes for
+// scripts/validate.ps1.
+const validationDisplaysEnv = "GAMEDEVTOOLS_VALIDATION_DISPLAYS"
+
+// TestRecordDisplayLayout writes the connected displays, as this
+// per-monitor-aware process reads them, for the validation report. A process
+// that is not DPI aware would read every display as 100%. Friendly names are
+// left out of the report, since they can identify a person's hardware.
+func TestRecordDisplayLayout(t *testing.T) {
+	path := os.Getenv(validationDisplaysEnv)
+	if path == "" {
+		t.Skipf("%s is not set", validationDisplaysEnv)
+	}
+	displays, err := NewMonitor().Displays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	type record struct {
+		Number       int   `json:"number"`
+		Primary      bool  `json:"primary"`
+		X            int32 `json:"x"`
+		Y            int32 `json:"y"`
+		Width        int32 `json:"width"`
+		Height       int32 `json:"height"`
+		ScalePercent int   `json:"scalePercent"`
+	}
+	records := make([]record, 0, len(displays))
+	for _, item := range displays {
+		records = append(records, record{
+			Number: item.Number, Primary: item.Primary,
+			X: item.Bounds.Left, Y: item.Bounds.Top,
+			Width: item.Bounds.Width(), Height: item.Bounds.Height(),
+			ScalePercent: item.ScalePercent(),
+		})
+	}
+	encoded, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestEnumerateRealDisplays(t *testing.T) {
 	monitor := NewMonitor()

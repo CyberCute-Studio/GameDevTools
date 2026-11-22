@@ -1,0 +1,45 @@
+name: Validation matrix
+
+# Runs scripts/validate.ps1 on real x64 Windows. It is started by hand, or by a
+# pull request that changes the validation itself, because it takes far longer
+# than CI. Windows Server is not a supported target (NFR-001): these runs check
+# the x64 executable and the suite, and do not stand in for Windows 11.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/validation-matrix.yml
+      - scripts/validate.ps1
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the platform validation
+        shell: pwsh
+        run: ./scripts/validate.ps1
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ matrix.os }}
+          path: bin/validation/validation-*.json
+          if-no-files-found: warn
