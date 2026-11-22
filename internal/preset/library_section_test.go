@@ -3,6 +3,7 @@ package preset
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -57,7 +58,7 @@ func TestKeptSectionAddsTheSessionsOwnPresets(t *testing.T) {
 	replaced := json.RawMessage(`{"resize":{"version":1},"presets":` + library + `}`)
 	session := json.RawMessage(`{"presets":{"version":1,"custom":[{"id":"` + sessionID + `","name":"Banner","width":300,"height":200,"resizeMode":"stretch"},{"id":"` + clashID + `","name":"icon","width":64,"height":64,"resizeMode":"crop-to-fill"}],"selectedPresetId":"` + sessionID + `"}}`)
 
-	kept, err := KeptSection(shell.ModuleImageResizer, replaced, session)
+	kept, err := KeptSection(shell.ModuleImageResizer, replaced, session, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestKeptSectionAddsTheSessionsOwnPresets(t *testing.T) {
 	}
 
 	for _, same := range []json.RawMessage{replaced, json.RawMessage(`{"presets":` + library + `}`), nil, json.RawMessage(`{"resize":{"version":1}}`)} {
-		kept, err := KeptSection(shell.ModuleImageResizer, replaced, same)
+		kept, err := KeptSection(shell.ModuleImageResizer, replaced, same, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,8 +88,44 @@ func TestKeptSectionAddsTheSessionsOwnPresets(t *testing.T) {
 			t.Fatalf("KeptSection with session %s = %s, want the library as stored %s", same, kept, want)
 		}
 	}
-	if kept, err := KeptSection(shell.ModuleImageResizer, nil, nil); err != nil || kept != nil {
+	if kept, err := KeptSection(shell.ModuleImageResizer, nil, nil, nil); err != nil || kept != nil {
 		t.Fatalf("KeptSection without a library = %s, %v, want nothing kept", kept, err)
+	}
+}
+
+// TestKeptSectionLeavesAnInheritedPresetDeleted pins that a preset the session
+// holds only because it took an older file's settings does not return to a
+// settings file that lacks it, while one the session created or changed is
+// kept.
+func TestKeptSectionLeavesAnInheritedPresetDeleted(t *testing.T) {
+	const (
+		deletedID = "custom.00000000000000000000000000000001"
+		editedID  = "custom.00000000000000000000000000000002"
+		newID     = "custom.00000000000000000000000000000003"
+	)
+	entry := func(id, name string) string {
+		return `{"id":"` + id + `","name":"` + name + `","width":64,"height":64,"resizeMode":"fit"}`
+	}
+	section := func(entries ...string) json.RawMessage {
+		return json.RawMessage(`{"presets":{"version":1,"custom":[` + strings.Join(entries, ",") + `]}}`)
+	}
+	inherited := section(entry(deletedID, "Deleted"), entry(editedID, "Before"))
+	session := section(entry(deletedID, "Deleted"), entry(editedID, "After"), entry(newID, "New"))
+
+	kept, err := KeptSection(shell.ModuleImageResizer, section(), session, inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := decodeSection(shell.ModuleImageResizer, kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Preset{
+		{ID: editedID, Name: "After", Width: 64, Height: 64, ResizeMode: ResizeFit},
+		{ID: newID, Name: "New", Width: 64, Height: 64, ResizeMode: ResizeFit},
+	}
+	if !slices.Equal(stored.Custom, want) {
+		t.Fatalf("kept presets = %+v, want %+v", stored.Custom, want)
 	}
 }
 
@@ -107,7 +144,7 @@ func TestKeptSectionKeepsAnotherBuildsModuleAsStored(t *testing.T) {
 		json.RawMessage(`{"zoom":1,"presets":` + library + `,"zoom":2}`),
 	} {
 		for _, session := range []json.RawMessage{section, nil} {
-			kept, err := KeptSection("editor", section, session)
+			kept, err := KeptSection("editor", section, session, nil)
 			if err != nil {
 				t.Fatalf("KeptSection(%s) with session %s: %v", section, session, err)
 			}
@@ -117,7 +154,7 @@ func TestKeptSectionKeepsAnotherBuildsModuleAsStored(t *testing.T) {
 			}
 		}
 	}
-	if _, err := KeptSection("editor", json.RawMessage(`{"presets":`+library+`,"presets":{}}`), nil); err == nil {
+	if _, err := KeptSection("editor", json.RawMessage(`{"presets":`+library+`,"presets":{}}`), nil, nil); err == nil {
 		t.Fatal("a section with its library given twice was kept")
 	}
 }

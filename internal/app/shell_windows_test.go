@@ -270,9 +270,6 @@ func (n *hotkeyRecordingView) NativeHotkey(id int32) bool {
 	return n.handled
 }
 
-// TestShellWindowProcRoutesHotkeys covers the shell half of SCR-002: a
-// WM_HOTKEY reaching the shell window is offered to the module views with
-// its registration identifier, and a consumed hotkey triggers a relayout.
 // TestIconPixelsFollowTheDPI pins the sizes the window asks for at the common
 // display scales, each of which the packaged icon holds or is scaled down to.
 func TestIconPixelsFollowTheDPI(t *testing.T) {
@@ -293,6 +290,9 @@ func TestIconPixelsFollowTheDPI(t *testing.T) {
 	}
 }
 
+// TestShellWindowProcRoutesHotkeys covers the shell half of SCR-002: a
+// WM_HOTKEY reaching the shell window is offered to the module views with
+// its registration identifier, and a consumed hotkey triggers a relayout.
 func TestShellWindowProcRoutesHotkeys(t *testing.T) {
 	native := &hotkeyRecordingView{handled: true}
 	shell := newCommandTestShell(t, native)

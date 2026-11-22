@@ -115,13 +115,16 @@ type Store struct {
 	migrations map[int]Migration
 	validators map[string][]ModuleValidator
 	blocked    error
-	// fromLegacy is whether Load, finding no settings file, went to the legacy
-	// file and nothing has reached the settings file since. Until something
-	// has, a write only creates that file, as its absence may be a share that
-	// is reconnecting. A block Load leaves then protects the legacy file, which
-	// stays in place whatever is written, so Restore can lift it by creating
-	// the settings file.
-	fromLegacy bool
+	// createOnly is whether Load found no settings file and nothing has
+	// reached it since, whether or not the legacy file gave the settings.
+	// Until something has, a write only creates that file, as its absence may
+	// be a share that is reconnecting. A block Load leaves then protects the
+	// legacy file, which stays in place whatever is written, so Restore can
+	// lift it by creating the settings file.
+	createOnly bool
+	// inherited is the settings Load took from the legacy file while they
+	// have not reached the settings file, or the zero value.
+	inherited Settings
 	// unloaded is whether the settings file holds settings the session never
 	// took: Load could not read or decode the file and started the session
 	// from the defaults in their place, and neither a save nor a restore
@@ -208,7 +211,7 @@ func (s *Store) Load() LoadResult {
 	if !settled {
 		// The settings file exists after all, so it is what the session
 		// loads, and the legacy file is left unadopted.
-		s.blocked, s.unloaded, s.fromLegacy = nil, false, false
+		s.blocked, s.unloaded, s.createOnly, s.inherited = nil, false, false, Settings{}
 		result, _ = s.load(false)
 	}
 	return result
@@ -234,18 +237,27 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		// because a save would create the settings file and so abandon it.
 		// So does finding neither file when the folders cannot be reached:
 		// a share that is down reports both missing, and a save once it
-		// returns would replace the one file or abandon the other.
-		source, s.fromLegacy = s.legacyPath, true
-		data, err = os.ReadFile(source)
-		if errors.Is(err, os.ErrNotExist) && s.reachable(source) {
-			s.fromLegacy = false
+		// returns would replace the one file or abandon the other. A real
+		// first run still only creates the file with its first write, as a
+		// share can return just after the reads here.
+		source, s.createOnly = s.legacyPath, true
+		var gone bool
+		data, gone, err = s.readLegacy()
+		if gone {
+			if _, statErr := os.Stat(s.path); !errors.Is(statErr, os.ErrNotExist) {
+				return result, false
+			}
 			return result, true
 		}
 	}
 	if err != nil {
 		s.blocked = err
 		s.unloaded = true
-		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsReadFailed, source, err))
+		message := ui.SettingsReadFailed
+		if s.createOnly && errors.Is(err, os.ErrNotExist) {
+			message = ui.SettingsFolderUnreachable
+		}
+		result.Warnings = append(result.Warnings, fmt.Sprintf(message, source, err))
 		return result, true
 	}
 
@@ -261,7 +273,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		result.Recovered = fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup)
 		result.Warnings = append(result.Warnings, result.Recovered)
 		if saveErr := s.saveLoaded(result.Settings); saveErr != nil {
-			if s.fromLegacy && errors.Is(saveErr, os.ErrExist) {
+			if s.createOnly && errors.Is(saveErr, os.ErrExist) {
 				os.Remove(backup)
 				return result, false
 			}
@@ -272,6 +284,9 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	}
 
 	result.Settings = decoded
+	if s.createOnly {
+		s.inherited = decoded
+	}
 	kept, backup := source, ""
 	if migrated {
 		var backupErr error
@@ -283,9 +298,9 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		}
 		kept = backup
 	}
-	if migrated || s.fromLegacy {
+	if migrated || s.createOnly {
 		if saveErr := s.saveLoaded(decoded); saveErr != nil {
-			if s.fromLegacy && errors.Is(saveErr, os.ErrExist) {
+			if s.createOnly && errors.Is(saveErr, os.ErrExist) {
 				if backup != "" {
 					os.Remove(backup)
 				}
@@ -298,12 +313,33 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	return result, true
 }
 
-// saveLoaded writes the settings Load settled on. Settings from the legacy
-// file only ever create the settings file: its absence may be a share that is
+// readLegacy reads the legacy file. gone reports that it is really missing:
+// its folder answers, and a second read, made after that answer in case the
+// share returned between the two, still finds nothing. A missing file that is
+// not gone is one reported missing from a folder that cannot be reached.
+func (s *Store) readLegacy() (data []byte, gone bool, err error) {
+	data, err = os.ReadFile(s.legacyPath)
+	if !errors.Is(err, os.ErrNotExist) || !s.reachable(s.legacyPath) {
+		return data, false, err
+	}
+	data, err = os.ReadFile(s.legacyPath)
+	return data, errors.Is(err, os.ErrNotExist), err
+}
+
+// Inherited returns the settings the session took from the legacy file while
+// they have not reached the settings file, or the zero Settings. A settings
+// file found later that lacks one of their presets had it deleted, so what
+// Restore keeps is told from the presets the session created by these.
+func (s *Store) Inherited() Settings {
+	return s.inherited
+}
+
+// saveLoaded writes the settings Load settled on. While the settings file was
+// found missing they only ever create it: its absence may be a share that is
 // reconnecting, and replacing what is really there would lose it with no copy
 // made.
 func (s *Store) saveLoaded(value Settings) error {
-	if !s.fromLegacy {
+	if !s.createOnly {
 		return s.save(value)
 	}
 	if err := s.check(value); err != nil {
@@ -360,10 +396,10 @@ func (s *Store) Hold() (write func(Settings) error) {
 // that fails after the copy is returned as Save returns
 // it, leaving the original in place beside its copy, as is the failure
 // without a settings path, ErrPathUnavailable, where there is no file to
-// copy. A session whose settings came from the legacy file and have not
-// reached the settings file, with none found now, is the exception to saving
-// again only once a copy exists: the legacy file is not replaced, so the
-// restore creates the settings file. When Load's block protects the legacy
+// copy. A session that found no settings file at launch and has not written
+// one, with none found now, is the exception to saving again only once a copy
+// exists: the legacy file is not replaced, so the restore creates the
+// settings file. When Load's block protects the legacy
 // file, the restore first backs it up, and while it exists but still cannot
 // be read, or is reported missing from a folder that cannot be reached, the
 // restore changes nothing, as the presets the restore keeps may be in it and
@@ -381,15 +417,19 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		var err error
 		data, err = os.ReadFile(s.path)
 		switch {
-		case errors.Is(err, os.ErrNotExist) && s.fromLegacy:
+		case errors.Is(err, os.ErrNotExist) && s.createOnly:
 			creating = true
 			if s.blocked != nil {
-				var legacyErr error
-				data, legacyErr = os.ReadFile(s.legacyPath)
-				if legacyErr != nil && (!errors.Is(legacyErr, os.ErrNotExist) || !s.reachable(s.legacyPath)) {
+				legacy, gone, legacyErr := s.readLegacy()
+				switch {
+				case gone:
+				case errors.Is(legacyErr, os.ErrNotExist):
+					return Settings{}, "", notRestored{fmt.Errorf("reach the earlier build's settings at %s: %w; reconnect the drive or network share that holds them and try again", s.legacyPath, legacyErr)}
+				case legacyErr != nil:
 					return Settings{}, "", notRestored{fmt.Errorf("read the earlier build's settings at %s: %w; close whatever holds the file and try again, or move it out of that folder to go on without its presets", s.legacyPath, legacyErr)}
+				default:
+					data, exists = legacy, true
 				}
-				exists = legacyErr == nil
 			}
 		case errors.Is(err, os.ErrNotExist) && s.blocked != nil:
 			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
@@ -399,11 +439,12 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		default:
 			exists = true
 		}
-		if exists && (s.unloaded || s.fromLegacy) {
+		if exists && (s.unloaded || s.createOnly) {
 			// A file that still does not decode is kept only in its copy, as
 			// recovery from a malformed file keeps it, and the session's
-			// settings are the ones the restore replaces. With fromLegacy the
-			// session holds the legacy file's settings, not this file's.
+			// settings are the ones the restore replaces. With createOnly the
+			// session holds the legacy file's settings or the defaults, not
+			// this file's.
 			if stored, _, err := s.decode(data); err == nil {
 				replaced = stored
 			}
@@ -438,30 +479,50 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 			}
 			return Settings{}, "", notRestored{fmt.Errorf("write the restored settings: %w", err)}
 		}
-		s.blocked, s.unloaded, s.fromLegacy = nil, false, false
+		s.blocked, s.unloaded, s.createOnly, s.inherited = nil, false, false, Settings{}
 		return value, backup, nil
 	}
-	s.blocked, s.unloaded, s.fromLegacy = nil, false, false
+	s.blocked, s.unloaded, s.createOnly, s.inherited = nil, false, false, Settings{}
 	return value, backup, s.write(value)
 }
 
-// folderReachable reports whether the folder holding path, or the nearest one
-// above it that exists, can be listed. Windows reports a file on a share that
-// is down as not found, the same as one that is really gone, so a missing file
-// counts as gone only when something on its volume can be read.
+// folderReachable reports whether the nearest folder above path that exists
+// can be listed. Windows reports a file on a share that is down as not found,
+// the same as one that is really gone, so a missing file counts as gone only
+// when that folder answers. The search goes up only past names that are really
+// absent or are not folders: a junction or link whose target is offline stops
+// it, so a folder on the local volume above the link does not vouch for the
+// volume that is gone, and so does a network error, so a share that is down
+// costs one wait rather than one for each folder on its path.
 func folderReachable(path string) bool {
 	for folder := filepath.Dir(path); ; folder = filepath.Dir(folder) {
-		if file, err := os.Open(folder); err == nil {
-			_, err = file.Readdirnames(1)
-			file.Close()
-			if err == nil || errors.Is(err, io.EOF) {
-				return true
+		info, err := os.Stat(folder)
+		switch {
+		case err == nil && info.IsDir():
+			return canList(folder)
+		case err == nil:
+		case !errors.Is(err, os.ErrNotExist) || networkPathMissing(err):
+			return false
+		default:
+			if _, err := os.Lstat(folder); !errors.Is(err, os.ErrNotExist) {
+				return false
 			}
 		}
 		if filepath.Dir(folder) == folder {
 			return false
 		}
 	}
+}
+
+// canList reports whether folder can be opened and asked for an entry.
+func canList(folder string) bool {
+	file, err := os.Open(folder)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	_, err = file.Readdirnames(1)
+	return err == nil || errors.Is(err, io.EOF)
 }
 
 // removeStaleTemporaries removes the temporary files that saves interrupted
@@ -501,11 +562,11 @@ func (s *Store) save(value Settings) error {
 		return err
 	}
 	err := s.write(value)
-	if s.fromLegacy && errors.Is(err, os.ErrExist) {
-		// The file was only reported missing when Load took the legacy
-		// settings. It holds settings this session never took, so it is kept
-		// for the next launch to load, and Restore can back it up.
-		s.blocked, s.unloaded, s.fromLegacy = err, true, false
+	if s.createOnly && errors.Is(err, os.ErrExist) {
+		// The file was only reported missing when Load looked for it. It
+		// holds settings this session never took, so it is kept for the next
+		// launch to load, and Restore can back it up.
+		s.blocked, s.unloaded, s.createOnly = err, true, false
 		return fmt.Errorf("saving is disabled because a settings file this session did not load exists: %w", err)
 	}
 	return err
@@ -521,10 +582,10 @@ func (s *Store) check(value Settings) error {
 }
 
 // write puts value, which check has accepted, in the settings file, replacing
-// it, or only creating it while the settings the session took from the legacy
-// file have not reached it (fromLegacy).
+// it, or only creating it while nothing has reached it since Load found it
+// missing (createOnly).
 func (s *Store) write(value Settings) error {
-	if s.fromLegacy {
+	if s.createOnly {
 		return s.create(value)
 	}
 	return s.place(value, os.Rename)
@@ -572,7 +633,7 @@ func (s *Store) place(value Settings, rename func(from, to string) error) error 
 	if err := rename(temporaryPath, s.path); err != nil {
 		return fmt.Errorf("replace settings file: %w", err)
 	}
-	s.unloaded, s.fromLegacy = false, false
+	s.unloaded, s.createOnly, s.inherited = false, false, Settings{}
 	return nil
 }
 

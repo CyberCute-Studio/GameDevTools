@@ -72,6 +72,7 @@ const (
 	LoggingUnavailable            = "Diagnostic logging is unavailable: %v."
 	SettingsPathUnavailable       = "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session."
 	SettingsReadFailed            = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file."
+	SettingsFolderUnreachable     = "The folder of %s cannot be reached: %v. Defaults are in use and saving is disabled so that no settings stored there are replaced. Reconnect its drive or network share and start the application again."
 	SettingsInvalidBackupFailed   = "Settings in %s are invalid (%v), and a backup could not be created: %v. Defaults are in use and saving is disabled to protect the original file."
 	SettingsInvalidRecovered      = "Settings were invalid (%v). The original was backed up to %s and defaults are now in use."
 	DefaultSettingsWriteFailed    = "Default settings could not be written: %v. Defaults remain in memory."

@@ -18,9 +18,9 @@ Check the download
 ------------------
 Each release publishes a .sha256 file beside the ZIP. In PowerShell:
 
-    Get-FileHash .\cybercute-dev-tools-<version>-windows-x64.zip -Algorithm SHA256
+    (Get-FileHash .\cybercute-dev-tools-<version>-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
 
-The hash must match the first value in the .sha256 file.
+The result must match the first value in the .sha256 file.
 
 Your files
 ----------

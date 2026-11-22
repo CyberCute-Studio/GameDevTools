@@ -38,7 +38,7 @@ The icon and version resource are linked from `cmd/gamedevtools/resource_windows
 
 ### Reproducible builds
 
-The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, and `scripts/package.ps1` pins the toolchain from `go.mod`, turns off the user's `go env -w` file and Go workspace mode, and fixes `GOAMD64` at `v1` with no `GOEXPERIMENT` or `GOFLAGS`. ZIP entries are sorted and carry a fixed date. The same commit gives the same executable and ZIP bytes from any checkout path and Go configuration.
+The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, and `scripts/package.ps1` pins the toolchain from `go.mod`, turns off the user's `go env -w` file and Go workspace mode, keeping from it only where modules come from and where they are cached, which cannot change the bytes, and fixes `GOAMD64` at `v1` with no `GOEXPERIMENT` or `GOFLAGS`. ZIP entries are sorted and carry a fixed date. The same commit gives the same executable and ZIP bytes from any checkout path and Go configuration.
 
 ## Alternatives considered
 

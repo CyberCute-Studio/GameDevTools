@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -486,6 +487,126 @@ func TestStoreRestoreKeepsTheBlockWhileTheLegacyFolderIsUnreachable(t *testing.T
 	}
 }
 
+// A share can return between the reads that found nothing and the check that
+// its folder answers. What it brought back is then what the session loads.
+func TestStoreLoadRereadsOnceTheFolderAnswers(t *testing.T) {
+	t.Run("settings file", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		store := NewStore(paths)
+		store.reachable = func(string) bool {
+			if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return true
+		}
+		result := store.Load()
+		if len(result.Warnings) != 0 || result.Settings.Shell.SelectedModule != string(shell.ModuleSettings) {
+			t.Fatalf("load = %+v, want the settings file's settings", result)
+		}
+		requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+	})
+	t.Run("legacy file", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		store := NewStore(paths)
+		store.reachable = func(string) bool {
+			if err := os.WriteFile(paths.LegacyConfigFile, []byte(legacyResizerSettings), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return true
+		}
+		result := store.Load()
+		if len(result.Warnings) != 0 || result.Settings.Shell.SelectedModule != string(shell.ModuleImageResizer) {
+			t.Fatalf("load = %+v, want the legacy file's settings", result)
+		}
+		if _, err := os.Stat(paths.ConfigFile); err != nil {
+			t.Fatalf("the adopted settings were not written: %v", err)
+		}
+	})
+}
+
+// A first run's first save only creates the settings file, so one a share
+// brings back after Load is kept for the next launch rather than replaced.
+func TestStoreFirstRunSaveKeepsASettingsFileThatAppeared(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	result := store.Load()
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(result.Settings); err == nil {
+		t.Fatal("a first run's save replaced a settings file it never loaded")
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+}
+
+// A first run's first save reaches the file, and later saves replace it.
+func TestStoreFirstRunSavesAsUsual(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	value := store.Load().Settings
+	for _, module := range []shell.ModuleID{shell.ModuleImageResizer, shell.ModuleSettings} {
+		value.Shell.SelectedModule = string(module)
+		if err := store.Save(value); err != nil {
+			t.Fatalf("save selecting %s: %v", module, err)
+		}
+	}
+	if got := NewStore(paths).Load().Settings.Shell.SelectedModule; got != string(shell.ModuleSettings) {
+		t.Fatalf("selected module after restart = %q", got)
+	}
+}
+
+// Inherited names the legacy settings only until they reach the settings
+// file, so Restore can tell presets the session merely took from them.
+func TestStoreInheritedLastsUntilTheSettingsAreWritten(t *testing.T) {
+	store, _, session := unwrittenAdoption(t)
+	if got := store.Inherited().Shell.SelectedModule; got != string(shell.ModuleImageResizer) {
+		t.Fatalf("inherited module = %q, want the legacy file's", got)
+	}
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Inherited().Shell.SelectedModule; got != "" {
+		t.Fatalf("inherited module after the write = %q", got)
+	}
+}
+
+// The warning for a folder that cannot be reached asks for the share back
+// rather than for a file that may never have existed to be closed or moved.
+func TestStoreUnreachableFolderWarningsSayToReconnect(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	store.reachable = func(string) bool { return false }
+	result := store.Load()
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "Reconnect") || strings.Contains(result.Warnings[0], "original file") {
+		t.Fatalf("warnings = %v, want one saying to reconnect", result.Warnings)
+	}
+	_, _, err := store.Restore(Default(), restoreTo(Default()))
+	if !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "reconnect") || strings.Contains(err.Error(), "close whatever") {
+		t.Fatalf("Restore() error = %v, want one saying to reconnect", err)
+	}
+}
+
 func TestFolderReachable(t *testing.T) {
 	root := t.TempDir()
 	if !folderReachable(filepath.Join(root, "settings.json")) {
@@ -494,8 +615,37 @@ func TestFolderReachable(t *testing.T) {
 	if !folderReachable(filepath.Join(root, "missing", "deeper", "settings.json")) {
 		t.Error("a missing folder under a readable one was not reachable")
 	}
+	stray := filepath.Join(root, "stray")
+	if err := os.WriteFile(stray, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !folderReachable(filepath.Join(stray, "settings.json")) {
+		t.Error("a file in the folder's place hid the readable folder above it")
+	}
 	if runtime.GOOS != "windows" {
 		return
+	}
+	// A junction whose target is gone is a volume that is down, however
+	// readable the folder holding the junction is.
+	target, link := filepath.Join(root, "target"), filepath.Join(root, "Roaming")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("create junction: %v: %s", err, out)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	if !folderReachable(filepath.Join(link, "GameDevTools", "settings.json")) {
+		t.Error("a folder through a working junction was not reachable")
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if folderReachable(filepath.Join(link, "GameDevTools", "settings.json")) {
+		t.Error("a folder through a junction whose target is gone was reachable")
+	}
+	if folderReachable(`\\unreachable.invalid\users\me\AppData\Roaming\GameDevTools\settings.json`) {
+		t.Error("a path on a server that does not answer was reachable")
 	}
 	for letter := 'Z'; letter >= 'D'; letter-- {
 		drive := string(letter) + `:\`

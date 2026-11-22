@@ -1322,9 +1322,12 @@ func workspaceOffset(info monitorInfo) point {
 // the restore replaces, stores it with its selected preset, joined by the
 // custom presets of session, the running session's settings, that replaced
 // does not hold (preset.KeptSection), as a custom preset is deleted only by
-// its explicit Delete — and the running window's placement and current
-// module, which are saved again as it closes.
-func restoredSettings(session, replaced settings.Settings) (settings.Settings, error) {
+// its explicit Delete, unless inherited, the settings the session took from
+// the legacy file and never wrote (settings.Store.Inherited), holds the same
+// preset: replaced then lacks it because it was deleted there — and the
+// running window's placement and current module, which are saved again as it
+// closes.
+func restoredSettings(session, replaced, inherited settings.Settings) (settings.Settings, error) {
 	restored := settings.Default()
 	restored.Shell = session.Shell
 	modules := make(map[string]bool, len(replaced.Modules)+len(session.Modules))
@@ -1335,7 +1338,7 @@ func restoredSettings(session, replaced settings.Settings) (settings.Settings, e
 		modules[name] = true
 	}
 	for name := range modules {
-		section, err := preset.KeptSection(core.ModuleID(name), replaced.Modules[name], session.Modules[name])
+		section, err := preset.KeptSection(core.ModuleID(name), replaced.Modules[name], session.Modules[name], inherited.Modules[name])
 		if err != nil {
 			return settings.Settings{}, fmt.Errorf("module settings %q: %w", name, err)
 		}
@@ -1363,8 +1366,9 @@ func restoredSettings(session, replaced settings.Settings) (settings.Settings, e
 // resize list, and a running job are not touched.
 func (s *nativeShell) restoreDefaults() ui.Notice {
 	session := *s.settings
+	inherited := s.store.Inherited()
 	restored, backup, err := s.store.Restore(session, func(replaced settings.Settings) (settings.Settings, error) {
-		return restoredSettings(session, replaced)
+		return restoredSettings(session, replaced, inherited)
 	})
 	if errors.Is(err, settings.ErrNotRestored) {
 		s.logEvent(diagnostics.LevelError, "settings.restore", "not-restored")
