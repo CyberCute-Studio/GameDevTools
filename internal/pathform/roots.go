@@ -97,6 +97,9 @@ func NamesNoFolder(folder string) bool {
 // the share is judged: a folder named pipe on an ordinary share is a folder.
 // Trailing spaces and periods are ignored, since a verbatim path keeps them
 // and what a server makes of such a share name cannot be judged from here.
+// For the same reason a name of nothing else, such as the .. of
+// \\server\..\pipe\x, which Windows keeps where a share belongs, does not hide
+// the name after it. A doubled separator holds no name.
 func LeadsThroughIPCShare(clean string) bool {
 	unc, found := "", false
 	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`, `\\.\UNC\`} {
@@ -111,14 +114,10 @@ func LeadsThroughIPCShare(clean string) bool {
 		}
 		unc = clean[len(`\\`):]
 	}
-	names := strings.Split(unc, `\`)
-	if len(names) < 2 {
-		return false
-	}
-	named := strings.TrimRight(names[1], " .")
-	for _, share := range []string{"pipe", "mailslot", "IPC$"} {
-		if strings.EqualFold(named, share) {
-			return true
+	names := strings.FieldsFunc(unc, func(character rune) bool { return character == '\\' })
+	for _, name := range names[min(1, len(names)):] {
+		if named := strings.TrimRight(name, " ."); named != "" {
+			return strings.EqualFold(named, "pipe") || strings.EqualFold(named, "mailslot") || strings.EqualFold(named, "IPC$")
 		}
 	}
 	return false

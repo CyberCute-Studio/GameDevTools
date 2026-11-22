@@ -45,7 +45,13 @@ func TestNamesNoFolder(t *testing.T) {
 		{`\??\UNC\server\MailSlot. \x`, true},
 		{`\\?\UNC\server\IPC$..\x`, true},
 		{`\\server\pipe.\x`, true},
+		{`\\..\pipe\x`, true},
+		{`//../IPC$/x`, true},
+		{`\\localhost\..\pipe\x`, true},
+		{`\\localhost\.\mailslot\x`, true},
 
+		{`\\server\..\x`, false},
+		{`\\server\..\share\pipe`, false},
 		{`\\?\UNC\server\pipe.d\x`, false},
 		{`\\server\share\pipe`, false},
 		{`\\server\share\pipe\x`, false},

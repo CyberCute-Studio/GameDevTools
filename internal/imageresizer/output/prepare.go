@@ -249,7 +249,7 @@ var (
 	ErrFolderEmpty       = errors.New("the output folder is empty")
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
-	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it")
+	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it, or leads through a server's pipe, mailslot, or IPC$ share")
 	ErrFolderName        = errors.New("Windows would change a name in the path, such as one that ends in a space or a period, or read one as a device name, or as a file stream because it holds a colon")
 )
 
@@ -310,9 +310,11 @@ var (
 // a folder, and creating it, as Prepare does, would open that device, which
 // for a named pipe connects to the program serving it. A server's pipe,
 // mailslot, or IPC$ share, as in \\localhost\pipe\x, is the same device
-// reached through a share, and is judged on the path as Windows resolves it,
-// which writes every spelling of it alike. Such a path is refused as
-// ErrFolderRoot.
+// reached through a share. It is judged on the path Prepare creates, which
+// past the name rule above is the path as Windows resolves it, keeping a ".."
+// where a server or share belongs, as in \\..\pipe\x. Such a path is refused
+// as ErrFolderRoot, unless the name rule has already refused it as
+// ErrFolderName, as it does \\server\pipe. for its trailing period.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -330,7 +332,7 @@ func ValidateFolder(folder string) error {
 		return ErrFolderName
 	}
 	resolved := resolvedPath(folder)
-	if pathform.NamesDevice(resolved) || pathform.LeadsThroughIPCShare(resolved) {
+	if pathform.NamesDevice(resolved) || pathform.LeadsThroughIPCShare(clean) {
 		return ErrFolderRoot
 	}
 	if resolved != resolvedPath(clean) {

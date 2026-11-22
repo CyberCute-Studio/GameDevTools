@@ -192,7 +192,7 @@ const (
 	// outputFolderNameRule and outputFolderRootRule state the two output
 	// folder rules, for every message that reports a folder breaking one.
 	outputFolderNameRule = "Windows would change a name in its path, such as a name that ends in a space or a period, or read one as a device name such as NUL, or as a file stream because it contains a colon"
-	outputFolderRootRule = "its path names a drive, volume, device, or server rather than a folder on it"
+	outputFolderRootRule = "its path names a drive, volume, device, or server rather than a folder on it, or leads through a server's pipe, mailslot, or IPC$ share"
 	// screenshotFolderRootRule is outputFolderRootRule as Screenshot applies
 	// it, which also refuses a path with more than two leading separators.
 	screenshotFolderRootRule = outputFolderRootRule + ", or starts with more than two backslashes"

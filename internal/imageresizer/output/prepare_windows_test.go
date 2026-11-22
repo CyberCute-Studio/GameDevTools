@@ -1167,13 +1167,6 @@ func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
 	}
 }
 
-// TestPrepareNeverOpensListedDevices pins RSZ-026 for listed paths through a
-// device other than a drive, a volume, or a share: planning never opens one,
-// as opening a named pipe connects to the program serving it and opening a
-// port claims it, and since such a path may still lead to a file, as an NT
-// device path can, a confirmed Overwrite renames rather than replaces. A
-// drive root or a drive's volume names no file however it is reached, so it
-// is not opened either, and a confirmed Overwrite still replaces.
 // TestValidateFolderRefusesServerIPCShares pins that a server's pipe,
 // mailslot, or IPC$ share is refused in every spelling, as creating a folder
 // there would connect to the program serving that pipe, and that an ordinary
@@ -1199,15 +1192,28 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\server\pipe \x`,
 		`\\?\UNC\server\pipe.\x`,
 		`\\?\UNC\server\pipe \x`,
+		// Windows keeps a ".." or "." where a server or share belongs, so it
+		// must not hide the share after it.
+		`\\..\pipe\x`,
+		`//../pipe/x`,
+		`//../pipe`,
+		`//../mailslot/x`,
+		`//../IPC$/x`,
+		`\\\..\pipe\x`,
+		`\\localhost\..\pipe\x`,
+		`//localhost/../pipe/x`,
+		`\\localhost\..\IPC$\x`,
+		`\\127.0.0.1\..\mailslot\x`,
+		`\\localhost\.\pipe\x`,
 	} {
 		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
 			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
 		}
 	}
 	// Refused as a name Windows would change, before the share is judged.
-	for _, folder := range []string{`\\server\\pipe\x`, `\\\\localhost\pipe\x`} {
-		if err := ValidateFolder(folder); err == nil {
-			t.Errorf("ValidateFolder(%q) accepted a path to an IPC share", folder)
+	for _, folder := range []string{`\\server\\pipe\x`, `\\\\localhost\pipe\x`, `\\server\pipe.`, `//./UNC//server/pipe/x`} {
+		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderName) {
+			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderName)
 		}
 	}
 	for _, folder := range []string{
@@ -1217,6 +1223,8 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\server\pipes\x`,
 		`\\pipe\share\x`,
 		`\\?\UNC\server\share\pipe\x`,
+		`\\server\..\pipes\x`,
+		`\\server\..\share\pipe`,
 		`C:\pipe\x`,
 		`\\?\C:\pipe\x`,
 	} {
@@ -1236,6 +1244,13 @@ func TestPrepareRefusesAnIPCShareBeforeTouchingIt(t *testing.T) {
 	}
 }
 
+// TestPrepareNeverOpensListedDevices pins RSZ-026 for listed paths through a
+// device other than a drive, a volume, or a share: planning never opens one,
+// as opening a named pipe connects to the program serving it and opening a
+// port claims it, and since such a path may still lead to a file, as an NT
+// device path can, a confirmed Overwrite renames rather than replaces. A
+// drive root or a drive's volume names no file however it is reached, so it
+// is not opened either, and a confirmed Overwrite still replaces.
 func TestPrepareNeverOpensListedDevices(t *testing.T) {
 	in := t.TempDir()
 	pipe := "GameDevTools-" + filepath.Base(in)
