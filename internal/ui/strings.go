@@ -78,9 +78,14 @@ const (
 	DefaultSettingsWriteFailed    = "Default settings could not be written: %v. Defaults remain in memory."
 	SettingsMigrationBackupFailed = "Settings were migrated in memory, but the original could not be backed up: %v. Saving is disabled to protect %s."
 	MigratedSettingsWriteFailed   = "Migrated settings could not be written: %v. The original remains at %s."
-	SettingsSaveFailed            = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
-	SettingsCloseTitle            = AppName + " — Settings not saved"
-	SettingsCloseConfirmation     = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
+	// LegacySettingsNotAdopted and InvalidLegacySettingsNotAdopted report a
+	// first launch that could not write the new settings file, which blocks
+	// saving for the session.
+	LegacySettingsNotAdopted        = "Your settings could not be copied to the new settings file: %[1]v. Changes in this session will not be saved. Your settings remain in %[2]s, and the next launch will try again."
+	InvalidLegacySettingsNotAdopted = "Settings in %[1]s are invalid (%[2]v), and the new settings file could not be written: %[3]v. Defaults are in use and changes in this session will not be saved. The original remains in %[1]s, and the next launch will try again."
+	SettingsSaveFailed              = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
+	SettingsCloseTitle              = AppName + " — Settings not saved"
+	SettingsCloseConfirmation       = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
 
 	// The Settings view's restore of the default settings (SET-005).
 	SettingsRestoreDescription  = "Restore Default Settings returns the global shortcut, the capture and resize options, and both output folders to their defaults. Custom presets, each module's selected preset, the images in the resize list, and saved images are kept; a preset is deleted only with Delete in its module. The current settings file is backed up first, in the same folder."
@@ -90,7 +95,10 @@ const (
 	SettingsRestored            = "Default settings restored. The previous settings were backed up to %s."
 	SettingsRestoredNoBackup    = "Default settings restored."
 	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
-	SettingsRestoreSaveFailed   = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
+	// SettingsRestoreBlocked is why a restore refuses while saving is blocked
+	// and there is no settings file to back up; SettingsRestoreFailed joins it.
+	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file exists at %s to restore (%v). Resolve the problem the startup warning describes, then start the application again"
+	SettingsRestoreSaveFailed = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
 	// SettingsRestoreSaveFailedNoFile is the restore's failed write when
 	// there was no settings file to back up or keep.
 	SettingsRestoreSaveFailedNoFile = "Default settings are in use for this session, but they could not be saved: %v. There was no settings file to back up."

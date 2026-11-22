@@ -181,7 +181,6 @@ var reviewedFileSites = map[string]string{
 	"internal/diagnostics/logger.go Logger.rotate os.Rename": logFolder,
 
 	"internal/settings/rename_windows.go renameNoReplace windows.MoveFileEx": settingsFolder,
-	"internal/settings/store.go Store.Restore os.Remove":                     settingsFolder,
 	"internal/settings/store.go Store.backup os.MkdirAll":                    settingsFolder,
 	"internal/settings/store.go Store.backup os.OpenFile":                    settingsFolder,
 	"internal/settings/store.go Store.backup os.Remove":                      settingsFolder,

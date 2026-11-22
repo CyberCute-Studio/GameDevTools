@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"unicode/utf8"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
@@ -320,19 +319,14 @@ func LibrarySection(section json.RawMessage) (json.RawMessage, error) {
 // session started from the defaults because the settings file could not be
 // read and the restore keeps the file's presets: the presets the session
 // created meanwhile, which could not be saved, are kept with them, as a
-// custom preset is deleted only by its explicit Delete. A session preset
-// that inherited, the module's section in settings the session took from an
-// older file and never wrote, holds unchanged is not one the session created:
-// replaced lacks it because it was deleted there, so it stays deleted; the
-// store reports nothing as inherited unless replaced's file is known to be
-// the newer one, as replaced may otherwise predate the preset. One
-// whose name a kept preset already uses is kept under the name Duplicate
-// would give a copy of it; the selected preset stays replaced's. A section
-// session holds as replaced does adds nothing, and neither does the section
-// of a module this build has no presets for, such as one a newer build
-// added, whose library is kept as stored: no session of this build creates
-// presets in it, and only that build can decode them.
-func KeptSection(module shell.ModuleID, replaced, session, inherited json.RawMessage) (json.RawMessage, error) {
+// custom preset is deleted only by its explicit Delete. One whose name a
+// kept preset already uses is kept under the name Duplicate would give a
+// copy of it; the selected preset stays replaced's. A section session holds
+// as replaced does adds nothing, and neither does the section of a module
+// this build has no presets for, such as one a newer build added, whose
+// library is kept as stored: no session of this build creates presets in
+// it, and only that build can decode them.
+func KeptSection(module shell.ModuleID, replaced, session json.RawMessage) (json.RawMessage, error) {
 	kept, err := LibrarySection(replaced)
 	if err != nil {
 		return nil, err
@@ -359,13 +353,9 @@ func KeptSection(module shell.ModuleID, replaced, session, inherited json.RawMes
 	if selected == "" {
 		selected = library.SelectedID()
 	}
-	older, err := decodeSection(module, inherited)
-	if err != nil {
-		return nil, fmt.Errorf("decode the inherited presets: %w", err)
-	}
 	added := false
 	for _, candidate := range running.Custom {
-		if _, exists := library.Get(candidate.ID); exists || slices.Contains(older.Custom, candidate) {
+		if _, exists := library.Get(candidate.ID); exists {
 			continue
 		}
 		if err := library.adopt(candidate); err != nil {

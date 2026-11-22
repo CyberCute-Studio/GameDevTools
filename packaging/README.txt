@@ -32,7 +32,9 @@ Resized:      Pictures\CyberCute Dev Tools\Resized (by default)
 If you used a build named GameDevTools, its settings are copied the first time
 this version starts, and the old %APPDATA%\GameDevTools folder is left in
 place. You may delete it afterwards. While it exists, its settings are copied
-again whenever the new settings file is missing.
+again whenever the new settings file is missing. If they cannot be copied, the
+app says so and saves no changes in that session; your settings stay in the old
+folder, and the next start tries again.
 
 Output folders stored in those settings stay selected. That build stored the
 folder in use whenever you changed a capture or resize option, so if you changed
