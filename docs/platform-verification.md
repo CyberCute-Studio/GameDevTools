@@ -29,7 +29,7 @@ The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) run
 
 ## Environment of record
 
-Results below were recorded on 2026-11-22 from commit `e1a6bc3`, with a clean working tree:
+Results below were recorded on 2026-11-22 from commit `54fdff4`, with a clean working tree:
 
 | Property | Value |
 |---|---|
@@ -60,20 +60,20 @@ Each figure comes from the validation script's benchmarks on the environment of 
 
 | Requirement | Measure | Target | Native ARM64 | x64 under emulation |
 |---|---|---|---|---|
-| NFR-010 | Warm launch to a responsive main window, mean of 20 | 2 s | 163 ms | 195 ms |
-| NFR-010 | Warm launch, slowest of 20 | 2 s | 235 ms | 245 ms |
-| NFR-011 | Free Rectangle overlay appears, 5360 × 1823 desktop, mean of 30 | 300 ms | 63 ms | 70 ms |
-| NFR-011 | 1280 × 720 Preset Rectangle frame appears, mean of 30 | 300 ms | 18 ms | 31 ms |
-| NFR-012 | 3840 × 2160 capture to clipboard | 1 s | 108 ms | 128 ms |
-| NFR-013 | 100 mixed 12 MP JPEGs to 1024 × 1024, slowest of 3 | 120 s | 7.5 s | 10.8 s |
+| NFR-010 | Warm launch to a responsive main window, mean of 20 | 2 s | 171 ms | 395 ms |
+| NFR-010 | Warm launch, slowest of 20 | 2 s | 194 ms | 602 ms |
+| NFR-011 | Free Rectangle overlay appears, 5360 × 1823 desktop, mean of 30 | 300 ms | 76.5 ms | 146 ms |
+| NFR-011 | Free Rectangle overlay appears, slowest of 30 | 300 ms | 110.7 ms | 240.2 ms |
+| NFR-011 | 1280 × 720 Preset Rectangle frame appears, mean of 30 | 300 ms | 20.4 ms | 44.1 ms |
+| NFR-011 | 1280 × 720 Preset Rectangle frame appears, slowest of 30 | 300 ms | 28.8 ms | 124.7 ms |
+| NFR-012 | 3840 × 2160 capture to clipboard | 1 s | 124.5 ms | 153.7 ms |
+| NFR-013 | 100 mixed 12 MP JPEGs to 1024 × 1024, slowest of 3 | 120 s | 11.4 s | 12.5 s |
 | NFR-014 | Peak heap during that batch | 1 GiB budget | 220 MiB | 220 MiB |
-| NFR-014 | Peak runtime footprint during that batch | — | 246 MiB | 237 MiB |
+| NFR-014 | Peak runtime footprint during that batch | — | 233 MiB | 248 MiB |
 
 Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's throughput converted to that region's size.
 
-Figures vary between runs. An earlier run of the same code, minutes before, measured native launch at 268 ms and the native batch at 11.4 s, and the x64 batch at 20.3 s. Every run met every target.
-
-The figures above are from the runs at `e1a6bc3`. The script has since gained a slowest-of-30 target for each overlay, which those runs did not measure, so this table has no figure for it; a QLT-04A run records it.
+Figures vary between runs. Across the three full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a6bc3`, and `54fdff4`, mean launch ranged from 163 to 268 ms natively and 195 to 395 ms as x64, the mean Free Rectangle overlay from 63 to 104 ms natively and 70 to 146 ms as x64, and the batch from 7.5 to 11.4 s natively and 10.8 to 20.3 s as x64. Every run met every target it measured. The slowest-of-30 overlay figures exist only for `54fdff4`, and the x64 Free Rectangle's 240 ms is the narrowest margin in the table.
 
 ## Display matrix
 
