@@ -445,6 +445,143 @@ func TestStoreFailedRestoreOfAMissingFileNeverReplacesIt(t *testing.T) {
 	})
 }
 
+// A failed restore leaves later saves only creating the file, but a session
+// that loaded that file did take its settings: when it returns, a later
+// restore derives from the session, so a preset renamed or deleted since does
+// not come back from the file. A session that never loaded a file derives
+// from the one that appears.
+func TestStoreRestoreDerivesFromTheSessionThatLoadedAFileThatReturned(t *testing.T) {
+	session := Default()
+	session.Shell.SelectedModule = string(shell.ModuleImageResizer)
+	derived := func(t *testing.T, store *Store) string {
+		t.Helper()
+		var replaced Settings
+		_, backup, err := store.Restore(session, func(value Settings) (Settings, error) {
+			replaced = value
+			return Default(), nil
+		})
+		if err != nil || backup == "" {
+			t.Fatalf("Restore() backup = %q, error = %v, want the file backed up", backup, err)
+		}
+		return replaced.Shell.SelectedModule
+	}
+	for _, saveFirst := range []bool{false, true} {
+		name := "restore finds it"
+		if saveFirst {
+			name = "save finds it first"
+		}
+		t.Run("loaded, "+name, func(t *testing.T) {
+			paths := legacyPaths(t, legacyResizerSettings)
+			if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := NewStore(paths)
+			store.Load()
+			away := paths.ConfigFile + ".away"
+			if err := os.Rename(paths.ConfigFile, away); err != nil {
+				t.Fatal(err)
+			}
+			store.renameNew = failingCreate
+			if _, _, err := store.Restore(session, restoreTo(session)); err == nil || errors.Is(err, ErrNotRestored) {
+				t.Fatalf("Restore() error = %v, want a failed write", err)
+			}
+			store.renameNew = renameNoReplace
+			if err := os.Rename(away, paths.ConfigFile); err != nil {
+				t.Fatal(err)
+			}
+			if saveFirst {
+				if err := store.Save(session); err == nil {
+					t.Fatal("a save replaced a returned settings file with no copy made")
+				}
+			}
+			if got := derived(t, store); got != string(shell.ModuleImageResizer) {
+				t.Fatalf("the restore derived from selected module %q, want the session's", got)
+			}
+		})
+		t.Run("never loaded, "+name, func(t *testing.T) {
+			paths := legacyPaths(t, legacyResizerSettings)
+			if err := os.Remove(paths.LegacyConfigFile); err != nil {
+				t.Fatal(err)
+			}
+			store := NewStore(paths)
+			store.Load()
+			if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if saveFirst {
+				if err := store.Save(session); err == nil {
+					t.Fatal("a first run's save replaced a settings file it never loaded")
+				}
+			}
+			if got := derived(t, store); got != string(shell.ModuleSettings) {
+				t.Fatalf("the restore derived from selected module %q, want the file's", got)
+			}
+		})
+	}
+}
+
+// A settings file that appears under a session which only creates one, as
+// when another of the user's Windows sessions saved first, stops its saves.
+// Each failed save then says how to end that, not only the first.
+func TestStoreSaveThatFindsAFileSaysWhatToDo(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	result := store.Load()
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		err := store.Save(result.Settings)
+		if err == nil {
+			t.Fatalf("save %d replaced a settings file the session never loaded", attempt)
+		}
+		for _, want := range []string{"has not backed up", "Start the application again", "Restore Default Settings"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("save %d error = %v, want it to contain %q", attempt, err, want)
+			}
+		}
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+}
+
+// An old settings file that stays unreadable blocks saving at every launch,
+// so the warning and the restore's refusal say how to end that, and removing
+// the file leads to a normal first run.
+func TestStoreUnreadableLegacySettingsSayHowToEndTheBlock(t *testing.T) {
+	store, paths := unreadableLegacyStore(t)
+	warnings := NewStore(paths).Load().Warnings
+	if len(warnings) != 1 || !strings.Contains(warnings[0], paths.LegacyConfigFile) || !strings.Contains(warnings[0], "delete or move") {
+		t.Fatalf("warnings = %v, want one naming the old file and saying to delete or move it", warnings)
+	}
+	_, _, err := store.Restore(Default(), restoreTo(Default()))
+	if !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "old settings file") {
+		t.Fatalf("Restore() error = %v, want a refusal covering an old settings file", err)
+	}
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	next := NewStore(paths)
+	result := next.Load()
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings after removing the old file = %v, want a first run", result.Warnings)
+	}
+	if err := next.Save(result.Settings); err != nil {
+		t.Fatalf("Save() after removing the old file = %v", err)
+	}
+}
+
 // Invariant: the legacy file is never modified, whether the adoption is
 // written or fails, and whatever the session does after it.
 func TestInvariantLegacyFileIsNeverModified(t *testing.T) {

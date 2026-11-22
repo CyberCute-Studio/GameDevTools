@@ -139,13 +139,16 @@ type Store struct {
 	// a write only creates that file, as its absence may be a share that is
 	// reconnecting.
 	createOnly bool
-	// unloaded is whether the settings file holds settings the session never
-	// took: Load could not read or decode the file and started the session
-	// from the defaults in their place, and neither a save nor a restore
-	// that backed the file up has replaced it since. Restore then derives
-	// the restored settings from the file's, once they decode, so what the
-	// restore keeps — the preset libraries — is what the file stores rather
-	// than the defaults the session started from.
+	// unloaded is whether a settings file, if one is there, holds settings
+	// the session never took: Load found none, or could not read or decode
+	// it, and started the session from something else, and neither a save
+	// nor a restore that backed the file up has replaced it since. Restore
+	// then derives the restored settings from the file's, once they decode,
+	// so what the restore keeps — the preset libraries — is what the file
+	// stores rather than what the session started from. A restore that finds
+	// a loaded file missing leaves this false, though it sets createOnly: the
+	// session took that file's settings, so what it has renamed or deleted
+	// since must not return from the file.
 	unloaded bool
 	// held is whether Save writes nothing, as Hold leaves it.
 	held bool
@@ -264,7 +267,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		// first run still only creates the file with its first write, as a
 		// share can return just after the reads here. A legacy file that was
 		// read is written to the settings file below, or saving is blocked.
-		source, s.createOnly = s.legacyPath, true
+		source, s.createOnly, s.unloaded = s.legacyPath, true, true
 		var gone bool
 		data, gone, err = s.readLegacy()
 		if gone {
@@ -286,8 +289,14 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		s.blocked = err
 		s.unloaded = true
 		message := ui.SettingsReadFailed
-		if (s.createOnly || !adopt) && errors.Is(err, os.ErrNotExist) {
+		switch {
+		case (s.createOnly || !adopt) && errors.Is(err, os.ErrNotExist):
 			message = ui.SettingsFolderUnreachable
+		case source == s.legacyPath:
+			// Nothing in the application can end this block, as Restore
+			// refuses while no settings file exists, so the warning says what
+			// can.
+			message = ui.LegacySettingsUnreadable
 		}
 		result.Warnings = append(result.Warnings, fmt.Sprintf(message, source, err))
 		return result, true
@@ -472,11 +481,10 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
 		default:
 			exists = true
-			if s.unloaded || s.createOnly {
+			if s.unloaded {
 				// A file that still does not decode is kept only in its copy,
 				// as recovery from a malformed file keeps it, and the session's
-				// settings are the ones the restore replaces. With createOnly
-				// the session never took this file's settings.
+				// settings are the ones the restore replaces.
 				if stored, _, err := s.decode(data); err == nil {
 					replaced = stored
 				}
@@ -590,6 +598,9 @@ func (s *Store) removeStaleTemporaries() {
 }
 
 func (s *Store) save(value Settings) error {
+	if foundSettingsFile(s.blocked) {
+		return fmt.Errorf(ui.SettingsFileAppeared, s.blocked)
+	}
 	if s.blocked != nil {
 		return fmt.Errorf("saving is disabled because settings recovery is incomplete: %w", s.blocked)
 	}
@@ -602,10 +613,12 @@ func (s *Store) save(value Settings) error {
 	err := s.write(value)
 	if s.createOnly && foundSettingsFile(err) {
 		// The file was only reported missing when Load or a restore looked
-		// for it. It holds settings this session has no copy of, so it is
-		// kept for the next launch to load, and Restore can back it up.
-		s.blocked, s.unloaded, s.createOnly = err, true, false
-		return fmt.Errorf("saving is disabled because a settings file exists that this session has not backed up: %w", err)
+		// for it, or another of the user's Windows sessions has just created
+		// it. No copy of it has been made, so it is kept for the next launch
+		// to load, and Restore can back it up. Whether the session took its
+		// settings is unchanged: unloaded already says.
+		s.blocked, s.createOnly = err, false
+		return fmt.Errorf(ui.SettingsFileAppeared, err)
 	}
 	return err
 }

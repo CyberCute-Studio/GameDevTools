@@ -53,6 +53,14 @@ function Test-InstanceRunning {
     return $false
 }
 
+# Every entry under the folder, each file with its hash, so a shipped file
+# rewritten in place shows as a change as much as a file added or removed.
+function Get-FolderState([string]$Folder) {
+    return @(Get-ChildItem -LiteralPath $Folder -Recurse -Force | Sort-Object FullName | ForEach-Object {
+        if ($_.PSIsContainer) { $_.FullName } else { "$($_.FullName)=$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }
+    })
+}
+
 function New-Workspace([string]$Parent, [string]$Name) {
     $workspace = Join-Path $Parent $Name
     foreach ($folder in "Roaming", "Local", "Temp", "Profile") {
@@ -162,7 +170,7 @@ try {
     if ($signature.Status -ne "NotSigned") { throw "The release is meant to be unsigned; its signature status is $($signature.Status)." }
     Write-Check "unsigned, as ADR-0002 decides"
 
-    $before = @(Get-ChildItem -LiteralPath $folder -Recurse -Force | ForEach-Object { $_.FullName } | Sort-Object)
+    $before = Get-FolderState $folder
 
     $firstRun = New-Workspace $scratch "FirstRun"
     Invoke-App -Executable $executable -Workspace $firstRun
@@ -181,11 +189,11 @@ try {
     if (-not (Test-Path -LiteralPath $adopted)) { throw "The upgrade wrote no settings at $adopted." }
     $selected = (Get-Content -LiteralPath $adopted -Raw | ConvertFrom-Json).shell.selectedModule
     if ($selected -ne "image-resizer") { throw "The upgrade selected '$selected' rather than keeping image-resizer." }
-    if ([System.IO.File]::ReadAllText($legacy) -ne $legacyText) { throw "The upgrade changed the GameDevTools settings file." }
+    if ([System.IO.File]::ReadAllText($legacy) -cne $legacyText) { throw "The upgrade changed the GameDevTools settings file." }
     Write-Check "upgrade keeps GameDevTools settings and leaves the old file"
 
-    $after = @(Get-ChildItem -LiteralPath $folder -Recurse -Force | ForEach-Object { $_.FullName } | Sort-Object)
-    if (($before -join "|") -ne ($after -join "|")) { throw "Running the application changed its extracted folder." }
+    $after = Get-FolderState $folder
+    if (($before -join "|") -cne ($after -join "|")) { throw "Running the application changed its extracted folder." }
     Write-Check "portable: nothing written beside the executable"
 } finally {
     # A virus scanner or the x64 emulation cache can hold a program that has

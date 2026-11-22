@@ -68,11 +68,18 @@ const (
 	SettingsTitle           = "Settings"
 	SettingsDescription     = "Application preferences are stored locally in a versioned per-user settings file. Diagnostic logs rotate automatically and exclude image, clipboard, and filename data."
 
-	LocalSettingsUnavailable      = "Local settings are unavailable: %v. Changes will remain in memory for this session."
-	LoggingUnavailable            = "Diagnostic logging is unavailable: %v."
-	SettingsPathUnavailable       = "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session."
-	SettingsReadFailed            = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file."
-	SettingsFolderUnreachable     = "The location of %s cannot be reached: %v. Defaults are in use and saving is disabled so that no settings stored there are replaced. Reconnect its drive or network share and start the application again. If it is gone for good, delete the link or junction at that path or its folder and start the application again, which gives up any settings stored there."
+	LocalSettingsUnavailable  = "Local settings are unavailable: %v. Changes will remain in memory for this session."
+	LoggingUnavailable        = "Diagnostic logging is unavailable: %v."
+	SettingsPathUnavailable   = "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session."
+	SettingsReadFailed        = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file."
+	SettingsFolderUnreachable = "The location of %s cannot be reached: %v. Defaults are in use and saving is disabled so that no settings stored there are replaced. Reconnect its drive or network share and start the application again. If it is gone for good, delete the link or junction at that path or its folder and start the application again, which gives up any settings stored there."
+	// LegacySettingsUnreadable reports an old settings file that exists but
+	// cannot be read, which blocks saving at every launch until it can be.
+	LegacySettingsUnreadable = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled so that those settings are not abandoned. Repair access to that old settings file and start the application again. If you no longer need it, delete or move it and start the application again, which gives up the settings in it."
+	// SettingsFileAppeared is why a save fails once it has found a settings
+	// file the session was only creating, as when another of the user's
+	// Windows sessions saved first.
+	SettingsFileAppeared          = "saving is disabled because a settings file exists that this session has not backed up (%w). Start the application again to load it, which gives up changes not yet saved, or use Restore Default Settings to back it up and replace it"
 	SettingsInvalidBackupFailed   = "Settings in %s are invalid (%v), and a backup could not be created: %v. Defaults are in use and saving is disabled to protect the original file."
 	SettingsInvalidRecovered      = "Settings were invalid (%v). The original was backed up to %s and defaults are now in use."
 	DefaultSettingsWriteFailed    = "Default settings could not be written: %v. Defaults remain in memory."
@@ -97,7 +104,7 @@ const (
 	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
 	// SettingsRestoreBlocked is why a restore refuses while saving is blocked
 	// and there is no settings file to back up; SettingsRestoreFailed joins it.
-	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file was found at %s to restore (%v). Resolve the problem that disabled saving, then start the application again. If it is a drive or network share that is gone for good, delete the link or junction leading to it and start the application again, which gives up any settings stored there"
+	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file was found at %s to restore (%v). Resolve the problem that disabled saving, then start the application again. If it is a drive or network share that is gone for good, delete the link or junction leading to it and start the application again, which gives up any settings stored there. If it is an old settings file that cannot be read and you no longer need it, delete or move it and start the application again, which gives up the settings in it"
 	SettingsRestoreSaveFailed = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
 	// SettingsRestoreSaveFailedNoFile is the restore's failed write when
 	// no settings file was found to back up, which may be one on a drive or
