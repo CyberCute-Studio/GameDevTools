@@ -229,6 +229,15 @@ func TestValidateFolder(t *testing.T) {
 		{`\\.\UNC\`, ErrFolderRoot},
 		{`\\.\UNC`, ErrFolderRoot},
 		{`\\.\UNC\server\share\Art.`, ErrFolderName},
+		// A \??\ path that names only a volume or device has no separator
+		// after its volume name, but it is no relative path: a stored one
+		// must give way to the default folder rather than reset the settings.
+		{`\??\C:`, ErrFolderRoot},
+		{`\??\NUL`, ErrFolderRoot},
+		{`\??\UNC`, ErrFolderRoot},
+		{`\??\Volume{00000000-0000-0000-0000-000000000000}`, ErrFolderRoot},
+		{`\??\`, ErrFolderRoot},
+		{`\??C:`, ErrFolderNotAbsolute},
 		{`C:`, ErrFolderNotAbsolute},
 		{`C:\Art.\Resized`, ErrFolderName},
 		{`C:\Art .\Resized`, ErrFolderName},

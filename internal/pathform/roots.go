@@ -89,6 +89,15 @@ func NamesNoFolder(folder string) bool {
 	return NamesDevice(clean)
 }
 
+// NamesBareNTVolume reports whether a path IsAbs calls relative is a \??\ path
+// that names only a volume or device, such as \??\C:. It has no separator
+// after its volume name, but it is no relative path: it is refused as naming
+// no folder, like its \\?\ spelling, and a stored one must not fail the whole
+// settings file.
+func NamesBareNTVolume(folder string) bool {
+	return !IsAbs(folder) && strings.HasPrefix(folder, `\??\`) && NamesNoFolder(folder)
+}
+
 // LeadsThroughIPCShare reports whether a cleaned path's share, in any UNC
 // spelling and letter case, is a server's pipe, mailslot, or IPC$, or cannot
 // be told from it. Windows reads those shares as its named pipes and mailslots

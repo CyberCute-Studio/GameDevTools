@@ -1,7 +1,7 @@
 # GameDevTools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.2\
+**Version:** 1.3\
 **Last updated:** 2026-11-22\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
@@ -32,8 +32,8 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M0 — Technical validation and application foundation | 1–7 | Pending |
 | M1 — Screenshot module | 8–18 | Pending |
 | M2 — Image Resizer module | 19–27 | Pending |
-| M3 — Cross-cutting quality and hardening | 28–34 | Pending |
-| M4 — Distribution and release | 35–37 | Pending |
+| M3 — Cross-cutting quality and hardening | 28–35 | Pending |
+| M4 — Distribution and release | 36–38 | Pending |
 
 ## 4. Milestone M0 — Technical validation and application foundation
 
@@ -292,8 +292,15 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Verify:** Table-test each UNC prefix, unusual server and share places, and similar ordinary names at string level, and that a job fails before touching a file system. Open no pipe, mailslot, or device in any test or probe.
     - **Notes:** QLT-03B's review found that `output.ValidateFolder` accepted these shares, which Screenshot already refused. It now applies the same `pathform.LeadsThroughIPCShare` check and refuses such a path as `ErrFolderRoot`, or as `ErrFolderName` when the name rule refuses the spelling first, as for `\\server\pipe.`. An ordinary network path is `\\server\share`, so a path with anything other than a plain name in either place, such as three leading separators, a `.` or `..`, or a `;LanmanRedirector` provider name, is refused too, because what Windows would connect to cannot be judged from the text. Screenshot reads the same rule through `pathform.NamesNoFolder`, so this item changes it too: the plain-name refusal replaces its check for more than two leading separators, and it now refuses a path it accepted before, such as `\\;x\nas\photos` or `\\nas\;x\photos`, and keeps a stored one selected with a startup warning. The plain-name rule also retires the defect where a job created `\\server\..\share\photos` but inspected another server's path. The share is judged by its name alone, so a WebDAV folder with one of those names at a server's web root, such as `\\server@SSL\pipe`, is refused too, while `\\server@SSL\DavWWWRoot\pipe` is not. In the Image Resizer, a stored folder of this kind follows the existing path for one the rules refuse: the default folder is selected with a startup warning. The Image Resizer's looser rule for names such as `Photos ` that a longer path leads through is unchanged. QLT-03B's PR, #32, merged into QLT-03A's branch after that branch had already merged, so its changes did not reach `main` there; this item's branch contains them, and its PR carries them to `main`.
 
-34. **QLT-04 — Validate the supported Windows matrix and combined performance**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03C
+34. **QLT-03D — Stop a stored `\??\` folder resetting all settings**
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** QLT-03C
+    - **Requirements:** SET-004, SET-006, RSZ-021, NFR-020.
+    - **Deliver:** Load a stored Image Resizer folder that names only a volume or device in the `\??\` spelling as a folder the rules refuse, keeping every other setting, rather than as a malformed file.
+    - **Verify:** Load such a file through the real settings store and confirm no recovery, every other setting kept, the default folder selected, and a warning naming the stored folder. Confirm a relative path is still malformed. Judge device paths at string level only.
+    - **Notes:** QLT-03C's review found that `\??\C:` has no separator after its volume name, so `pathform.IsAbs` calls it relative and `output.ValidateFolder` returned `ErrFolderNotAbsolute`, which the store treats as malformed. The new `pathform.NamesBareNTVolume`, which Screenshot's validation now shares, makes `ValidateFolder` refuse it as `ErrFolderRoot`, and the store's existing fallback does the rest. This item's branch contains QLT-03C's commits and its PR targets `main` directly, so it lands correctly whichever merges first.
+
+35. **QLT-04 — Validate the supported Windows matrix and combined performance**
+    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03D
     - **Requirements:** NFR-001, NFR-002, NFR-003, NFR-004, NFR-010 through NFR-014, AC-A01 through AC-A05, all remaining P0 acceptance scenarios.
     - **Deliver:** Windows 10 22H2 and supported Windows 11 test matrix, non-admin validation, launch/overlay/capture/resize performance report, multi-monitor DPI matrix, combined-module regression run, and fixes for cross-module defects.
     - **Verify:** Run the application and acceptance suite on each supported OS without administrator rights. Confirm 100–500% scaling coverage, reference performance targets, clean exit, offline operation, persistence, and responsive batch behavior.
@@ -306,21 +313,21 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Milestone status:** Pending\
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
-35. **REL-01 — Finalize product identity, packaging, and distribution**
+36. **REL-01 — Finalize product identity, packaging, and distribution**
     - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-04
     - **Requirements:** TECH-010 and PRD Section 19 open decisions.
     - **Deliver:** Final product/executable name, version metadata and application icon, installer and/or portable ZIP decision, code-signing decision, update-strategy decision, reproducible release build, and selected packaging implementation.
     - **Verify:** Install/run or extract/run the packaged app in a clean non-admin Windows environment without Go installed. Confirm settings paths, shortcuts, file associations if any, uninstall behavior if applicable, and artifact integrity/signing according to the chosen strategy.
     - **Notes:** If the selected distribution or update approach cannot fit one PR, split this item before starting it and preserve backward-only dependencies.
 
-36. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
+37. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-01
     - **Requirements:** PRD Sections 9.8, 10.6, 18, and 19; TECH-009.
     - **Deliver:** Setup and usage documentation for both modules, hotkey/configuration help, output/collision behavior, protected-content and metadata limitations, troubleshooting, test/verification guide, release notes, and PRD-to-implementation traceability update.
     - **Verify:** Follow the documentation on a clean machine to perform every core workflow. Confirm documented behavior and limitations match the packaged application and no deferred P0 requirement is presented as complete.
     - **Notes:** Update the PRD and this plan if approved behavior changed during implementation.
 
-37. **REL-03 — Validate the release candidate and close the implementation baseline**
+38. **REL-03 — Validate the release candidate and close the implementation baseline**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02
     - **Requirements:** All P0 requirements and all acceptance criteria in PRD Section 15.
     - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
@@ -357,3 +364,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.0 | 2026-11-10 | Initial ordered, milestone-based implementation plan derived from PRD 1.0. |
 | 1.1 | 2026-11-22 | Inserted QLT-03A and QLT-03B for the Screenshot defects QLT-03 found already on `main`; QLT-04 now depends on QLT-03B, and later items are renumbered. |
 | 1.2 | 2026-11-22 | Inserted QLT-03C for the Image Resizer defect QLT-03B found already on `main`; QLT-04 now depends on QLT-03C, and later items are renumbered. |
+| 1.3 | 2026-11-22 | Inserted QLT-03D for the settings reset QLT-03C found already on `main`; QLT-04 now depends on QLT-03D, and later items are renumbered. |
