@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -428,6 +429,84 @@ func TestStoreSaveCompletesAnUnwrittenAdoption(t *testing.T) {
 	if got := NewStore(paths).Load().Settings.Shell.SelectedModule; got != string(shell.ModuleSettings) {
 		t.Fatalf("selected module after restart = %q", got)
 	}
+}
+
+// A share that is down reports both files missing. The session must not treat
+// that as a first run, or a save once the share returns would replace the
+// settings file or stop the legacy file ever being taken.
+func TestStoreBlocksSavingWhenNeitherFileCanBeReached(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	store.reachable = func(string) bool { return false }
+	result := store.Load()
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.LegacyConfigFile) {
+		t.Fatalf("warnings = %v, want one naming the legacy file", result.Warnings)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(result.Settings); err == nil {
+		t.Fatal("a save succeeded with neither file reachable at launch")
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+	if got := NewStore(paths).Load().Settings.Shell.SelectedModule; got != string(shell.ModuleSettings) {
+		t.Fatalf("selected module after the share returned = %q", got)
+	}
+}
+
+// A legacy file reported missing from a folder that cannot be reached has not
+// been moved away, so the restore keeps its block until the folder answers.
+func TestStoreRestoreKeepsTheBlockWhileTheLegacyFolderIsUnreachable(t *testing.T) {
+	store, paths := unreadableLegacyStore(t)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store.reachable = func(string) bool { return false }
+	if _, _, err := store.Restore(Default(), restoreTo(Default())); !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), paths.LegacyConfigFile) {
+		t.Fatalf("Restore() error = %v, want ErrNotRestored naming the legacy file", err)
+	}
+	if _, err := os.Stat(paths.ConfigFile); !os.IsNotExist(err) {
+		t.Fatalf("the settings file was created: %v", err)
+	}
+	if err := store.Save(Default()); err == nil {
+		t.Fatal("a refused restore unblocked saving")
+	}
+	store.reachable = folderReachable
+	if _, _, err := store.Restore(Default(), restoreTo(Default())); err != nil {
+		t.Fatalf("Restore() once the folder answers: %v", err)
+	}
+	if err := store.Save(Default()); err != nil {
+		t.Fatalf("saving is still blocked: %v", err)
+	}
+}
+
+func TestFolderReachable(t *testing.T) {
+	root := t.TempDir()
+	if !folderReachable(filepath.Join(root, "settings.json")) {
+		t.Error("an empty existing folder was not reachable")
+	}
+	if !folderReachable(filepath.Join(root, "missing", "deeper", "settings.json")) {
+		t.Error("a missing folder under a readable one was not reachable")
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+	for letter := 'Z'; letter >= 'D'; letter-- {
+		drive := string(letter) + `:\`
+		if _, err := os.Stat(drive); errors.Is(err, os.ErrNotExist) {
+			if folderReachable(drive + `Roaming\GameDevTools\settings.json`) {
+				t.Errorf("a path on the absent drive %s was reachable", drive)
+			}
+			return
+		}
+	}
+	t.Log("no absent drive letter to test with")
 }
 
 func TestStoreMalformedLegacySettingsAreRecoveredAndLeft(t *testing.T) {

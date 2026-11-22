@@ -135,6 +135,8 @@ type Store struct {
 	now  func() time.Time
 	// readBack reads a backup back to verify it; tests substitute it.
 	readBack func(string) ([]byte, error)
+	// reachable is folderReachable; tests substitute it.
+	reachable func(string) bool
 }
 
 func LocalPaths() (Paths, error) {
@@ -175,6 +177,7 @@ func NewStore(paths Paths, migrations ...Migration) *Store {
 		validators: make(map[string][]ModuleValidator),
 		now:        time.Now,
 		readBack:   os.ReadFile,
+		reachable:  folderReachable,
 	}
 	for _, migration := range migrations {
 		if migration != nil {
@@ -220,18 +223,24 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	result := LoadResult{Settings: Default()}
 	data, err := os.ReadFile(s.path)
 	source := s.path
-	if adopt && errors.Is(err, os.ErrNotExist) && s.legacyPath != "" {
+	if adopt && errors.Is(err, os.ErrNotExist) {
+		if s.legacyPath == "" {
+			return result, true
+		}
 		// The first run after the rename takes the settings of the build
 		// before it. The file stays where it is, so that build still works,
 		// and is not read again once the settings file exists. One that
 		// cannot be read blocks saving, as an unreadable settings file does,
 		// because a save would create the settings file and so abandon it.
+		// So does finding neither file when the folders cannot be reached:
+		// a share that is down reports both missing, and a save once it
+		// returns would replace the one file or abandon the other.
 		source, s.fromLegacy = s.legacyPath, true
 		data, err = os.ReadFile(source)
-	}
-	if adopt && errors.Is(err, os.ErrNotExist) {
-		s.fromLegacy = false
-		return result, true
+		if errors.Is(err, os.ErrNotExist) && s.reachable(source) {
+			s.fromLegacy = false
+			return result, true
+		}
 	}
 	if err != nil {
 		s.blocked = err
@@ -356,8 +365,9 @@ func (s *Store) Hold() (write func(Settings) error) {
 // again only once a copy exists: the legacy file is not replaced, so the
 // restore creates the settings file. When Load's block protects the legacy
 // file, the restore first backs it up, and while it exists but still cannot
-// be read the restore changes nothing, as the presets the restore keeps may
-// be in it and the new file would stop it ever being taken. It creates the
+// be read, or is reported missing from a folder that cannot be reached, the
+// restore changes nothing, as the presets the restore keeps may be in it and
+// the new file would stop it ever being taken. It creates the
 // file without replacing one, so a settings file that was only reported
 // missing is kept: when one turns out to exist, or a block cannot be lifted
 // because the file cannot be created, nothing changes. Without a block, a file
@@ -376,7 +386,7 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 			if s.blocked != nil {
 				var legacyErr error
 				data, legacyErr = os.ReadFile(s.legacyPath)
-				if legacyErr != nil && !errors.Is(legacyErr, os.ErrNotExist) {
+				if legacyErr != nil && (!errors.Is(legacyErr, os.ErrNotExist) || !s.reachable(s.legacyPath)) {
 					return Settings{}, "", notRestored{fmt.Errorf("read the earlier build's settings at %s: %w; close whatever holds the file and try again, or move it out of that folder to go on without its presets", s.legacyPath, legacyErr)}
 				}
 				exists = legacyErr == nil
@@ -433,6 +443,25 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 	}
 	s.blocked, s.unloaded, s.fromLegacy = nil, false, false
 	return value, backup, s.write(value)
+}
+
+// folderReachable reports whether the folder holding path, or the nearest one
+// above it that exists, can be listed. Windows reports a file on a share that
+// is down as not found, the same as one that is really gone, so a missing file
+// counts as gone only when something on its volume can be read.
+func folderReachable(path string) bool {
+	for folder := filepath.Dir(path); ; folder = filepath.Dir(folder) {
+		if file, err := os.Open(folder); err == nil {
+			_, err = file.Readdirnames(1)
+			file.Close()
+			if err == nil || errors.Is(err, io.EOF) {
+				return true
+			}
+		}
+		if filepath.Dir(folder) == folder {
+			return false
+		}
+	}
 }
 
 // removeStaleTemporaries removes the temporary files that saves interrupted

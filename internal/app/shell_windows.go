@@ -383,6 +383,7 @@ func newNativeShell(navigator *core.Navigator, store *settings.Store, initial *s
 	if dpi, _, _ := procGetDpiForWindow.Call(hwnd); dpi != 0 {
 		shell.dpi = uint32(dpi)
 	}
+	setWindowIcons(shell.hwnd, shell.dpi)
 	if err := shell.createControls(); err != nil {
 		procDestroyWindow.Call(hwnd)
 		return nil, err
@@ -417,14 +418,16 @@ func registerShellClassNow() error {
 	if cursor == 0 {
 		return callError("LoadCursorW", err)
 	}
+	large, _, _ := procGetSystemMetrics.Call(smCxIcon)
+	small, _, _ := procGetSystemMetrics.Call(smCxSmIcon)
 	class := wndClassEx{
 		LpfnWndProc:   windows.NewCallback(shellWindowProc),
 		HInstance:     windows.Handle(instance),
-		HIcon:         loadAppIcon(instance, smCxIcon, smCyIcon),
+		HIcon:         loadAppIcon(instance, large),
 		HCursor:       windows.Handle(cursor),
 		HbrBackground: windows.Handle(colorWindow + 1),
 		LpszClassName: utf16(shellClassName),
-		HIconSm:       loadAppIcon(instance, smCxSmIcon, smCySmIcon),
+		HIconSm:       loadAppIcon(instance, small),
 	}
 	class.CbSize = uint32(unsafe.Sizeof(class))
 	atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class)))
@@ -434,14 +437,45 @@ func registerShellClassNow() error {
 	return nil
 }
 
-// loadAppIcon loads the executable's application icon at the size the two
-// system metrics give. It returns 0 when the running program has no icon, as
-// a test binary does, and the class then takes the default icon.
-func loadAppIcon(instance uintptr, widthMetric, heightMetric uintptr) windows.Handle {
-	width, _, _ := procGetSystemMetrics.Call(widthMetric)
-	height, _, _ := procGetSystemMetrics.Call(heightMetric)
-	icon, _, _ := procLoadImageW.Call(instance, appIconResource, imageIcon, width, height, lrShared)
+// appIcons holds the application icon at each pixel size loaded so far. They
+// are not loaded with LR_SHARED, which LoadImage's documentation rules out for
+// non-standard sizes such as a scaled 20 or 40 pixels. They last as long as
+// the process: a class or window may hold any of them, and there are only as
+// many as there are display scales in use.
+var (
+	appIconsMutex sync.Mutex
+	appIcons      = make(map[uintptr]windows.Handle)
+)
+
+// loadAppIcon returns the executable's application icon at size pixels, or 0
+// when the running program has no icon, as a test binary does, and the class
+// then takes the default icon.
+func loadAppIcon(instance, size uintptr) windows.Handle {
+	appIconsMutex.Lock()
+	defer appIconsMutex.Unlock()
+	if icon, loaded := appIcons[size]; loaded {
+		return icon
+	}
+	icon, _, _ := procLoadImageW.Call(instance, appIconResource, imageIcon, size, size, 0)
+	appIcons[size] = windows.Handle(icon)
 	return windows.Handle(icon)
+}
+
+// iconPixels is an icon's size in pixels at dpi, from its size at 100%.
+func iconPixels(base uintptr, dpi uint32) uintptr {
+	return (base*uintptr(dpi) + 48) / 96
+}
+
+// setWindowIcons gives the window the application icon at the sizes its DPI
+// calls for. The class's icons are sized for the system DPI, which Windows
+// would stretch on a display of another scale.
+func setWindowIcons(hwnd windows.Handle, dpi uint32) {
+	instance, _, _ := procGetModuleHandleW.Call(0)
+	for _, icon := range []struct{ kind, size uintptr }{{iconSmall, 16}, {iconBig, 32}} {
+		if handle := loadAppIcon(instance, iconPixels(icon.size, dpi)); handle != 0 {
+			procSendMessageW.Call(uintptr(hwnd), wmSetIcon, icon.kind, uintptr(handle))
+		}
+	}
 }
 
 func (s *nativeShell) createControls() error {
@@ -1668,6 +1702,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDPIChanged:
 		if shell != nil {
 			shell.dpi = uint32(lowWord(wParam))
+			setWindowIcons(hwnd, shell.dpi)
 			shell.updateFonts()
 			if lParam != 0 {
 				suggested := *(**rect)(unsafe.Pointer(&lParam))

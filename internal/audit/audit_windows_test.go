@@ -923,6 +923,7 @@ func TestWindowProceduresTakeLParamAsAnInteger(t *testing.T) {
 func TestCallbackPointerProblemsFindsEveryForm(t *testing.T) {
 	for name, body := range map[string]string{
 		"declared lParam":     `func proc(h uintptr, lParam unsafe.Pointer) uintptr { return 0 }`,
+		"typed lParam":        `func proc(h uintptr, lParam *rect) uintptr { return 0 }`,
 		"literal lParam":      `var proc = func(h uintptr, lParam unsafe.Pointer) uintptr { return 0 }`,
 		"literal callback":    `var c = windows.NewCallback(func(h uintptr, lp unsafe.Pointer) uintptr { return 0 })`,
 		"declared callback":   `var c = windows.NewCallback(proc); func proc(h uintptr, lp unsafe.Pointer) uintptr { return 0 }`,
@@ -970,7 +971,8 @@ func callbackPointerProblems(sources []sourceFile) []string {
 	var problems []string
 	checkLParam := func(source sourceFile, function *ast.FuncType) {
 		for _, field := range function.Params.List {
-			if isPointer(field) && slices.ContainsFunc(field.Names, isLParam) {
+			_, typed := field.Type.(*ast.StarExpr)
+			if (typed || isPointer(field)) && slices.ContainsFunc(field.Names, isLParam) {
 				problems = append(problems, fmt.Sprintf("%s: a function declares lParam as a pointer", source.name))
 			}
 		}

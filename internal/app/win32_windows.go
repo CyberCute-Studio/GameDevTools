@@ -112,12 +112,13 @@ const (
 	// internal/release gives it, passed to LoadImageW as MAKEINTRESOURCE.
 	appIconResource = 1
 	imageIcon       = 1
-	lrShared        = 0x00008000
 
 	smCxIcon   = 11
-	smCyIcon   = 12
 	smCxSmIcon = 49
-	smCySmIcon = 50
+
+	wmSetIcon = 0x0080
+	iconSmall = 0
+	iconBig   = 1
 )
 
 var (

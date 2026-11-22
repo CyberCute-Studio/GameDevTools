@@ -30,11 +30,15 @@ Screenshots:  Pictures\CyberCute Dev Tools\Screenshots (by default)
 Resized:      Pictures\CyberCute Dev Tools\Resized (by default)
 
 If you used a build named GameDevTools, its settings are copied the first time
-this version starts. Output folders you had selected stay selected, and the old
-%APPDATA%\GameDevTools folder is left in place. You may delete it afterwards.
-While it exists, its settings are copied again whenever the new settings file
-is missing. If you never chose an output folder, new images go to the default
-folders above, and the images you already saved stay in Pictures\GameDevTools.
+this version starts, and the old %APPDATA%\GameDevTools folder is left in
+place. You may delete it afterwards. While it exists, its settings are copied
+again whenever the new settings file is missing.
+
+Output folders stored in those settings stay selected. That build stored the
+folder in use whenever you changed a capture or resize option, so if you changed
+any, that tool keeps saving to Pictures\GameDevTools until you choose another
+folder. A tool whose options you never changed uses the default folder above.
+Images you already saved stay where they are.
 
 Update
 ------
