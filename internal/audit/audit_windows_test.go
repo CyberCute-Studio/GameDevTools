@@ -907,8 +907,9 @@ func stringLiteral(expression ast.Expr) (string, bool) {
 
 // TestWindowProceduresTakeLParamAsAnInteger pins that no function declares a
 // message's lParam as a pointer, and that no function given to Windows as a
-// callback takes an unsafe.Pointer under any name. Most messages carry a
-// number there, such as the DPI in WM_GETICON or a position in a mouse
+// callback takes an unsafe.Pointer under any name or a typed pointer as its
+// fourth parameter, where a window procedure receives lParam. Most messages
+// carry a number there, such as the DPI in WM_GETICON or a position in a mouse
 // message, and the garbage collector crashes the process if it finds a small
 // value in a pointer slot.
 func TestWindowProceduresTakeLParamAsAnInteger(t *testing.T) {
@@ -927,6 +928,9 @@ func TestCallbackPointerProblemsFindsEveryForm(t *testing.T) {
 		"literal callback":    `var c = windows.NewCallback(func(h uintptr, lp unsafe.Pointer) uintptr { return 0 })`,
 		"declared callback":   `var c = windows.NewCallback(proc); func proc(h uintptr, lp unsafe.Pointer) uintptr { return 0 }`,
 		"unresolved callback": `var c = windows.NewCallback(other.Proc)`,
+		"typed fourth":        `var c = windows.NewCallback(proc); func proc(h uintptr, m uint32, w uintptr, lp *rect) uintptr { return 0 }`,
+		"grouped typed":       `var c = windows.NewCallback(func(h uintptr, m uint32, w, lp *rect) uintptr { return 0 })`,
+		"typed lParam fourth": `var c = windows.NewCallback(proc); func proc(h uintptr, m uint32, w uintptr, lParam *rect) uintptr { return 0 }`,
 	} {
 		file, err := parser.ParseFile(token.NewFileSet(), "sample.go", "package sample\n"+body, parser.SkipObjectResolution)
 		if err != nil {
@@ -936,19 +940,26 @@ func TestCallbackPointerProblemsFindsEveryForm(t *testing.T) {
 			t.Errorf("%s: problems = %v, want one", name, problems)
 		}
 	}
-	file, err := parser.ParseFile(token.NewFileSet(), "sample.go",
-		"package sample\nvar c = windows.NewCallback(proc)\nfunc proc(h uintptr, r *rect, lParam uintptr) uintptr { return 0 }", parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if problems := callbackPointerProblems([]sourceFile{{name: "internal/sample/sample.go", file: file}}); len(problems) != 0 {
-		t.Errorf("a callback with integer and typed-pointer parameters was refused: %v", problems)
+	// A real pointer before the fourth parameter is what a monitor enumeration
+	// callback receives, so it stays allowed.
+	for _, body := range []string{
+		"var c = windows.NewCallback(proc)\nfunc proc(h uintptr, r *rect, lParam uintptr) uintptr { return 0 }",
+		"var c = windows.NewCallback(proc)\nfunc proc(m, h uintptr, r *rect, data uintptr) uintptr { return 0 }",
+	} {
+		file, err := parser.ParseFile(token.NewFileSet(), "sample.go", "package sample\n"+body, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if problems := callbackPointerProblems([]sourceFile{{name: "internal/sample/sample.go", file: file}}); len(problems) != 0 {
+			t.Errorf("a callback with integer and typed-pointer parameters was refused: %v", problems)
+		}
 	}
 }
 
 // callbackPointerProblems describes every function, declared or literal, with
 // a pointer parameter named lParam, and every function passed to NewCallback
-// with an unsafe.Pointer parameter or that cannot be found to check.
+// with an unsafe.Pointer parameter, a typed pointer as its fourth parameter, or
+// that cannot be found to check.
 func callbackPointerProblems(sources []sourceFile) []string {
 	declared := map[string]*ast.FuncType{}
 	for _, source := range sources {
@@ -977,12 +988,22 @@ func callbackPointerProblems(sources []sourceFile) []string {
 		}
 	}
 	// A parameter named lParam is left to checkLParam, which sees every
-	// function, so that it is reported once.
+	// function, so that it is reported once. The fourth parameter is a window
+	// procedure's lParam whatever it is called, so it may not be a typed
+	// pointer either; one before it is real, as a monitor callback's rectangle.
 	checkCallback := func(source sourceFile, function *ast.FuncType) {
+		position := 0
 		for _, field := range function.Params.List {
 			if isPointer(field) && !slices.ContainsFunc(field.Names, isLParam) {
 				problems = append(problems, fmt.Sprintf("%s: a Windows callback takes an unsafe.Pointer", source.name))
 			}
+			count := max(len(field.Names), 1)
+			if _, typed := field.Type.(*ast.StarExpr); typed && position < 4 && position+count >= 4 {
+				if len(field.Names) == 0 || !isLParam(field.Names[3-position]) {
+					problems = append(problems, fmt.Sprintf("%s: a Windows callback takes a pointer as its fourth parameter, a window procedure's lParam", source.name))
+				}
+			}
+			position += count
 		}
 	}
 	for _, source := range sources {

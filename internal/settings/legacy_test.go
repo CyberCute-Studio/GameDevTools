@@ -889,6 +889,56 @@ func TestStoreDanglingLinkAtASettingsFileIsNotAFirstRun(t *testing.T) {
 			t.Fatalf("Save() = %v, want saving blocked by the offline link", err)
 		}
 	})
+
+	// Adoption finds the link when its create fails, and the load that
+	// follows must still report a location to reconnect, not a failed read.
+	t.Run("settings file with legacy settings to adopt", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		dangling(t, paths.ConfigFile)
+		store := NewStore(paths)
+		result := store.Load()
+		if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.ConfigFile) || !strings.Contains(result.Warnings[0], "Reconnect") {
+			t.Fatalf("warnings = %v, want one naming the settings file and saying to reconnect", result.Warnings)
+		}
+		if err := store.Save(result.Settings); err == nil {
+			t.Fatal("a save succeeded while the settings file's link was offline")
+		}
+		requireFileContent(t, paths.LegacyConfigFile, legacyResizerSettings)
+	})
+
+	// A location that never returns must not leave the user unable to save
+	// with no way to know why: the warning and the restore's refusal say what
+	// to remove, and once it is gone the next launch is a normal first run.
+	t.Run("legacy link that never returns", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		dangling(t, paths.LegacyConfigFile)
+		store := NewStore(paths)
+		result := store.Load()
+		if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.LegacyConfigFile) || !strings.Contains(result.Warnings[0], "gone for good") {
+			t.Fatalf("warnings = %v, want one naming the legacy file and saying what to do if it is gone for good", result.Warnings)
+		}
+		_, _, err := store.Restore(result.Settings, restoreTo(Default()))
+		if !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "gone for good") || !strings.Contains(err.Error(), "start the application again") {
+			t.Fatalf("Restore() error = %v, want a refusal saying what to do if the location is gone for good", err)
+		}
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		next := NewStore(paths)
+		result = next.Load()
+		if len(result.Warnings) != 0 {
+			t.Fatalf("warnings after removing the link = %v, want a first run with none", result.Warnings)
+		}
+		if err := next.Save(result.Settings); err != nil {
+			t.Fatalf("Save() after removing the link = %v", err)
+		}
+		if _, err := os.Stat(paths.ConfigFile); err != nil {
+			t.Fatalf("the settings file was not written: %v", err)
+		}
+	})
 }
 
 // A block a save hit mid-session has no startup warning behind it, so the

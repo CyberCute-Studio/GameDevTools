@@ -242,7 +242,8 @@ func (s *Store) Load() LoadResult {
 // the legacy file. It reports false when adopting the legacy file found that
 // a settings file exists after all, having written nothing over it; the
 // result is then to be discarded. With adopt false a missing settings file is
-// a failed read, as one just found to exist has not really gone away.
+// no first run: one just found to exist has not really gone away, so a link
+// holds its name whose target cannot be reached, and it is reported as that.
 func (s *Store) load(adopt bool) (LoadResult, bool) {
 	result := LoadResult{Settings: Default()}
 	data, err := os.ReadFile(s.path)
@@ -285,7 +286,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		s.blocked = err
 		s.unloaded = true
 		message := ui.SettingsReadFailed
-		if s.createOnly && errors.Is(err, os.ErrNotExist) {
+		if (s.createOnly || !adopt) && errors.Is(err, os.ErrNotExist) {
 			message = ui.SettingsFolderUnreachable
 		}
 		result.Warnings = append(result.Warnings, fmt.Sprintf(message, source, err))
