@@ -273,16 +273,20 @@ func SaveFolder(folder string) string {
 // name as a file stream, and resolves a ".." after \\.\UNC\server\share
 // differently from Clean, so a path that depends on any of these is refused.
 //
-// This is the Image Resizer's output folder rule made stricter in one way:
-// that rule keeps a name Windows keeps where it falls, such as "Photos " or
-// COM1 before another name, and this one refuses every name that ends in a
-// space or a period, a server's or share's included but for the one period
-// that ends a server's fully qualified name, and every name after the volume
-// name that is reserved for a device, wherever it falls. A path marked \\?\
-// or \??\ is one Windows takes verbatim, so it names one folder unless it
-// holds a stream or Clean would rewrite it. A path through a device other
-// than a drive, such as \\.\pipe\x, is not judged here.
+// This is the Image Resizer's output folder rule made stricter: that rule
+// keeps a name Windows keeps where it falls, such as "Photos " or COM1 before
+// another name, and this one refuses every name that ends in a space or a
+// period, a server's or share's included but for the one period that ends a
+// server's fully qualified name, and every name after the volume name that is
+// reserved for a device, wherever it falls. A path marked \\?\ or \??\ is one
+// Windows takes verbatim, so it names one folder unless it holds a stream or
+// Clean would rewrite it. A path that names no folder at all, by
+// NamesNoFolder, which also refuses a server's IPC shares and any path with
+// more than two leading separators, names no one folder either.
 func NamesOneFolder(folder string) bool {
+	if NamesNoFolder(folder) {
+		return false
+	}
 	clean := SaveFolder(folder)
 	if holdsStream(clean) {
 		return false

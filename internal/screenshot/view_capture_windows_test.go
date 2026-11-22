@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
@@ -418,28 +420,178 @@ func TestNativeViewOpenFolderRevealsSavedFile(t *testing.T) {
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, folder, parent)
 
-	revealed := ""
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	revealed := make(chan string, 1)
 	view.reveal = func(path string) error {
-		revealed = path
+		revealed <- path
 		return nil
 	}
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
-	if revealed != "" {
-		t.Fatal("Open Folder acted before any capture was saved")
+	select {
+	case path := <-revealed:
+		t.Fatalf("Open Folder revealed %q before any capture was saved", path)
+	case <-time.After(50 * time.Millisecond):
 	}
 
 	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}, displayCaptureMessages)
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
-	if revealed != `C:\Screenshots\Screenshot_1.png` {
-		t.Fatalf("revealed path = %q", revealed)
+	select {
+	case path := <-revealed:
+		if path != `C:\Screenshots\Screenshot_1.png` {
+			t.Fatalf("revealed path = %q", path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Open Folder revealed nothing")
 	}
+	waitForRevealEnd(t, view, `C:\Screenshots\Screenshot_1.png`)
 
+	// The reveal runs off the GUI thread, so a drive that does not respond
+	// cannot freeze the window: this command returns while it is held.
+	release := make(chan struct{})
 	view.reveal = func(string) error {
+		<-release
 		return errors.New("explorer unavailable")
 	}
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	close(release)
+	dispatcher.runNext(t)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") || !strings.Contains(got, "explorer unavailable") {
 		t.Fatalf("status after failed reveal = %q", got)
+	}
+}
+
+// waitForRevealEnd waits until the view no longer counts the file's reveal as
+// running, which a reveal that succeeded does not post.
+func waitForRevealEnd(t *testing.T, view *NativeView, path string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		view.revealMu.Lock()
+		running := view.revealing[path]
+		view.revealMu.Unlock()
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the reveal of %s did not end", path)
+		}
+	}
+}
+
+// TestNativeViewRevealRunsOnceAtATime pins that clicking Open Folder again
+// while a stalled drive holds the reveal starts no second one, so the drive's
+// recovery cannot open a window per click, and that the button works again
+// once the reveal has ended.
+func TestNativeViewRevealRunsOnceAtATime(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+
+	var calls atomic.Int32
+	release := make(chan struct{})
+	view.reveal = func(string) error {
+		calls.Add(1)
+		<-release
+		return nil
+	}
+	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}, displayCaptureMessages)
+	for range 3 {
+		view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	}
+	close(release)
+	waitForRevealEnd(t, view, `C:\Screenshots\Screenshot_1.png`)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("three clicks during a held reveal ran %d reveals, want 1", got)
+	}
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	waitForRevealEnd(t, view, `C:\Screenshots\Screenshot_1.png`)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("a click after the reveal ended left %d reveals, want 2", got)
+	}
+}
+
+// TestNativeViewLateRevealFailureKeepsANewerResult pins that a reveal failing
+// after another capture finished leaves that capture's result in the status
+// area, and that the newer file can be revealed meanwhile.
+func TestNativeViewLateRevealFailureKeepsANewerResult(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 2)}
+	view.dispatcher = dispatcher
+
+	const first, second = `C:\Screenshots\Screenshot_1.png`, `C:\Screenshots\Screenshot_2.png`
+	release := make(chan struct{})
+	revealed := make(chan string, 1)
+	view.reveal = func(path string) error {
+		if path == first {
+			<-release
+			return errors.New("explorer unavailable")
+		}
+		revealed <- path
+		return nil
+	}
+	view.finishCapture(CaptureResult{Path: first}, displayCaptureMessages)
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	view.finishCapture(CaptureResult{Path: second, Clipboard: errors.New("clipboard busy")}, displayCaptureMessages)
+	newer := view.status.Text()
+
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	select {
+	case path := <-revealed:
+		if path != second {
+			t.Fatalf("revealed %q, want %q", path, second)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the newer file was not revealed while the older reveal was held")
+	}
+	close(release)
+	dispatcher.runNext(t)
+	if got := view.status.Text(); got != newer {
+		t.Fatalf("status after the late failure = %q, want the newer result %q", got, newer)
+	}
+}
+
+// TestNativeViewLateRevealFailureKeepsANewerAttempt pins that a reveal failing
+// after another capture was started leaves that attempt's outcome in the
+// status area even when it saved nothing, as a selection that could not open
+// leaves the saved file unchanged.
+func TestNativeViewLateRevealFailureKeepsANewerAttempt(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+
+	const saved = `C:\Screenshots\Screenshot_1.png`
+	release := make(chan struct{})
+	view.reveal = func(string) error {
+		<-release
+		return errors.New("explorer unavailable")
+	}
+	view.finishCapture(CaptureResult{Path: saved}, displayCaptureMessages)
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	view.sessions = nil
+	view.NativeAction()
+	newer := view.status.Text()
+	if !strings.Contains(newer, ui.OverlayServiceUnavailable) {
+		t.Fatalf("status after the refused capture = %q", newer)
+	}
+	close(release)
+	dispatcher.runNext(t)
+	if got := view.status.Text(); got != newer {
+		t.Fatalf("status after the late failure = %q, want the newer outcome %q", got, newer)
 	}
 }
 

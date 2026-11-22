@@ -300,6 +300,22 @@ func TestSaveUsesTheCleanedFolder(t *testing.T) {
 	}
 }
 
+// TestSaveRefusesAPathThatNamesNoFolder pins that a stored device, volume, or
+// server path is refused before anything is opened: creating \\.\pipe\x
+// would connect to whatever program serves that pipe.
+func TestSaveRefusesAPathThatNamesNoFolder(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows has device paths")
+	}
+	for _, folder := range []string{`\\.\pipe\gamedevtools-test`, `\\?\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`} {
+		path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, errFolderNamesNoFolder) || path != "" {
+			t.Errorf("save to %q = %q, %v, want %v", folder, path, err, errFolderNamesNoFolder)
+		}
+	}
+}
+
 // TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder is
 // created as written.
 func TestSaveCreatesAMissingFolderThroughADevicePath(t *testing.T) {

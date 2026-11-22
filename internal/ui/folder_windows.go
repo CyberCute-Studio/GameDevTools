@@ -5,10 +5,12 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -86,6 +88,11 @@ func initializeCOM() (uninitialize func()) {
 
 // BrowseForFolder opens the modal folder picker and returns the chosen
 // absolute folder. It reports false without an error when the user cancels.
+// The shell reports a folder without the periods its name ends in, so a
+// folder named v2.. comes back as v2, and one named only periods as its
+// parent with a separator after it. A reported path that does not exist, or
+// that has that separator, is refused with an error rather than returned, as
+// is one whose drive does not answer within shellNameWait.
 func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) {
 	// The picker requires an initialized COM apartment on the calling thread.
 	defer initializeCOM()()
@@ -106,7 +113,66 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 	if result == 0 {
 		return "", false, callError("SHGetPathFromIDListW", err)
 	}
-	return windows.UTF16ToString(path), true, nil
+	folder := windows.UTF16ToString(path)
+	if err := awaitShellNameCheck(folder, checkShellName, shellNameWait); err != nil {
+		return "", false, err
+	}
+	return folder, true, nil
+}
+
+// shellNameWait is how long the GUI thread, which the picker runs on, waits
+// for checkShellName. The picker has just read the folder, so its drive
+// answers at once unless it has stopped responding, and the wait stays short
+// of the five seconds after which Windows reports the window as hung.
+const shellNameWait = 2 * time.Second
+
+// awaitShellNameCheck runs the check on a goroutine of its own, as looking at
+// a drive blocks for as long as the drive does not respond, and waits for it
+// no longer than wait. A check still running then is abandoned, and the
+// choice is refused, since its name was not confirmed.
+func awaitShellNameCheck(folder string, check func(string) error, wait time.Duration) error {
+	result := make(chan error, 1)
+	go func() { result <- check(folder) }()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(wait):
+		return errFolderNotResponding
+	}
+}
+
+// verbatimFolder is a path the shell gave in the verbatim spelling, which
+// keeps a name's trailing space that any other spelling would lose, and the
+// length of its volume name there. A path through a volume GUID is already
+// in that spelling.
+func verbatimFolder(folder string) (string, int) {
+	volume := len(pathform.VolumeName(folder))
+	switch {
+	case strings.HasPrefix(folder, `\\?\`):
+		return folder, volume
+	case strings.HasPrefix(folder, `\\`):
+		return `\\?\UNC\` + folder[len(`\\`):], len(`\\?\UNC\`) + volume - len(`\\`)
+	}
+	return `\\?\` + folder, len(`\\?\`) + volume
+}
+
+// checkShellName reports why a path the shell gave for a chosen folder cannot
+// be stored. The shell does not say when it has shortened a name, so a path
+// that is not there, or that has an empty name, is refused. A path that cannot
+// be inspected for another reason, such as a denied folder, is left for the
+// save to report. A shortened name that happens to match a real folder, as
+// when v2 and v2.. stand side by side, cannot be told from that folder; File
+// Explorer cannot create such names.
+func checkShellName(folder string) error {
+	verbatim, volume := verbatimFolder(folder)
+	rest := verbatim[volume:]
+	if len(rest) > 1 && (strings.HasSuffix(rest, `\`) || strings.Contains(rest, `\\`)) {
+		return errShellNameUnconfirmed
+	}
+	if _, err := os.Stat(verbatim); errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return errShellNameUnconfirmed
+	}
+	return nil
 }
 
 // OpenFolder opens the given folder in File Explorer. It runs only on
@@ -151,7 +217,12 @@ func OpenFolder(folder string) error {
 // application's and the current folder, where another explorer.exe could be
 // waiting. The file is named as shellPath spells it. Explorer's /select does
 // not read a path through a volume GUID, opening another folder without
-// reporting a failure, so such a file is refused with an error.
+// reporting a failure, so such a file is refused with an error, and so is a
+// file that cannot be found, for which Explorer opens some other folder and
+// reports success. Looking at the file and the shell's call each
+// block for as long as its drive does not respond, so the GUI thread calls it
+// on a goroutine of its own, which it keeps on one thread while it holds the
+// COM apartment it initializes, as OpenFolder does.
 func RevealInFolder(path string) error {
 	target, err := shellPath(path)
 	if err != nil {
@@ -160,14 +231,34 @@ func RevealInFolder(path string) error {
 	if strings.HasPrefix(target, `\\?\`) {
 		return errNoDriveOrShare
 	}
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist), err == nil && info.IsDir():
+		return errSavedFileNotFound
+	case err != nil:
+		return err
+	}
 	explorer, err := explorerPath()
 	if err != nil {
 		return err
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer initializeCOM()()
 	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
 
 var (
+	// errShellNameUnconfirmed is BrowseForFolder's failure for a folder whose
+	// exact name the shell's report could not confirm.
+	errShellNameUnconfirmed = errors.New("Windows could not confirm this folder's exact name, which happens when a name in its path ends in a period or the folder has been removed. Choose another folder")
+	// errFolderNotResponding is BrowseForFolder's failure for a folder whose
+	// drive did not answer in time for its name to be confirmed.
+	errFolderNotResponding = errors.New("the drive of the chosen folder is not responding. Try again, or choose another folder")
+	// errSavedFileNotFound is RevealInFolder's failure for a file it cannot
+	// find. Windows reports a deleted file, an unplugged drive, an offline
+	// server, and a broken junction alike, so the message names them all.
+	errSavedFileNotFound = errors.New("the saved file could not be found. It may have been moved or deleted, or its drive or network share may not be available")
 	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a
 	// path File Explorer cannot be pointed at, as it has no drive or share.
 	errNoDriveOrShare = errors.New("File Explorer cannot show a path that has no drive letter or network share")

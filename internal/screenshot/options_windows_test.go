@@ -116,6 +116,60 @@ func TestDefaultFolderIsOneACaptureCanUse(t *testing.T) {
 	}
 }
 
+// TestAPathThatNamesNoFolderIsRefusedAndReported pins that a device, volume,
+// or server path is refused when chosen and reported at startup when stored,
+// by the reason that fits it, and still passes Validate, so a hand-edited
+// settings file holding one cannot reset every other setting.
+func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
+	root := t.TempDir()
+	usable := filepath.Join(root, "Shots")
+	manager, _ := newTestOptionsManager(t, filepath.Join(root, "settings.json"), usable)
+	for _, folder := range []string{
+		`\\.\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`, `\\\localhost\pipe\x`,
+		`\??\C:`, `\??\pipe`, `\??\NUL`, `\??\UNC`, `\??\Volume{00000000-0000-0000-0000-000000000000}`,
+	} {
+		if err := manager.SetOutputFolder(folder); err == nil || err.Error() != ui.ScreenshotFolderRootInvalid {
+			t.Errorf("SetOutputFolder(%q) = %v, want the root refusal", folder, err)
+		}
+		if got := manager.Options().OutputFolder; got != usable {
+			t.Fatalf("after refusing %q the folder is %q, want %q", folder, got, usable)
+		}
+		options := DefaultOptions(folder)
+		if err := options.Validate(); err != nil {
+			t.Errorf("Validate with stored folder %q: %v", folder, err)
+		}
+		manager.options.OutputFolder = folder
+		if got, want := manager.FolderWarning(), fmt.Sprintf(ui.OutputFolderStoredRootRefused, folder); got != want {
+			t.Errorf("FolderWarning = %q, want %q", got, want)
+		}
+		manager.options.OutputFolder = usable
+	}
+}
+
+// TestDefaultFolderReportsAPathThatNamesNoFolder pins that a Pictures folder
+// leading through a device or IPC share is refused for that reason rather than
+// for a name Windows would change. Both calls only read the path's text.
+func TestDefaultFolderReportsAPathThatNamesNoFolder(t *testing.T) {
+	for _, pictures := range []string{`\\.\pipe\Pictures`, `\\nas\pipe\Pictures`, `\\nas\IPC$\Pictures`} {
+		_, err := defaultFolderIn(pictures)
+		if err == nil || !strings.HasSuffix(err.Error(), ": "+ui.OutputFolderRootReason) {
+			t.Errorf("defaultFolderIn(%q) = %v, want the root reason", pictures, err)
+		}
+	}
+}
+
+// TestValidateStillRefusesARelativeFolder pins that accepting a stored \??\
+// path that names only a volume or device did not widen Validate to a path
+// that is relative, a drive's current folder among them.
+func TestValidateStillRefusesARelativeFolder(t *testing.T) {
+	for _, folder := range []string{`C:`, `C:Shots`, `Shots`, `.`, `\Shots`, `/??/C:`} {
+		options := DefaultOptions(folder)
+		if err := options.Validate(); err == nil || err.Error() != ui.OutputFolderNotAbsolute {
+			t.Errorf("Validate with output folder %q = %v, want the absolute-path refusal", folder, err)
+		}
+	}
+}
+
 // TestFolderWarningNamesAStoredFolderEveryCaptureRefuses pins that a stored
 // folder the save rule refuses is reported at startup and stays selected, and
 // that choosing a usable one ends the warning.

@@ -550,7 +550,7 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		}
 		folder, chosen, err := n.browse(n.parent, ui.BrowseResizeFolderTitle)
 		if err != nil {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.ResizeOperationFailed, err)}, 0)
+			n.presentResult(err, "")
 			return true
 		}
 		if !chosen {

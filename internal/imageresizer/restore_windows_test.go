@@ -4,6 +4,7 @@ package imageresizer
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -141,6 +142,25 @@ func TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice(t *testing.T) {
 	view.NativeRestoreDefaults()
 	if got := view.status.Text(); got != kept {
 		t.Fatalf("status after the restore = %q, want the source list's notice %q kept", got, kept)
+	}
+}
+
+// TestNativeViewRestoreDefaultsClearsAPickerRefusal pins that the picker's
+// request to choose another folder does not stay beside the default folder
+// the restore selects.
+func TestNativeViewRestoreDefaultsClearsAPickerRefusal(t *testing.T) {
+	view, _ := newSourcesTestView(t)
+	view.browse = func(windows.Handle, string) (string, bool, error) {
+		return "", false, errors.New("choose another folder")
+	}
+	view.NativeCommand(optionsCommandBase+browseCommand, 0)
+	if got := view.status.Text(); !strings.Contains(got, "choose another folder") {
+		t.Fatalf("status after the refusal = %q", got)
+	}
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status after the restore = %q, want the refusal cleared", got)
 	}
 }
 

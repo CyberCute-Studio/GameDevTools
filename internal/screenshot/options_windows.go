@@ -80,6 +80,9 @@ func defaultFolderIn(pictures string) (string, error) {
 		pictures = full
 	}
 	folder := pathform.Join(pictures, "GameDevTools", "Screenshots")
+	if pathform.NamesNoFolder(folder) {
+		return "", fmt.Errorf("%s: %s", folder, ui.OutputFolderRootReason)
+	}
 	if !pathform.NamesOneFolder(folder) {
 		return "", fmt.Errorf("%s: %s", folder, ui.OutputFolderNameReason)
 	}
