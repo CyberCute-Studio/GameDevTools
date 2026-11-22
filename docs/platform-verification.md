@@ -4,7 +4,7 @@ This document is the QLT-04 record for the supported Windows platforms, running 
 
 ## Result
 
-Every check that could run passed, and the combined run found no cross-module defect, so QLT-04 changes no production code. **Three things were not run, because this environment does not have them, and they are QLT-04A's scope:** x64 Windows 11 on real hardware, including the PRD's reference machine; any display scaling other than 100%; and a live display disconnect. Until QLT-04A passes, NFR-001, NFR-003, AC-S02, and AC-S12 are not fully verified, and the NFR-010 through NFR-013 figures below are indicative rather than results on the reference machine.
+Every check that could run passed, and the combined run found no cross-module defect, so QLT-04 changes no production code. **One performance target was missed:** under x64 emulation, the slowest Free Rectangle overlay exceeded NFR-011's 300 ms in 2 of 6 batches of 30, at 312 and 317 ms ([details](#the-missed-overlay-target)). **Three things were not run, because this environment does not have them, and they are QLT-04A's scope:** x64 Windows 11 on real hardware, including the PRD's reference machine; any display scaling other than 100%; and a live display disconnect. Until QLT-04A passes, NFR-001, NFR-003, NFR-011, AC-S02, and AC-S12 are not fully verified, and the NFR-010, NFR-012, and NFR-013 figures below are indicative rather than results on the reference machine.
 
 ## Support policy
 
@@ -31,7 +31,7 @@ The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) run
 
 ## Environment of record
 
-Results below were recorded on 2026-11-22 from commit `54fdff4`, with a clean working tree:
+Results below were recorded on 2026-11-22 from commit `8c06406`, with a clean working tree:
 
 | Property | Value |
 |---|---|
@@ -62,20 +62,28 @@ Each figure comes from the validation script's benchmarks on the environment of 
 
 | Requirement | Measure | Target | Native ARM64 | x64 under emulation |
 |---|---|---|---|---|
-| NFR-010 | Warm launch to a responsive main window, mean of 20 | 2 s | 171 ms | 395 ms |
-| NFR-010 | Warm launch, slowest of 20 | 2 s | 194 ms | 602 ms |
-| NFR-011 | Free Rectangle overlay appears, 5360 × 1823 desktop, mean of 30 | 300 ms | 76.5 ms | 146 ms |
-| NFR-011 | Free Rectangle overlay appears, slowest of 30 | 300 ms | 110.7 ms | 240.2 ms |
-| NFR-011 | 1280 × 720 Preset Rectangle frame appears, mean of 30 | 300 ms | 20.4 ms | 44.1 ms |
-| NFR-011 | 1280 × 720 Preset Rectangle frame appears, slowest of 30 | 300 ms | 28.8 ms | 124.7 ms |
-| NFR-012 | 3840 × 2160 capture to clipboard | 1 s | 124.5 ms | 153.7 ms |
-| NFR-013 | 100 mixed 12 MP JPEGs to 1024 × 1024, slowest of 3 | 120 s | 11.4 s | 12.5 s |
-| NFR-014 | Peak heap during that batch | 1 GiB budget | 220 MiB | 220 MiB |
-| NFR-014 | Peak runtime footprint during that batch | — | 233 MiB | 248 MiB |
+| NFR-010 | Warm launch to a responsive main window, mean of 20 | 2 s | 176.7 ms | 262.1 ms |
+| NFR-010 | Warm launch, slowest of 20 | 2 s | 210.3 ms | 769.8 ms |
+| NFR-011 | Free Rectangle overlay appears, 5360 × 1823 desktop, mean of 30 | 300 ms | 93 ms | 166.7 ms |
+| NFR-011 | Free Rectangle overlay appears, slowest of 30 | 300 ms | 151.9 ms | **317.2 ms (missed)** |
+| NFR-011 | 1280 × 720 Preset Rectangle frame appears, mean of 30 | 300 ms | 21.5 ms | 33.2 ms |
+| NFR-011 | 1280 × 720 Preset Rectangle frame appears, slowest of 30 | 300 ms | 48.6 ms | 57 ms |
+| NFR-012 | 3840 × 2160 capture to clipboard | 1 s | 131 ms | 195.9 ms |
+| NFR-013 | 100 mixed 12 MP JPEGs to 1024 × 1024, slowest of 3 | 120 s | 7.6 s | 22.9 s |
+| NFR-014 | Peak heap during that batch | 1 GiB budget | 220.2 MiB | 220.3 MiB |
+| NFR-014 | Peak runtime footprint during that batch | — | 244.2 MiB | 260.5 MiB |
 
-Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's time converted to that region's size. The figures above, from `54fdff4`, converted by the whole virtual desktop, 9.8 MP here, of which the displays hold 7.3 MP; parts no display covers are cheaper to read, so that reads the capture half low on this layout. The script now converts by the pixels the displays hold, so empty areas can raise the figure but not lower it.
+Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's time, scaled to that region by the pixels the displays hold, 7.3 MP of the 9.8 MP virtual desktop here, because parts no display covers are cheaper to read.
 
-Figures vary between runs. Across the three full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a6bc3`, and `54fdff4`, mean launch ranged from 163 to 268 ms natively and 195 to 395 ms as x64, the mean Free Rectangle overlay from 63 to 104 ms natively and 70 to 146 ms as x64, and the batch from 7.5 to 11.4 s natively and 10.8 to 20.3 s as x64. Every run met every target it measured. The slowest-of-30 overlay figures exist only for `54fdff4`, and the x64 Free Rectangle's 240 ms is the narrowest margin in the table.
+### The missed overlay target
+
+The x64 build's slowest Free Rectangle overlay took 317.2 ms in the full run, over NFR-011's 300 ms. Five more batches of 30 at the same commit, run to see how often this happens, gave a slowest overlay of 250.2, 312.0, 245.0, 252.8, and 264.7 ms as x64, so 2 of the 6 x64 batches went over the limit, while each batch's mean stayed between 130 and 167 ms. Natively, the slowest overlay of each of the six batches was 152 to 232 ms, with none over the limit.
+
+These runs were under x64 emulation on a 9.8 MP virtual desktop, on a machine that is not the reference machine, so whether x64 hardware misses the target is not known. QLT-04A must measure it there. No production code was changed for it, and the target was not changed.
+
+### Variation between runs
+
+Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a6bc3`, `54fdff4`, and `8c06406`, mean launch ranged from 163 to 268 ms natively and 195 to 395 ms as x64, the mean Free Rectangle overlay from 63 to 104 ms natively and 70 to 167 ms as x64, and the batch from 7.5 to 11.4 s natively and 10.8 to 22.9 s as x64. Slowest-of-30 overlay figures exist only from `54fdff4` on.
 
 ## Display matrix
 
@@ -98,7 +106,8 @@ Figures vary between runs. Across the three full runs of each architecture on 20
 | NFR-002 — No administrator rights | Pass | The release executable test, on a standard-user token |
 | NFR-003 — Per-monitor DPI, 100–500%, negative coordinates, disconnect | **Partial** | Mechanism-level tests and live 100%; the rest is QLT-04A |
 | NFR-004 — Arm and 32-bit are not targets | Pass | The release target is `windows/amd64`; Arm is only the development host |
-| NFR-010 to NFR-013 — Performance | Met here; **reference machine pending** | [Performance](#performance) |
+| NFR-010, NFR-012, NFR-013 — Performance | Met here; **reference machine pending** | [Performance](#performance) |
+| NFR-011 — Overlay within 300 ms | **Missed in 2 of 6 x64 batches under emulation**; met natively; reference machine pending | [The missed overlay target](#the-missed-overlay-target) |
 | NFR-014 — Bounded batch memory | Pass | Peak heap 220 MiB, about 7% of the 3,094 MiB that decoding every source at once would take |
 | AC-A01 — Persistence | Pass | [Reliability record](reliability-verification.md) and the release executable test |
 | AC-A02 — Offline use | Pass | `app.TestCoreWorkflowsRunOffline`, [privacy record](privacy-verification.md) |
