@@ -256,9 +256,10 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		// and is not read again once the settings file exists. One that
 		// cannot be read blocks saving, as an unreadable settings file does,
 		// because a save would create the settings file and so abandon it.
-		// So does finding neither file when either folder cannot be reached:
-		// a share that is down reports its file missing, and a save once it
-		// returns would replace the one file or abandon the other. A real
+		// So does finding neither file when either folder, or the target of a
+		// link at either file's own name, cannot be reached: a share that is
+		// down reports its file missing, and a save once it returns would
+		// replace the one file or abandon the other. A real
 		// first run still only creates the file with its first write, as a
 		// share can return just after the reads here. A legacy file that was
 		// read is written to the settings file below, or saving is blocked.
@@ -269,7 +270,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 			// The settings folder can be on another volume than the legacy
 			// one, so it is asked too, before the look that decides, in case
 			// its share returned since the first read.
-			reachable := s.reachable(s.path)
+			reachable := s.reachable(s.path) && nameAbsent(s.path)
 			_, statErr := os.Stat(s.path)
 			if !errors.Is(statErr, os.ErrNotExist) {
 				return result, false
@@ -361,16 +362,25 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 }
 
 // readLegacy reads the legacy file. gone reports that it is really missing:
-// its folder answers, and a second read, made after that answer in case the
-// share returned between the two, still finds nothing. A missing file that is
-// not gone is one reported missing from a folder that cannot be reached.
+// its folder answers, a second read, made after that answer in case the share
+// returned between the two, still finds nothing, and nothing holds its name.
+// A missing file that is not gone is one reported missing from a folder that
+// cannot be reached, or through a link whose target cannot be.
 func (s *Store) readLegacy() (data []byte, gone bool, err error) {
 	data, err = os.ReadFile(s.legacyPath)
 	if !errors.Is(err, os.ErrNotExist) || !s.reachable(s.legacyPath) {
 		return data, false, err
 	}
 	data, err = os.ReadFile(s.legacyPath)
-	return data, errors.Is(err, os.ErrNotExist), err
+	return data, errors.Is(err, os.ErrNotExist) && nameAbsent(s.legacyPath), err
+}
+
+// nameAbsent reports whether nothing holds path's own name. A link or junction
+// there whose target is offline makes reading the file report it missing,
+// though its folder answers, so that report alone does not show it is gone.
+func nameAbsent(path string) bool {
+	_, err := os.Lstat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // saveLoaded writes the settings Load settled on. While the settings file was

@@ -818,6 +818,112 @@ func TestStoreDanglingSettingsFolderIsNotAFoundSettingsFile(t *testing.T) {
 	})
 }
 
+// A link at a settings file's own name whose target is offline reports the
+// file missing from a folder that answers. That is no first run: a save would
+// create the new file and so abandon the legacy one, or fail on a name the
+// session was never told about, so saving is blocked with a warning at launch.
+func TestStoreDanglingLinkAtASettingsFileIsNotAFirstRun(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("uses a directory junction")
+	}
+	dangling := func(t *testing.T, link string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := link + "-target"
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Fatalf("create junction: %v: %s", err, out)
+		}
+		t.Cleanup(func() { os.Remove(link) })
+		if err := os.Remove(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("legacy file", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		dangling(t, paths.LegacyConfigFile)
+		store := NewStore(paths)
+		result := store.Load()
+		if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.LegacyConfigFile) || !strings.Contains(result.Warnings[0], "Reconnect") {
+			t.Fatalf("warnings = %v, want one naming the legacy file and saying to reconnect", result.Warnings)
+		}
+		if err := store.Save(result.Settings); err == nil {
+			t.Fatal("a save succeeded while the legacy file's link was offline")
+		}
+		if _, err := os.Lstat(paths.ConfigFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the blocked session left a settings file: %v", err)
+		}
+		// Once the legacy file is back, the next launch takes it.
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.LegacyConfigFile, []byte(legacyResizerSettings), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := NewStore(paths).Load().Settings.Shell.SelectedModule; got != string(shell.ModuleImageResizer) {
+			t.Fatalf("selected module after the link returned = %q, want the legacy file's", got)
+		}
+	})
+
+	t.Run("settings file", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		dangling(t, paths.ConfigFile)
+		store := NewStore(paths)
+		result := store.Load()
+		if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.ConfigFile) || !strings.Contains(result.Warnings[0], "Reconnect") {
+			t.Fatalf("warnings = %v, want one naming the settings file and saying to reconnect", result.Warnings)
+		}
+		err := store.Save(result.Settings)
+		if err == nil || strings.Contains(err.Error(), "has not backed up") || !strings.Contains(err.Error(), "saving is disabled") {
+			t.Fatalf("Save() = %v, want saving blocked by the offline link", err)
+		}
+	})
+}
+
+// A block a save hit mid-session has no startup warning behind it, so the
+// restore's refusal must not send the user to one.
+func TestStoreRestoreRefusalAfterAMidSessionBlockNamesNoStartupWarning(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	result := store.Load()
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want a first run with none", result.Warnings)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(result.Settings); err == nil {
+		t.Fatal("a first run's save replaced a settings file it never loaded")
+	}
+	if err := os.Remove(paths.ConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := store.Restore(result.Settings, restoreTo(Default()))
+	if !errors.Is(err, ErrNotRestored) || !strings.Contains(err.Error(), "start the application again") {
+		t.Fatalf("Restore() error = %v, want a refusal saying what to do", err)
+	}
+	if strings.Contains(err.Error(), "startup warning") {
+		t.Fatalf("Restore() error = %v, names a startup warning the session never showed", err)
+	}
+}
+
 // With no legacy file, the legacy folder answering says nothing about the
 // settings folder, which may be on another volume that is down.
 func TestStoreBlocksSavingWhenOnlyTheSettingsFolderCannotBeReached(t *testing.T) {

@@ -72,7 +72,7 @@ const (
 	LoggingUnavailable            = "Diagnostic logging is unavailable: %v."
 	SettingsPathUnavailable       = "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session."
 	SettingsReadFailed            = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file."
-	SettingsFolderUnreachable     = "The folder of %s cannot be reached: %v. Defaults are in use and saving is disabled so that no settings stored there are replaced. Reconnect its drive or network share and start the application again."
+	SettingsFolderUnreachable     = "The location of %s cannot be reached: %v. Defaults are in use and saving is disabled so that no settings stored there are replaced. Reconnect its drive or network share and start the application again."
 	SettingsInvalidBackupFailed   = "Settings in %s are invalid (%v), and a backup could not be created: %v. Defaults are in use and saving is disabled to protect the original file."
 	SettingsInvalidRecovered      = "Settings were invalid (%v). The original was backed up to %s and defaults are now in use."
 	DefaultSettingsWriteFailed    = "Default settings could not be written: %v. Defaults remain in memory."
@@ -97,7 +97,7 @@ const (
 	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
 	// SettingsRestoreBlocked is why a restore refuses while saving is blocked
 	// and there is no settings file to back up; SettingsRestoreFailed joins it.
-	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file exists at %s to restore (%v). Resolve the problem the startup warning describes, then start the application again"
+	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file was found at %s to restore (%v). Resolve the problem that disabled saving, then start the application again"
 	SettingsRestoreSaveFailed = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
 	// SettingsRestoreSaveFailedNoFile is the restore's failed write when
 	// no settings file was found to back up, which may be one on a drive or

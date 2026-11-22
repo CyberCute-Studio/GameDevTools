@@ -108,7 +108,7 @@ Every diagnostic event is a UTC timestamp, a severity, a fixed operation, and a 
 
 The offline test checks a real run's log against this format. User-facing error details may show a path where recovery needs it, as SET-007 allows, and are never copied into the log.
 
-The application also reads `%APPDATA%\GameDevTools\settings.json`, the settings of a build from before the rename, while its own settings file does not exist, at launch only. It never writes to that file. When that file is reported missing too, the application opens its folder, or the nearest folder above it that exists, and asks for one entry, only to tell a file that is gone from a share that is down; it keeps nothing it reads there.
+The application also reads `%APPDATA%\GameDevTools\settings.json`, the settings of a build from before the rename, while its own settings file does not exist, at launch only. It never writes to that file. When that file is reported missing too, the application opens its folder, or the nearest folder above it that exists, asks for one entry, and checks whether a link holds the file's name, only to tell a file that is gone from a share that is down; it keeps nothing it reads there.
 
 ## Dependency and license inventory
 
