@@ -99,7 +99,12 @@ func NamesNoFolder(folder string) bool {
 // and what a server makes of such a share name cannot be judged from here.
 // For the same reason a name of nothing else, such as the .. of
 // \\server\..\pipe\x, which Windows keeps where a share belongs, does not hide
-// the name after it. A doubled separator holds no name.
+// the name after it. A doubled separator holds no name. A leading name that
+// starts with a semicolon, as in \\;LanmanRedirector\server\pipe\x, picks a
+// network provider, so the server is the name after it. With no server at
+// all, as in \\\pipe\x, Windows takes the first name as the share, while
+// \\\localhost\pipe\x may still be read past the empty server, so the first
+// two names are both judged.
 func LeadsThroughIPCShare(clean string) bool {
 	unc, found := "", false
 	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`, `\\.\UNC\`} {
@@ -115,9 +120,23 @@ func LeadsThroughIPCShare(clean string) bool {
 		unc = clean[len(`\\`):]
 	}
 	names := strings.FieldsFunc(unc, func(character rune) bool { return character == '\\' })
-	for _, name := range names[min(1, len(names)):] {
-		if named := strings.TrimRight(name, " ."); named != "" {
-			return strings.EqualFold(named, "pipe") || strings.EqualFold(named, "mailslot") || strings.EqualFold(named, "IPC$")
+	for len(names) > 0 && strings.HasPrefix(names[0], ";") {
+		names = names[1:]
+	}
+	first, judged := 1, 1
+	if strings.HasPrefix(unc, `\`) {
+		first, judged = 0, 2
+	}
+	for _, name := range names[min(first, len(names)):] {
+		named := strings.TrimRight(name, " .")
+		if named == "" {
+			continue
+		}
+		if strings.EqualFold(named, "pipe") || strings.EqualFold(named, "mailslot") || strings.EqualFold(named, "IPC$") {
+			return true
+		}
+		if judged--; judged == 0 {
+			return false
 		}
 	}
 	return false

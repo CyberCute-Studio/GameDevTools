@@ -1205,6 +1205,19 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\localhost\..\IPC$\x`,
 		`\\127.0.0.1\..\mailslot\x`,
 		`\\localhost\.\pipe\x`,
+		// With no server, Windows takes the first name as the share.
+		`\\\pipe\x`,
+		`//\pipe/x`,
+		`\\\mailslot\x`,
+		`\\\IPC$\x`,
+		// A network provider's name comes before the server.
+		`\\;LanmanRedirector\localhost\pipe\x`,
+		`\\;LanmanRedirector\server\IPC$\x`,
+		`\\;\server\pipe\x`,
+		`\\\;LanmanRedirector\localhost\pipe\x`,
+		`\\?\UNC\;LanmanRedirector\localhost\pipe\x`,
+		`\\.\UNC\;LanmanRedirector\localhost\pipe\x`,
+		`\??\UNC\;LanmanRedirector\localhost\mailslot\x`,
 	} {
 		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
 			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
@@ -1225,6 +1238,11 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\?\UNC\server\share\pipe\x`,
 		`\\server\..\pipes\x`,
 		`\\server\..\share\pipe`,
+		`\\\nas\photos`,
+		`\\\nas\photos\pipe`,
+		`\\;LanmanRedirector\nas\photos\pipe`,
+		`\\;LanmanRedirector\pipe\x`,
+		`\\nas\;x\pipe`,
 		`C:\pipe\x`,
 		`\\?\C:\pipe\x`,
 	} {
