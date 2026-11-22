@@ -46,7 +46,9 @@ const (
 )
 
 const (
-	AppName         = "GameDevTools"
+	AppName = "CyberCute Dev Tools"
+	// AppFileName names the executable and the diagnostic log.
+	AppFileName     = "cybercute-dev-tools"
 	ToolsHeading    = "TOOLS"
 	PlaceholderNote = "Placeholder view. No files or images are changed."
 
@@ -76,13 +78,13 @@ const (
 	SettingsMigrationBackupFailed = "Settings were migrated in memory, but the original could not be backed up: %v. Saving is disabled to protect %s."
 	MigratedSettingsWriteFailed   = "Migrated settings could not be written: %v. The original remains at %s."
 	SettingsSaveFailed            = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
-	SettingsCloseTitle            = "GameDevTools — Settings not saved"
+	SettingsCloseTitle            = AppName + " — Settings not saved"
 	SettingsCloseConfirmation     = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
 
 	// The Settings view's restore of the default settings (SET-005).
 	SettingsRestoreDescription  = "Restore Default Settings returns the global shortcut, the capture and resize options, and both output folders to their defaults. Custom presets, each module's selected preset, the images in the resize list, and saved images are kept; a preset is deleted only with Delete in its module. The current settings file is backed up first, in the same folder."
 	RestoreDefaultsAction       = "&Restore Default Settings"
-	RestoreDefaultsTitle        = "GameDevTools — Restore default settings"
+	RestoreDefaultsTitle        = AppName + " — Restore default settings"
 	RestoreDefaultsConfirmation = "Restore the default settings?\n\nThe global shortcut, the capture and resize options, and both output folders return to their defaults. Custom presets, each module's selected preset, and saved images are kept.\n\nThe current settings file is backed up first."
 	SettingsRestored            = "Default settings restored. The previous settings were backed up to %s."
 	SettingsRestoredNoBackup    = "Default settings restored."
@@ -115,7 +117,7 @@ const (
 	PresetDeleteAction       = "Delete"
 	PresetBuiltInSuffix      = " (built-in)"
 	PresetListFormat         = "%s — %s%s"
-	PresetDeleteTitle        = "GameDevTools — Delete preset"
+	PresetDeleteTitle        = AppName + " — Delete preset"
 	PresetDeleteConfirmation = "Delete the custom preset %q? This cannot be undone."
 	PresetCreated            = "Preset %q was created."
 	PresetUpdated            = "Preset %q was updated."
@@ -216,9 +218,9 @@ const (
 	CaptureClipboardFailed = "Display captured and saved to %s, but copying to the clipboard failed: %v"
 	CaptureOutputsFailed   = "Display captured, but saving failed (%v) and copying to the clipboard failed (%v)."
 
-	OverlayWindowTitle        = "GameDevTools rectangle selection overlay"
-	PresetFrameWindowTitle    = "GameDevTools preset rectangle frame"
-	OverlayToolbarTitle       = "GameDevTools rectangle selection toolbar"
+	OverlayWindowTitle        = AppName + " rectangle selection overlay"
+	PresetFrameWindowTitle    = AppName + " preset rectangle frame"
+	OverlayToolbarTitle       = AppName + " rectangle selection toolbar"
 	OverlayInstructions       = "Drag to draw a rectangle, or type its size and press Enter. Move it with a drag or the arrow keys; resize it with a handle. Escape cancels."
 	OverlayPresetInstructions = "Drag the frame's border to move it, or nudge it with the arrow keys (Shift for ten pixels). Type exact dimensions to resize it. Escape cancels."
 	SelectionWidthLabel       = "&W (px)"
@@ -363,10 +365,10 @@ const (
 	ResizeJobFolderFailed   = "The output folder could not be created or used: %v. Choose another folder with Browse, or check that its drive is connected and writable."
 	ResizeJobJPEGInvalid    = "The JPEG options cannot be used: %v"
 	ResizeJobNotConfirmed   = "Resize not started: existing files are replaced only after you confirm. Choose Rename or Skip to keep them."
-	ResizeOverwriteTitle    = "GameDevTools — Replace existing files"
+	ResizeOverwriteTitle    = AppName + " — Replace existing files"
 	ResizeOverwriteConfirm  = "Resized images will replace existing files with the same names in %s.\n\nSource images are never overwritten, and an image whose existing file cannot be confirmed safe to replace is saved under a numbered name instead.\n\nReplace existing files?"
 	ResizeOpenFolderFailed  = "The output folder could not be opened: %v"
-	ResizeCloseTitle        = "GameDevTools — Resize job running"
+	ResizeCloseTitle        = AppName + " — Resize job running"
 	ResizeCloseConfirmation = "A resize job is running. Close anyway?\n\nClosing cancels the job: images already resized are kept, and the remaining images are not resized."
 
 	ResizeStatePending    = "Pending"

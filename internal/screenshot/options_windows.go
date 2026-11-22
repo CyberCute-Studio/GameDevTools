@@ -66,7 +66,7 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 // Options.Validate refuses for its text, which no capture could start with,
 // and one Windows resolves to a device, as it does a last name such as NUL.
 func defaultFolderIn(pictures string) (string, error) {
-	named := pathform.Join(pictures, "GameDevTools", "Screenshots")
+	named := pathform.Join(pictures, ui.AppName, "Screenshots")
 	if !pathform.IsAbs(pictures) {
 		return "", fmt.Errorf("%s: %s", named, ui.OutputFolderNotAbsoluteReason)
 	}
@@ -79,7 +79,7 @@ func defaultFolderIn(pictures string) (string, error) {
 		}
 		pictures = full
 	}
-	folder := pathform.Join(pictures, "GameDevTools", "Screenshots")
+	folder := pathform.Join(pictures, ui.AppName, "Screenshots")
 	if pathform.NamesNoFolder(folder) {
 		return "", fmt.Errorf("%s: %s", folder, ui.OutputFolderRootReason)
 	}

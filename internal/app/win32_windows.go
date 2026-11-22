@@ -107,6 +107,17 @@ const (
 	dtWordBreak = 0x0010
 	dtCalcRect  = 0x0400
 	dtNoPrefix  = 0x0800
+
+	// appIconResource is the application icon's group resource ID, which
+	// internal/release gives it, passed to LoadImageW as MAKEINTRESOURCE.
+	appIconResource = 1
+	imageIcon       = 1
+	lrShared        = 0x00008000
+
+	smCxIcon   = 11
+	smCyIcon   = 12
+	smCxSmIcon = 49
+	smCySmIcon = 50
 )
 
 var (
@@ -134,6 +145,8 @@ var (
 	procSetScrollInfo                 = user32.NewProc("SetScrollInfo")
 	procMapWindowPoints               = user32.NewProc("MapWindowPoints")
 	procLoadCursorW                   = user32.NewProc("LoadCursorW")
+	procLoadImageW                    = user32.NewProc("LoadImageW")
+	procGetSystemMetrics              = user32.NewProc("GetSystemMetrics")
 	procGetMessageW                   = user32.NewProc("GetMessageW")
 	procIsDialogMessageW              = user32.NewProc("IsDialogMessageW")
 	procTranslateMessage              = user32.NewProc("TranslateMessage")

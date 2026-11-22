@@ -10,7 +10,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 if (-not $OutputPath) {
     $suffix = if ($Configuration -eq "Debug") { "-debug" } else { "" }
-    $OutputPath = "bin/gamedevtools$suffix.exe"
+    $OutputPath = "bin/cybercute-dev-tools$suffix.exe"
 }
 if (-not [System.IO.Path]::IsPathRooted($OutputPath)) {
     $OutputPath = Join-Path $root $OutputPath
@@ -23,7 +23,11 @@ $buildArgs = @("build", "-o", $OutputPath)
 if ($Configuration -eq "Debug") {
     $buildArgs += "-gcflags=github.com/CyberCute-Studio/GameDevTools/...=-N -l"
 } else {
-    $buildArgs += "-ldflags=-s -w -H=windowsgui"
+    # These leave nothing in the executable that depends on where or when it
+    # was built, so the same source and toolchain give the same bytes.
+    $buildArgs += "-trimpath"
+    $buildArgs += "-buildvcs=false"
+    $buildArgs += "-ldflags=-s -w -H=windowsgui -buildid="
 }
 $buildArgs += "./cmd/gamedevtools"
 

@@ -621,7 +621,7 @@ func TestChoosingAFolderEndsItsWarningAtOnce(t *testing.T) {
 			shell.nativeViews[core.ModuleScreenshot] = folderChoosingView{nativeView: real, choose: func() error {
 				return shell.capture.SetOutputFolder(filepath.Join(filepath.Dir(shell.path), "Chosen"))
 			}}
-			shellWindowProc(shell.hwnd, wmCommand, uintptr(9999), nil)
+			shellWindowProc(shell.hwnd, wmCommand, uintptr(9999), 0)
 			shell.nativeViews[core.ModuleScreenshot] = real
 			if shell.capture.FolderWarning() != "" {
 				t.Fatal("the chosen folder still has a warning")

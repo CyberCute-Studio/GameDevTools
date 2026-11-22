@@ -420,9 +420,11 @@ func registerShellClassNow() error {
 	class := wndClassEx{
 		LpfnWndProc:   windows.NewCallback(shellWindowProc),
 		HInstance:     windows.Handle(instance),
+		HIcon:         loadAppIcon(instance, smCxIcon, smCyIcon),
 		HCursor:       windows.Handle(cursor),
 		HbrBackground: windows.Handle(colorWindow + 1),
 		LpszClassName: utf16(shellClassName),
+		HIconSm:       loadAppIcon(instance, smCxSmIcon, smCySmIcon),
 	}
 	class.CbSize = uint32(unsafe.Sizeof(class))
 	atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class)))
@@ -430,6 +432,16 @@ func registerShellClassNow() error {
 		return callError("RegisterClassExW", err)
 	}
 	return nil
+}
+
+// loadAppIcon loads the executable's application icon at the size the two
+// system metrics give. It returns 0 when the running program has no icon, as
+// a test binary does, and the class then takes the default icon.
+func loadAppIcon(instance uintptr, widthMetric, heightMetric uintptr) windows.Handle {
+	width, _, _ := procGetSystemMetrics.Call(widthMetric)
+	height, _, _ := procGetSystemMetrics.Call(heightMetric)
+	icon, _, _ := procLoadImageW.Call(instance, appIconResource, imageIcon, width, height, lrShared)
+	return windows.Handle(icon)
 }
 
 func (s *nativeShell) createControls() error {
@@ -1027,7 +1039,7 @@ var (
 // controls: it forwards WM_DROPFILES to the shell window, which owns the
 // drop routing and the HDROP lifetime, and defers every other message to the
 // control's original procedure.
-func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	if message == wmDropFiles {
 		if root, _, _ := procGetAncestor.Call(uintptr(hwnd), gaRoot); root != 0 {
 			r, _, _ := procSendMessageW.Call(root, wmDropFiles, wParam, 0)
@@ -1038,10 +1050,10 @@ func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 	}
 	previous := dropForwardOriginals[hwnd]
 	if previous == 0 {
-		r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+		r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 		return r
 	}
-	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, lParam)
 	if message == wmDestroy {
 		delete(dropForwardOriginals, hwnd)
 	}
@@ -1493,12 +1505,17 @@ func staticTextBrush(dc uintptr) uintptr {
 	return brush
 }
 
-func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+// shellWindowProc takes lParam as an integer because most messages carry a
+// number there: WM_GETICON, sent once the class has an icon, carries the DPI.
+// Declared as a pointer, a small value crashes the garbage collector when it
+// scans this frame. Only WM_DPICHANGED's lParam is a pointer, to memory
+// Windows owns.
+func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
 	case wmCommand:
 		notification := highWord(wParam)
-		if shell != nil && reportsFocus(notification, uintptr(lParam)) {
+		if shell != nil && reportsFocus(notification, lParam) {
 			shell.focus = windows.Handle(lParam)
 			if !shell.keepScroll {
 				shell.ensureControlVisible(windows.Handle(lParam))
@@ -1526,7 +1543,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				if shell.navigator.Select(id) == nil {
 					_ = shell.saveSettings(false)
 				}
-				if lParam != nil {
+				if lParam != 0 {
 					shell.ensureControlVisible(windows.Handle(lParam))
 				}
 				return 0
@@ -1566,7 +1583,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				}
 			case waClickActive:
 				shell.clickActivating = true
-				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 				shell.clickActivating = false
 				return r
 			}
@@ -1652,8 +1669,8 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		if shell != nil {
 			shell.dpi = uint32(lowWord(wParam))
 			shell.updateFonts()
-			if lParam != nil {
-				suggested := (*rect)(lParam)
+			if lParam != 0 {
+				suggested := *(**rect)(unsafe.Pointer(&lParam))
 				procSetWindowPos.Call(
 					uintptr(hwnd),
 					0,
@@ -1731,6 +1748,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 		return 0
 	}
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
 }

@@ -9,7 +9,7 @@ to end, and the release build; and measures NFR-010 through NFR-014 against
 their targets. The report holds no computer name, user name, or monitor name.
 
 Run it with nothing else using the desktop. It moves windows, takes the
-foreground, and REPLACES THE CLIPBOARD. Close GameDevTools first.
+foreground, and REPLACES THE CLIPBOARD. Close CyberCute Dev Tools first.
 
 .PARAMETER Architecture
 The architecture to build and run: the host's by default. On Windows on Arm,
@@ -315,7 +315,7 @@ try {
     $ranRelease = $release.Passed -and (@($release.Lines | Where-Object { $_ -match "^--- PASS: $launchTest" }).Count -eq 1)
     Add-Check -Name "release executable as a standard user" -Passed $ranRelease -Seconds $release.Seconds
 
-    $buildPath = Join-Path $OutputDirectory "gamedevtools-$target.exe"
+    $buildPath = Join-Path $OutputDirectory "cybercute-dev-tools-$target.exe"
     $buildWatch = [System.Diagnostics.Stopwatch]::StartNew()
     $buildPassed = $true
     $buildDetail = ""

@@ -38,28 +38,30 @@ jobs:
       - name: Run unit tests
         run: go test -count=1 ./...
 
-      - name: Build Windows AMD64 release executable
+      - name: Build portable x64 package
         shell: pwsh
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: "0"
-        run: ./scripts/build.ps1 -Configuration Release -OutputPath bin/gamedevtools-windows-amd64.exe
+        run: ./scripts/package.ps1 -OutputDirectory bin/release
 
       - name: Check release toolchain
         shell: pwsh
         run: |
           $pinned = (Select-String -Path go.mod -Pattern '^toolchain (go\S+)$').Matches.Groups[1].Value
           if (-not $pinned) { throw "go.mod names no toolchain." }
-          $reported = go version bin/gamedevtools-windows-amd64.exe
+          $reported = go version bin/release/cybercute-dev-tools.exe
           if ($LASTEXITCODE -ne 0) { throw "go version failed with exit code $LASTEXITCODE" }
           $built = ($reported -split '\s+')[-1]
           if ($built -ne $pinned) { throw "The release executable was built with $built, but go.mod pins $pinned." }
           Write-Output "Release executable built with $built."
 
-      - name: Upload Windows executable
+      - name: Verify portable package
+        shell: pwsh
+        run: ./scripts/verify-package.ps1 -Package (Get-ChildItem bin/release/*.zip).FullName
+
+      - name: Upload portable package
         uses: actions/upload-artifact@v4
         with:
-          name: gamedevtools-windows-amd64
-          path: bin/gamedevtools-windows-amd64.exe
+          name: cybercute-dev-tools-windows-x64
+          path: |
+            bin/release/*.zip
+            bin/release/*.zip.sha256
           if-no-files-found: error

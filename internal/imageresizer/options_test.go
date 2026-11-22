@@ -10,6 +10,7 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func testFolder(t *testing.T) string {
@@ -46,7 +47,7 @@ func TestDefaultOptions(t *testing.T) {
 // that cannot be located does, rather than a default every job would refuse.
 func TestDefaultFolderIn(t *testing.T) {
 	pictures := t.TempDir()
-	want := filepath.Join(pictures, "GameDevTools", "Resized")
+	want := filepath.Join(pictures, ui.AppName, "Resized")
 	spellings := []string{pictures}
 	refused := map[string]error{"Pictures": output.ErrFolderNotAbsolute}
 	if runtime.GOOS == "windows" {
@@ -80,7 +81,7 @@ func TestDefaultFolderIn(t *testing.T) {
 // why, preferring the known folder's refusal.
 func TestDefaultFolder(t *testing.T) {
 	known, profile := t.TempDir(), t.TempDir()
-	under := func(pictures string) string { return filepath.Join(pictures, "GameDevTools", "Resized") }
+	under := func(pictures string) string { return filepath.Join(pictures, ui.AppName, "Resized") }
 	home := func() (string, error) { return profile, nil }
 	relativeHome := func() (string, error) { return "profile", nil }
 	lookupErr, homeErr := errors.New("element not found"), errors.New("no profile")

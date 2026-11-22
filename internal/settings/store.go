@@ -47,9 +47,17 @@ func (e notRestored) Error() string { return e.err.Error() }
 
 func (e notRestored) Unwrap() []error { return []error{ErrNotRestored, e.err} }
 
+// legacyFolderName is the per-user folder the application used before it was
+// named CyberCute Dev Tools. Load reads the settings file there once.
+const legacyFolderName = "GameDevTools"
+
 type Paths struct {
 	ConfigFile string
 	LogFile    string
+	// LegacyConfigFile is the settings file of a build from before the
+	// rename, which Load takes the settings from while ConfigFile does not
+	// exist, leaving it in place. Empty when there is none to look for.
+	LegacyConfigFile string
 }
 
 type Settings struct {
@@ -99,7 +107,9 @@ type LoadResult struct {
 }
 
 type Store struct {
-	path       string
+	path string
+	// legacyPath is Paths.LegacyConfigFile.
+	legacyPath string
 	migrations map[int]Migration
 	validators map[string][]ModuleValidator
 	blocked    error
@@ -128,8 +138,9 @@ func LocalPaths() (Paths, error) {
 		return Paths{}, fmt.Errorf("locate per-user log directory: %w", err)
 	}
 	return Paths{
-		ConfigFile: filepath.Join(configRoot, "GameDevTools", "settings.json"),
-		LogFile:    filepath.Join(logRoot, "GameDevTools", "Logs", "gamedevtools.log"),
+		ConfigFile:       filepath.Join(configRoot, ui.AppName, "settings.json"),
+		LogFile:          filepath.Join(logRoot, ui.AppName, "Logs", ui.AppFileName+".log"),
+		LegacyConfigFile: filepath.Join(configRoot, legacyFolderName, "settings.json"),
 	}, nil
 }
 
@@ -150,6 +161,7 @@ func Default() Settings {
 func NewStore(paths Paths, migrations ...Migration) *Store {
 	store := &Store{
 		path:       paths.ConfigFile,
+		legacyPath: paths.LegacyConfigFile,
 		migrations: make(map[int]Migration),
 		validators: make(map[string][]ModuleValidator),
 		now:        time.Now,
@@ -183,13 +195,24 @@ func (s *Store) Load() LoadResult {
 	}
 	s.removeStaleTemporaries()
 	data, err := os.ReadFile(s.path)
+	source, adopted := s.path, false
+	if errors.Is(err, os.ErrNotExist) && s.legacyPath != "" {
+		// The first run after the rename takes the settings of the build
+		// before it. The file stays where it is, so that build still works,
+		// and is not read again once the settings file exists. One that
+		// cannot be read blocks saving, as an unreadable settings file does,
+		// because a save would create the settings file and so abandon it.
+		source = s.legacyPath
+		data, err = os.ReadFile(source)
+		adopted = err == nil
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return result
 	}
 	if err != nil {
 		s.blocked = err
 		s.unloaded = true
-		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsReadFailed, s.path, err))
+		result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsReadFailed, source, err))
 		return result
 	}
 
@@ -199,7 +222,7 @@ func (s *Store) Load() LoadResult {
 		backup, backupErr := s.backup(data, "corrupt")
 		if backupErr != nil {
 			s.blocked = backupErr
-			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsInvalidBackupFailed, s.path, err, backupErr))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsInvalidBackupFailed, source, err, backupErr))
 			return result
 		}
 		result.Recovered = fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup)
@@ -216,11 +239,16 @@ func (s *Store) Load() LoadResult {
 		backup, backupErr := s.backup(data, "migration")
 		if backupErr != nil {
 			s.blocked = backupErr
-			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsMigrationBackupFailed, backupErr, s.path))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsMigrationBackupFailed, backupErr, source))
 			return result
 		}
 		if saveErr := s.save(decoded); saveErr != nil {
 			result.Unwritten = fmt.Sprintf(ui.MigratedSettingsWriteFailed, saveErr, backup)
+			result.Warnings = append(result.Warnings, result.Unwritten)
+		}
+	} else if adopted {
+		if saveErr := s.save(decoded); saveErr != nil {
+			result.Unwritten = fmt.Sprintf(ui.MigratedSettingsWriteFailed, saveErr, source)
 			result.Warnings = append(result.Warnings, result.Unwritten)
 		}
 	}

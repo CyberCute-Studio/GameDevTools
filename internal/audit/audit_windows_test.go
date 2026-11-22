@@ -103,10 +103,10 @@ var reviewedProcedures = []string{
 	"EnumDisplayMonitors", "FindWindowW", "GetAncestor", "GetClientRect", "GetCursorPos", "GetDC",
 	"GetDpiForMonitor", "GetDpiForWindow", "GetFocus", "GetKeyState", "GetMessageW", "GetModuleHandleW",
 	"GetMonitorInfoW", "GetNextDlgTabItem", "GetOpenFileNameW", "GetScrollInfo", "GetSysColor",
-	"GetSysColorBrush", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW",
+	"GetSysColorBrush", "GetSystemMetrics", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW",
 	"GlobalAlloc", "GlobalFree", "GlobalLock", "GlobalUnlock", "InvalidateRect", "IsChild",
 	"IsDialogMessageW", "IsIconic", "IsWindow", "IsWindowEnabled", "IsWindowVisible", "IsZoomed", "KillTimer",
-	"LoadCursorW", "MapWindowPoints", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
+	"LoadCursorW", "LoadImageW", "MapWindowPoints", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
 	"OpenClipboard", "PostMessageW", "PostQuitMessage", "RegisterClassExW", "RegisterClipboardFormatW",
 	"RegisterHotKey", "ReleaseCapture", "ReleaseDC", "RtlMoveMemory", "SHBrowseForFolderW",
 	"SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkMode", "SetCapture", "SetClipboardData",
@@ -901,4 +901,30 @@ func stringLiteral(expression ast.Expr) (string, bool) {
 	}
 	value, err := strconv.Unquote(literal.Value)
 	return value, err == nil
+}
+
+// TestWindowProceduresTakeLParamAsAnInteger pins that no function declares a
+// message's lParam as a pointer. Most messages carry a number there, such as
+// the DPI in WM_GETICON or a position in a mouse message, and the garbage
+// collector crashes the process if it finds a small value in a pointer slot.
+func TestWindowProceduresTakeLParamAsAnInteger(t *testing.T) {
+	for _, source := range applicationSources(t) {
+		for _, declaration := range source.file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			for _, field := range function.Type.Params.List {
+				selector, ok := field.Type.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "Pointer" {
+					continue
+				}
+				for _, name := range field.Names {
+					if strings.EqualFold(name.Name, "lParam") {
+						t.Errorf("%s: %s declares lParam as a pointer", source.name, function.Name.Name)
+					}
+				}
+			}
+		}
+	}
 }

@@ -154,7 +154,7 @@ func TestCalculateShellLayout(t *testing.T) {
 func TestShellWindowProcRoutesNativeCommandsAndRelayouts(t *testing.T) {
 	native := &recordingNativeView{}
 	shell := newCommandTestShell(t, native)
-	shellWindowProc(shell.hwnd, wmCommand, uintptr(206)|uintptr(1)<<16, nil)
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(206)|uintptr(1)<<16, 0)
 	if native.commandID != 206 || native.notification != 1 {
 		t.Fatalf("routed command = (%d, %d), want (206, 1)", native.commandID, native.notification)
 	}
@@ -169,20 +169,20 @@ func TestShellWindowProcForwardsDisplayChanges(t *testing.T) {
 	shell.displays = monitor
 	calls := 0
 	monitor.Subscribe(func() { calls++ })
-	shellWindowProc(shell.hwnd, wmDisplayChange, 0, nil)
+	shellWindowProc(shell.hwnd, wmDisplayChange, 0, 0)
 	if calls != 1 {
 		t.Fatalf("display-change callback invocations = %d, want 1", calls)
 	}
 	// A scaling change reaches the same subscribers: the physical topology
 	// is unchanged, but every DPI-derived measurement is invalidated
 	// (SCR-054).
-	shellWindowProc(shell.hwnd, wmDPIChanged, uintptr(96)|uintptr(96)<<16, nil)
+	shellWindowProc(shell.hwnd, wmDPIChanged, uintptr(96)|uintptr(96)<<16, 0)
 	if calls != 2 {
 		t.Fatalf("DPI-change callback invocations = %d, want 2", calls)
 	}
 	shell.displays = nil
-	shellWindowProc(shell.hwnd, wmDisplayChange, 0, nil)
-	shellWindowProc(shell.hwnd, wmDPIChanged, uintptr(96)|uintptr(96)<<16, nil)
+	shellWindowProc(shell.hwnd, wmDisplayChange, 0, 0)
+	shellWindowProc(shell.hwnd, wmDPIChanged, uintptr(96)|uintptr(96)<<16, 0)
 	if calls != 2 {
 		t.Fatalf("nil monitor panicked or renotified: %d calls", calls)
 	}
@@ -276,7 +276,7 @@ func (n *hotkeyRecordingView) NativeHotkey(id int32) bool {
 func TestShellWindowProcRoutesHotkeys(t *testing.T) {
 	native := &hotkeyRecordingView{handled: true}
 	shell := newCommandTestShell(t, native)
-	shellWindowProc(shell.hwnd, wmHotkey, 1, nil)
+	shellWindowProc(shell.hwnd, wmHotkey, 1, 0)
 	if native.calls != 1 || native.hotkeyID != 1 {
 		t.Fatalf("routed hotkey = (%d calls, id %d), want (1, 1)", native.calls, native.hotkeyID)
 	}
@@ -286,7 +286,7 @@ func TestShellWindowProcRoutesHotkeys(t *testing.T) {
 
 	native.handled = false
 	layouts := native.layouts
-	shellWindowProc(shell.hwnd, wmHotkey, 7, nil)
+	shellWindowProc(shell.hwnd, wmHotkey, 7, 0)
 	if native.calls != 2 || native.hotkeyID != 7 {
 		t.Fatalf("unconsumed hotkey = (%d calls, id %d), want (2, 7)", native.calls, native.hotkeyID)
 	}
@@ -569,7 +569,7 @@ func (n *dropRecordingView) NativeDropFiles(paths []string) {
 func TestShellWindowProcRoutesDroppedFiles(t *testing.T) {
 	native := &dropRecordingView{}
 	shell := newCommandTestShell(t, native)
-	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`, `C:\Images\b.jpg`}), nil)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`, `C:\Images\b.jpg`}), 0)
 	if len(native.paths) != 2 || native.paths[0] != `C:\Images\a.png` || native.paths[1] != `C:\Images\b.jpg` {
 		t.Fatalf("dropped paths = %v", native.paths)
 	}
@@ -578,7 +578,7 @@ func TestShellWindowProcRoutesDroppedFiles(t *testing.T) {
 	}
 
 	layouts := native.layouts
-	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, nil), nil)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, nil), 0)
 	if len(native.paths) != 2 {
 		t.Fatalf("empty drop delivered paths: %v", native.paths)
 	}
@@ -590,7 +590,7 @@ func TestShellWindowProcRoutesDroppedFiles(t *testing.T) {
 func TestShellWindowProcIgnoresDropsForNonTargets(t *testing.T) {
 	native := &recordingNativeView{}
 	shell := newCommandTestShell(t, native)
-	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`}), nil)
+	shellWindowProc(shell.hwnd, wmDropFiles, newTestDrop(t, []string{`C:\Images\a.png`}), 0)
 	if native.layouts != 0 {
 		t.Fatal("drop for a module without drop support triggered a layout")
 	}
@@ -734,7 +734,7 @@ func TestShellDisablesAnUnavailablePrimaryAction(t *testing.T) {
 	}
 	native.available = false
 	shell.action.Focus()
-	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), nil)
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), 0)
 	if native.actions != 1 || isEnabled() {
 		t.Fatalf("after the action: %d actions, enabled = %v; want 1 and disabled", native.actions, isEnabled())
 	}
@@ -771,7 +771,7 @@ func TestShellHandsAnUnavailableActionsFocusToTheWindow(t *testing.T) {
 	shell.layout()
 	native.available = false
 	shell.action.Focus()
-	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), nil)
+	shellWindowProc(shell.hwnd, wmCommand, uintptr(actionCommand), 0)
 	if result, _, _ := procIsWindowEnabled.Call(uintptr(shell.action.Handle())); result != 0 {
 		t.Fatal("the unavailable primary action stayed enabled")
 	}

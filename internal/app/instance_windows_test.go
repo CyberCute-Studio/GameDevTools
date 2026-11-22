@@ -189,7 +189,7 @@ func TestActivateExistingInstanceWaitsForStartupWindow(t *testing.T) {
 	<-destroyed
 }
 
-func defWindowProcCallback(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+func defWindowProcCallback(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
 }

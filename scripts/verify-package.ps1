@@ -1,0 +1,168 @@
+<#
+.SYNOPSIS
+Checks a portable ZIP the way a user receives it.
+
+.DESCRIPTION
+Confirms the checksum, contents, version metadata, icon, and signing state, then
+extracts the ZIP and runs the executable with no Go on its PATH and its per-user
+folders in a temporary workspace: once as a first run and once as an upgrade
+from a GameDevTools settings file. Close the application first.
+#>
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$Package
+)
+
+$ErrorActionPreference = "Stop"
+$productName = "CyberCute Dev Tools"
+$executableName = "cybercute-dev-tools.exe"
+$windowWait = 30
+$exitWait = 30
+
+Add-Type -Namespace PackageCheck -Name Native -MemberDefinition @'
+[DllImport("user32.dll")]
+public static extern IntPtr GetClassLongPtrW(IntPtr window, int index);
+'@
+
+function Write-Check([string]$Name) { Write-Output "PASS  $Name" }
+
+function Test-InstanceRunning {
+    $held = $null
+    try {
+        if ([System.Threading.Mutex]::TryOpenExisting("Local\GameDevTools.SingleInstance", [ref]$held)) {
+            $held.Dispose()
+            return $true
+        }
+    } catch [System.UnauthorizedAccessException] {
+        return $true
+    }
+    return $false
+}
+
+function New-Workspace([string]$Parent, [string]$Name) {
+    $workspace = Join-Path $Parent $Name
+    foreach ($folder in "Roaming", "Local", "Temp", "Profile") {
+        New-Item -ItemType Directory -Force -Path (Join-Path $workspace $folder) | Out-Null
+    }
+    return $workspace
+}
+
+# Runs the executable until its window appears, closes it, and requires a clean
+# exit. The environment holds only what Windows needs, so no Go tool is on PATH.
+function Invoke-App([string]$Executable, [string]$Workspace) {
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $Executable
+    $start.WorkingDirectory = Split-Path -Parent $Executable
+    $start.UseShellExecute = $false
+    $start.EnvironmentVariables.Clear()
+    $start.EnvironmentVariables["SystemRoot"] = $env:SystemRoot
+    $start.EnvironmentVariables["SystemDrive"] = $env:SystemDrive
+    $start.EnvironmentVariables["windir"] = $env:windir
+    $start.EnvironmentVariables["PATH"] = Join-Path $env:SystemRoot "System32"
+    $start.EnvironmentVariables["USERPROFILE"] = Join-Path $Workspace "Profile"
+    $start.EnvironmentVariables["APPDATA"] = Join-Path $Workspace "Roaming"
+    $start.EnvironmentVariables["LOCALAPPDATA"] = Join-Path $Workspace "Local"
+    $start.EnvironmentVariables["TEMP"] = Join-Path $Workspace "Temp"
+    $start.EnvironmentVariables["TMP"] = Join-Path $Workspace "Temp"
+
+    $process = [System.Diagnostics.Process]::Start($start)
+    try {
+        $deadline = (Get-Date).AddSeconds($windowWait)
+        while ($true) {
+            if ($process.HasExited) { throw "The application exited with code $($process.ExitCode) before showing a window." }
+            $process.Refresh()
+            if ($process.MainWindowHandle -ne [IntPtr]::Zero) { break }
+            if ((Get-Date) -gt $deadline) { throw "The application showed no window within $windowWait seconds." }
+            Start-Sleep -Milliseconds 100
+        }
+        if ($process.MainWindowTitle -ne $productName) { throw "The window is titled '$($process.MainWindowTitle)'." }
+        # GCLP_HICON and GCLP_HICONSM: the title bar and taskbar show these.
+        foreach ($index in -14, -34) {
+            if ([PackageCheck.Native]::GetClassLongPtrW($process.MainWindowHandle, $index) -eq [IntPtr]::Zero) {
+                throw "The main window's class has no icon (index $index)."
+            }
+        }
+        [void]$process.CloseMainWindow()
+        if (-not $process.WaitForExit($exitWait * 1000)) { throw "The application did not exit within $exitWait seconds." }
+        if ($process.ExitCode -ne 0) { throw "The application exited with code $($process.ExitCode)." }
+    } finally {
+        if (-not $process.HasExited) { $process.Kill() }
+        $process.Dispose()
+    }
+}
+
+$Package = (Resolve-Path -LiteralPath $Package).Path
+if (Test-InstanceRunning) { throw "$productName is running. Close it and run this again." }
+
+$checksumFile = "$Package.sha256"
+if (-not (Test-Path -LiteralPath $checksumFile)) { throw "No checksum file at $checksumFile." }
+$recorded = ((Get-Content -LiteralPath $checksumFile -Raw).Trim() -split '\s+')
+$actual = (Get-FileHash -LiteralPath $Package -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($recorded[0] -ne $actual) { throw "The checksum does not match: recorded $($recorded[0]), actual $actual." }
+if ($recorded[1] -ne (Split-Path -Leaf $Package)) { throw "The checksum file names $($recorded[1])." }
+Write-Check "SHA-256 checksum"
+
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("cybercute-package-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $scratch | Out-Null
+try {
+    $extracted = Join-Path $scratch "Extracted"
+    Expand-Archive -LiteralPath $Package -DestinationPath $extracted
+    $folder = Join-Path $extracted $productName
+    $found = @(Get-ChildItem -LiteralPath $extracted -Recurse -File | ForEach-Object { $_.FullName.Substring($folder.Length + 1) } | Sort-Object)
+    $wanted = @("README.txt", "THIRD-PARTY-NOTICES.txt", $executableName) | Sort-Object
+    if (($found -join "|") -ne ($wanted -join "|")) { throw "The ZIP holds: $($found -join ', ')." }
+    Write-Check "contents"
+
+    $executable = Join-Path $folder $executableName
+    $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
+    if ($info.ProductName -ne $productName) { throw "ProductName is '$($info.ProductName)'." }
+    if ($info.OriginalFilename -ne $executableName) { throw "OriginalFilename is '$($info.OriginalFilename)'." }
+    if ((Split-Path -Leaf $Package) -notmatch "-$([regex]::Escape($info.ProductVersion))-windows-x64\.zip$") {
+        throw "The executable's version $($info.ProductVersion) is not the one the ZIP is named for."
+    }
+    Write-Check "version metadata ($($info.ProductVersion))"
+
+    Add-Type -AssemblyName System.Drawing
+    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable)
+    if ($null -eq $icon) { throw "The executable has no icon." }
+    $icon.Dispose()
+    Write-Check "application icon"
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $executable
+    if ($signature.Status -ne "NotSigned") { throw "The release is meant to be unsigned; its signature status is $($signature.Status)." }
+    Write-Check "unsigned, as ADR-0002 decides"
+
+    $before = @(Get-ChildItem -LiteralPath $folder -Recurse -Force | ForEach-Object { $_.FullName } | Sort-Object)
+
+    $firstRun = New-Workspace $scratch "FirstRun"
+    Invoke-App -Executable $executable -Workspace $firstRun
+    $settings = Join-Path $firstRun "Roaming\$productName\settings.json"
+    if (-not (Test-Path -LiteralPath $settings)) { throw "The first run wrote no settings at $settings." }
+    Write-Check "first run without Go: window, clean exit, settings path"
+
+    $upgrade = New-Workspace $scratch "Upgrade"
+    $legacyFolder = Join-Path $upgrade "Roaming\GameDevTools"
+    New-Item -ItemType Directory -Path $legacyFolder | Out-Null
+    $legacy = Join-Path $legacyFolder "settings.json"
+    $legacyText = '{"version":1,"shell":{"selectedModule":"image-resizer","window":{"x":0,"y":0,"width":1100,"height":700,"maximized":false,"hasPosition":false}}}'
+    [System.IO.File]::WriteAllText($legacy, $legacyText)
+    Invoke-App -Executable $executable -Workspace $upgrade
+    $adopted = Join-Path $upgrade "Roaming\$productName\settings.json"
+    if (-not (Test-Path -LiteralPath $adopted)) { throw "The upgrade wrote no settings at $adopted." }
+    $selected = (Get-Content -LiteralPath $adopted -Raw | ConvertFrom-Json).shell.selectedModule
+    if ($selected -ne "image-resizer") { throw "The upgrade selected '$selected' rather than keeping image-resizer." }
+    if ([System.IO.File]::ReadAllText($legacy) -ne $legacyText) { throw "The upgrade changed the GameDevTools settings file." }
+    Write-Check "upgrade keeps GameDevTools settings and leaves the old file"
+
+    $after = @(Get-ChildItem -LiteralPath $folder -Recurse -Force | ForEach-Object { $_.FullName } | Sort-Object)
+    if (($before -join "|") -ne ($after -join "|")) { throw "Running the application changed its extracted folder." }
+    Write-Check "portable: nothing written beside the executable"
+} finally {
+    # A virus scanner or the x64 emulation cache can hold a program that has
+    # just exited for a moment.
+    for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $scratch); $attempt++) {
+        Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $scratch) { Start-Sleep -Milliseconds 250 }
+    }
+}

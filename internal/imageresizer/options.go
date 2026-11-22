@@ -183,7 +183,7 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 // colon, is reported as unavailable, as one that cannot be located is,
 // rather than selected.
 func defaultFolderIn(pictures string) (string, error) {
-	folder := pathform.Join(resolveFolder(pictures), "GameDevTools", "Resized")
+	folder := pathform.Join(resolveFolder(pictures), ui.AppName, "Resized")
 	if err := output.ValidateFolder(folder); err != nil {
 		return "", fmt.Errorf("%s: %w", folder, err)
 	}
