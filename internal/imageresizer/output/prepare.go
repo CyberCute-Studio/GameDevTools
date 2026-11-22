@@ -312,8 +312,10 @@ var (
 // mailslot, or IPC$ share, as in \\localhost\pipe\x, is the same device
 // reached through a share. It is judged on the path Prepare creates, which
 // past the name rule above is the path as Windows resolves it, keeping a ".."
-// where a server or share belongs, as in \\..\pipe\x. Such a path is refused
-// as ErrFolderRoot, unless the name rule has already refused it as
+// where a server or share belongs, as in \\..\pipe\x, and on the same path
+// without that "..", which is how Prepare inspects a folder it could not
+// create, as in \\a\..\localhost\pipe\x. Such a path is refused as
+// ErrFolderRoot, unless the name rule has already refused it as
 // ErrFolderName, as it does \\server\pipe. for its trailing period.
 func ValidateFolder(folder string) error {
 	switch {

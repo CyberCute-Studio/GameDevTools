@@ -95,16 +95,12 @@ func NamesNoFolder(folder string) bool {
 // reads those as its named pipes and mailslots rather than as folders, so
 // creating \\localhost\pipe\x connects to the program serving that pipe. Only
 // the share is judged: a folder named pipe on an ordinary share is a folder.
-// Trailing spaces and periods are ignored, since a verbatim path keeps them
-// and what a server makes of such a share name cannot be judged from here.
-// For the same reason a name of nothing else, such as the .. of
-// \\server\..\pipe\x, which Windows keeps where a share belongs, does not hide
-// the name after it. A doubled separator holds no name. A leading name that
-// starts with a semicolon, as in \\;LanmanRedirector\server\pipe\x, picks a
-// network provider, so the server is the name after it. With no server at
-// all, as in \\\pipe\x, Windows takes the first name as the share, while
-// \\\localhost\pipe\x may still be read past the empty server, so the first
-// two names are both judged.
+// The share is judged by its name alone, whichever redirector would read it,
+// so a WebDAV folder named pipe at a server's web root is refused too. The
+// path is judged as written and with its . and .. elements removed by Clean,
+// since Windows keeps the .. of \\a\..\localhost\pipe\x, where a share
+// belongs, but the Image Resizer's planner inspects that path as
+// \\?\UNC\localhost\pipe\x.
 func LeadsThroughIPCShare(clean string) bool {
 	unc, found := "", false
 	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`, `\\.\UNC\`} {
@@ -119,12 +115,38 @@ func LeadsThroughIPCShare(clean string) bool {
 		}
 		unc = clean[len(`\\`):]
 	}
+	if namesIPCShare(unc) {
+		return true
+	}
+	const extended = `\\?\UNC\`
+	collapsed, found := strings.CutPrefix(Clean(extended+unc), extended)
+	return found && namesIPCShare(collapsed)
+}
+
+// namesIPCShare reports whether the names of a UNC path after its prefix, the
+// server's first, hold an IPC share where the share belongs. Trailing spaces
+// and periods are ignored, since a verbatim path keeps them and what a server
+// makes of such a share name cannot be judged from here. For the same reason
+// a name of nothing else, such as the .. of \\server\..\pipe\x, does not hide
+// the name after it. A doubled separator holds no name. The second name is
+// the share unless the server's place is in doubt, and then the first two
+// names are both judged: with no server, as in \\\pipe\x, which Windows may
+// read as that share or read past, as in \\\localhost\pipe\x; after leading
+// names that start with a semicolon, as in \\;LanmanRedirector\server\pipe\x,
+// which pick a network provider, or are the server if no provider has that
+// name; and after a first name of only spaces and periods, as in
+// \\...\localhost\pipe\x.
+func namesIPCShare(unc string) bool {
 	names := strings.FieldsFunc(unc, func(character rune) bool { return character == '\\' })
+	inDoubt := strings.HasPrefix(unc, `\`)
 	for len(names) > 0 && strings.HasPrefix(names[0], ";") {
-		names = names[1:]
+		names, inDoubt = names[1:], true
+	}
+	if len(names) > 0 && strings.TrimRight(names[0], " .") == "" {
+		inDoubt = true
 	}
 	first, judged := 1, 1
-	if strings.HasPrefix(unc, `\`) {
+	if inDoubt {
 		first, judged = 0, 2
 	}
 	for _, name := range names[min(first, len(names)):] {

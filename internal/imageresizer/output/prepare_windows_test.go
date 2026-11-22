@@ -1205,19 +1205,42 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\localhost\..\IPC$\x`,
 		`\\127.0.0.1\..\mailslot\x`,
 		`\\localhost\.\pipe\x`,
+		// A job inspects a folder it could not create without that "..", so
+		// the share it would reach that way is refused too.
+		`\\..\localhost\pipe\x`,
+		`//../localhost/IPC$/x`,
+		`\\a\..\localhost\pipe\x`,
+		`\\..\..\server\mailslot\x`,
+		`\\server\..\share\pipe`,
+		`\\;LanmanRedirector\..\localhost\pipe\x`,
+		`\\localhost\..\;LanmanRedirector\server\pipe\x`,
+		// A first name of only spaces and periods leaves the server in doubt.
+		`\\...\localhost\pipe\x`,
+		`\\.. \localhost\pipe\x`,
+		`\\ \localhost\pipe\x`,
 		// With no server, Windows takes the first name as the share.
 		`\\\pipe\x`,
+		`\\\pipe\photos`,
 		`//\pipe/x`,
 		`\\\mailslot\x`,
 		`\\\IPC$\x`,
-		// A network provider's name comes before the server.
+		// A network provider's name comes before the server, and a name no
+		// provider has may be the server itself.
 		`\\;LanmanRedirector\localhost\pipe\x`,
 		`\\;LanmanRedirector\server\IPC$\x`,
+		`\\;LanmanRedirector\pipe\x`,
+		`\\;LanmanRedirector\;b\pipe\x`,
+		`\\;x\pipe\y`,
+		`\\;x\IPC$\y`,
+		`\\?\UNC\;x\mailslot\y`,
 		`\\;\server\pipe\x`,
 		`\\\;LanmanRedirector\localhost\pipe\x`,
 		`\\?\UNC\;LanmanRedirector\localhost\pipe\x`,
 		`\\.\UNC\;LanmanRedirector\localhost\pipe\x`,
 		`\??\UNC\;LanmanRedirector\localhost\mailslot\x`,
+		// The share is judged by its name, whichever redirector reads it.
+		`\\dav.example.com@SSL\pipe\Resized`,
+		`\\dav.example.com@8080\mailslot`,
 	} {
 		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
 			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
@@ -1237,12 +1260,11 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\pipe\share\x`,
 		`\\?\UNC\server\share\pipe\x`,
 		`\\server\..\pipes\x`,
-		`\\server\..\share\pipe`,
 		`\\\nas\photos`,
 		`\\\nas\photos\pipe`,
 		`\\;LanmanRedirector\nas\photos\pipe`,
-		`\\;LanmanRedirector\pipe\x`,
 		`\\nas\;x\pipe`,
+		`\\dav.example.com@SSL\DavWWWRoot\pipe`,
 		`C:\pipe\x`,
 		`\\?\C:\pipe\x`,
 	} {
