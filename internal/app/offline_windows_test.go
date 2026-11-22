@@ -61,7 +61,42 @@ var (
 	procDeleteAppContainerProfile  = userenv.NewProc("DeleteAppContainerProfile")
 	procDeriveAppContainerSidNamed = userenv.NewProc("DeriveAppContainerSidFromAppContainerName")
 	procGetAppContainerFolderPath  = userenv.NewProc("GetAppContainerFolderPath")
+
+	procOfflineOpenClipboard          = user32.NewProc("OpenClipboard")
+	procOfflineCloseClipboard         = user32.NewProc("CloseClipboard")
+	procOfflineGetOpenClipboardWindow = user32.NewProc("GetOpenClipboardWindow")
+	procOfflineGetWindowProcessID     = user32.NewProc("GetWindowThreadProcessId")
+	procOfflineGetForegroundWindow    = user32.NewProc("GetForegroundWindow")
 )
+
+// clipboardDiagnosis tries the clipboard for three seconds from this process
+// and says what it found. OpenClipboard fails with the same access error
+// whether another program holds the clipboard or the session denies this
+// process it, so a failure is told apart by whether any attempt succeeds, and
+// by whether a process outside the sandbox can open it.
+func clipboardDiagnosis() string {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	const attempts = 30
+	opened := 0
+	var last error
+	for range attempts {
+		if result, _, err := procOfflineOpenClipboard.Call(0); result != 0 {
+			procOfflineCloseClipboard.Call()
+			opened++
+		} else {
+			last = err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	var holder uint32
+	if window, _, _ := procOfflineGetOpenClipboardWindow.Call(); window != 0 {
+		procOfflineGetWindowProcessID.Call(window, uintptr(unsafe.Pointer(&holder)))
+	}
+	foreground, _, _ := procOfflineGetForegroundWindow.Call()
+	return fmt.Sprintf("process %d opened the clipboard %d of %d times (last error: %v; held by process %d; foreground window: %v)",
+		os.Getpid(), opened, attempts, last, holder, foreground != 0)
+}
 
 // securityCapabilities is SECURITY_CAPABILITIES with no capabilities, which
 // is what denies the process the network.
@@ -326,7 +361,7 @@ func TestCoreWorkflowsRunOffline(t *testing.T) {
 	before := profileFiles(t, profile)
 	code, output := runInContainer(t, sid, workspace, executable, "TestOfflineWorkflowsInContainer", listener.Addr().(*net.TCPAddr).Port)
 	if code != 0 || !strings.Contains(output, offlineDone) {
-		t.Fatalf("the sandboxed workflows exited with %d:\n%s", code, output)
+		t.Fatalf("the sandboxed workflows exited with %d; outside the sandbox, %s:\n%s", code, clipboardDiagnosis(), output)
 	}
 	if count := accepted.Load(); count != 0 {
 		t.Fatalf("the sandboxed process reached this machine's loopback listener %d time(s)", count)
@@ -570,7 +605,7 @@ func runOfflineCapture(t *testing.T, shell *auditShell, workspace string) string
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("no capture reached both destinations; the last outcome was %q", last)
+	t.Fatalf("no capture reached both destinations; the last outcome was %q; inside the sandbox, %s", last, clipboardDiagnosis())
 	return ""
 }
 
