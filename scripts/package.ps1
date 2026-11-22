@@ -19,7 +19,7 @@ if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
     $OutputDirectory = Join-Path $root $OutputDirectory
 }
 
-$toolchain = (Select-String -Path (Join-Path $root "go.mod") -Pattern '^toolchain (go\S+)$').Matches.Groups[1].Value
+$toolchain = (Select-String -LiteralPath (Join-Path $root "go.mod") -Pattern '^toolchain (go\S+)$').Matches.Groups[1].Value
 if (-not $toolchain) { throw "go.mod names no toolchain." }
 
 $executable = Join-Path $OutputDirectory "cybercute-dev-tools.exe"
@@ -34,10 +34,25 @@ foreach ($name in @("GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_EN
 try {
     # Reading them needs no particular toolchain, so none is fetched for it.
     $env:GOTOOLCHAIN = "local"
-    $configured = & go env -json @kept
-    if ($LASTEXITCODE -ne 0) { throw "go env failed with exit code $LASTEXITCODE" }
+    # go prints UTF-8, which PowerShell would decode with the console's code
+    # page, so a cache path with a non-ASCII name would come back as another
+    # path. Reading the bytes directly also needs no console to set one on.
+    $goEnv = New-Object System.Diagnostics.ProcessStartInfo
+    $goEnv.FileName = (Get-Command go -CommandType Application | Select-Object -First 1).Source
+    $goEnv.Arguments = "env -json " + ($kept -join " ")
+    $goEnv.UseShellExecute = $false
+    $goEnv.RedirectStandardOutput = $true
+    $goEnv.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $process = [System.Diagnostics.Process]::Start($goEnv)
+    try {
+        $configured = $process.StandardOutput.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "go env failed with exit code $($process.ExitCode)" }
+    } finally {
+        $process.Dispose()
+    }
     if ($configured) {
-        $values = ($configured -join "`n") | ConvertFrom-Json
+        $values = $configured | ConvertFrom-Json
         foreach ($name in $kept) {
             [Environment]::SetEnvironmentVariable($name, $values.$name)
         }
@@ -65,10 +80,12 @@ try {
     # shell had set.
     $env:GOOS = ""
     $env:GOARCH = ""
-    Push-Location $root
+    Push-Location -LiteralPath $root
     try {
-        $archive = & go run ./cmd/release package -exe $executable -packaging packaging -out $OutputDirectory
+        $printed = & go run ./cmd/release package -exe $executable -packaging packaging -out $OutputDirectory
         if ($LASTEXITCODE -ne 0) { throw "packaging failed with exit code $LASTEXITCODE" }
+        # Only the name is taken from what it printed, for the same reason.
+        $archive = Join-Path $OutputDirectory (Split-Path -Leaf $printed)
     } finally {
         Pop-Location
     }

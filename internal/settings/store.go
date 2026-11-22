@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,7 +286,10 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 
 	result.Settings = decoded
 	if s.createOnly {
+		// A copy of the sections, as the session's saves update the map it
+		// is given, and these must stay what the legacy file held.
 		s.inherited = decoded
+		s.inherited.Modules = maps.Clone(decoded.Modules)
 	}
 	kept, backup := source, ""
 	if migrated {
@@ -487,7 +491,9 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 }
 
 // folderReachable reports whether the nearest folder above path that exists
-// can be listed. Windows reports a file on a share that is down as not found,
+// answers, by listing or by refusing access: a profile may allow creating
+// files in a folder it denies listing, and a refusal comes from the volume
+// holding it. Windows reports a file on a share that is down as not found,
 // the same as one that is really gone, so a missing file counts as gone only
 // when that folder answers. The search goes up only past names that are really
 // absent or are not folders: a junction or link whose target is offline stops
@@ -499,8 +505,10 @@ func folderReachable(path string) bool {
 		info, err := os.Stat(folder)
 		switch {
 		case err == nil && info.IsDir():
-			return canList(folder)
+			return folderAnswers(folder)
 		case err == nil:
+		case errors.Is(err, os.ErrPermission):
+			return true
 		case !errors.Is(err, os.ErrNotExist) || networkPathMissing(err):
 			return false
 		default:
@@ -514,15 +522,16 @@ func folderReachable(path string) bool {
 	}
 }
 
-// canList reports whether folder can be opened and asked for an entry.
-func canList(folder string) bool {
+// folderAnswers reports whether folder, asked for an entry, gives one, has
+// none, or refuses access.
+func folderAnswers(folder string) bool {
 	file, err := os.Open(folder)
 	if err != nil {
-		return false
+		return errors.Is(err, os.ErrPermission)
 	}
 	defer file.Close()
 	_, err = file.Readdirnames(1)
-	return err == nil || errors.Is(err, io.EOF)
+	return err == nil || errors.Is(err, io.EOF) || errors.Is(err, os.ErrPermission)
 }
 
 // removeStaleTemporaries removes the temporary files that saves interrupted

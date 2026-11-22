@@ -31,7 +31,7 @@ if ($Configuration -eq "Debug") {
 }
 $buildArgs += "./cmd/gamedevtools"
 
-Push-Location $root
+Push-Location -LiteralPath $root
 try {
     & go @buildArgs
     if ($LASTEXITCODE -ne 0) {

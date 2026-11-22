@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -657,6 +658,50 @@ func TestFolderReachable(t *testing.T) {
 		}
 	}
 	t.Log("no absent drive letter to test with")
+}
+
+// A folder that refuses to be listed has answered, so a first run under a
+// locked-down profile is a first run, and its settings save.
+func TestStoreFirstRunWhereListingIsDeniedSaves(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("denies listing with a Windows access control entry")
+	}
+	root := filepath.Join(t.TempDir(), "Roaming")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	account, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := "*" + account.Uid
+	if out, err := exec.Command("icacls", root, "/deny", entry+":(RD)").CombinedOutput(); err != nil {
+		t.Fatalf("deny listing: %v: %s", err, out)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("icacls", root, "/remove:d", entry).CombinedOutput(); err != nil {
+			t.Errorf("allow listing again: %v: %s", err, out)
+		}
+	})
+	if _, err := os.ReadDir(root); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("listing the folder gave %v, want it denied", err)
+	}
+
+	paths := Paths{
+		ConfigFile:       filepath.Join(root, ui.AppName, "settings.json"),
+		LegacyConfigFile: filepath.Join(root, legacyFolderName, "settings.json"),
+	}
+	store := NewStore(paths)
+	result := store.Load()
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %v, want a plain first run", result.Warnings)
+	}
+	if err := store.Save(result.Settings); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err := os.Stat(paths.ConfigFile); err != nil {
+		t.Fatalf("the first save wrote no settings file: %v", err)
+	}
 }
 
 func TestStoreMalformedLegacySettingsAreRecoveredAndLeft(t *testing.T) {
