@@ -124,7 +124,10 @@ func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
 	root := t.TempDir()
 	usable := filepath.Join(root, "Shots")
 	manager, _ := newTestOptionsManager(t, filepath.Join(root, "settings.json"), usable)
-	for _, folder := range []string{`\\.\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`} {
+	for _, folder := range []string{
+		`\\.\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`, `\\\localhost\pipe\x`,
+		`\??\C:`, `\??\pipe`, `\??\NUL`, `\??\UNC`, `\??\Volume{00000000-0000-0000-0000-000000000000}`,
+	} {
 		if err := manager.SetOutputFolder(folder); err == nil || err.Error() != ui.OutputFolderRootInvalid {
 			t.Errorf("SetOutputFolder(%q) = %v, want the root refusal", folder, err)
 		}
@@ -140,6 +143,18 @@ func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
 			t.Errorf("FolderWarning = %q, want %q", got, want)
 		}
 		manager.options.OutputFolder = usable
+	}
+}
+
+// TestValidateStillRefusesARelativeFolder pins that accepting a stored \??\
+// path that names only a volume or device did not widen Validate to a path
+// that is relative, a drive's current folder among them.
+func TestValidateStillRefusesARelativeFolder(t *testing.T) {
+	for _, folder := range []string{`C:`, `C:Shots`, `Shots`, `.`, `\Shots`, `/??/C:`} {
+		options := DefaultOptions(folder)
+		if err := options.Validate(); err == nil || err.Error() != ui.OutputFolderNotAbsolute {
+			t.Errorf("Validate with output folder %q = %v, want the absolute-path refusal", folder, err)
+		}
 	}
 }
 

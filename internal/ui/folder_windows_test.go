@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -99,6 +100,104 @@ func TestCheckShellNameFindsAFolderTheShellMisnames(t *testing.T) {
 	}
 }
 
+// TestCheckShellNameIgnoresAFileWithPeriods pins that a file whose name is a
+// folder's plus periods does not refuse that folder: the picker returns only
+// folders, so such a file cannot be what the shell shortened.
+func TestCheckShellNameIgnoresAFileWithPeriods(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{`plain`, `parent`, `parent\child`} {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{`plain.`, `parent..`, `parent\child.`} {
+		if err := os.WriteFile(`\\?\`+root+`\`+name, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{root + `\plain`, root + `\parent`, root + `\parent\child`} {
+		if got := checkShellName(path); got != nil {
+			t.Errorf("checkShellName(%q) = %v, want none", path, got)
+		}
+	}
+}
+
+// TestHasPeriodSiblingFindsAFolderNamedOnlyPeriods pins what a drive or share
+// root is checked for, as the shell reports a folder named only periods there
+// as the root itself: such a folder counts, and neither a file of that name
+// nor the . and .. entries of a directory do.
+func TestHasPeriodSiblingFindsAFolderNamedOnlyPeriods(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{`holds`, `holds\...`, `file`, `empty`, `other`, `other\.config`} {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(`\\?\`+root+`\file\...`, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for folder, want := range map[string]bool{`holds`: true, `file`: false, `empty`: false, `other`: false} {
+		if got := hasPeriodSibling(`\\?\`+root+`\`+folder, ""); got != want {
+			t.Errorf("hasPeriodSibling(%q, \"\") = %v, want %v", folder, got, want)
+		}
+	}
+}
+
+// TestShortenedNameInChecksARootAndEveryName pins which folders are asked
+// about: a root for a folder of periods, and otherwise each name's parent.
+func TestShortenedNameInChecksARootAndEveryName(t *testing.T) {
+	for _, rest := range []string{``, `\`} {
+		asked := ""
+		shortenedNameIn(`\\?\D:`, rest, func(parent, name string) bool {
+			asked = parent + "|" + name
+			return false
+		})
+		if asked != `\\?\D:|` {
+			t.Errorf("for the rest %q the root check asked %q", rest, asked)
+		}
+	}
+	var mu sync.Mutex
+	asked := map[string]bool{}
+	got := shortenedNameIn(`\\?\D:`, `\a\b\c`, func(parent, name string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		asked[parent+"|"+name] = true
+		return name == "b"
+	})
+	if !got {
+		t.Error("a sibling of the middle name was not reported")
+	}
+	for _, want := range []string{`\\?\D:|a`, `\\?\D:\a|b`, `\\?\D:\a\b|c`} {
+		if !asked[want] {
+			t.Errorf("%q was not asked; asked %v", want, asked)
+		}
+	}
+}
+
+// TestShortenedNameInAsksAboutNamesTogether pins that a deep path's folders
+// are queried at once: each query here waits for all the others to start, so
+// asking one after another would never finish.
+func TestShortenedNameInAsksAboutNamesTogether(t *testing.T) {
+	var started sync.WaitGroup
+	started.Add(shellNameQueries)
+	finished := make(chan bool, 1)
+	go func() {
+		finished <- shortenedNameIn(`\\?\D:`, strings.Repeat(`\n`, shellNameQueries), func(string, string) bool {
+			started.Done()
+			started.Wait()
+			return false
+		})
+	}()
+	select {
+	case got := <-finished:
+		if got {
+			t.Error("no name has a sibling here")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the names were not queried together")
+	}
+}
+
 // TestCheckShellNameReadsAVolumeGUIDPath pins that a path the shell gives
 // through a volume GUID is checked as it is written, rather than rewritten as
 // a server's, which no name in it could then be found under.
@@ -186,6 +285,46 @@ func TestSavedFileGoneDoesNotBlameAnOfflineServer(t *testing.T) {
 		if got := savedFileGone(nil, failure(test.code)); got != test.want {
 			t.Errorf("savedFileGone(%v) = %v, want %v", test.code, got, test.want)
 		}
+	}
+}
+
+// TestSavedFileFailureDoesNotBlameAMissingDrive pins that a path not found on
+// a drive that is not there is reported as the drive, as the file may be
+// intact on it, while a path not found on a drive that answers is a file that
+// has gone. The volume's root is asked through a stand-in, so no drive or
+// server is touched.
+func TestSavedFileFailureDoesNotBlameAMissingDrive(t *testing.T) {
+	notFound := func(code windows.Errno) error {
+		return &fs.PathError{Op: "CreateFile", Path: `Z:\Shots\a.png`, Err: code}
+	}
+	missing := func(string) (fs.FileInfo, error) { return nil, notFound(windows.ERROR_PATH_NOT_FOUND) }
+	present := func(string) (fs.FileInfo, error) { return nil, nil }
+	for _, test := range []struct {
+		code windows.Errno
+		stat func(string) (fs.FileInfo, error)
+		want error
+	}{
+		{windows.ERROR_PATH_NOT_FOUND, missing, errSavedDriveMissing},
+		{windows.ERROR_PATH_NOT_FOUND, present, errSavedFileGone},
+		{windows.ERROR_FILE_NOT_FOUND, present, errSavedFileGone},
+	} {
+		if got := savedFileFailure(`Z:\Shots\a.png`, nil, notFound(test.code), test.stat); !errors.Is(got, test.want) {
+			t.Errorf("savedFileFailure(%v) = %v, want %v", test.code, got, test.want)
+		}
+	}
+	for target, root := range map[string]string{`Z:\Shots\a.png`: `Z:\`, `\\nas\art\Shots\a.png`: `\\nas\art\`} {
+		asked := ""
+		savedFileFailure(target, nil, notFound(windows.ERROR_PATH_NOT_FOUND), func(path string) (fs.FileInfo, error) {
+			asked = path
+			return nil, nil
+		})
+		if asked != root {
+			t.Errorf("for %q the root asked was %q, want %q", target, asked, root)
+		}
+	}
+	denied := notFound(windows.ERROR_ACCESS_DENIED)
+	if got := savedFileFailure(`Z:\Shots\a.png`, nil, denied, present); !errors.Is(got, denied) {
+		t.Errorf("another failure = %v, want it reported as it is", got)
 	}
 }
 

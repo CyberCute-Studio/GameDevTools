@@ -15,6 +15,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
@@ -494,6 +495,114 @@ func TestNativeViewRevealRunsOnceAtATime(t *testing.T) {
 	dispatcher.runNext(t)
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("a click after the reveal ended left %d reveals, want 2", got)
+	}
+}
+
+// TestNativeViewSaysARevealIsWaiting pins that a repeated Open Folder click
+// during a held reveal says so, once, and that the reveal's end clears the
+// message, while a notice shown since is kept.
+func TestNativeViewSaysARevealIsWaiting(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 2)}
+	view.dispatcher = dispatcher
+
+	release := make(chan struct{})
+	view.reveal = func(string) error {
+		<-release
+		return nil
+	}
+	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}, displayCaptureMessages)
+	result := view.status.Text()
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	if got := view.status.Text(); got != result {
+		t.Fatalf("status after the first click = %q, want the capture's result %q", got, result)
+	}
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	if got := view.status.Text(); !strings.Contains(got, ui.OpenFolderWaiting) {
+		t.Fatalf("status after a repeated click = %q, want the waiting message", got)
+	}
+	shown := view.status.Revision()
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	if got := view.status.Revision(); got != shown {
+		t.Fatal("a third click announced the waiting message again")
+	}
+	close(release)
+	dispatcher.runNext(t)
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status after the reveal ended = %q, want the waiting message cleared", got)
+	}
+
+	held := make(chan struct{})
+	view.reveal = func(string) error {
+		<-held
+		return nil
+	}
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	later := ui.Notice{Kind: ui.NoticeSuccess, Message: "A later notice."}
+	_ = view.status.Show(later, 0)
+	close(held)
+	dispatcher.runNext(t)
+	if got := view.status.Text(); got != later.Text() {
+		t.Fatalf("status after the reveal ended = %q, want the later notice kept", got)
+	}
+}
+
+// refusingDispatcher refuses its first posts as a full message queue does,
+// counting every attempt, and queues the rest.
+type refusingDispatcher struct {
+	queuedDispatcher
+	refusals int32
+	attempts atomic.Int32
+}
+
+func (d *refusingDispatcher) Post(task func()) error {
+	if d.attempts.Add(1) <= d.refusals {
+		return errors.New("not enough quota")
+	}
+	return d.queuedDispatcher.Post(task)
+}
+
+// TestNativeViewRetriesARefusedRevealOutcome pins that a refused post of a
+// reveal's outcome is retried, so its failure is shown and Open Folder works
+// again, and that the retries stop once the view is destroyed.
+func TestNativeViewRetriesARefusedRevealOutcome(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	dispatcher := &refusingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 1)}, refusals: 2}
+	view.dispatcher = dispatcher
+	view.reveal = func(string) error { return errors.New("explorer unavailable") }
+
+	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}, displayCaptureMessages)
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	dispatcher.runNext(t)
+	if got := view.status.Text(); !strings.Contains(got, "explorer unavailable") {
+		t.Fatalf("status after the retried post = %q, want the reveal's failure", got)
+	}
+	if view.revealing != "" {
+		t.Fatalf("revealing = %q after the outcome arrived, want none", view.revealing)
+	}
+
+	refused := &refusingDispatcher{queuedDispatcher: queuedDispatcher{tasks: make(chan func(), 1)}, refusals: 1 << 30}
+	view.dispatcher = refused
+	view.closed.Store(true)
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	deadline := time.Now().Add(5 * time.Second)
+	for refused.attempts.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(3 * revealPostRetryDelay)
+	if got := refused.attempts.Load(); got != 1 {
+		t.Fatalf("a destroyed view's refused post was tried %d times, want 1", got)
 	}
 }
 

@@ -110,7 +110,11 @@ func validateOutputFolder(folder string) error {
 	if strings.ContainsRune(folder, 0) || strings.ContainsRune(folder, '�') {
 		return errors.New(ui.OutputFolderInvalid)
 	}
-	if !pathform.IsAbs(folder) {
+	// A \??\ path that names only a volume or device, such as \??\C:, has no
+	// separator after its volume name, so IsAbs calls it relative. It is not
+	// malformed: like its \\?\ spelling, it is refused when chosen and at a
+	// save and reported at startup, and must not fail the whole settings file.
+	if !pathform.IsAbs(folder) && (!strings.HasPrefix(folder, `\??\`) || !pathform.NamesNoFolder(folder)) {
 		return errors.New(ui.OutputFolderNotAbsolute)
 	}
 	return nil

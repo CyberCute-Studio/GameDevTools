@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -161,10 +163,11 @@ func verbatimFolder(folder string) (string, int) {
 // the same path for both folders when v2 and v2.. stand side by side, so a
 // path with a name that has such a sibling is refused as one it may have
 // shortened, and so is a path with an empty name, which is how it reports a
-// folder named only periods: as its parent with a separator after it. A path
-// that does not exist and has no such name is a folder that has gone. A path
-// that cannot be inspected for another reason, such as a denied folder, is
-// left for the save to report.
+// folder named only periods: as its parent with a separator after it. On a
+// drive or share root that spelling is the root's own, so a root holding such
+// a folder is refused as well. A path that does not exist and has no such
+// name is a folder that has gone. A path that cannot be inspected for another
+// reason, such as a denied folder, is left for the save to report.
 func checkShellName(folder string) error {
 	verbatim, volume := verbatimFolder(folder)
 	rest := verbatim[volume:]
@@ -172,15 +175,8 @@ func checkShellName(folder string) error {
 		return errShellShortenedName
 	}
 	_, statErr := os.Stat(verbatim)
-	parent := verbatim[:volume]
-	for name := range strings.SplitSeq(rest, `\`) {
-		if name == "" {
-			continue
-		}
-		if hasPeriodSibling(parent, name) {
-			return errShellShortenedName
-		}
-		parent += `\` + name
+	if shortenedNameIn(verbatim[:volume], rest, hasPeriodSibling) {
+		return errShellShortenedName
 	}
 	if errors.Is(statErr, windows.ERROR_FILE_NOT_FOUND) || errors.Is(statErr, windows.ERROR_PATH_NOT_FOUND) {
 		return errChosenFolderGone
@@ -188,8 +184,47 @@ func checkShellName(folder string) error {
 	return nil
 }
 
-// hasPeriodSibling reports whether the folder holds an entry named name with
-// one or more periods after it.
+// shellNameQueries is how many folders shortenedNameIn asks about at once. It
+// covers the depth of an ordinary path, and bounds the threads that a drive
+// that has stopped responding can hold.
+const shellNameQueries = 8
+
+// shortenedNameIn reports whether the shell may have shortened a name in the
+// path below the root: whether has finds a sibling of any of its names, or,
+// for the root itself, a folder in it named only periods. The folders are
+// asked about together, so that the time shellNameWait allows does not run
+// out on a slow network share merely because the path is deep.
+func shortenedNameIn(root, rest string, has func(parent, name string) bool) bool {
+	if rest == "" || rest == `\` {
+		return has(root, "")
+	}
+	var found atomic.Bool
+	var queries sync.WaitGroup
+	slots := make(chan struct{}, shellNameQueries)
+	parent := root
+	for name := range strings.SplitSeq(rest, `\`) {
+		if name == "" {
+			continue
+		}
+		folder := parent
+		slots <- struct{}{}
+		queries.Go(func() {
+			defer func() { <-slots }()
+			if has(folder, name) {
+				found.Store(true)
+			}
+		})
+		parent += `\` + name
+	}
+	queries.Wait()
+	return found.Load()
+}
+
+// hasPeriodSibling reports whether the folder holds another folder named name
+// with one or more periods after it, or, for an empty name, a folder named
+// only periods. Only a folder counts, as the picker returns nothing else, so
+// a file with such a name cannot be what the shell shortened. The . and ..
+// entries a directory lists are not names of folders in it.
 func hasPeriodSibling(parent, name string) bool {
 	pattern, err := windows.UTF16PtrFromString(parent + `\` + name + ".*")
 	if err != nil {
@@ -203,7 +238,8 @@ func hasPeriodSibling(parent, name string) bool {
 	defer windows.FindClose(handle)
 	for {
 		found := windows.UTF16ToString(data.FileName[:])
-		if len(found) > len(name) && strings.EqualFold(strings.TrimRight(found, "."), name) {
+		if data.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && found != "." && found != ".." &&
+			len(found) > len(name) && strings.EqualFold(strings.TrimRight(found, "."), name) {
 			return true
 		}
 		if windows.FindNextFile(handle, &data) != nil {
@@ -255,8 +291,9 @@ func OpenFolder(folder string) error {
 // waiting. The file is named as shellPath spells it. Explorer's /select does
 // not read a path through a volume GUID, opening another folder without
 // reporting a failure, so such a file is refused with an error, and so is a
-// file that has been moved or deleted, for which Explorer opens some other
-// folder and reports success. Looking at the file and the shell's call each
+// file that has been moved or deleted or whose drive is not there
+// (savedFileFailure), for which Explorer opens some other folder and reports
+// success. Looking at the file and the shell's call each
 // block for as long as its drive does not respond, so the GUI thread calls it
 // on a goroutine of its own, which it keeps on one thread while it holds the
 // COM apartment it initializes, as OpenFolder does.
@@ -269,10 +306,7 @@ func RevealInFolder(path string) error {
 		return errNoDriveOrShare
 	}
 	info, err := os.Stat(path)
-	switch {
-	case savedFileGone(info, err):
-		return errSavedFileGone
-	case err != nil:
+	if err := savedFileFailure(target, info, err, os.Stat); err != nil {
 		return err
 	}
 	explorer, err := explorerPath()
@@ -296,10 +330,32 @@ func savedFileGone(info fs.FileInfo, err error) bool {
 	return info.IsDir()
 }
 
+// savedFileFailure is why a saved file that was looked at cannot be revealed,
+// or nil if it can. Windows also says the path was not found for a drive
+// letter with nothing behind it, as for a USB drive since unplugged, where
+// the file may be intact, so the volume's root is looked at, through stat,
+// before such a file is called gone. The target is the file's ordinary drive
+// or UNC spelling.
+func savedFileFailure(target string, info fs.FileInfo, err error, stat func(string) (fs.FileInfo, error)) error {
+	switch {
+	case savedFileGone(info, err):
+		if errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			if _, rootErr := stat(pathform.VolumeName(target) + `\`); rootErr != nil {
+				return errSavedDriveMissing
+			}
+		}
+		return errSavedFileGone
+	case err != nil:
+		return err
+	}
+	return nil
+}
+
 var (
 	// errShellShortenedName is BrowseForFolder's failure for a folder whose
-	// exact name the shell did not report.
-	errShellShortenedName = errors.New("Windows does not report the exact name of this folder, because a name in its path ends in a period. Choose another folder")
+	// exact name the shell did not report: one with a name ending in a
+	// period, or standing beside a folder whose name differs only by that.
+	errShellShortenedName = errors.New("Windows does not report the exact name of this folder, because a name in its path ends in a period or has a folder beside it with the same name and periods after it. Choose another folder")
 	// errChosenFolderGone is BrowseForFolder's failure for a folder no longer
 	// there when the picker closed.
 	errChosenFolderGone = errors.New("the chosen folder no longer exists. Choose another folder")
@@ -308,6 +364,9 @@ var (
 	errFolderNotResponding = errors.New("the drive of the chosen folder is not responding. Try again, or choose another folder")
 	// errSavedFileGone is RevealInFolder's failure for a file no longer there.
 	errSavedFileGone = errors.New("the saved file has been moved or deleted")
+	// errSavedDriveMissing is RevealInFolder's failure for a file on a drive
+	// that is not there now, where it may be intact.
+	errSavedDriveMissing = errors.New("the drive that holds the saved file is not available")
 	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a
 	// path File Explorer cannot be pointed at, as it has no drive or share.
 	errNoDriveOrShare = errors.New("File Explorer cannot show a path that has no drive letter or network share")

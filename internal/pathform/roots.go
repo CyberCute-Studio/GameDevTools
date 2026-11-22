@@ -73,10 +73,12 @@ func ShareRoot(volume string) bool {
 // volume, device, or server rather than a folder on it, or leads through a
 // device other than a drive, a volume, or a share, such as the named pipe
 // \\.\pipe\x, which creating the folder would open, or the same pipe on a
-// server, \\localhost\pipe\x (leadsThroughIPCShare).
+// server, \\localhost\pipe\x (leadsThroughIPCShare). A path with more than two
+// leading separators is refused too: Windows keeps the extra ones in the UNC
+// path it builds, so its server and share cannot be judged from the names.
 func NamesNoFolder(folder string) bool {
 	clean := SaveFolder(folder)
-	if RootDepth(clean) < 0 || leadsThroughIPCShare(clean) {
+	if strings.HasPrefix(clean, `\\\`) || RootDepth(clean) < 0 || leadsThroughIPCShare(clean) {
 		return true
 	}
 	for _, prefix := range []string{`\\.\`, `\??\`} {

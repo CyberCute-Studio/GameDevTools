@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -70,8 +72,15 @@ type NativeView struct {
 	inProgress       bool
 	savedPath        string
 	revealing        string // the file whose reveal is running, on the GUI thread
-	shown            bool
-	font             windows.Handle
+	// revealNotice is the status area's revision once a repeated Open Folder
+	// click last said the reveal is still waiting for its drive, which the
+	// reveal's end clears while it is still shown.
+	revealNotice uint64
+	// closed is set by NativeDestroy, after which a refused post can only
+	// fail again, so a reveal's outcome is no longer retried.
+	closed atomic.Bool
+	shown  bool
+	font   windows.Handle
 	// shortcutNotice is the status area's revision once
 	// presentShortcutFailure last showed a failure there, which
 	// NativeAnnounceNotice compares to tell whether a later notice replaced
@@ -401,7 +410,7 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		}
 		folder, chosen, err := n.browse(n.parent, ui.BrowseFolderDialogTitle)
 		if err != nil {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}, 0)
+			n.presentResult(err, "")
 			return true
 		}
 		if !chosen {
@@ -433,20 +442,29 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 // after the capture, so they run on a goroutine of their own, which must not
 // freeze the window (TECH-005). Its outcome returns through the dispatcher,
 // so without one nothing is started. A click while the same file's reveal is
-// still running is ignored, or a drive that recovers would open one Explorer
-// window for each. A failure is shown only while this file is still the
-// latest capture's, so that it cannot replace a newer capture's result.
+// still running starts no second one, or a drive that recovers would open one
+// Explorer window for each; it says once that the reveal is waiting, which
+// the reveal's end clears. A failure is shown only while this file is still
+// the latest capture's, so that it cannot replace a newer capture's result.
 func (n *NativeView) revealSaved() {
 	path, reveal := n.savedPath, n.reveal
-	if n.dispatcher == nil || path == n.revealing {
+	if n.dispatcher == nil {
+		return
+	}
+	if path == n.revealing {
+		if n.status.Revision() != n.revealNotice {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.OpenFolderWaiting}, 0)
+			n.revealNotice = n.status.Revision()
+		}
 		return
 	}
 	n.revealing = path
 	go func() {
 		err := reveal(path)
-		n.post(func() {
+		n.postRevealOutcome(func() {
 			if n.revealing == path {
 				n.revealing = ""
+				n.status.ClearShown(n.revealNotice)
 			}
 			if err != nil && n.savedPath == path {
 				_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
@@ -455,7 +473,24 @@ func (n *NativeView) revealSaved() {
 	}()
 }
 
+// revealPostRetryDelay paces the retries of a refused post of a reveal's
+// outcome.
+const revealPostRetryDelay = 100 * time.Millisecond
+
+// postRevealOutcome posts a reveal's outcome to the GUI thread. A refused post
+// — the thread's message queue is momentarily full — is retried after a pause,
+// as nothing else would end the reveal: Open Folder would stay inert for this
+// file and its failure unreported. Once the view is destroyed a post can only
+// fail, so the retries stop.
+func (n *NativeView) postRevealOutcome(task func()) {
+	if err := n.dispatcher.Post(task); err == nil || n.closed.Load() {
+		return
+	}
+	time.AfterFunc(revealPostRetryDelay, func() { n.postRevealOutcome(task) })
+}
+
 func (n *NativeView) NativeDestroy() {
+	n.closed.Store(true)
 	if n.hotkeys != nil {
 		n.hotkeys.Release()
 	}
