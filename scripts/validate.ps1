@@ -392,7 +392,9 @@ try {
     $displayMegapixels = [double](($displays | ForEach-Object { [double]$_.width * [double]$_.height } | Measure-Object -Sum).Sum) / 1e6
     if ($captureRuns.Count -gt 0 -and $clipboardRuns.Count -gt 0 -and $captureRuns[0]["MP"] -gt 0 -and $displayMegapixels -gt 0) {
         $fourKMegapixels = 3840 * 2160 / 1e6
-        $captureScale = [math]::Max(1, $fourKMegapixels / $displayMegapixels)
+        # [double]: Windows PowerShell resolves an integer 1 to Max(int, int),
+        # which truncates the ratio.
+        $captureScale = [math]::Max([double]1, $fourKMegapixels / $displayMegapixels)
         $captureMs = ($captureRuns[0]["ns/op"] / 1e6) * $captureScale
         $captureToClipboardMs = $captureMs + ($clipboardRuns[0]["ns/op"] / 1e6)
         $captureBasis = if ($captureScale -gt 1) { "scaled from" } else { "not scaled down from" }
