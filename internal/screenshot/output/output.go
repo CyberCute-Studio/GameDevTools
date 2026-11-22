@@ -176,11 +176,11 @@ func encode(writer io.Writer, img *image.RGBA, options screenshot.CaptureOptions
 }
 
 // save encodes img into a temporary file inside the destination folder and
-// finalizes it under a collision-free timestamped name. The final name is
-// claimed with a hard link, which the filesystem refuses to create over an
-// existing file, so a save racing another writer can never silently
-// overwrite it (SCR-065). On any failure the temporary file is removed, so
-// no partial image remains at a final or temporary path (SCR-066).
+// finalizes it under a collision-free timestamped name. claimName takes the
+// final name in a way the filesystem refuses over an existing file, so a save
+// racing another writer can never silently overwrite it (SCR-065). On any
+// failure the temporary file is removed, so no partial image remains at a
+// final or temporary path (SCR-066).
 func save(img *image.RGBA, options screenshot.CaptureOptions, now time.Time) (string, error) {
 	return saveWithEncoder(img, options, now, encode)
 }
@@ -240,11 +240,16 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 			name = fmt.Sprintf("%s_%d", base, suffix)
 		}
 		final := pathform.Join(folder, name+options.Format.Extension())
-		if err := os.Link(temporaryPath, final); err != nil {
+		moved, err := claimName(temporaryPath, final)
+		if err != nil {
 			if os.IsExist(err) {
 				continue
 			}
 			return "", kindError(KindWrite, "finalize saved file", err)
+		}
+		if moved {
+			succeeded = true
+			return final, nil
 		}
 		if err := os.Remove(temporaryPath); err != nil {
 			// The final file already exists and is complete; an orphaned
@@ -259,4 +264,25 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	return "", kindError(KindWrite, "choose filename",
 		fmt.Errorf("no unused filename found after %d attempts for %s", maxSuffixAttempts,
 			base+options.Format.Extension()))
+}
+
+// createHardLink is os.Link; tests replace it to stand in for a volume
+// without hard links.
+var createHardLink = os.Link
+
+// claimName gives the finished temporary file the final name without ever
+// replacing a file that has it, and reports whether it moved the file, which
+// leaves no temporary name to remove. A hard link is tried first. Volumes
+// such as FAT32 and exFAT have none, and the error differs by file system and
+// network redirector, so any failure other than the name being taken falls
+// back to a rename that refuses an existing name just as a link does.
+func claimName(temporary, final string) (moved bool, err error) {
+	err = createHardLink(temporary, final)
+	if err == nil || os.IsExist(err) {
+		return false, err
+	}
+	if err := moveNoReplace(temporary, final); err != nil {
+		return false, err
+	}
+	return true, nil
 }
