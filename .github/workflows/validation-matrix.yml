@@ -12,6 +12,7 @@ on:
       - scripts/validate.ps1
       - scripts/build.ps1
       - go.mod
+      - go.sum
       - internal/app/launch_windows_test.go
       - internal/display/display_windows_test.go
       - internal/imageresizer/job/bench_test.go

@@ -3,6 +3,7 @@
 package capture
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -450,15 +451,40 @@ func TestQuadrantSeamSamplesStraddleBothSeams(t *testing.T) {
 	}
 }
 
+// validationCaptureEnv names the file
+// TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries writes for
+// scripts/validate.ps1. The test runs only when it is set: it reads exact
+// pixels, and the script runs packages one at a time, while a plain go test
+// can run the overlay package's full-desktop tint beside it.
+const validationCaptureEnv = "GAMEDEVTOOLS_VALIDATION_CAPTURE"
+
+// capturedRegion is one region the test checked, as the validation report
+// records it. Displays are picker numbers, since a report holds no monitor name.
+type capturedRegion struct {
+	Displays      []int  `json:"displays"`
+	ScalesPercent []int  `json:"scalesPercent"`
+	X             int32  `json:"x"`
+	Y             int32  `json:"y"`
+	Width         int32  `json:"width"`
+	Height        int32  `json:"height"`
+	Result        string `json:"result"`
+}
+
 // TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries is AC-S02 on the
 // displays connected now. Over a preset-sized region centered on each display
 // and across each edge two displays share, it shows four windows of known
 // colors meeting at the region's center, on the shared edge when there is one,
 // so no window spans two displays. The capture must have the region's exact
 // physical size and each color on its own side of both seams, which a capture
-// that is displaced or scaled does not. It logs each display's scaling, so a
-// run on a mixed-DPI or negative-coordinate arrangement records what it covered.
+// that is displaced or scaled does not. It writes each region, the scaling of
+// the displays involved, and its result for the validation report, so a run on
+// a mixed-DPI or negative-coordinate arrangement records what it covered,
+// including a region it had to skip.
 func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
+	coveragePath := os.Getenv(validationCaptureEnv)
+	if coveragePath == "" {
+		t.Skipf("%s is not set; scripts/validate.ps1 runs this test", validationCaptureEnv)
+	}
 	const presetWidth, presetHeight = 1280, 720
 	// Each quadrant must be large enough that a seam's midpoint is clear of
 	// DWM's rounded corners.
@@ -474,8 +500,23 @@ func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func(t *testing.T, region display.Rect) {
+	covered := []capturedRegion{}
+	check := func(t *testing.T, region display.Rect, shown ...display.Display) {
 		t.Helper()
+		t.Cleanup(func() {
+			entry := capturedRegion{X: region.Left, Y: region.Top, Width: region.Width(), Height: region.Height(), Result: "passed"}
+			for _, item := range shown {
+				entry.Displays = append(entry.Displays, item.Number)
+				entry.ScalesPercent = append(entry.ScalesPercent, item.ScalePercent())
+			}
+			switch {
+			case t.Failed():
+				entry.Result = "failed"
+			case t.Skipped():
+				entry.Result = "skipped"
+			}
+			covered = append(covered, entry)
+		})
 		centerX, centerY := (region.Left+region.Right)/2, (region.Top+region.Bottom)/2
 		if min(centerX-region.Left, region.Right-centerX, centerY-region.Top, region.Bottom-centerY) < smallestQuadrant {
 			t.Skipf("%v is too small to compare pixels beside its seams", region)
@@ -523,7 +564,7 @@ func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
 			width, height := min(presetWidth, item.Bounds.Width()), min(presetHeight, item.Bounds.Height())
 			left := item.Bounds.Left + (item.Bounds.Width()-width)/2
 			top := item.Bounds.Top + (item.Bounds.Height()-height)/2
-			check(t, display.Rect{Left: left, Top: top, Right: left + width, Bottom: top + height})
+			check(t, display.Rect{Left: left, Top: top, Right: left + width, Bottom: top + height}, item)
 		})
 	}
 	for i, a := range displays {
@@ -534,9 +575,16 @@ func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
 			}
 			t.Run(a.DeviceName+" to "+b.DeviceName, func(t *testing.T) {
 				t.Logf("across %d%% and %d%% scaling: %v", a.ScalePercent(), b.ScalePercent(), region)
-				check(t, region)
+				check(t, region, a, b)
 			})
 		}
+	}
+	encoded, err := json.Marshal(covered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(coveragePath, encoded, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

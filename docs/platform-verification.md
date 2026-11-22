@@ -23,11 +23,11 @@ The script moves windows, takes the foreground, and **replaces the clipboard**. 
 - `-Architecture amd64` builds and runs the x64 release target, under emulation on Windows on Arm.
 - `-ReferenceMachine` asserts this is the PRD's reference machine and refuses one that is not: 64-bit Intel or AMD by its processor, four or more cores, 16 GB RAM installed, Windows 11, not elevated, and an SSD shown to hold both the system drive and the temporary files the benchmarks use. Windows does not report a CPU's age, so whoever passes the switch confirms the CPU is from 2020 or later; the result file records its name. A target missed or not measured then fails the run. Elsewhere, performance figures are recorded without failing it.
 
-A benchmark that cannot run on a machine, such as the 1280 × 720 preset on a smaller desktop, is recorded as skipped and its target as not measured.
+A benchmark that reports it cannot run on a machine, such as the 1280 × 720 preset on a smaller desktop, is recorded as skipped and its target as not measured. A benchmark that produces no result and reports no skip, such as one that was renamed, fails the run.
 
 The result file names the commit and working-tree state from before the first step, and the run fails if either changes before the last, including the content of a file that was already changed or untracked.
 
-The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) runs the same script on x64 Windows Server. It is started by hand, or by a pull request that changes the validation or the tests and benchmarks it runs.
+The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) runs the same script on x64 Windows Server. It is started by hand, or by a pull request that changes the script, the workflow, the build script, the Go module files, or a file holding a test or benchmark the script runs by name. A change to any other test file does not start it, although the script runs the whole suite.
 
 ## Environment of record
 
@@ -73,7 +73,7 @@ Each figure comes from the validation script's benchmarks on the environment of 
 | NFR-014 | Peak heap during that batch | 1 GiB budget | 220 MiB | 220 MiB |
 | NFR-014 | Peak runtime footprint during that batch | — | 233 MiB | 248 MiB |
 
-Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's throughput converted to that region's size.
+Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's time converted to that region's size. The figures above, from `54fdff4`, converted by the whole virtual desktop, 9.8 MP here, of which the displays hold 7.3 MP; parts no display covers are cheaper to read, so that reads the capture half low on this layout. The script now converts by the pixels the displays hold, so empty areas can raise the figure but not lower it.
 
 Figures vary between runs. Across the three full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a6bc3`, and `54fdff4`, mean launch ranged from 163 to 268 ms natively and 195 to 395 ms as x64, the mean Free Rectangle overlay from 63 to 104 ms natively and 70 to 146 ms as x64, and the batch from 7.5 to 11.4 s natively and 10.8 to 20.3 s as x64. Every run met every target it measured. The slowest-of-30 overlay figures exist only for `54fdff4`, and the x64 Free Rectangle's 240 ms is the narrowest margin in the table.
 
@@ -88,7 +88,7 @@ Figures vary between runs. Across the three full runs of each architecture on 20
 | Rotated display | **Not run** (QLT-04A) |
 | Live disconnect and reconnect during a selection (AC-S12) | **Not run** (QLT-04A); simulated topology changes covered by tests |
 
-`capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` captures a 1280 × 720 region on every connected display and across every shared edge, over four windows of known colors that meet at the region's center, and checks the size and the pixels on both sides of each seam, so a displaced or scaled capture fails. It logs each display's scaling, and the result file records the layout, so a QLT-04A run on other hardware reports what it covered without changing the test.
+`capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` captures a 1280 × 720 region on every connected display and across every shared edge, over four windows of known colors that meet at the region's center, and checks the size and the pixels on both sides of each seam, so a displaced or scaled capture fails. Only the validation script runs it, one package at a time, because an overlay test's full-desktop tint running beside it would change the pixels; a plain `go test ./...` skips it. The result file's `displays.captureCoverage` lists each region it checked, with the displays involved, their scaling, and whether it passed or was skipped, so a QLT-04A run on other hardware reports what it covered without changing the test.
 
 ## Results by requirement
 

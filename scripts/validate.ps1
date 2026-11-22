@@ -40,6 +40,10 @@ $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
     $OutputDirectory = Join-Path $root $OutputDirectory
 }
+# The run's own files would read as source changing under it.
+if ([System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/') -ieq [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')) {
+    throw "The output directory cannot be the repository root."
+}
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 $checks = New-Object System.Collections.ArrayList
@@ -160,7 +164,8 @@ function Get-SourceState {
     }
     return [pscustomobject]@{
         Commit      = (& git rev-parse HEAD).Trim()
-        Status      = (@(& git status --porcelain @pathspec) -join "`n")
+        # Named explicitly, since status.showUntrackedFiles can hide them.
+        Status      = (@(& git status --porcelain --untracked-files=normal @pathspec) -join "`n")
         Fingerprint = ($parts -join "`n")
     }
 }
@@ -234,8 +239,10 @@ try {
         $refused = @()
         if ($target -ne "amd64" -or $hostArchitecture -ne "amd64") { $refused += "it is not 64-bit Intel or AMD" }
         if ($cores -lt 4) { $refused += "it has $cores cores" }
-        # A virtual machine's fallback is usable memory, slightly under 16 GB.
-        if ($installedGiB -lt 15) { $refused += "it has $installedGiB GB of memory installed" }
+        # A virtual machine's fallback is usable memory, slightly under 16 GB;
+        # reported modules must add up to the full amount.
+        $requiredGiB = if ($installedBytes -gt 0) { 16 } else { 15 }
+        if ($installedGiB -lt $requiredGiB) { $refused += "it has $installedGiB GB of memory installed" }
         if ($systemDiskMedia -ne "SSD") { $refused += "its system drive is not shown to be an SSD ($systemDiskMedia)" }
         if ($tempDiskMedia -ne "SSD") { $refused += "the drive holding temporary files is not shown to be an SSD ($tempDiskMedia)" }
         if (-not $windows11Client) { $refused += "it is not Windows 11" }
@@ -250,8 +257,18 @@ try {
 
     # One package at a time: overlay tests show a topmost tint over the whole
     # desktop, which a capture test running beside them would read as pixels.
-    $suite = Invoke-Go -Name "test suite" -Arguments @("test", "-count=1", "-p", "1", "-timeout=30m", "./...") -Environment $goEnvironment
+    # The capture test named by this variable runs only here, for that reason,
+    # and writes each region it checked, so a skip reaches the report.
+    $coverageFile = Join-Path $OutputDirectory "capture-coverage-$PID.json"
+    $suiteEnvironment = $goEnvironment + @{ GAMEDEVTOOLS_VALIDATION_CAPTURE = $coverageFile }
+    $suite = Invoke-Go -Name "test suite" -Arguments @("test", "-count=1", "-p", "1", "-timeout=30m", "./...") -Environment $suiteEnvironment
     Add-Check -Name "combined test suite" -Passed $suite.Passed -Seconds $suite.Seconds
+    $captureCoverage = @()
+    if (Test-Path -LiteralPath $coverageFile) {
+        $captureCoverage = @(Get-Content -Raw -LiteralPath $coverageFile | ConvertFrom-Json | ForEach-Object { $_ })
+        Remove-Item -LiteralPath $coverageFile
+    }
+    Add-Check -Name "capture coverage recorded" -Passed ($captureCoverage.Count -gt 0) -Seconds 0
 
     $layoutFile = Join-Path $OutputDirectory "displays-$PID.json"
     $layoutEnvironment = $goEnvironment + @{ GAMEDEVTOOLS_VALIDATION_DISPLAYS = $layoutFile }
@@ -299,15 +316,21 @@ try {
     function Invoke-Benchmark {
         param([string]$Name, [string]$Package, [string]$Pattern, [string[]]$Options, [hashtable]$Environment, [string[]]$Expected)
         # The workflow's job limit allows for this timeout on every benchmark.
-        $arguments = @("test", "-run", "^$", "-timeout=15m", "-bench", $Pattern) + $Options + @($Package)
+        # -v is what prints a skip; it adds no work inside the timed loops.
+        $arguments = @("test", "-run", "^$", "-v", "-timeout=15m", "-bench", $Pattern) + $Options + @($Package)
         $result = Invoke-Go -Name "benchmark: $Name" -Arguments $arguments -Environment $Environment
-        # A skip also exits 0, so a benchmark with no result line did not run.
-        # That is recorded as skipped: its target reads not-measured, which only
-        # a reference-machine run treats as a failure.
+        # A skip exits 0 with no result line, but so does a benchmark that was
+        # renamed or removed. Only a reported skip is recorded as skipped: its
+        # target reads not-measured, which only a reference-machine run treats
+        # as a failure. Any other missing result fails the check.
         $missing = @($Expected | Where-Object { (Read-Benchmark -Lines $result.Lines -Name $_).Count -eq 0 })
-        $skipped = $result.Passed -and ($missing.Count -gt 0)
-        $detail = if ($skipped) { "no result from $($missing -join ', ')" } else { "" }
-        Add-Check -Name "benchmark: $Name" -Passed ($result.Passed -and -not $skipped) -Skipped $skipped -Seconds $result.Seconds -Detail $detail
+        $unexplained = @($missing | Where-Object {
+            $benchmark = $_
+            @($result.Lines | Where-Object { $_ -match "^\s*--- SKIP: $benchmark(-\d+)?(\s|$)" }).Count -eq 0
+        })
+        $skipped = $result.Passed -and ($missing.Count -gt 0) -and ($unexplained.Count -eq 0)
+        $detail = if ($skipped) { "skipped: $($missing -join ', ')" } elseif ($result.Passed -and $unexplained.Count -gt 0) { "no result from $($unexplained -join ', ')" } else { "" }
+        Add-Check -Name "benchmark: $Name" -Passed ($result.Passed -and ($missing.Count -eq 0)) -Skipped $skipped -Seconds $result.Seconds -Detail $detail
         return $result
     }
 
@@ -332,14 +355,18 @@ try {
     $presetMaxMs = if ($presetRuns.Count -gt 0) { $presetRuns[0]["max-ms"] } else { $null }
 
     # NFR-012 is defined at 3840 x 2160. The capture benchmark reads the whole
-    # virtual desktop, so its throughput is converted to that region's bytes,
-    # and the measure says so and names the size actually captured.
+    # virtual desktop, whose areas no display covers are cheaper to read, so
+    # its time is scaled by the pixels the displays hold. That charges the empty
+    # areas' time to those pixels, so they can raise the estimate but not lower
+    # it, and the measure says so and names the sizes.
     $captureToClipboardMs = $null
     $captureToClipboardMeasure = "3840 x 2160 capture to clipboard"
-    if ($captureRuns.Count -gt 0 -and $clipboardRuns.Count -gt 0 -and $captureRuns[0]["MB/s"] -gt 0 -and $captureRuns[0]["MP"] -gt 0) {
-        $fourKMegabytes = 3840 * 2160 * 4 / 1e6
-        $captureToClipboardMs = ($fourKMegabytes / $captureRuns[0]["MB/s"] * 1000) + ($clipboardRuns[0]["ns/op"] / 1e6)
-        $captureToClipboardMeasure += ", capture time converted from a $($captureRuns[0]["MP"].ToString("0.0", $invariant)) MP desktop capture"
+    $displayMegapixels = [double](($displays | ForEach-Object { [double]$_.width * [double]$_.height } | Measure-Object -Sum).Sum) / 1e6
+    if ($captureRuns.Count -gt 0 -and $clipboardRuns.Count -gt 0 -and $captureRuns[0]["MP"] -gt 0 -and $displayMegapixels -gt 0) {
+        $fourKMegapixels = 3840 * 2160 / 1e6
+        $captureMs = ($captureRuns[0]["ns/op"] / 1e6) * $fourKMegapixels / $displayMegapixels
+        $captureToClipboardMs = $captureMs + ($clipboardRuns[0]["ns/op"] / 1e6)
+        $captureToClipboardMeasure += ", capture time scaled from a $($captureRuns[0]["MP"].ToString("0.0", $invariant)) MP desktop capture holding $($displayMegapixels.ToString("0.0", $invariant)) MP of display pixels"
     }
 
     $batchMs = $null
@@ -370,7 +397,8 @@ try {
     # Each step compiled the working tree as it stood then, so a change during
     # the run would leave results from more than one state of the source.
     $sourceAtEnd = Get-SourceState
-    $sourceUnchanged = ($sourceAtEnd.Commit -eq $sourceAtStart.Commit) -and ($sourceAtEnd.Status -eq $sourceAtStart.Status) -and ($sourceAtEnd.Fingerprint -eq $sourceAtStart.Fingerprint)
+    # Case-sensitive, because Go's filename build constraints are.
+    $sourceUnchanged = ($sourceAtEnd.Commit -ceq $sourceAtStart.Commit) -and ($sourceAtEnd.Status -ceq $sourceAtStart.Status) -and ($sourceAtEnd.Fingerprint -ceq $sourceAtStart.Fingerprint)
     Add-Check -Name "source unchanged during the run" -Passed $sourceUnchanged -Seconds 0
 
     $checksPassed = @($checks | Where-Object { -not $_.passed -and -not $_.skipped }).Count -eq 0
@@ -378,7 +406,7 @@ try {
     $passed = $checksPassed -and ((-not $ReferenceMachine) -or $targetsMet)
 
     $report = [ordered]@{
-        schema         = 3
+        schema         = 4
         recordedUtc    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", $invariant)
         commit         = $sourceAtStart.Commit
         dirtyTree      = [bool]$sourceAtStart.Status
@@ -406,6 +434,7 @@ try {
             scalesPercent       = $scales
             mixedScaling        = ($scales.Count -gt 1)
             negativeCoordinates = $negative
+            captureCoverage     = $captureCoverage
         }
         checks         = $checks
         targets        = $targets
@@ -424,6 +453,9 @@ try {
         $state = if ($check.passed) { "pass" } elseif ($check.skipped) { "skip" } else { "FAIL" }
         $note = if ($check.detail) { " ($($check.detail))" } else { "" }
         Write-Host ("{0,-6} {1}{2}" -f $state, $check.name, $note)
+    }
+    foreach ($item in $captureCoverage) {
+        Write-Host ("capture {0}: display {1} at {2}%" -f $item.result, ($item.displays -join " to "), ($item.scalesPercent -join "% to "))
     }
     foreach ($item in $targets) {
         Write-Host ("{0,-12} {1}: {2} {3} (limit {4}) - {5}" -f $item.status, $item.requirement, $item.value, $item.unit, $item.limit, $item.measure)
