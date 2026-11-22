@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -64,12 +63,12 @@ func TestInitializeCOMBalancesEverySuccessfulCall(t *testing.T) {
 	}
 }
 
-// TestCheckShellNameFindsAFolderTheShellMisnames pins the picker's check. The
+// TestCheckShellNameRefusesANameItCannotConfirm pins the picker's check. The
 // shell reports a folder without the periods its name ends in, so each path
 // below is what it gives for the folder in the comment.
-func TestCheckShellNameFindsAFolderTheShellMisnames(t *testing.T) {
+func TestCheckShellNameRefusesANameItCannotConfirm(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{`v2..`, `Real.`, `both`, `both..`, `Mid.`, `Mid.\Sub`, `plain`, `plain.d`, `Shots `, `x .`, `dots`, `dots\...`, `dots\beside`} {
+	for _, name := range []string{`v2..`, `Real.`, `Mid.`, `Mid.\Sub`, `plain`, `plain.d`, `Shots `, `x .`, `dots`, `dots\...`, `dots\beside`} {
 		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -78,123 +77,23 @@ func TestCheckShellNameFindsAFolderTheShellMisnames(t *testing.T) {
 		path string
 		want error
 	}{
-		{root + `\v2`, errShellShortenedName},      // v2.., with no v2 beside it
-		{root + `\Real`, errShellShortenedName},    // Real.
-		{root + `\both`, errShellShortenedName},    // both.. or both, which cannot be told apart
-		{root + `\Mid\Sub`, errShellShortenedName}, // Sub, inside Mid.
-		{root + `\x `, errShellShortenedName},      // x .
-		{root + `\dots\`, errShellShortenedName},   // ..., which it gives as its parent
-		{root + `\plain`, nil},                     // a sibling with an extension is another name
+		{root + `\v2`, errShellNameUnconfirmed},      // v2..
+		{root + `\Real`, errShellNameUnconfirmed},    // Real.
+		{root + `\Mid\Sub`, errShellNameUnconfirmed}, // Sub, inside Mid.
+		{root + `\x `, errShellNameUnconfirmed},      // x .
+		{root + `\dots\`, errShellNameUnconfirmed},   // ..., which it gives as its parent
+		{root + `\deleted`, errShellNameUnconfirmed}, // a folder removed since it was chosen
+		{root + `\plain`, nil},
 		{root + `\plain.d`, nil},
 		{root + `\Shots `, nil}, // reported whole; the output rules refuse it
 		{root + `\dots`, nil},   // the parent itself, reported without a separator
 		{root + `\dots\beside`, nil},
 		{root, nil},
 		{filepath.VolumeName(root) + `\`, nil},
-		{root + `\deleted`, errChosenFolderGone}, // no name in the path ends in a period
-		{root + `\deleted\inner`, errChosenFolderGone},
 	} {
 		if got := checkShellName(test.path); !errors.Is(got, test.want) {
 			t.Errorf("checkShellName(%q) = %v, want %v", test.path, got, test.want)
 		}
-	}
-}
-
-// TestCheckShellNameIgnoresAFileWithPeriods pins that a file whose name is a
-// folder's plus periods does not refuse that folder: the picker returns only
-// folders, so such a file cannot be what the shell shortened.
-func TestCheckShellNameIgnoresAFileWithPeriods(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{`plain`, `parent`, `parent\child`} {
-		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, name := range []string{`plain.`, `parent..`, `parent\child.`} {
-		if err := os.WriteFile(`\\?\`+root+`\`+name, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, path := range []string{root + `\plain`, root + `\parent`, root + `\parent\child`} {
-		if got := checkShellName(path); got != nil {
-			t.Errorf("checkShellName(%q) = %v, want none", path, got)
-		}
-	}
-}
-
-// TestHasPeriodSiblingFindsAFolderNamedOnlyPeriods pins what a drive or share
-// root is checked for, as the shell reports a folder named only periods there
-// as the root itself: such a folder counts, and neither a file of that name
-// nor the . and .. entries of a directory do.
-func TestHasPeriodSiblingFindsAFolderNamedOnlyPeriods(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{`holds`, `holds\...`, `file`, `empty`, `other`, `other\.config`} {
-		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(`\\?\`+root+`\file\...`, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for folder, want := range map[string]bool{`holds`: true, `file`: false, `empty`: false, `other`: false} {
-		if got := hasPeriodSibling(`\\?\`+root+`\`+folder, ""); got != want {
-			t.Errorf("hasPeriodSibling(%q, \"\") = %v, want %v", folder, got, want)
-		}
-	}
-}
-
-// TestShortenedNameInChecksARootAndEveryName pins which folders are asked
-// about: a root for a folder of periods, and otherwise each name's parent.
-func TestShortenedNameInChecksARootAndEveryName(t *testing.T) {
-	for _, rest := range []string{``, `\`} {
-		asked := ""
-		shortenedNameIn(`\\?\D:`, rest, func(parent, name string) bool {
-			asked = parent + "|" + name
-			return false
-		})
-		if asked != `\\?\D:|` {
-			t.Errorf("for the rest %q the root check asked %q", rest, asked)
-		}
-	}
-	var mu sync.Mutex
-	asked := map[string]bool{}
-	got := shortenedNameIn(`\\?\D:`, `\a\b\c`, func(parent, name string) bool {
-		mu.Lock()
-		defer mu.Unlock()
-		asked[parent+"|"+name] = true
-		return name == "b"
-	})
-	if !got {
-		t.Error("a sibling of the middle name was not reported")
-	}
-	for _, want := range []string{`\\?\D:|a`, `\\?\D:\a|b`, `\\?\D:\a\b|c`} {
-		if !asked[want] {
-			t.Errorf("%q was not asked; asked %v", want, asked)
-		}
-	}
-}
-
-// TestShortenedNameInAsksAboutNamesTogether pins that a deep path's folders
-// are queried at once: each query here waits for all the others to start, so
-// asking one after another would never finish.
-func TestShortenedNameInAsksAboutNamesTogether(t *testing.T) {
-	var started sync.WaitGroup
-	started.Add(shellNameQueries)
-	finished := make(chan bool, 1)
-	go func() {
-		finished <- shortenedNameIn(`\\?\D:`, strings.Repeat(`\n`, shellNameQueries), func(string, string) bool {
-			started.Done()
-			started.Wait()
-			return false
-		})
-	}()
-	select {
-	case got := <-finished:
-		if got {
-			t.Error("no name has a sibling here")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the names were not queried together")
 	}
 }
 
@@ -219,8 +118,8 @@ func TestCheckShellNameReadsAVolumeGUIDPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	below := root[len(filepath.VolumeName(root)):]
-	if got := checkShellName(volume + below + `\v2`); !errors.Is(got, errShellShortenedName) {
-		t.Errorf("a shortened name through a volume GUID = %v, want %v", got, errShellShortenedName)
+	if got := checkShellName(volume + below + `\v2`); !errors.Is(got, errShellNameUnconfirmed) {
+		t.Errorf("a shortened name through a volume GUID = %v, want %v", got, errShellNameUnconfirmed)
 	}
 	if got := checkShellName(volume + below + `\plain`); got != nil {
 		t.Errorf("an ordinary folder through a volume GUID = %v, want none", got)
@@ -240,8 +139,8 @@ func TestAwaitShellNameCheckDoesNotWaitForAStalledDrive(t *testing.T) {
 	if err := awaitShellNameCheck(`C:\Shots`, stalled, 10*time.Millisecond); !errors.Is(err, errFolderNotResponding) {
 		t.Errorf("a stalled check = %v, want %v", err, errFolderNotResponding)
 	}
-	refused := func(string) error { return errShellShortenedName }
-	if err := awaitShellNameCheck(`C:\Shots`, refused, time.Minute); !errors.Is(err, errShellShortenedName) {
+	refused := func(string) error { return errShellNameUnconfirmed }
+	if err := awaitShellNameCheck(`C:\Shots`, refused, time.Minute); !errors.Is(err, errShellNameUnconfirmed) {
 		t.Errorf("a finished check = %v, want its own result", err)
 	}
 	accepted := func(string) error { return nil }

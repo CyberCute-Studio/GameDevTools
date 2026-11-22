@@ -203,7 +203,6 @@ const (
 	DisplayRequired        = "Choose a display before capturing."
 	OpenFolderAction       = "Open Folder"
 	OpenFolderFailed       = "The folder of the saved screenshot could not be opened: %v"
-	OpenFolderWaiting      = "Still waiting for the drive of the saved screenshot to respond."
 
 	CaptureInProgress      = "A capture is already in progress. Wait for it to finish."
 	CaptureFailed          = "The display could not be captured: %v"

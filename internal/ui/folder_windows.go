@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -91,10 +89,10 @@ func initializeCOM() (uninitialize func()) {
 // BrowseForFolder opens the modal folder picker and returns the chosen
 // absolute folder. It reports false without an error when the user cancels.
 // The shell reports a folder without the periods its name ends in, so a
-// folder named v2.. comes back as v2, which is another folder or none, and
-// one named only periods comes back as its parent. Such a choice is refused
-// with an error rather than returned, as is one that has since gone or whose
-// drive does not answer within shellNameWait.
+// folder named v2.. comes back as v2, and one named only periods as its
+// parent with a separator after it. A reported path that does not exist, or
+// that has that separator, is refused with an error rather than returned, as
+// is one whose drive does not answer within shellNameWait.
 func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) {
 	// The picker requires an initialized COM apartment on the calling thread.
 	defer initializeCOM()()
@@ -159,93 +157,22 @@ func verbatimFolder(folder string) (string, int) {
 }
 
 // checkShellName reports why a path the shell gave for a chosen folder cannot
-// be stored. The shell does not say when it has shortened a name, and reports
-// the same path for both folders when v2 and v2.. stand side by side, so a
-// path with a name that has such a sibling is refused as one it may have
-// shortened, and so is a path with an empty name, which is how it reports a
-// folder named only periods: as its parent with a separator after it. On a
-// drive or share root that spelling is the root's own, so a root holding such
-// a folder is refused as well. A path that does not exist and has no such
-// name is a folder that has gone. A path that cannot be inspected for another
-// reason, such as a denied folder, is left for the save to report.
+// be stored. The shell does not say when it has shortened a name, so a path
+// that is not there, or that has an empty name, is refused. A path that cannot
+// be inspected for another reason, such as a denied folder, is left for the
+// save to report. A shortened name that happens to match a real folder, as
+// when v2 and v2.. stand side by side, cannot be told from that folder; File
+// Explorer cannot create such names.
 func checkShellName(folder string) error {
 	verbatim, volume := verbatimFolder(folder)
 	rest := verbatim[volume:]
 	if len(rest) > 1 && (strings.HasSuffix(rest, `\`) || strings.Contains(rest, `\\`)) {
-		return errShellShortenedName
+		return errShellNameUnconfirmed
 	}
-	_, statErr := os.Stat(verbatim)
-	if shortenedNameIn(verbatim[:volume], rest, hasPeriodSibling) {
-		return errShellShortenedName
-	}
-	if errors.Is(statErr, windows.ERROR_FILE_NOT_FOUND) || errors.Is(statErr, windows.ERROR_PATH_NOT_FOUND) {
-		return errChosenFolderGone
+	if _, err := os.Stat(verbatim); errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return errShellNameUnconfirmed
 	}
 	return nil
-}
-
-// shellNameQueries is how many folders shortenedNameIn asks about at once. It
-// covers the depth of an ordinary path, and bounds the threads that a drive
-// that has stopped responding can hold.
-const shellNameQueries = 8
-
-// shortenedNameIn reports whether the shell may have shortened a name in the
-// path below the root: whether has finds a sibling of any of its names, or,
-// for the root itself, a folder in it named only periods. The folders are
-// asked about together, so that the time shellNameWait allows does not run
-// out on a slow network share merely because the path is deep.
-func shortenedNameIn(root, rest string, has func(parent, name string) bool) bool {
-	if rest == "" || rest == `\` {
-		return has(root, "")
-	}
-	var found atomic.Bool
-	var queries sync.WaitGroup
-	slots := make(chan struct{}, shellNameQueries)
-	parent := root
-	for name := range strings.SplitSeq(rest, `\`) {
-		if name == "" {
-			continue
-		}
-		folder := parent
-		slots <- struct{}{}
-		queries.Go(func() {
-			defer func() { <-slots }()
-			if has(folder, name) {
-				found.Store(true)
-			}
-		})
-		parent += `\` + name
-	}
-	queries.Wait()
-	return found.Load()
-}
-
-// hasPeriodSibling reports whether the folder holds another folder named name
-// with one or more periods after it, or, for an empty name, a folder named
-// only periods. Only a folder counts, as the picker returns nothing else, so
-// a file with such a name cannot be what the shell shortened. The . and ..
-// entries a directory lists are not names of folders in it.
-func hasPeriodSibling(parent, name string) bool {
-	pattern, err := windows.UTF16PtrFromString(parent + `\` + name + ".*")
-	if err != nil {
-		return false
-	}
-	var data windows.Win32finddata
-	handle, err := windows.FindFirstFile(pattern, &data)
-	if err != nil {
-		return false
-	}
-	defer windows.FindClose(handle)
-	for {
-		found := windows.UTF16ToString(data.FileName[:])
-		if data.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 && found != "." && found != ".." &&
-			len(found) > len(name) && strings.EqualFold(strings.TrimRight(found, "."), name) {
-			return true
-		}
-		if windows.FindNextFile(handle, &data) != nil {
-			return false
-		}
-	}
 }
 
 // OpenFolder opens the given folder in File Explorer. It runs only on
@@ -352,13 +279,9 @@ func savedFileFailure(target string, info fs.FileInfo, err error, stat func(stri
 }
 
 var (
-	// errShellShortenedName is BrowseForFolder's failure for a folder whose
-	// exact name the shell did not report: one with a name ending in a
-	// period, or standing beside a folder whose name differs only by that.
-	errShellShortenedName = errors.New("Windows does not report the exact name of this folder, because a name in its path ends in a period or has a folder beside it with the same name and periods after it. Choose another folder")
-	// errChosenFolderGone is BrowseForFolder's failure for a folder no longer
-	// there when the picker closed.
-	errChosenFolderGone = errors.New("the chosen folder no longer exists. Choose another folder")
+	// errShellNameUnconfirmed is BrowseForFolder's failure for a folder whose
+	// exact name the shell's report could not confirm.
+	errShellNameUnconfirmed = errors.New("Windows could not confirm this folder's exact name, which happens when a name in its path ends in a period or the folder has been removed. Choose another folder")
 	// errFolderNotResponding is BrowseForFolder's failure for a folder whose
 	// drive did not answer in time for its name to be confirmed.
 	errFolderNotResponding = errors.New("the drive of the chosen folder is not responding. Try again, or choose another folder")
