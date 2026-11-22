@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
@@ -190,6 +191,101 @@ func TestRestoreKeepsAPresetCreatedAfterAnUnwrittenAdoption(t *testing.T) {
 	}
 	if want := []Preset{created}; !slices.Equal(stored.Custom, want) {
 		t.Fatalf("kept presets = %+v, want only the one the session created, %+v", stored.Custom, want)
+	}
+}
+
+// TestRestoreTellsAnAddedPresetFromADeletedOne pins what a restore keeps of a
+// preset the legacy file holds and a settings file found later does not. With
+// the legacy file written last, an earlier build added it after that settings
+// file, and it is kept. With the settings file written last, it was deleted
+// there, and it stays deleted.
+func TestRestoreTellsAnAddedPresetFromADeletedOne(t *testing.T) {
+	const (
+		sharedID = "custom.00000000000000000000000000000001"
+		onlyID   = "custom.00000000000000000000000000000002"
+	)
+	entry := func(id, name string) string {
+		return `{"id":"` + id + `","name":"` + name + `","width":64,"height":64,"resizeMode":"fit"}`
+	}
+	file := func(entries ...string) string {
+		return `{"version":1,"shell":{"selectedModule":"image-resizer","window":{"x":0,"y":0,"width":1100,"height":700,"maximized":false,"hasPosition":false}},` +
+			`"modules":{"image-resizer":{"presets":{"version":1,"custom":[` + strings.Join(entries, ",") + `]}}}}`
+	}
+	shared := Preset{ID: sharedID, Name: "Shared", Width: 64, Height: 64, ResizeMode: ResizeFit}
+	only := Preset{ID: onlyID, Name: "Only", Width: 64, Height: 64, ResizeMode: ResizeFit}
+	for name, test := range map[string]struct {
+		settingsAge time.Duration
+		want        []Preset
+	}{
+		"legacy file written last":   {settingsAge: time.Hour, want: []Preset{shared, only}},
+		"settings file written last": {settingsAge: -time.Hour, want: []Preset{shared}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			paths := settings.Paths{
+				ConfigFile:       filepath.Join(root, "New", "settings.json"),
+				LegacyConfigFile: filepath.Join(root, "Old", "settings.json"),
+			}
+			if err := os.Mkdir(filepath.Dir(paths.LegacyConfigFile), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.LegacyConfigFile, []byte(file(entry(sharedID, "Shared"), entry(onlyID, "Only"))), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// A file where the settings folder belongs stops the adoption's write.
+			folder := filepath.Dir(paths.ConfigFile)
+			if err := os.WriteFile(folder, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			store := settings.NewStore(paths)
+			loaded := store.Load()
+			if loaded.Unwritten == "" {
+				t.Fatalf("the adoption was written: %+v", loaded)
+			}
+			if err := os.Remove(folder); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(folder, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.ConfigFile, []byte(file(entry(sharedID, "Shared"))), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			if err := os.Chtimes(paths.LegacyConfigFile, now, now); err != nil {
+				t.Fatal(err)
+			}
+			written := now.Add(-test.settingsAge)
+			if err := os.Chtimes(paths.ConfigFile, written, written); err != nil {
+				t.Fatal(err)
+			}
+			session := loaded.Settings
+			if err := store.Save(session); err == nil {
+				t.Fatal("a save replaced a settings file the session never loaded")
+			}
+
+			module := string(shell.ModuleImageResizer)
+			inherited := store.Inherited()
+			restored, _, err := store.Restore(session, func(replaced settings.Settings) (settings.Settings, error) {
+				section, err := KeptSection(shell.ModuleImageResizer, replaced.Modules[module], session.Modules[module], inherited.Modules[module])
+				if err != nil {
+					return settings.Settings{}, err
+				}
+				value := settings.Default()
+				value.Modules[module] = section
+				return value, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := decodeSection(shell.ModuleImageResizer, restored.Modules[module])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(stored.Custom, test.want) {
+				t.Fatalf("kept presets = %+v, want %+v", stored.Custom, test.want)
+			}
+		})
 	}
 }
 

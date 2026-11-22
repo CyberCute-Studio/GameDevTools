@@ -34,7 +34,7 @@ $executable = Join-Path $OutputDirectory "cybercute-dev-tools.exe"
 # them to build at all, so they outlive the env file being turned off below.
 $kept = "GOPROXY", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOVCS", "GOAUTH", "GOMODCACHE", "GOCACHE"
 $saved = @{}
-foreach ($name in @("GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140", "GOWORK") + $kept) {
+foreach ($name in @("GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140", "GOWORK", "GO111MODULE") + $kept) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 try {
@@ -68,9 +68,11 @@ try {
     # file is turned off: nothing else in this machine's Go configuration can
     # change the bytes or raise the CPU the executable needs above baseline
     # x64. A go.work file in a parent folder could change the modules linked,
-    # so workspace mode is off too.
+    # so workspace mode is off too, and module mode is on, as GO111MODULE=off
+    # would build from GOPATH rather than the versions go.sum pins.
     $env:GOENV = "off"
     $env:GOWORK = "off"
+    $env:GO111MODULE = "on"
     $env:GOTOOLCHAIN = $toolchain
     $env:GOFLAGS = ""
     $env:GOEXPERIMENT = ""

@@ -48,6 +48,23 @@ func (e notRestored) Error() string { return e.err.Error() }
 
 func (e notRestored) Unwrap() []error { return []error{ErrNotRestored, e.err} }
 
+// settingsFileFound marks a write that only creates the settings file finding
+// one already there. Only the no-replace rename reports it: creating the
+// folder before it also fails with an error matching os.ErrExist when a
+// junction whose target is gone holds the folder's name, which says nothing
+// about a settings file.
+type settingsFileFound struct{ err error }
+
+func (e settingsFileFound) Error() string { return e.err.Error() }
+
+func (e settingsFileFound) Unwrap() error { return e.err }
+
+// foundSettingsFile reports whether err is a create finding a settings file.
+func foundSettingsFile(err error) bool {
+	var found settingsFileFound
+	return errors.As(err, &found)
+}
+
 // legacyFolderName is the per-user folder the application used before it was
 // named CyberCute Dev Tools. Load reads the settings file there whenever the
 // settings file does not exist, so deleting the new file alone brings the old
@@ -274,7 +291,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		result.Recovered = fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup)
 		result.Warnings = append(result.Warnings, result.Recovered)
 		if saveErr := s.saveLoaded(result.Settings); saveErr != nil {
-			if s.createOnly && errors.Is(saveErr, os.ErrExist) {
+			if s.createOnly && foundSettingsFile(saveErr) {
 				os.Remove(backup)
 				return result, false
 			}
@@ -304,7 +321,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	}
 	if migrated || s.createOnly {
 		if saveErr := s.saveLoaded(decoded); saveErr != nil {
-			if s.createOnly && errors.Is(saveErr, os.ErrExist) {
+			if s.createOnly && foundSettingsFile(saveErr) {
 				if backup != "" {
 					os.Remove(backup)
 				}
@@ -333,9 +350,28 @@ func (s *Store) readLegacy() (data []byte, gone bool, err error) {
 // Inherited returns the settings the session took from the legacy file while
 // they have not reached the settings file, or the zero Settings. A settings
 // file found later that lacks one of their presets had it deleted, so what
-// Restore keeps is told from the presets the session created by these.
+// Restore keeps is told from the presets the session created by these. That
+// holds only for a settings file written after the legacy file: an earlier
+// build still runs and can add presets there, which an older settings file
+// never held, so with the legacy file the newer of the two nothing counts as
+// inherited. A preset this keeps by mistake can be deleted again, where one
+// it dropped could not be got back in the application.
 func (s *Store) Inherited() Settings {
+	if s.inherited.Modules == nil || s.legacyIsNewer() {
+		return Settings{}
+	}
 	return s.inherited
+}
+
+// legacyIsNewer reports whether both files exist and the legacy file was
+// written after the settings file.
+func (s *Store) legacyIsNewer() bool {
+	legacy, err := os.Stat(s.legacyPath)
+	if err != nil {
+		return false
+	}
+	current, err := os.Stat(s.path)
+	return err == nil && legacy.ModTime().After(current.ModTime())
 }
 
 // saveLoaded writes the settings Load settled on. While the settings file was
@@ -477,7 +513,7 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 	}
 	if creating {
 		if err := s.create(value); err != nil {
-			if s.blocked == nil && !errors.Is(err, os.ErrExist) {
+			if s.blocked == nil && !foundSettingsFile(err) {
 				return value, "", err
 			}
 			if backup != "" {
@@ -573,7 +609,7 @@ func (s *Store) save(value Settings) error {
 		return err
 	}
 	err := s.write(value)
-	if s.createOnly && errors.Is(err, os.ErrExist) {
+	if s.createOnly && foundSettingsFile(err) {
 		// The file was only reported missing when Load looked for it. It
 		// holds settings this session never took, so it is kept for the next
 		// launch to load, and Restore can back it up.
@@ -603,9 +639,15 @@ func (s *Store) write(value Settings) error {
 }
 
 // create writes value, which check has accepted, as a new settings file, and
-// fails with an error matching os.ErrExist if there already is one.
+// fails with an error foundSettingsFile reports if there already is one.
 func (s *Store) create(value Settings) error {
-	return s.place(value, renameNoReplace)
+	return s.place(value, func(from, to string) error {
+		err := renameNoReplace(from, to)
+		if errors.Is(err, os.ErrExist) {
+			return settingsFileFound{err}
+		}
+		return err
+	})
 }
 
 // place puts value at the settings path through a temporary file in the same

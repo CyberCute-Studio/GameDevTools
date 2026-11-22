@@ -20,6 +20,12 @@ $executableName = "cybercute-dev-tools.exe"
 $windowWait = 30
 $exitWait = 30
 
+# GetClassLongPtrW, which the icon check calls, is only a header macro in 32-bit
+# user32.dll, so a 32-bit host would stop there on a valid package.
+if ([IntPtr]::Size -ne 8) {
+    throw "Run this from 64-bit PowerShell: a 32-bit host cannot read the main window's icon."
+}
+
 Add-Type -Namespace PackageCheck -Name Native -MemberDefinition @'
 [DllImport("user32.dll")]
 public static extern IntPtr GetClassLongPtrW(IntPtr window, int index);

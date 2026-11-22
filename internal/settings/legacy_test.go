@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -619,6 +620,105 @@ func TestStoreInheritedLastsUntilTheSettingsAreWritten(t *testing.T) {
 	if got := store.Inherited().Shell.SelectedModule; got != "" {
 		t.Fatalf("inherited module after the write = %q", got)
 	}
+}
+
+// Inherited counts for a settings file written after the legacy file. One
+// older than it may simply predate presets an earlier build added there, so
+// nothing then counts as inherited.
+func TestStoreInheritedYieldsToALegacyFileNewerThanTheSettingsFile(t *testing.T) {
+	store, paths, _ := unwrittenAdoption(t)
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := os.Chtimes(paths.LegacyConfigFile, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(paths.ConfigFile, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Inherited().Shell.SelectedModule; got != string(shell.ModuleImageResizer) {
+		t.Fatalf("inherited module with the settings file newer = %q, want the legacy file's", got)
+	}
+	if err := os.Chtimes(paths.LegacyConfigFile, now.Add(time.Hour), now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Inherited().Shell.SelectedModule; got != "" {
+		t.Fatalf("inherited module with the legacy file newer = %q, want none", got)
+	}
+}
+
+// A junction at the settings folder whose target is gone makes the folder's
+// creation fail with an error matching os.ErrExist. That is no settings file
+// being there: the legacy settings are still taken, the failure is reported as
+// a failed write, and a real file behind the junction once it returns is kept.
+func TestStoreDanglingSettingsFolderIsNotAFoundSettingsFile(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("uses a directory junction")
+	}
+	dangling := func(t *testing.T, paths Paths) (target string) {
+		t.Helper()
+		link := filepath.Dir(paths.ConfigFile)
+		target = link + "-target"
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+			t.Fatalf("create junction: %v: %s", err, out)
+		}
+		t.Cleanup(func() { os.Remove(link) })
+		if err := os.Remove(target); err != nil {
+			t.Fatal(err)
+		}
+		return target
+	}
+
+	t.Run("legacy settings", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		target := dangling(t, paths)
+		store := NewStore(paths)
+		result := store.Load()
+		if got := result.Settings.Shell.SelectedModule; got != string(shell.ModuleImageResizer) {
+			t.Fatalf("selected module = %q, want the legacy file's; warnings %v", got, result.Warnings)
+		}
+		if result.Unwritten == "" {
+			t.Fatalf("the adoption was not reported unwritten: %+v", result)
+		}
+		err := store.Save(result.Settings)
+		if err == nil || strings.Contains(err.Error(), "did not load") || strings.Contains(err.Error(), "saving is disabled") {
+			t.Fatalf("Save() = %v, want a plain failed write", err)
+		}
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(result.Settings); err == nil {
+			t.Fatal("a save replaced the settings file behind the returned junction")
+		}
+		requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+		if err := os.Remove(paths.ConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(target); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("no legacy settings", func(t *testing.T) {
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.Remove(paths.LegacyConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		dangling(t, paths)
+		store := NewStore(paths)
+		result := store.Load()
+		err := store.Save(result.Settings)
+		if err == nil || strings.Contains(err.Error(), "did not load") {
+			t.Fatalf("Save() = %v, want a plain failed write", err)
+		}
+	})
 }
 
 // The warning for a folder that cannot be reached asks for the share back
