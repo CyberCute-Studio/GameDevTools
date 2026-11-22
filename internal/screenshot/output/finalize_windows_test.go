@@ -4,6 +4,8 @@ package output
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,14 +23,29 @@ import (
 // these tests exercise runs on the test machine's own file system.
 func withoutHardLinks(t *testing.T, before func(temporary string)) {
 	t.Helper()
-	previous := createHardLink
-	t.Cleanup(func() { createHardLink = previous })
-	createHardLink = func(oldname, newname string) error {
+	t.Cleanup(func() { linkForTest = nil })
+	linkForTest = func(oldname, newname string) error {
 		if before != nil {
 			before(oldname)
 		}
 		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: windows.ERROR_INVALID_FUNCTION}
 	}
+}
+
+// holdOpen opens a file the way a virus scanner can, without letting anyone
+// rename or delete it until the returned handle is closed.
+func holdOpen(t *testing.T, path string) windows.Handle {
+	t.Helper()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handle
 }
 
 // folderNames lists a folder's entries.
@@ -102,17 +119,7 @@ func TestSaveWithoutHardLinksNeverReplacesAnEntry(t *testing.T) {
 // does not fail the save.
 func TestSaveWithoutHardLinksWaitsForABriefOpen(t *testing.T) {
 	withoutHardLinks(t, func(temporary string) {
-		name, err := windows.UTF16PtrFromString(temporary)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		handle, err := windows.CreateFile(name, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil,
-			windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-		if err != nil {
-			t.Error(err)
-			return
-		}
+		handle := holdOpen(t, temporary)
 		time.AfterFunc(60*time.Millisecond, func() { windows.CloseHandle(handle) })
 	})
 	folder := t.TempDir()
@@ -140,8 +147,95 @@ func TestSaveWithoutHardLinksReportsAFailedMove(t *testing.T) {
 	if path != "" {
 		t.Fatalf("path = %q after a failed save", path)
 	}
+	if !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || !errors.Is(err, windows.ERROR_INVALID_FUNCTION) {
+		t.Fatalf("the error does not carry both the rename's and the link's cause: %v", err)
+	}
+	if strings.Contains(err.Error(), "left behind") {
+		t.Fatalf("a temporary file that has gone was reported as left behind: %v", err)
+	}
 	if names := folderNames(t, folder); len(names) != 0 {
 		t.Fatalf("the failed save left %v", names)
+	}
+}
+
+// TestSaveReportsATemporaryFileItCouldNotRemove pins that a failed save whose
+// temporary file another program keeps open says so, rather than leaving a
+// complete image in the folder without a word.
+func TestSaveReportsATemporaryFileItCouldNotRemove(t *testing.T) {
+	var handle windows.Handle
+	withoutHardLinks(t, func(temporary string) {
+		handle = holdOpen(t, temporary)
+	})
+	folder := t.TempDir()
+	path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
+	names := folderNames(t, folder)
+	windows.CloseHandle(handle)
+	assertKind(t, err, KindWrite)
+	if path != "" {
+		t.Fatalf("path = %q after a failed save", path)
+	}
+	if !strings.Contains(err.Error(), "left behind") || !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("the error does not report the temporary file: %v", err)
+	}
+	if len(names) != 1 || !strings.HasPrefix(names[0], ".gamedevtools-") {
+		t.Fatalf("the folder held %v, want only the temporary file", names)
+	}
+}
+
+// TestRemoveTemporaryWaitsForABriefOpen pins that a failed save's cleanup
+// outlasts a program that is about to close the file.
+func TestRemoveTemporaryWaitsForABriefOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".gamedevtools-1.tmp")
+	if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	handle := holdOpen(t, path)
+	time.AfterFunc(60*time.Millisecond, func() { windows.CloseHandle(handle) })
+	if err := removeTemporary(path); err != nil {
+		t.Fatalf("removeTemporary: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the file is still there: %v", err)
+	}
+	if err := removeTemporary(path); err != nil {
+		t.Fatalf("removing a file that has gone: %v", err)
+	}
+}
+
+// TestRetryWhileHeld pins which failures are waited out and that the wait is
+// bounded.
+func TestRetryWhileHeld(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		err   error
+		calls int
+	}{
+		{"sharing violation", windows.ERROR_SHARING_VIOLATION, heldAttempts},
+		{"access denied", windows.ERROR_ACCESS_DENIED, heldAttempts},
+		{"wrapped access denied", &os.PathError{Op: "remove", Path: "x", Err: windows.ERROR_ACCESS_DENIED}, heldAttempts},
+		{"already exists", windows.ERROR_ALREADY_EXISTS, 1},
+		{"not found", windows.ERROR_FILE_NOT_FOUND, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			err := retryWhileHeld(func() error {
+				calls++
+				return test.err
+			})
+			if !errors.Is(err, test.err) || calls != test.calls {
+				t.Fatalf("err = %v after %d calls, want %v after %d", err, calls, test.err, test.calls)
+			}
+		})
+	}
+	calls := 0
+	if err := retryWhileHeld(func() error {
+		calls++
+		if calls < 3 {
+			return windows.ERROR_ACCESS_DENIED
+		}
+		return nil
+	}); err != nil || calls != 3 {
+		t.Fatalf("err = %v after %d calls, want success on the third", err, calls)
 	}
 }
 

@@ -190,8 +190,9 @@ var reviewedFileSites = map[string]string{
 	"internal/settings/store.go Store.write os.Rename":                  settingsFolder,
 
 	"internal/screenshot/output/output.go saveWithEncoder os.CreateTemp":              screenshotFolder,
-	"internal/screenshot/output/output.go (package) os.Link":                          screenshotFolder,
+	"internal/screenshot/output/output.go claimName os.Link":                          screenshotFolder,
 	"internal/screenshot/output/finalize_windows.go moveNoReplace windows.MoveFileEx": screenshotFolder,
+	"internal/screenshot/output/output.go removeTemporary os.Remove":                  screenshotFolder,
 	"internal/screenshot/output/output.go saveWithEncoder os.MkdirAll":                screenshotFolder,
 	"internal/screenshot/output/output.go saveWithEncoder os.Remove":                  screenshotFolder,
 
