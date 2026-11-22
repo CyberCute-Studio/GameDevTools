@@ -218,9 +218,8 @@ func OpenFolder(folder string) error {
 // waiting. The file is named as shellPath spells it. Explorer's /select does
 // not read a path through a volume GUID, opening another folder without
 // reporting a failure, so such a file is refused with an error, and so is a
-// file that has been moved or deleted or whose drive is not there
-// (savedFileFailure), for which Explorer opens some other folder and reports
-// success. Looking at the file and the shell's call each
+// file that cannot be found, for which Explorer opens some other folder and
+// reports success. Looking at the file and the shell's call each
 // block for as long as its drive does not respond, so the GUI thread calls it
 // on a goroutine of its own, which it keeps on one thread while it holds the
 // COM apartment it initializes, as OpenFolder does.
@@ -233,7 +232,10 @@ func RevealInFolder(path string) error {
 		return errNoDriveOrShare
 	}
 	info, err := os.Stat(path)
-	if err := savedFileFailure(target, info, err, os.Stat, os.Lstat); err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist), err == nil && info.IsDir():
+		return errSavedFileNotFound
+	case err != nil:
 		return err
 	}
 	explorer, err := explorerPath()
@@ -246,63 +248,6 @@ func RevealInFolder(path string) error {
 	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
 
-// savedFileGone reports whether looking at a saved file found it gone: no such
-// name, or a folder in its place. An unreachable server is not that, though
-// Go counts ERROR_BAD_NETPATH as fs.ErrNotExist: the file may be intact there,
-// so that failure is reported as it is.
-func savedFileGone(info fs.FileInfo, err error) bool {
-	if err != nil {
-		return errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND)
-	}
-	return info.IsDir()
-}
-
-// savedFileFailure is why a saved file that was looked at cannot be revealed,
-// or nil if it can. Windows also says the path was not found for a drive
-// letter with nothing behind it, as for a USB drive since unplugged, where
-// the file may be intact, so the volume's root is looked at, through stat,
-// before such a file is called gone. A root that refuses access is there, as
-// on a share whose top folder the user cannot read, so the file is gone. A
-// path that leads through a folder link that cannot be followed, as a junction
-// to a drive since unplugged, is reported as that link, for the same reason.
-// The target is the file's ordinary drive or UNC spelling.
-func savedFileFailure(target string, info fs.FileInfo, err error, stat, lstat func(string) (fs.FileInfo, error)) error {
-	switch {
-	case savedFileGone(info, err):
-		if errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
-			if _, rootErr := stat(pathform.VolumeName(target) + `\`); rootErr != nil && !errors.Is(rootErr, fs.ErrPermission) {
-				return errSavedDriveMissing
-			}
-			if leadsThroughBrokenLink(target, stat, lstat) {
-				return errSavedLinkBroken
-			}
-		}
-		return errSavedFileGone
-	case err != nil:
-		return err
-	}
-	return nil
-}
-
-// leadsThroughBrokenLink reports whether the nearest folder still present on
-// the target's path is a link, such as a junction or a folder mount, that
-// cannot be followed. Windows reports such a path as not found while the
-// volume the path names answers. A link whose target refuses access is there.
-func leadsThroughBrokenLink(target string, stat, lstat func(string) (fs.FileInfo, error)) bool {
-	for folder := pathform.Dir(target); folder != pathform.Dir(folder); folder = pathform.Dir(folder) {
-		info, err := lstat(folder)
-		if err != nil {
-			continue
-		}
-		if info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) == 0 {
-			return false
-		}
-		_, err = stat(folder)
-		return err != nil && !errors.Is(err, fs.ErrPermission)
-	}
-	return false
-}
-
 var (
 	// errShellNameUnconfirmed is BrowseForFolder's failure for a folder whose
 	// exact name the shell's report could not confirm.
@@ -310,14 +255,10 @@ var (
 	// errFolderNotResponding is BrowseForFolder's failure for a folder whose
 	// drive did not answer in time for its name to be confirmed.
 	errFolderNotResponding = errors.New("the drive of the chosen folder is not responding. Try again, or choose another folder")
-	// errSavedFileGone is RevealInFolder's failure for a file no longer there.
-	errSavedFileGone = errors.New("the saved file has been moved or deleted")
-	// errSavedDriveMissing is RevealInFolder's failure for a file on a drive
-	// that is not there now, where it may be intact.
-	errSavedDriveMissing = errors.New("the drive that holds the saved file is not available")
-	// errSavedLinkBroken is RevealInFolder's failure for a file reached through
-	// a folder link that cannot be followed now, where it may be intact.
-	errSavedLinkBroken = errors.New("the folder link that leads to the saved file points to a drive or folder that is not available")
+	// errSavedFileNotFound is RevealInFolder's failure for a file it cannot
+	// find. Windows reports a deleted file, an unplugged drive, an offline
+	// server, and a broken junction alike, so the message names them all.
+	errSavedFileNotFound = errors.New("the saved file could not be found. It may have been moved or deleted, or its drive or network share may not be available")
 	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a
 	// path File Explorer cannot be pointed at, as it has no drive or share.
 	errNoDriveOrShare = errors.New("File Explorer cannot show a path that has no drive letter or network share")
