@@ -3,6 +3,7 @@
 package capture
 
 import (
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -168,6 +169,15 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 		Right:  primary.Bounds.Left + 110 + width,
 		Bottom: primary.Bounds.Top + 110 + height,
 	}
+	return showSolidWindow(t, region, fill), region
+}
+
+// showSolidWindow shows a topmost popup filled with one known color over
+// region, in physical pixels.
+func showSolidWindow(t *testing.T, region display.Rect, fill color.RGBA) windows.Handle {
+	t.Helper()
+	startWindowThread()
+	width, height := region.Width(), region.Height()
 
 	className, err := windows.UTF16PtrFromString(fmt.Sprintf("GameDevToolsCaptureTest%d", classCounter.Add(1)))
 	if err != nil {
@@ -224,7 +234,7 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 		t.Fatalf("CreateWindowExW: %v", createErr)
 	}
 	t.Cleanup(func() { runOnWindowThread(func() { procDestroyWindow.Call(hwnd) }) })
-	return windows.Handle(hwnd), region
+	return windows.Handle(hwnd)
 }
 
 // insetPixelsMatch reports whether every pixel inside the image, minus a
@@ -397,6 +407,245 @@ func TestCaptureSpanningDisplayBoundary(t *testing.T) {
 	}
 	if got := img.Bounds(); got.Dx() != int(region.Width()) || got.Dy() != int(region.Height()) {
 		t.Fatalf("spanning capture bounds = %v, want %d × %d", got, region.Width(), region.Height())
+	}
+}
+
+// seamSample is one pixel of a capture beside a seam of the quadrant pattern,
+// and the color that belongs there.
+type seamSample struct {
+	x, y int
+	want color.RGBA
+}
+
+// quadrantSeamSamples returns the pixels on both sides of the two seams where
+// four colors, in reading order, meet at (centerX, centerY) in a width × height
+// image. They are taken halfway along each seam, clear of the corners DWM may
+// round, so a capture displaced or scaled by even one pixel fails.
+func quadrantSeamSamples(width, height, centerX, centerY int, colors [4]color.RGBA) []seamSample {
+	upper, lower := centerY/2, centerY+(height-centerY)/2
+	left, right := centerX/2, centerX+(width-centerX)/2
+	return []seamSample{
+		{centerX - 1, upper, colors[0]}, {centerX, upper, colors[1]},
+		{centerX - 1, lower, colors[2]}, {centerX, lower, colors[3]},
+		{left, centerY - 1, colors[0]}, {left, centerY, colors[2]},
+		{right, centerY - 1, colors[1]}, {right, centerY, colors[3]},
+	}
+}
+
+func TestQuadrantSeamSamplesStraddleBothSeams(t *testing.T) {
+	colors := [4]color.RGBA{{R: 1}, {R: 2}, {R: 3}, {R: 4}}
+	want := []seamSample{
+		{59, 20, colors[0]}, {60, 20, colors[1]},
+		{59, 70, colors[2]}, {60, 70, colors[3]},
+		{30, 39, colors[0]}, {30, 40, colors[2]},
+		{90, 39, colors[1]}, {90, 40, colors[3]},
+	}
+	got := quadrantSeamSamples(120, 100, 60, 40, colors)
+	if len(got) != len(want) {
+		t.Fatalf("got %d samples, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("sample %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// validationCaptureEnv names the file
+// TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries writes for
+// scripts/validate.ps1. The test runs only when it is set: it reads exact
+// pixels, and the script runs packages one at a time, while a plain go test
+// can run the overlay package's full-desktop tint beside it.
+const validationCaptureEnv = "GAMEDEVTOOLS_VALIDATION_CAPTURE"
+
+// capturedRegion is one region the test checked, as the validation report
+// records it. Displays are picker numbers, since a report holds no monitor name.
+type capturedRegion struct {
+	Displays      []int  `json:"displays"`
+	ScalesPercent []int  `json:"scalesPercent"`
+	X             int32  `json:"x"`
+	Y             int32  `json:"y"`
+	Width         int32  `json:"width"`
+	Height        int32  `json:"height"`
+	Result        string `json:"result"`
+}
+
+// TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries is AC-S02 on the
+// displays connected now. Over a preset-sized region centered on each display
+// and across each edge two displays share, it shows four windows of known
+// colors meeting at the region's center, on the shared edge when there is one,
+// so no window spans two displays. The capture must have the region's exact
+// physical size and each color on its own side of both seams, which a capture
+// that is displaced or scaled does not. It writes each region, the scaling of
+// the displays involved, and its result for the validation report, so a run on
+// a mixed-DPI or negative-coordinate arrangement records what it covered,
+// including a region it had to skip.
+func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
+	coveragePath := os.Getenv(validationCaptureEnv)
+	if coveragePath == "" {
+		t.Skipf("%s is not set; scripts/validate.ps1 runs this test", validationCaptureEnv)
+	}
+	const presetWidth, presetHeight = 1280, 720
+	// Each quadrant must be large enough that a seam's midpoint is clear of
+	// DWM's rounded corners.
+	const smallestQuadrant = 48
+	colors := [4]color.RGBA{
+		{R: 0xC9, G: 0x14, B: 0x4B, A: 0xFF},
+		{R: 0x21, G: 0x9F, B: 0x53, A: 0xFF},
+		{R: 0x1F, G: 0x4F, B: 0xD8, A: 0xFF},
+		{R: 0xE8, G: 0xB4, B: 0x0C, A: 0xFF},
+	}
+	monitor := display.NewMonitor()
+	displays, err := monitor.Displays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	covered := []capturedRegion{}
+	check := func(t *testing.T, region display.Rect, shown ...display.Display) {
+		t.Helper()
+		t.Cleanup(func() {
+			entry := capturedRegion{X: region.Left, Y: region.Top, Width: region.Width(), Height: region.Height(), Result: "passed"}
+			for _, item := range shown {
+				entry.Displays = append(entry.Displays, item.Number)
+				entry.ScalesPercent = append(entry.ScalesPercent, item.ScalePercent())
+			}
+			switch {
+			case t.Failed():
+				entry.Result = "failed"
+			case t.Skipped():
+				entry.Result = "skipped"
+			}
+			covered = append(covered, entry)
+		})
+		centerX, centerY := (region.Left+region.Right)/2, (region.Top+region.Bottom)/2
+		if min(centerX-region.Left, region.Right-centerX, centerY-region.Top, region.Bottom-centerY) < smallestQuadrant {
+			t.Skipf("%v is too small to compare pixels beside its seams", region)
+		}
+		showSolidWindow(t, display.Rect{Left: region.Left, Top: region.Top, Right: centerX, Bottom: centerY}, colors[0])
+		showSolidWindow(t, display.Rect{Left: centerX, Top: region.Top, Right: region.Right, Bottom: centerY}, colors[1])
+		showSolidWindow(t, display.Rect{Left: region.Left, Top: centerY, Right: centerX, Bottom: region.Bottom}, colors[2])
+		showSolidWindow(t, display.Rect{Left: centerX, Top: centerY, Right: region.Right, Bottom: region.Bottom}, colors[3])
+		samples := quadrantSeamSamples(int(region.Width()), int(region.Height()), int(centerX-region.Left), int(centerY-region.Top), colors)
+
+		var img *image.RGBA
+		var wrong *seamSample
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(25 * time.Millisecond) {
+			captured, err := CaptureRect(monitor, region)
+			if err != nil {
+				t.Fatalf("CaptureRect(%v): %v", region, err)
+			}
+			img = captured
+			if got := img.Bounds(); got.Dx() != int(region.Width()) || got.Dy() != int(region.Height()) {
+				t.Fatalf("capture of %v is %d × %d, want %d × %d", region, got.Dx(), got.Dy(), region.Width(), region.Height())
+			}
+			wrong = nil
+			for i := range samples {
+				got := img.RGBAAt(samples[i].x, samples[i].y)
+				if got.R != samples[i].want.R || got.G != samples[i].want.G || got.B != samples[i].want.B {
+					wrong = &samples[i]
+					break
+				}
+			}
+			if wrong == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+		}
+		if uniformlyBlack(img) && os.Getenv("CI") != "" {
+			t.Skipf("CI session composites no display; captures are uniformly black")
+		}
+		t.Fatalf("capture of %v has %v at (%d, %d), want %v", region, img.RGBAAt(wrong.x, wrong.y), wrong.x, wrong.y, wrong.want)
+	}
+	for _, item := range displays {
+		t.Run(item.DeviceName, func(t *testing.T) {
+			t.Logf("%s at (%d, %d), %d × %d, %d%% scaling", item.DeviceName, item.Bounds.Left, item.Bounds.Top, item.Bounds.Width(), item.Bounds.Height(), item.ScalePercent())
+			width, height := min(presetWidth, item.Bounds.Width()), min(presetHeight, item.Bounds.Height())
+			left := item.Bounds.Left + (item.Bounds.Width()-width)/2
+			top := item.Bounds.Top + (item.Bounds.Height()-height)/2
+			check(t, display.Rect{Left: left, Top: top, Right: left + width, Bottom: top + height}, item)
+		})
+	}
+	for i, a := range displays {
+		for _, b := range displays[i+1:] {
+			region, shared := regionAcrossSharedEdge(a.Bounds, b.Bounds, presetWidth, presetHeight)
+			if !shared {
+				continue
+			}
+			t.Run(a.DeviceName+" to "+b.DeviceName, func(t *testing.T) {
+				t.Logf("across %d%% and %d%% scaling: %v", a.ScalePercent(), b.ScalePercent(), region)
+				check(t, region, a, b)
+			})
+		}
+	}
+	encoded, err := json.Marshal(covered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(coveragePath, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// regionAcrossSharedEdge returns a region of at most width × height centered
+// on the edge a and b share, inside the two displays, and whether they share
+// one.
+func regionAcrossSharedEdge(a, b display.Rect, width, height int32) (display.Rect, bool) {
+	across := func(edge, spanStart, spanEnd, reachA, reachB, along, thick int32) (start, end, crossStart, crossEnd int32, ok bool) {
+		if spanEnd <= spanStart {
+			return 0, 0, 0, 0, false
+		}
+		half := min(along/2, reachA, reachB)
+		size := min(thick, spanEnd-spanStart)
+		crossStart = spanStart + (spanEnd-spanStart-size)/2
+		return edge - half, edge + half, crossStart, crossStart + size, half > 0
+	}
+	switch {
+	case a.Right == b.Left || b.Right == a.Left:
+		edge, left, right := a.Right, a, b
+		if b.Right == a.Left {
+			edge, left, right = a.Left, b, a
+		}
+		x0, x1, y0, y1, ok := across(edge, max(a.Top, b.Top), min(a.Bottom, b.Bottom), left.Width(), right.Width(), width, height)
+		return display.Rect{Left: x0, Top: y0, Right: x1, Bottom: y1}, ok
+	case a.Bottom == b.Top || b.Bottom == a.Top:
+		edge, upper, lower := a.Bottom, a, b
+		if b.Bottom == a.Top {
+			edge, upper, lower = a.Top, b, a
+		}
+		y0, y1, x0, x1, ok := across(edge, max(a.Left, b.Left), min(a.Right, b.Right), upper.Height(), lower.Height(), height, width)
+		return display.Rect{Left: x0, Top: y0, Right: x1, Bottom: y1}, ok
+	}
+	return display.Rect{}, false
+}
+
+func TestRegionAcrossSharedEdge(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		a, b   display.Rect
+		want   display.Rect
+		shared bool
+	}{
+		{"side by side", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Right: 3840, Bottom: 1080},
+			display.Rect{Left: 1280, Top: 180, Right: 2560, Bottom: 900}, true},
+		{"b left of a, negative coordinates", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: -1920, Right: 0, Bottom: 1080},
+			display.Rect{Left: -640, Top: 180, Right: 640, Bottom: 900}, true},
+		{"stacked", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Top: 1080, Right: 1920, Bottom: 2160},
+			display.Rect{Left: 320, Top: 720, Right: 1600, Bottom: 1440}, true},
+		{"narrow neighbor limits the reach", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Right: 2020, Bottom: 1080},
+			display.Rect{Left: 1820, Top: 180, Right: 2020, Bottom: 900}, true},
+		{"short overlap limits the height", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Top: 980, Right: 3840, Bottom: 2060},
+			display.Rect{Left: 1280, Top: 980, Right: 2560, Bottom: 1080}, true},
+		{"touching only at a corner", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 1920, Top: 1080, Right: 3840, Bottom: 2160}, display.Rect{}, false},
+		{"apart", display.Rect{Right: 1920, Bottom: 1080}, display.Rect{Left: 2000, Right: 3920, Bottom: 1080}, display.Rect{}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, shared := regionAcrossSharedEdge(test.a, test.b, 1280, 720)
+			if shared != test.shared || (shared && got != test.want) {
+				t.Fatalf("got %v, %v; want %v, %v", got, shared, test.want, test.shared)
+			}
+		})
 	}
 }
 

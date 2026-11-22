@@ -1,0 +1,61 @@
+name: Validation matrix
+
+# Runs scripts/validate.ps1 on real x64 Windows. It is started by hand, or by a
+# pull request that changes the validation itself, because it takes far longer
+# than CI. Windows Server is not a supported target (NFR-001): these runs check
+# the x64 executable and the suite, and do not stand in for Windows 11.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/validation-matrix.yml
+      - scripts/validate.ps1
+      - scripts/build.ps1
+      - go.mod
+      - go.sum
+      - internal/app/launch_windows_test.go
+      - internal/display/display_windows_test.go
+      - internal/imageresizer/job/bench_test.go
+      - internal/screenshot/capture/capture_windows_test.go
+      - internal/screenshot/capture/capture_windows_perf_test.go
+      - internal/screenshot/output/clipboard_windows_perf_test.go
+      - internal/screenshot/overlay/session_windows_test.go
+      - internal/screenshot/overlay/session_windows_perf_test.go
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    # Room for a normal run and a hung step. go test's timeouts apply per package
+    # (30 minutes each in the suite, 10 for the layout and the release executable,
+    # 15 for each of five benchmarks), so they do not bound the whole script. The
+    # result file is written only when the script finishes, so a run this limit
+    # cancels leaves none.
+    timeout-minutes: 150
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the platform validation
+        shell: pwsh
+        run: ./scripts/validate.ps1
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ matrix.os }}
+          path: bin/validation/validation-*.json
+          if-no-files-found: error

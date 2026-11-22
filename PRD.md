@@ -1,8 +1,8 @@
 # GameDevTools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.3\
-**Last updated:** 2026-11-21\
+**Version:** 1.4\
+**Last updated:** 2026-11-22\
 **Product name:** GameDevTools (working name)\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
@@ -471,7 +471,7 @@ Each Image Resizer preset contains width, height, and one fitting mode. Both ups
 
 ### 13.1 Platform compatibility
 
-**NFR-001 (P0):** Support 64-bit Windows 10 version 22H2 and currently supported Windows 11 releases.
+**NFR-001 (P0):** Support 64-bit Windows 11 in its currently supported releases. Windows 10 is not supported.
 
 **NFR-002 (P0):** Operate without administrator privileges for normal use.
 
@@ -706,7 +706,6 @@ The following decisions do not block initial implementation but must be resolved
 2. Installer, portable ZIP, or both.
 3. Code-signing approach and release identity.
 4. Whether an automatic update mechanism is needed.
-5. Support policy for future Windows 10 updates after Microsoft ends general support.
 
 ## 20. Confirmed product decisions
 
@@ -725,6 +724,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - Restoring the default settings (SET-005) backs the settings file up first and keeps each module's custom presets and its selected preset, the window placement, and the current module; every other setting — the global shortcut, the capture and resize options, and both output folders — returns to its default.
 - Closing the application while a resize job runs asks first, as closing cancels the job. Signing out of, restarting, or shutting down Windows asks nothing: the application saves its settings and stops all work.
 - Screenshots copied to the clipboard are marked so that Windows clipboard sync does not upload them (NFR-031). They stay in the local clipboard history (Win+V). An image that cannot be marked is not placed on the clipboard, which is reported as a clipboard failure while the saved file is kept (SCR-060).
+- The initial release supports Windows 11 only (NFR-001). Windows 10, whose general support from Microsoft ended in October 2025, is not supported or tested; the application does not refuse to start there.
 
 ## 21. Revision history
 
@@ -734,3 +734,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.1 | 2026-11-20 | QLT-01: resolved the theme open decision — system colors and contrast themes, no dark app mode in the initial release (section 20, a future consideration in section 18) — and added SCR-015, keyboard completion of Free Rectangle capture. |
 | 1.2 | 2026-11-20 | QLT-02: confirmed what restoring the default settings keeps and resets (SET-005), that closing while a resize job runs asks first, and that the end of the Windows session asks nothing (section 20). |
 | 1.3 | 2026-11-21 | QLT-03: confirmed that copied screenshots opt out of Windows clipboard sync and stay in the local clipboard history (NFR-031, section 20). |
+| 1.4 | 2026-11-22 | QLT-04: resolved the Windows 10 open decision — the initial release supports Windows 11 only (NFR-001, section 20). |

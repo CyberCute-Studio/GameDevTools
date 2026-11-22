@@ -176,6 +176,6 @@ The logs and the dependency set needed no change.
 - **Real clipboard sync.** The marker is the documented opt-out, and the test reads it back, but no signed-in account was used to observe that nothing was uploaded. A third-party clipboard manager may ignore the marker.
 - **What Windows itself records.** Windows can keep its own history of dialogs and of folders opened in File Explorer. Those records were not measured.
 - **A folder the picker cannot tell from its neighbor.** When `v2` and `v2..` stand side by side, or a folder named only periods sits directly on the root of a drive or network share, the shell reports the other folder's path, which exists, so the picker cannot detect it. File Explorer cannot create such names.
-- **A missing parent such as `con.d` on Windows 10.** `os.MkdirAll` may read such a name as a device there, failing the save with an error. It does not reproduce on the Windows 11 build of record, so it was not changed, and the QLT-04 Windows 10 run should check it.
+- **A missing parent such as `con.d` on Windows 10.** `os.MkdirAll` may read such a name as a device there, failing the save with an error. It does not reproduce on the Windows 11 build of record, so it was not changed, and QLT-04 closed it when Windows 10 left the supported platforms.
 - **Future advisories.** The scan reflects the database's date above. Run it again on the release candidate (REL-03).
-- **Performance on the new toolchain.** Earlier performance figures were measured on go1.26.5. QLT-04 owns the combined performance report.
+- **Performance on the new toolchain.** Earlier performance figures were measured on go1.26.5. The [platform record](platform-verification.md#performance) has the figures on go1.27.4.

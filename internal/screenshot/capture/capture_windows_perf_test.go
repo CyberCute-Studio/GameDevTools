@@ -11,10 +11,10 @@ import (
 // BenchmarkCaptureRectVirtualDesktop measures the NFR-012 capture half:
 // reading one large region of physical pixels off the screen. NFR-012's
 // target region is 3840 × 2160; the benchmark captures the whole virtual
-// desktop instead so it adapts to the machine it runs on — on the
-// verification environment of record the virtual desktop is larger than 4K,
-// making the measurement conservative. The MP metric records the captured
-// size next to the SetBytes throughput.
+// desktop instead so it adapts to the machine it runs on. Parts of that
+// rectangle no display covers are cheaper to read, so scripts/validate.ps1
+// scales a smaller desktop's time up by the pixels the displays hold rather
+// than using the SetBytes throughput. The MP metric records the captured size.
 func BenchmarkCaptureRectVirtualDesktop(b *testing.B) {
 	monitor := display.NewMonitor()
 	bounds, err := monitor.VirtualDesktopBounds()
