@@ -127,6 +127,7 @@ func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
 	for _, folder := range []string{
 		`\\.\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`, `\\\localhost\pipe\x`,
 		`\??\C:`, `\??\pipe`, `\??\NUL`, `\??\UNC`, `\??\Volume{00000000-0000-0000-0000-000000000000}`,
+		`\\server\..\x`, `\\\nas\photos`, `\\;x\nas\photos`, `\\nas\;x\photos`,
 	} {
 		if err := manager.SetOutputFolder(folder); err == nil || err.Error() != ui.OutputFolderRootInvalid {
 			t.Errorf("SetOutputFolder(%q) = %v, want the root refusal", folder, err)

@@ -93,9 +93,9 @@ func NamesNoFolder(folder string) bool {
 // spelling and letter case, is a server's pipe, mailslot, or IPC$, or cannot
 // be told from it. Windows reads those shares as its named pipes and mailslots
 // rather than as folders, so creating \\localhost\pipe\x connects to the
-// program serving that pipe. Only the share is judged: a folder named pipe on
-// an ordinary share is a folder, while a WebDAV folder named pipe at a web
-// root is refused, as its share has that name.
+// program serving that pipe. The share is the only name compared with those
+// three: a folder named pipe on an ordinary share is a folder, while a WebDAV
+// folder named pipe at a web root is refused, as its share has that name.
 //
 // An ordinary network path is \\server\share. When either place holds
 // something other than a plain name, as in \\\localhost\pipe\x,
@@ -122,12 +122,14 @@ func LeadsThroughIPCShare(clean string) bool {
 	if !plainUNCName(names[0]) || !plainUNCName(names[1]) {
 		return true
 	}
-	share := strings.TrimRight(names[1], " .")
+	share := strings.TrimLeft(strings.TrimRight(names[1], " ."), " ")
 	return strings.EqualFold(share, "pipe") || strings.EqualFold(share, "mailslot") || strings.EqualFold(share, "IPC$")
 }
 
 // plainUNCName reports whether a server's or share's place holds a name: not
-// empty, not only spaces and periods, and not a network provider's ;name.
+// empty, not only spaces and periods, and not a network provider's ;name,
+// even behind leading spaces or periods.
 func plainUNCName(name string) bool {
-	return strings.Trim(name, " .") != "" && !strings.HasPrefix(name, ";")
+	name = strings.TrimLeft(name, " .")
+	return name != "" && name[0] != ';'
 }

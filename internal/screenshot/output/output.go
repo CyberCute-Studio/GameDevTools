@@ -107,8 +107,10 @@ func kindError(kind Kind, op string, err error) *Error {
 var errFolderReadTwoWays = errors.New(ui.OutputFolderNameInvalid)
 
 // errFolderNamesNoFolder is the cause of the KindFolder error for an output
-// folder whose path names a drive, volume, device, or server rather than a
-// folder on it. Creating it could open the device.
+// folder pathform.NamesNoFolder refuses: its path names a drive, volume,
+// device, or server rather than a folder on it, leads through a server's pipe,
+// mailslot, or IPC$ share, or has no plain server and share name. Creating it
+// could open a device.
 var errFolderNamesNoFolder = errors.New(ui.OutputFolderRootInvalid)
 
 // Result reports the two independent outcomes of one delivery (SCR-060).

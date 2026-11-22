@@ -153,8 +153,9 @@ func decodeOptions(section json.RawMessage) (decodedOptions, error) {
 		// one with a colon that names a file stream, one that names only a
 		// volume or a server, and one on a device that holds no folders, such
 		// as a named pipe, and builds before QLT-03C still accepted a server's
-		// pipe, mailslot, or IPC$ share, all of which jobs now refuse. Such a
-		// folder gives way to the default folder on load, with a warning,
+		// pipe, mailslot, or IPC$ share and a network path with no plain server
+		// and share name, such as \\server\..\x, all of which jobs now refuse.
+		// Such a folder gives way to the default folder on load, with a warning,
 		// rather than the whole settings file failing validation and every
 		// module losing its settings.
 		found.legacyFolder = true

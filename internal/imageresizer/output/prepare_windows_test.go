@@ -1214,6 +1214,10 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\?\UNC\;LanmanRedirector\localhost\pipe\x`,
 		`\\.\UNC\;LanmanRedirector\localhost\pipe\x`,
 		`\??\UNC\;LanmanRedirector\localhost\mailslot\x`,
+		`\\ ;LanmanRedirector\localhost\pipe\x`,
+		`\\.;LanmanRedirector\localhost\pipe\x`,
+		`\\?\UNC\ ;x\localhost\pipe\x`,
+		`\\server\ pipe\x`,
 	} {
 		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
 			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
@@ -1232,6 +1236,8 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\server\share\IPC$`,
 		`\\server\share\Art\..\x`,
 		`\\server\pipes\x`,
+		`\\server\.pipe\x`,
+		`\\.nas\share\x`,
 		`\\pipe\share\x`,
 		`\\nas.example.com.\share\x`,
 		`\\?\UNC\server\share\pipe\x`,
@@ -1249,9 +1255,11 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 // folder fails before anything is created or inspected: the planner is given
 // no file system, so any use of one would panic.
 func TestPrepareRefusesAnIPCShareBeforeTouchingIt(t *testing.T) {
-	_, err := prepare(context.Background(), jobRequest(`\\localhost\pipe\Resized`, CollisionRename, png(`C:\In\a.png`)), nil)
-	if !errors.Is(err, ErrFolderRoot) {
-		t.Fatalf("prepare = %v, want %v", err, ErrFolderRoot)
+	for _, folder := range []string{`\\localhost\pipe\Resized`, `\\server\..\x`, `\\\nas\photos`, `\\;x\nas\photos`} {
+		_, err := prepare(context.Background(), jobRequest(folder, CollisionRename, png(`C:\In\a.png`)), nil)
+		if !errors.Is(err, ErrFolderRoot) {
+			t.Errorf("prepare(%q) = %v, want %v", folder, err, ErrFolderRoot)
+		}
 	}
 }
 
