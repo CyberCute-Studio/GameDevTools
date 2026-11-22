@@ -10,6 +10,8 @@ on:
     paths:
       - .github/workflows/validation-matrix.yml
       - scripts/validate.ps1
+      - scripts/build.ps1
+      - go.mod
       - internal/app/launch_windows_test.go
       - internal/display/display_windows_test.go
       - internal/imageresizer/job/bench_test.go
@@ -29,9 +31,11 @@ jobs:
       matrix:
         os: [windows-2025, windows-2022]
     runs-on: ${{ matrix.os }}
-    # Above the sum of the script's go test timeouts (30 for the suite, 10 each
-    # for the layout and the release executable, 15 for each of five benchmarks),
-    # because the result file is written only when the script finishes.
+    # Room for a normal run and a hung step. go test's timeouts apply per package
+    # (30 minutes each in the suite, 10 for the layout and the release executable,
+    # 15 for each of five benchmarks), so they do not bound the whole script. The
+    # result file is written only when the script finishes, so a run this limit
+    # cancels leaves none.
     timeout-minutes: 150
     steps:
       - name: Check out repository

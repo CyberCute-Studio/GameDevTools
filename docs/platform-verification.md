@@ -21,9 +21,11 @@ From the repository root, in an interactive desktop session, with GameDevTools c
 The script moves windows, takes the foreground, and **replaces the clipboard**. It records the machine and its displays, runs `go vet`, the whole test suite, the release executable end to end, and the release build, measures NFR-010 through NFR-014, and writes one JSON file to `bin/validation`. The file holds no computer, user, or monitor name.
 
 - `-Architecture amd64` builds and runs the x64 release target, under emulation on Windows on Arm.
-- `-ReferenceMachine` asserts this is the PRD's reference machine and refuses one that is not: 64-bit Intel or AMD by its processor, four or more cores, 16 GB RAM installed, Windows 11, not elevated, and not on a hard disk. Windows does not report a CPU's age, so whoever passes the switch confirms the CPU is from 2020 or later; the result file records its name. A target missed or not measured then fails the run. Elsewhere, performance figures are recorded without failing it.
+- `-ReferenceMachine` asserts this is the PRD's reference machine and refuses one that is not: 64-bit Intel or AMD by its processor, four or more cores, 16 GB RAM installed, Windows 11, not elevated, and an SSD shown to hold both the system drive and the temporary files the benchmarks use. Windows does not report a CPU's age, so whoever passes the switch confirms the CPU is from 2020 or later; the result file records its name. A target missed or not measured then fails the run. Elsewhere, performance figures are recorded without failing it.
 
-The result file names the commit and working-tree state from before the first step, and the run fails if either changes before the last.
+A benchmark that cannot run on a machine, such as the 1280 × 720 preset on a smaller desktop, is recorded as skipped and its target as not measured.
+
+The result file names the commit and working-tree state from before the first step, and the run fails if either changes before the last, including the content of a file that was already changed or untracked.
 
 The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) runs the same script on x64 Windows Server. It is started by hand, or by a pull request that changes the validation or the tests and benchmarks it runs.
 

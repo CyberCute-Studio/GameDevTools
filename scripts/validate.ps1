@@ -17,10 +17,10 @@ amd64 runs the release target under Windows' x64 emulation.
 
 .PARAMETER ReferenceMachine
 Asserts this is the PRD's reference machine: 64-bit Intel or AMD, four or more
-cores, 16 GB RAM installed, Windows 11, not elevated, and not on a hard disk. The
-script refuses a machine that is not, and a target that is missed or not measured
-then fails the run. Elsewhere the performance results are recorded without
-failing it. Windows does not report a CPU's age, so whoever passes this switch
+cores, 16 GB RAM installed, Windows 11, not elevated, and an SSD shown to hold both
+the system drive and the temporary files the benchmarks use. The script refuses a
+machine that is not, and a target that is missed or not measured then fails the
+run. Elsewhere the performance results are recorded without failing it. Windows does not report a CPU's age, so whoever passes this switch
 confirms the CPU is from 2020 or later; the report records its name.
 
 .PARAMETER OutputDirectory
@@ -84,23 +84,84 @@ function Invoke-Go {
 }
 
 function Add-Check {
-    param([string]$Name, [bool]$Passed, [double]$Seconds, [string]$Detail = "")
-    [void]$checks.Add([ordered]@{ name = $Name; passed = $Passed; seconds = $Seconds; detail = $Detail })
+    param([string]$Name, [bool]$Passed, [double]$Seconds, [string]$Detail = "", [bool]$Skipped = $false)
+    [void]$checks.Add([ordered]@{ name = $Name; passed = $Passed; skipped = $Skipped; seconds = $Seconds; detail = $Detail })
 }
 
-# Get-SourceState reads the commit and the working tree's status, leaving out a
-# result folder inside the repository, whose files are this script's own.
+# Get-DriveMedia returns the media type of the physical disk behind a path's
+# drive, or Unknown when Windows does not establish one.
+function Get-DriveMedia {
+    param([string]$Path)
+    try {
+        $letter = [System.IO.Path]::GetPathRoot($Path)[0]
+        $disk = Get-Partition -DriveLetter $letter | Get-Disk
+        $physicalDisk = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq "$($disk.Number)" }
+        if ($physicalDisk) { return "$($physicalDisk.MediaType)" }
+    } catch {
+        Write-Host "Could not read a disk's type: $_"
+    }
+    return "Unknown"
+}
+
+# Read-GitOutput returns a git command's exact output bytes, which PowerShell's
+# own capture would decode and split into lines.
+function Read-GitOutput {
+    param([string[]]$Arguments)
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = "git"
+    $info.WorkingDirectory = $root
+    $info.Arguments = ($Arguments | ForEach-Object { '"' + $_ + '"' }) -join " "
+    $info.UseShellExecute = $false
+    $info.RedirectStandardOutput = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $output = New-Object System.IO.MemoryStream
+        $process.StandardOutput.BaseStream.CopyTo($output)
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "git $($Arguments[0]) failed with exit code $($process.ExitCode)."
+        }
+        return , $output.ToArray()
+    } finally {
+        $process.Dispose()
+    }
+}
+
+# Get-SourceState reads the commit, the working tree's status, and a fingerprint
+# of the content of its changed and untracked files, since status alone does not
+# change when a file already listed is edited again. It leaves out a result
+# folder inside the repository, whose files are this script's own.
 function Get-SourceState {
-    $arguments = @("status", "--porcelain")
+    $pathspec = @()
     $repository = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
     $results = [System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/')
     if ($results.StartsWith($repository + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         $relative = $results.Substring($repository.Length + 1).Replace('\', '/')
-        $arguments += @("--", ".", ":(exclude,literal)$relative")
+        $pathspec = @("--", ".", ":(exclude,literal)$relative")
+    }
+    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        [byte[]]$changes = Read-GitOutput (@("diff", "--binary", "HEAD") + $pathspec)
+        $parts = New-Object System.Collections.ArrayList
+        [void]$parts.Add([BitConverter]::ToString($hasher.ComputeHash($changes)))
+        [byte[]]$listing = Read-GitOutput (@("ls-files", "--others", "--exclude-standard", "-z") + $pathspec)
+        $untracked = [System.Text.Encoding]::UTF8.GetString($listing).Split([char[]]@([char]0), [StringSplitOptions]::RemoveEmptyEntries)
+        foreach ($path in $untracked) {
+            $content = "unreadable"
+            try {
+                $content = (Get-FileHash -LiteralPath ([System.IO.Path]::Combine($root, $path)) -Algorithm SHA256).Hash
+            } catch {
+                Write-Host "Could not read an untracked file: $_"
+            }
+            [void]$parts.Add("$path=$content")
+        }
+    } finally {
+        $hasher.Dispose()
     }
     return [pscustomobject]@{
-        Commit = (& git rev-parse HEAD).Trim()
-        Status = (@(& git @arguments) -join "`n")
+        Commit      = (& git rev-parse HEAD).Trim()
+        Status      = (@(& git status --porcelain @pathspec) -join "`n")
+        Fingerprint = ($parts -join "`n")
     }
 }
 
@@ -157,14 +218,9 @@ try {
     # report no modules.
     $installedBytes = (@(Get-CimInstance Win32_PhysicalMemory) | Measure-Object -Property Capacity -Sum).Sum
     $installedGiB = if ($installedBytes -gt 0) { [math]::Round($installedBytes / 1GB, 1) } else { $memoryGiB }
-    $systemDiskMedia = "Unknown"
-    try {
-        $systemDisk = Get-Partition -DriveLetter $env:SystemDrive[0] | Get-Disk
-        $physicalDisk = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq "$($systemDisk.Number)" }
-        if ($physicalDisk) { $systemDiskMedia = "$($physicalDisk.MediaType)" }
-    } catch {
-        Write-Host "Could not read the system disk's type: $_"
-    }
+    $systemDiskMedia = Get-DriveMedia "$env:SystemDrive\"
+    # Where the benchmarks write, which Go and .NET both resolve from TMP and TEMP.
+    $tempDiskMedia = Get-DriveMedia ([System.IO.Path]::GetTempPath())
     $version = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
     $build = [int]$os.BuildNumber
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -180,7 +236,8 @@ try {
         if ($cores -lt 4) { $refused += "it has $cores cores" }
         # A virtual machine's fallback is usable memory, slightly under 16 GB.
         if ($installedGiB -lt 15) { $refused += "it has $installedGiB GB of memory installed" }
-        if ($systemDiskMedia -eq "HDD") { $refused += "its system drive is a hard disk" }
+        if ($systemDiskMedia -ne "SSD") { $refused += "its system drive is not shown to be an SSD ($systemDiskMedia)" }
+        if ($tempDiskMedia -ne "SSD") { $refused += "the drive holding temporary files is not shown to be an SSD ($tempDiskMedia)" }
         if (-not $windows11Client) { $refused += "it is not Windows 11" }
         if ($elevated) { $refused += "this shell is elevated" }
         if ($refused.Count -gt 0) {
@@ -191,7 +248,9 @@ try {
     $vet = Invoke-Go -Name "go vet" -Arguments @("vet", "./...") -Environment $goEnvironment
     Add-Check -Name "static analysis" -Passed $vet.Passed -Seconds $vet.Seconds
 
-    $suite = Invoke-Go -Name "test suite" -Arguments @("test", "-count=1", "-timeout=30m", "./...") -Environment $goEnvironment
+    # One package at a time: overlay tests show a topmost tint over the whole
+    # desktop, which a capture test running beside them would read as pixels.
+    $suite = Invoke-Go -Name "test suite" -Arguments @("test", "-count=1", "-p", "1", "-timeout=30m", "./...") -Environment $goEnvironment
     Add-Check -Name "combined test suite" -Passed $suite.Passed -Seconds $suite.Seconds
 
     $layoutFile = Join-Path $OutputDirectory "displays-$PID.json"
@@ -226,7 +285,10 @@ try {
         & (Join-Path $PSScriptRoot "build.ps1") -Configuration Release -OutputPath $buildPath | Out-Null
     } catch {
         $buildPassed = $false
-        $buildDetail = "$_"
+        # The error can name a path holding the user name, so it stays on the
+        # console and out of the result file.
+        $buildDetail = "the release build failed; see the console output"
+        Write-Host "Release build failed: $_"
     } finally {
         foreach ($key in $savedGoEnvironment.Keys) {
             [Environment]::SetEnvironmentVariable($key, $savedGoEnvironment[$key])
@@ -235,19 +297,25 @@ try {
     Add-Check -Name "release build" -Passed $buildPassed -Seconds ([math]::Round($buildWatch.Elapsed.TotalSeconds, 1)) -Detail $buildDetail
 
     function Invoke-Benchmark {
-        param([string]$Name, [string]$Package, [string]$Pattern, [string[]]$Options, [hashtable]$Environment)
+        param([string]$Name, [string]$Package, [string]$Pattern, [string[]]$Options, [hashtable]$Environment, [string[]]$Expected)
         # The workflow's job limit allows for this timeout on every benchmark.
         $arguments = @("test", "-run", "^$", "-timeout=15m", "-bench", $Pattern) + $Options + @($Package)
         $result = Invoke-Go -Name "benchmark: $Name" -Arguments $arguments -Environment $Environment
-        Add-Check -Name "benchmark: $Name" -Passed $result.Passed -Seconds $result.Seconds
+        # A skip also exits 0, so a benchmark with no result line did not run.
+        # That is recorded as skipped: its target reads not-measured, which only
+        # a reference-machine run treats as a failure.
+        $missing = @($Expected | Where-Object { (Read-Benchmark -Lines $result.Lines -Name $_).Count -eq 0 })
+        $skipped = $result.Passed -and ($missing.Count -gt 0)
+        $detail = if ($skipped) { "no result from $($missing -join ', ')" } else { "" }
+        Add-Check -Name "benchmark: $Name" -Passed ($result.Passed -and -not $skipped) -Skipped $skipped -Seconds $result.Seconds -Detail $detail
         return $result
     }
 
-    $launch = Invoke-Benchmark -Name "launch" -Package "./internal/app" -Pattern "^BenchmarkWarmLaunchToResponsiveMainWindow$" -Options @("-benchtime=20x") -Environment $validationEnvironment
-    $overlay = Invoke-Benchmark -Name "overlay" -Package "./internal/screenshot/overlay" -Pattern "^BenchmarkOverlayAppear" -Options @("-benchtime=30x") -Environment $goEnvironment
-    $capture = Invoke-Benchmark -Name "capture" -Package "./internal/screenshot/capture" -Pattern "^BenchmarkCaptureRectVirtualDesktop$" -Options @("-benchtime=30x") -Environment $goEnvironment
-    $clipboard = Invoke-Benchmark -Name "clipboard" -Package "./internal/screenshot/output" -Pattern "^BenchmarkSetClipboardImage4K$" -Options @("-benchtime=30x") -Environment $goEnvironment
-    $batch = Invoke-Benchmark -Name "batch" -Package "./internal/imageresizer/job" -Pattern "^BenchmarkRun100Mixed12MegapixelJPEGsFit1024$" -Options @("-benchtime=1x", "-count=3") -Environment $goEnvironment
+    $launch = Invoke-Benchmark -Name "launch" -Package "./internal/app" -Pattern "^BenchmarkWarmLaunchToResponsiveMainWindow$" -Options @("-benchtime=20x") -Environment $validationEnvironment -Expected @("BenchmarkWarmLaunchToResponsiveMainWindow")
+    $overlay = Invoke-Benchmark -Name "overlay" -Package "./internal/screenshot/overlay" -Pattern "^BenchmarkOverlayAppear" -Options @("-benchtime=30x") -Environment $goEnvironment -Expected @("BenchmarkOverlayAppearFreeRectangle", "BenchmarkOverlayAppearPresetRectangle")
+    $capture = Invoke-Benchmark -Name "capture" -Package "./internal/screenshot/capture" -Pattern "^BenchmarkCaptureRectVirtualDesktop$" -Options @("-benchtime=30x") -Environment $goEnvironment -Expected @("BenchmarkCaptureRectVirtualDesktop")
+    $clipboard = Invoke-Benchmark -Name "clipboard" -Package "./internal/screenshot/output" -Pattern "^BenchmarkSetClipboardImage4K$" -Options @("-benchtime=30x") -Environment $goEnvironment -Expected @("BenchmarkSetClipboardImage4K")
+    $batch = Invoke-Benchmark -Name "batch" -Package "./internal/imageresizer/job" -Pattern "^BenchmarkRun100Mixed12MegapixelJPEGsFit1024$" -Options @("-benchtime=1x", "-count=3") -Environment $goEnvironment -Expected @("BenchmarkRun100Mixed12MegapixelJPEGsFit1024")
 
     $launchRuns = Read-Benchmark -Lines $launch.Lines -Name "BenchmarkWarmLaunchToResponsiveMainWindow"
     $freeRuns = Read-Benchmark -Lines $overlay.Lines -Name "BenchmarkOverlayAppearFreeRectangle"
@@ -264,11 +332,14 @@ try {
     $presetMaxMs = if ($presetRuns.Count -gt 0) { $presetRuns[0]["max-ms"] } else { $null }
 
     # NFR-012 is defined at 3840 x 2160. The capture benchmark reads the whole
-    # virtual desktop, so its throughput is converted to that region's bytes.
+    # virtual desktop, so its throughput is converted to that region's bytes,
+    # and the measure says so and names the size actually captured.
     $captureToClipboardMs = $null
-    if ($captureRuns.Count -gt 0 -and $clipboardRuns.Count -gt 0 -and $captureRuns[0]["MB/s"] -gt 0) {
+    $captureToClipboardMeasure = "3840 x 2160 capture to clipboard"
+    if ($captureRuns.Count -gt 0 -and $clipboardRuns.Count -gt 0 -and $captureRuns[0]["MB/s"] -gt 0 -and $captureRuns[0]["MP"] -gt 0) {
         $fourKMegabytes = 3840 * 2160 * 4 / 1e6
         $captureToClipboardMs = ($fourKMegabytes / $captureRuns[0]["MB/s"] * 1000) + ($clipboardRuns[0]["ns/op"] / 1e6)
+        $captureToClipboardMeasure += ", capture time converted from a $($captureRuns[0]["MP"].ToString("0.0", $invariant)) MP desktop capture"
     }
 
     $batchMs = $null
@@ -287,7 +358,7 @@ try {
         (New-Target "NFR-011" "Free Rectangle overlay appears, slowest of 30" "ms" 300 $freeMaxMs),
         (New-Target "NFR-011" "Preset Rectangle overlay appears, mean of 30" "ms" 300 $presetMs),
         (New-Target "NFR-011" "Preset Rectangle overlay appears, slowest of 30" "ms" 300 $presetMaxMs),
-        (New-Target "NFR-012" "3840 x 2160 capture to clipboard" "ms" 1000 $captureToClipboardMs),
+        (New-Target "NFR-012" $captureToClipboardMeasure "ms" 1000 $captureToClipboardMs),
         (New-Target "NFR-013" "100 mixed 12 MP JPEGs to 1024 x 1024, slowest of 3" "ms" 120000 $batchMs),
         (New-Target "NFR-014" "peak heap during the batch" "MiB" 1024 $peakHeap)
     )
@@ -299,15 +370,15 @@ try {
     # Each step compiled the working tree as it stood then, so a change during
     # the run would leave results from more than one state of the source.
     $sourceAtEnd = Get-SourceState
-    $sourceUnchanged = ($sourceAtEnd.Commit -eq $sourceAtStart.Commit) -and ($sourceAtEnd.Status -eq $sourceAtStart.Status)
+    $sourceUnchanged = ($sourceAtEnd.Commit -eq $sourceAtStart.Commit) -and ($sourceAtEnd.Status -eq $sourceAtStart.Status) -and ($sourceAtEnd.Fingerprint -eq $sourceAtStart.Fingerprint)
     Add-Check -Name "source unchanged during the run" -Passed $sourceUnchanged -Seconds 0
 
-    $checksPassed = @($checks | Where-Object { -not $_.passed }).Count -eq 0
+    $checksPassed = @($checks | Where-Object { -not $_.passed -and -not $_.skipped }).Count -eq 0
     $targetsMet = @($targets | Where-Object { $_.status -ne "met" }).Count -eq 0
     $passed = $checksPassed -and ((-not $ReferenceMachine) -or $targetsMet)
 
     $report = [ordered]@{
-        schema         = 2
+        schema         = 3
         recordedUtc    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", $invariant)
         commit         = $sourceAtStart.Commit
         dirtyTree      = [bool]$sourceAtStart.Status
@@ -326,6 +397,7 @@ try {
             memoryGiB         = $memoryGiB
             installedGiB      = $installedGiB
             systemDiskMedia   = $systemDiskMedia
+            tempDiskMedia     = $tempDiskMedia
             elevated          = $elevated
             referenceMachine  = [bool]$ReferenceMachine
         }
@@ -349,7 +421,9 @@ try {
     Write-Host ""
     Write-Host "Windows build $build, windows/$target, scaling: $($scales -join ', ')%, mixed: $($scales.Count -gt 1), negative coordinates: $negative, elevated: $elevated"
     foreach ($check in $checks) {
-        Write-Host ("{0,-6} {1}" -f $(if ($check.passed) { "pass" } else { "FAIL" }), $check.name)
+        $state = if ($check.passed) { "pass" } elseif ($check.skipped) { "skip" } else { "FAIL" }
+        $note = if ($check.detail) { " ($($check.detail))" } else { "" }
+        Write-Host ("{0,-6} {1}{2}" -f $state, $check.name, $note)
     }
     foreach ($item in $targets) {
         Write-Host ("{0,-12} {1}: {2} {3} (limit {4}) - {5}" -f $item.status, $item.requirement, $item.value, $item.unit, $item.limit, $item.measure)

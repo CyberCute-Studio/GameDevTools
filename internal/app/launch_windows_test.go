@@ -155,7 +155,45 @@ func standardUserToken(tb testing.TB) windows.Token {
 		restricted.Close()
 		tb.Fatalf("lower the token's integrity level: %v", err)
 	}
+	if err := grantUserDefaultDacl(restricted); err != nil {
+		restricted.Close()
+		tb.Fatalf("set the token's default DACL: %v", err)
+	}
 	return restricted
+}
+
+// grantUserDefaultDacl makes the objects a token's process creates open to that
+// token's user and to SYSTEM. An elevated token's default DACL grants
+// Administrators, which a restricted token holds only as deny-only, so a second
+// process could not open the single-instance mutex the first one created.
+func grantUserDefaultDacl(token windows.Token) error {
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return err
+	}
+	grant := func(sid *windows.SID) windows.EXPLICIT_ACCESS {
+		return windows.EXPLICIT_ACCESS{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Inheritance:       windows.NO_INHERITANCE,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_UNKNOWN,
+				TrusteeValue: windows.TrusteeValueFromSID(sid),
+			},
+		}
+	}
+	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{grant(user.User.Sid), grant(system)}, nil)
+	if err != nil {
+		return err
+	}
+	// TOKEN_DEFAULT_DACL, whose only member is the pointer to the ACL.
+	info := struct{ defaultDacl *windows.ACL }{acl}
+	return windows.SetTokenInformation(token, windows.TokenDefaultDacl, (*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)))
 }
 
 // launchedApp is one running process of the release executable.
