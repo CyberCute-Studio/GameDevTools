@@ -324,8 +324,8 @@ func LibrarySection(section json.RawMessage) (json.RawMessage, error) {
 // that inherited, the module's section in settings the session took from an
 // older file and never wrote, holds unchanged is not one the session created:
 // replaced lacks it because it was deleted there, so it stays deleted; the
-// store reports nothing as inherited when that file is the newer one, as
-// replaced may then predate the preset. One
+// store reports nothing as inherited unless replaced's file is known to be
+// the newer one, as replaced may otherwise predate the preset. One
 // whose name a kept preset already uses is kept under the name Duplicate
 // would give a copy of it; the selected preset stays replaced's. A section
 // session holds as replaced does adds nothing, and neither does the section

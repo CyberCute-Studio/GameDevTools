@@ -349,29 +349,31 @@ func (s *Store) readLegacy() (data []byte, gone bool, err error) {
 
 // Inherited returns the settings the session took from the legacy file while
 // they have not reached the settings file, or the zero Settings. A settings
-// file found later that lacks one of their presets had it deleted, so what
-// Restore keeps is told from the presets the session created by these. That
-// holds only for a settings file written after the legacy file: an earlier
-// build still runs and can add presets there, which an older settings file
-// never held, so with the legacy file the newer of the two nothing counts as
-// inherited. A preset this keeps by mistake can be deleted again, where one
-// it dropped could not be got back in the application.
+// file found later that lacks one of their presets is taken to have had it
+// deleted, so what Restore keeps is told from the presets the session created
+// by these. That holds only for a settings file known to be written after the
+// legacy file: an earlier build still runs and can add presets there, which
+// an older settings file never held, and with the legacy file gone the
+// session may hold the only copy of one. So unless the settings file is the
+// newer of the two, nothing counts as inherited. A preset this keeps by
+// mistake can be deleted again, where one it dropped could not be got back in
+// the application.
 func (s *Store) Inherited() Settings {
-	if s.inherited.Modules == nil || s.legacyIsNewer() {
+	if s.inherited.Modules == nil || !s.settingsFileIsNewer() {
 		return Settings{}
 	}
 	return s.inherited
 }
 
-// legacyIsNewer reports whether both files exist and the legacy file was
-// written after the settings file.
-func (s *Store) legacyIsNewer() bool {
+// settingsFileIsNewer reports whether both files can be examined and the
+// settings file was written after the legacy file.
+func (s *Store) settingsFileIsNewer() bool {
 	legacy, err := os.Stat(s.legacyPath)
 	if err != nil {
 		return false
 	}
 	current, err := os.Stat(s.path)
-	return err == nil && legacy.ModTime().After(current.ModTime())
+	return err == nil && current.ModTime().After(legacy.ModTime())
 }
 
 // saveLoaded writes the settings Load settled on. While the settings file was
@@ -443,12 +445,13 @@ func (s *Store) Hold() (write func(Settings) error) {
 // file, the restore first backs it up, and while it exists but still cannot
 // be read, or is reported missing from a folder that cannot be reached, the
 // restore changes nothing, as the presets the restore keeps may be in it and
-// the new file would stop it ever being taken. It creates the
-// file without replacing one, so a settings file that was only reported
-// missing is kept: when one turns out to exist, or a block cannot be lifted
-// because the file cannot be created, nothing changes. Without a block, a file
-// that cannot be created is a failed write, returned as Save returns it, and
-// later saves still only create the file.
+// the new file would stop it ever being taken. Any restore that found no
+// settings file creates the file without replacing one, so a settings file
+// that was only reported missing is kept: when one turns out to exist, or a
+// block cannot be lifted because the file cannot be created, nothing changes.
+// Without a block, a file that cannot be created is a failed write, returned
+// as Save returns it, and in a session that found no file at launch later
+// saves still only create the file.
 func (s *Store) Restore(current Settings, reset func(replaced Settings) (Settings, error)) (Settings, string, error) {
 	replaced := current
 	var data []byte
@@ -474,6 +477,9 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		case errors.Is(err, os.ErrNotExist) && s.blocked != nil:
 			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
 		case errors.Is(err, os.ErrNotExist):
+			// A share that is reconnecting reports a file missing too, and no
+			// copy of it has been made, so the restore must not replace it.
+			creating = true
 		case err != nil:
 			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
 		default:
@@ -514,6 +520,9 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 	if creating {
 		if err := s.create(value); err != nil {
 			if s.blocked == nil && !foundSettingsFile(err) {
+				if !s.createOnly {
+					s.unloaded = false
+				}
 				return value, "", err
 			}
 			if backup != "" {

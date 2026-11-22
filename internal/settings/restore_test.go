@@ -95,6 +95,46 @@ func TestStoreRestoreWithoutAFileWritesOne(t *testing.T) {
 	}
 }
 
+// TestStoreRestoreKeepsAFileReportedMissingThatReturns pins that a session
+// that loaded its settings file does not replace it uncopied when a share
+// reports it missing as the restore reads it and brings it back before the
+// write: nothing changes, and the next restore backs the file up.
+func TestStoreRestoreKeepsAFileReportedMissingThatReturns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	store := NewStore(Paths{ConfigFile: path})
+	value := Default()
+	value.Shell.SelectedModule = string(shell.ModuleImageResizer)
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_, backup, err := store.Restore(value, func(Settings) (Settings, error) {
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Default(), nil
+	})
+	if !errors.Is(err, ErrNotRestored) || backup != "" {
+		t.Fatalf("Restore() backup = %q, error = %v, want ErrNotRestored", backup, err)
+	}
+	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("settings file = %q, err = %v, want it kept as %q", got, err, original)
+	}
+	_, backup, err = store.Restore(value, restoreTo(Default()))
+	if err != nil || backup == "" {
+		t.Fatalf("second Restore() backup = %q, error = %v, want the file backed up", backup, err)
+	}
+	if copied, err := os.ReadFile(backup); err != nil || !bytes.Equal(copied, original) {
+		t.Fatalf("backup = %q, err = %v, want the file's bytes", copied, err)
+	}
+}
+
 // TestStoreRestoreReenablesSavingOnceTheOriginalIsBackedUp pins that the
 // restore is the way out of a session whose saving Load disabled because it
 // could not back up a malformed file: once Restore has copied the file,

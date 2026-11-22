@@ -178,6 +178,20 @@ func TestRestoreKeepsAPresetCreatedAfterAnUnwrittenAdoption(t *testing.T) {
 	if err := repository.Save(&value, library); err == nil {
 		t.Fatal("the save succeeded with the settings folder blocked")
 	}
+	// The share returns with a settings file written after the legacy file.
+	if err := os.Remove(filepath.Dir(paths.ConfigFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(paths.ConfigFile, later, later); err != nil {
+		t.Fatal(err)
+	}
 
 	module := string(shell.ModuleImageResizer)
 	found := json.RawMessage(`{"presets":{"version":1,"custom":[]}}`)
@@ -198,7 +212,9 @@ func TestRestoreKeepsAPresetCreatedAfterAnUnwrittenAdoption(t *testing.T) {
 // preset the legacy file holds and a settings file found later does not. With
 // the legacy file written last, an earlier build added it after that settings
 // file, and it is kept. With the settings file written last, it was deleted
-// there, and it stays deleted.
+// there, and it stays deleted. With the two written together, or the legacy
+// file since removed, which came last cannot be told and the session may hold
+// the only copy, so it is kept.
 func TestRestoreTellsAnAddedPresetFromADeletedOne(t *testing.T) {
 	const (
 		sharedID = "custom.00000000000000000000000000000001"
@@ -214,11 +230,14 @@ func TestRestoreTellsAnAddedPresetFromADeletedOne(t *testing.T) {
 	shared := Preset{ID: sharedID, Name: "Shared", Width: 64, Height: 64, ResizeMode: ResizeFit}
 	only := Preset{ID: onlyID, Name: "Only", Width: 64, Height: 64, ResizeMode: ResizeFit}
 	for name, test := range map[string]struct {
-		settingsAge time.Duration
-		want        []Preset
+		settingsAge  time.Duration
+		removeLegacy bool
+		want         []Preset
 	}{
 		"legacy file written last":   {settingsAge: time.Hour, want: []Preset{shared, only}},
 		"settings file written last": {settingsAge: -time.Hour, want: []Preset{shared}},
+		"written together":           {want: []Preset{shared, only}},
+		"legacy file removed":        {settingsAge: -time.Hour, removeLegacy: true, want: []Preset{shared, only}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -258,6 +277,11 @@ func TestRestoreTellsAnAddedPresetFromADeletedOne(t *testing.T) {
 			written := now.Add(-test.settingsAge)
 			if err := os.Chtimes(paths.ConfigFile, written, written); err != nil {
 				t.Fatal(err)
+			}
+			if test.removeLegacy {
+				if err := os.Remove(paths.LegacyConfigFile); err != nil {
+					t.Fatal(err)
+				}
 			}
 			session := loaded.Settings
 			if err := store.Save(session); err == nil {

@@ -29,10 +29,11 @@ $toolchain = (Select-String -LiteralPath (Join-Path $root "go.mod") -Pattern '^t
 if (-not $toolchain) { throw "go.mod names no toolchain." }
 
 $executable = Join-Path $OutputDirectory "cybercute-dev-tools.exe"
-# Where modules come from and where they are kept cannot change the bytes, as
-# go.sum pins the modules and -trimpath drops the paths, but a machine may need
-# them to build at all, so they outlive the env file being turned off below.
-$kept = "GOPROXY", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOVCS", "GOAUTH", "GOMODCACHE", "GOCACHE"
+# Where modules come from and where they and the build's temporary files are
+# kept cannot change the bytes, as go.sum pins the modules and -trimpath drops
+# the paths, but a machine may need them to build at all, so they outlive the
+# env file being turned off below.
+$kept = "GOPROXY", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOVCS", "GOAUTH", "GOMODCACHE", "GOCACHE", "GOTMPDIR"
 $saved = @{}
 foreach ($name in @("GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140", "GOWORK", "GO111MODULE") + $kept) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)

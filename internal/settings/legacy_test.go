@@ -610,9 +610,19 @@ func TestStoreFirstRunSavesAsUsual(t *testing.T) {
 // Inherited names the legacy settings only until they reach the settings
 // file, so Restore can tell presets the session merely took from them.
 func TestStoreInheritedLastsUntilTheSettingsAreWritten(t *testing.T) {
-	store, _, session := unwrittenAdoption(t)
+	store, paths, session := unwrittenAdoption(t)
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(paths.ConfigFile, later, later); err != nil {
+		t.Fatal(err)
+	}
 	if got := store.Inherited().Shell.SelectedModule; got != string(shell.ModuleImageResizer) {
 		t.Fatalf("inherited module = %q, want the legacy file's", got)
+	}
+	if err := os.Remove(paths.ConfigFile); err != nil {
+		t.Fatal(err)
 	}
 	if err := store.Save(session); err != nil {
 		t.Fatal(err)
@@ -622,9 +632,10 @@ func TestStoreInheritedLastsUntilTheSettingsAreWritten(t *testing.T) {
 	}
 }
 
-// Inherited counts for a settings file written after the legacy file. One
-// older than it may simply predate presets an earlier build added there, so
-// nothing then counts as inherited.
+// Inherited counts only for a settings file known to be written after the
+// legacy file. One older than it, or written at the same time, may predate
+// presets an earlier build added there, and with either file gone the order
+// cannot be told, so nothing then counts as inherited.
 func TestStoreInheritedYieldsToALegacyFileNewerThanTheSettingsFile(t *testing.T) {
 	store, paths, _ := unwrittenAdoption(t)
 	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
@@ -645,6 +656,30 @@ func TestStoreInheritedYieldsToALegacyFileNewerThanTheSettingsFile(t *testing.T)
 	}
 	if got := store.Inherited().Shell.SelectedModule; got != "" {
 		t.Fatalf("inherited module with the legacy file newer = %q, want none", got)
+	}
+	if err := os.Chtimes(paths.LegacyConfigFile, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Inherited().Shell.SelectedModule; got != "" {
+		t.Fatalf("inherited module with both files written together = %q, want none", got)
+	}
+	if err := os.Chtimes(paths.LegacyConfigFile, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(paths.ConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Inherited().Shell.SelectedModule; got != "" {
+		t.Fatalf("inherited module with no settings file = %q, want none", got)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Inherited().Shell.SelectedModule; got != "" {
+		t.Fatalf("inherited module with the legacy file gone = %q, want none", got)
 	}
 }
 

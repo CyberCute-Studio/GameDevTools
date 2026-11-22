@@ -89,7 +89,7 @@ function Invoke-App([string]$Executable, [string]$Workspace) {
             if ((Get-Date) -gt $deadline) { throw "The application showed no window within $windowWait seconds." }
             Start-Sleep -Milliseconds 100
         }
-        if ($process.MainWindowTitle -ne $productName) { throw "The window is titled '$($process.MainWindowTitle)'." }
+        if ($process.MainWindowTitle -cne $productName) { throw "The window is titled '$($process.MainWindowTitle)'." }
         # GCLP_HICON and GCLP_HICONSM: the title bar and taskbar show these.
         foreach ($index in -14, -34) {
             if ([PackageCheck.Native]::GetClassLongPtrW($process.MainWindowHandle, $index) -eq [IntPtr]::Zero) {
@@ -132,13 +132,13 @@ try {
         $zip.Dispose()
     }
     $wanted = @("README.txt", "THIRD-PARTY-NOTICES.txt", $executableName) | ForEach-Object { "$productName/$_" } | Sort-Object
-    if (($found -join "|") -ne ($wanted -join "|")) { throw "The ZIP holds: $($found -join ', ')." }
+    if (($found -join "|") -cne ($wanted -join "|")) { throw "The ZIP holds: $($found -join ', ')." }
     Write-Check "contents"
 
     $executable = Join-Path $folder $executableName
     $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
-    if ($info.ProductName -ne $productName) { throw "ProductName is '$($info.ProductName)'." }
-    if ($info.OriginalFilename -ne $executableName) { throw "OriginalFilename is '$($info.OriginalFilename)'." }
+    if ($info.ProductName -cne $productName) { throw "ProductName is '$($info.ProductName)'." }
+    if ($info.OriginalFilename -cne $executableName) { throw "OriginalFilename is '$($info.OriginalFilename)'." }
     if ((Split-Path -Leaf $Package) -notmatch "-$([regex]::Escape($info.ProductVersion))-windows-x64\.zip$") {
         throw "The executable's version $($info.ProductVersion) is not the one the ZIP is named for."
     }

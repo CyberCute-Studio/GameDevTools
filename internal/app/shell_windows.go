@@ -457,7 +457,10 @@ func loadAppIcon(instance, size uintptr) windows.Handle {
 		return icon
 	}
 	icon, _, _ := procLoadImageW.Call(instance, appIconResource, imageIcon, size, size, 0)
-	appIcons[size] = windows.Handle(icon)
+	// A failed load is not kept, so the next DPI change at this size retries.
+	if icon != 0 {
+		appIcons[size] = windows.Handle(icon)
+	}
 	return windows.Handle(icon)
 }
 
