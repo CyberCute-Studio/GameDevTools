@@ -1,6 +1,6 @@
-# GameDevTools
+# CyberCute Dev Tools
 
-GameDevTools is a Windows desktop application implemented in Go. The repository contains the production project foundation under `cmd/gamedevtools` and `internal`, plus the separate **FND-01 technical spike** under `cmd/fnd01-spike`.
+CyberCute Dev Tools is a Windows desktop application implemented in Go. The repository contains the production project foundation under `cmd/gamedevtools` and `internal`, plus the separate **FND-01 technical spike** under `cmd/fnd01-spike`.
 
 The production application provides a native Win32 main window with Screenshot, Image Resizer, and Settings navigation. Both feature modules include independent preset management. The Screenshot module configures its capture mode, output format, JPEG quality, and output folder, and captures a selected display, a user-drawn rectangle, or an exact preset-sized rectangle end to end. The Image Resizer module builds a deduplicated, per-file validated source list from a multi-select image picker or drag-and-drop, manages resize presets with their fitting modes, and configures the resize job's output folder, format, collision policy, JPEG quality, and JPEG transparency background; Start Resize then resizes every ready image in the background, with live progress, Cancel Resize, each image's result in its row, a completion summary, and an Open Output Folder action. The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open mixed-DPI validation blocker.
 
@@ -16,11 +16,11 @@ go run ./cmd/gamedevtools
 
 Use the navigation controls — clicked, or with the arrow keys once Tab has reached them — to switch between Screenshot, Image Resizer, and Settings. Each module retains its view object while another module is selected. In either feature module, use the preset fields to create a custom preset, Rename / Save to update the selected custom preset, Duplicate to copy any preset, and Delete to remove a custom preset after confirmation. Shared registration, navigation, and GUI-dispatch contracts live in `internal/shell`.
 
-The Screenshot module also configures the capture mode (Free Rectangle, Preset Rectangle, or Full Display), the PNG/JPEG save format, JPEG quality from 1–100, the global capture shortcut, and the output folder, which defaults to `Pictures\GameDevTools\Screenshots` and is chosen through the Windows folder picker. All options persist across restarts. In Full Display mode a picker lists every connected display with its number, name where Windows provides one, native resolution, scaling, and primary status, defaulting to the display under the cursor and refreshing when the display topology changes. Start Capture hides the main window, captures the selected display at its native pixel dimensions, copies the original pixels to the clipboard, saves the timestamped file, restores the window without stealing focus, and reports the clipboard and save outcomes independently in a non-blocking notification with an Open Folder action. In Free Rectangle or Preset Rectangle mode Start Capture opens the selection session described below, where the drawn rectangle or the exact preset frame is captured and delivered the same way.
+The Screenshot module also configures the capture mode (Free Rectangle, Preset Rectangle, or Full Display), the PNG/JPEG save format, JPEG quality from 1–100, the global capture shortcut, and the output folder, which defaults to `Pictures\CyberCute Dev Tools\Screenshots` and is chosen through the Windows folder picker. All options persist across restarts. In Full Display mode a picker lists every connected display with its number, name where Windows provides one, native resolution, scaling, and primary status, defaulting to the display under the cursor and refreshing when the display topology changes. Start Capture hides the main window, captures the selected display at its native pixel dimensions, copies the original pixels to the clipboard, saves the timestamped file, restores the window without stealing focus, and reports the clipboard and save outcomes independently in a non-blocking notification with an Open Folder action. In Free Rectangle or Preset Rectangle mode Start Capture opens the selection session described below, where the drawn rectangle or the exact preset frame is captured and delivered the same way.
 
 The global shortcut, `Ctrl+Alt+S` by default, starts the currently selected capture mode while another application has the foreground. It is registered on the main window, so it works even while that window is hidden behind a selection session; invoking it during a session brings the existing selection's toolbar back to the foreground instead of stacking a second overlay. A combination another application already owns is reported as a shortcut-registration conflict beside the field and in the status area, the previous combination keeps working, and a replacement typed into the shortcut field is validated, applied, and persisted without reinstalling. The shortcut is suspended while its field is being edited and released when the application exits.
 
-The Image Resizer module accepts PNG and JPEG sources through a multi-select file picker and through files — or a folder of images — dropped anywhere on its view. Each added file's content is decoded in the background to validate it rather than trusting its extension, and the source list shows each file's name, upright dimensions once checked, and status, with the full path and a description — format, alpha channel, applied EXIF orientation, or the reason a file cannot be used — shown for the selected item; duplicates are skipped, and sources are opened read-only and never modified. Items can be removed or the whole list cleared before a job starts. The module persists its job configuration across restarts: the output folder, defaulting to `Pictures\GameDevTools\Resized` and chosen through the Windows folder picker; the output format — Keep Source Format, PNG, or JPEG; the collision policy — Rename, Skip, or Overwrite — with the selected policy's consequence restated beneath it; JPEG quality from 1–100; and the `#RRGGBB` background color transparent pixels are flattened against when JPEG output is produced. The selected preset's fitting mode is explained in plain language alongside, including the Stretch distortion warning. Start Resize runs the job described below for every listed image.
+The Image Resizer module accepts PNG and JPEG sources through a multi-select file picker and through files — or a folder of images — dropped anywhere on its view. Each added file's content is decoded in the background to validate it rather than trusting its extension, and the source list shows each file's name, upright dimensions once checked, and status, with the full path and a description — format, alpha channel, applied EXIF orientation, or the reason a file cannot be used — shown for the selected item; duplicates are skipped, and sources are opened read-only and never modified. Items can be removed or the whole list cleared before a job starts. The module persists its job configuration across restarts: the output folder, defaulting to `Pictures\CyberCute Dev Tools\Resized` and chosen through the Windows folder picker; the output format — Keep Source Format, PNG, or JPEG; the collision policy — Rename, Skip, or Overwrite — with the selected policy's consequence restated beneath it; JPEG quality from 1–100; and the `#RRGGBB` background color transparent pixels are flattened against when JPEG output is produced. The selected preset's fitting mode is explained in plain language alongside, including the Stretch distortion warning. Start Resize runs the job described below for every listed image.
 
 The selected module and normal window bounds persist across restarts. Only one instance runs per user session: a second launch activates the existing window — restoring it first when minimized — and exits, so global shortcuts and settings never conflict across instances; one that lands while the running instance is closing, its window gone while a resize job's images in flight stop, waits for it to exit and then starts. Closing the window while a resize job runs asks first, as closing cancels the job; when Windows signs out, restarts, or shuts down, the application asks nothing, saves its settings, releases the global shortcut, closes any capture overlay, and cancels a running job before the session ends. Settings use a versioned JSON file with atomic writes, migration hooks, and backup-before-recovery behavior. The Settings view's Restore Default Settings backs the settings file up and returns the global shortcut, capture and resize options, and output folders to their defaults, keeping custom presets, each module's selected preset, the window, and every image. Diagnostic logs contain structured event metadata only and rotate by size. See [Local settings and diagnostics](docs/settings.md) for paths, schema, recovery, and redaction boundaries.
 
@@ -78,7 +78,7 @@ Build the smaller Windows GUI release executable:
 ./scripts/build.ps1 -Configuration Release
 ```
 
-The default outputs are `bin/gamedevtools-debug.exe` and `bin/gamedevtools.exe`. Override the destination with `-OutputPath`; relative paths are resolved from the repository root.
+The default outputs are `bin/cybercute-dev-tools-debug.exe` and `bin/cybercute-dev-tools.exe`. Override the destination with `-OutputPath`; relative paths are resolved from the repository root.
 
 To build the initial 64-bit Intel/AMD target from another Windows architecture:
 
@@ -86,10 +86,30 @@ To build the initial 64-bit Intel/AMD target from another Windows architecture:
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "0"
-./scripts/build.ps1 -Configuration Release -OutputPath bin/gamedevtools-windows-amd64.exe
+./scripts/build.ps1 -Configuration Release -OutputPath bin/cybercute-dev-tools-windows-amd64.exe
 ```
 
-Windows CI runs the same formatting, static-analysis, test, and release-build checks and uploads the AMD64 executable as an artifact.
+Windows CI runs the same formatting, static-analysis, and test checks, builds and verifies the portable package, and uploads it as an artifact.
+
+## Release package
+
+CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsigned and with a SHA-256 checksum file. It has no installer and no update check. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
+
+```powershell
+./scripts/package.ps1
+```
+
+The ZIP and its `.sha256` file are written to `bin/release`, and the same commit gives the same bytes from any checkout path. To check a package as a user receives it, with the application closed, run the command below. It confirms the checksum, contents, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade from a GameDevTools settings file:
+
+```powershell
+./scripts/verify-package.ps1 -Package bin/release/cybercute-dev-tools-1.0.0-windows-x64.zip
+```
+
+The version is in `internal/release/release.go` and the icon in `assets/icon.ico`. After changing either, regenerate the linked Windows resources:
+
+```powershell
+go generate ./cmd/gamedevtools
+```
 
 The Screenshot module's acceptance and performance verification is recorded in [Screenshot verification and acceptance results](docs/screenshot-verification.md): the repeatable test matrix for every Screenshot acceptance scenario, the NFR-011 overlay-appearance and NFR-012 capture-to-clipboard benchmarks, the environment of record the results were measured on, and the scenarios still gated on mixed-DPI hardware.
 
@@ -101,7 +121,7 @@ Settings migration, recovery, restore, and application shutdown are recorded in 
 
 Offline operation, privacy, file access, and dependencies are recorded in [Offline, privacy, file access, and dependency verification](docs/privacy-verification.md): the test that runs both core workflows in a sandbox with no network, the network, account, and telemetry audit, every place the application changes a file, what its logs can hold, the dependency and license inventory, and the vulnerability review.
 
-The application supports 64-bit Windows 11; Windows 10 is not supported. Supported platforms, running without administrator rights, display scaling, and combined performance are recorded in [Windows platform and combined performance verification](docs/platform-verification.md), including what has not yet been run. To repeat the validation on a machine, with GameDevTools closed and nothing else using the desktop, run the script below. It moves windows, takes the foreground, replaces the clipboard, and writes a JSON result file to `bin/validation`:
+The application supports 64-bit Windows 11; Windows 10 is not supported. Supported platforms, running without administrator rights, display scaling, and combined performance are recorded in [Windows platform and combined performance verification](docs/platform-verification.md), including what has not yet been run. To repeat the validation on a machine, with CyberCute Dev Tools closed and nothing else using the desktop, run the script below. It moves windows, takes the foreground, replaces the clipboard, and writes a JSON result file to `bin/validation`:
 
 ```powershell
 ./scripts/validate.ps1

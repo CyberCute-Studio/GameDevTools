@@ -12,7 +12,7 @@ The initial release supports 64-bit **Windows 11** only, in the releases Microso
 
 ## How to run the validation
 
-From the repository root, in an interactive desktop session, with GameDevTools closed and nothing else using the desktop:
+From the repository root, in an interactive desktop session, with CyberCute Dev Tools closed and nothing else using the desktop:
 
 ```powershell
 ./scripts/validate.ps1
