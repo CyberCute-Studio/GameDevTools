@@ -156,7 +156,9 @@ try {
     $layout = Invoke-Go -Name "display layout" -Arguments @("test", "-count=1", "-run", "^TestRecordDisplayLayout$", "./internal/display") -Environment $layoutEnvironment
     $displays = @()
     if ($layout.Passed -and (Test-Path -LiteralPath $layoutFile)) {
-        $displays = @(Get-Content -Raw -LiteralPath $layoutFile | ConvertFrom-Json)
+        # Windows PowerShell passes a JSON array down the pipeline as one object,
+        # so ForEach-Object unrolls it into one item per display on either edition.
+        $displays = @(Get-Content -Raw -LiteralPath $layoutFile | ConvertFrom-Json | ForEach-Object { $_ })
         Remove-Item -LiteralPath $layoutFile
     }
     Add-Check -Name "display layout recorded" -Passed ($displays.Count -gt 0) -Seconds $layout.Seconds
