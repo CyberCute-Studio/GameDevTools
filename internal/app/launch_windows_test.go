@@ -23,8 +23,9 @@ const (
 	// a package `go test ./...` runs at the same time.
 	validationEnv = "GAMEDEVTOOLS_VALIDATION"
 
-	launchLimit = 30 * time.Second
-	exitLimit   = 20 * time.Second
+	launchLimit        = 30 * time.Second
+	exitLimit          = 20 * time.Second
+	launchCleanupLimit = 10 * time.Second
 
 	launchWMNull        = 0x0000
 	launchSMTOAbortHung = 0x0002
@@ -70,11 +71,37 @@ func instanceRunning(tb testing.TB) bool {
 	return !errors.Is(err, windows.ERROR_FILE_NOT_FOUND)
 }
 
+// launchTempDir is a temporary folder for an executable that has run and the
+// files it wrote. Another program, such as a virus scanner or the x64 emulation
+// cache, can hold a program that has just exited for a moment, which fails
+// testing.TB.TempDir's cleanup, so removal waits that out. A folder still held
+// after the wait is logged rather than failing a run whose checks all passed.
+func launchTempDir(tb testing.TB) string {
+	tb.Helper()
+	folder, err := os.MkdirTemp("", "gamedevtools-validation-*")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	tb.Cleanup(func() {
+		var err error
+		for deadline := time.Now().Add(launchCleanupLimit); ; time.Sleep(100 * time.Millisecond) {
+			if err = os.RemoveAll(folder); err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				tb.Logf("left a temporary folder behind: %v", err)
+				return
+			}
+		}
+	})
+	return folder
+}
+
 // buildReleaseExecutable builds the application with the release flags
 // scripts/build.ps1 uses, for the architecture this test binary runs as.
 func buildReleaseExecutable(tb testing.TB) string {
 	tb.Helper()
-	executable := filepath.Join(tb.TempDir(), "gamedevtools.exe")
+	executable := filepath.Join(launchTempDir(tb), "gamedevtools.exe")
 	command := exec.Command("go", "build", "-ldflags=-s -w -H=windowsgui", "-o", executable,
 		"github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
 	command.Env = append(os.Environ(), "GOOS=windows", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
@@ -88,7 +115,7 @@ func buildReleaseExecutable(tb testing.TB) string {
 // so a validation run neither reads nor changes the user's own settings.
 func launchWorkspace(tb testing.TB) string {
 	tb.Helper()
-	workspace := tb.TempDir()
+	workspace := launchTempDir(tb)
 	for _, folder := range []string{"Roaming", "Local", "Temp"} {
 		if err := os.MkdirAll(filepath.Join(workspace, folder), 0o755); err != nil {
 			tb.Fatal(err)
