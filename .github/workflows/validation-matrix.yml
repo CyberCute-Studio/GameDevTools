@@ -10,6 +10,14 @@ on:
     paths:
       - .github/workflows/validation-matrix.yml
       - scripts/validate.ps1
+      - internal/app/launch_windows_test.go
+      - internal/display/display_windows_test.go
+      - internal/imageresizer/job/bench_test.go
+      - internal/screenshot/capture/capture_windows_test.go
+      - internal/screenshot/capture/capture_windows_perf_test.go
+      - internal/screenshot/output/clipboard_windows_perf_test.go
+      - internal/screenshot/overlay/session_windows_test.go
+      - internal/screenshot/overlay/session_windows_perf_test.go
 
 permissions:
   contents: read
@@ -21,7 +29,10 @@ jobs:
       matrix:
         os: [windows-2025, windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Above the sum of the script's go test timeouts (30 for the suite, 10 each
+    # for the layout and the release executable, 15 for each of five benchmarks),
+    # because the result file is written only when the script finishes.
+    timeout-minutes: 150
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -42,4 +53,4 @@ jobs:
         with:
           name: validation-${{ matrix.os }}
           path: bin/validation/validation-*.json
-          if-no-files-found: warn
+          if-no-files-found: error

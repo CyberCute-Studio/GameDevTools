@@ -3,6 +3,8 @@
 package overlay
 
 import (
+	"fmt"
+	"os"
 	"runtime"
 	"testing"
 	"unsafe"
@@ -11,6 +13,20 @@ import (
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
+
+// TestMain puts the test process into the same per-monitor DPI awareness V2
+// context the production shell establishes in internal/app. Without it, on any
+// display not at 100% scaling, Windows virtualizes the desktop these tests and
+// the NFR-011 benchmarks see, so they would time a surface of the wrong size.
+func TestMain(m *testing.M) {
+	const dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3)
+	r, _, err := user32.NewProc("SetProcessDpiAwarenessContext").Call(dpiAwarenessContextPerMonitorAwareV2)
+	if r == 0 {
+		fmt.Fprintf(os.Stderr, "TestMain: SetProcessDpiAwarenessContext failed, aborting: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
 
 const (
 	wmGetFont         = 0x0031

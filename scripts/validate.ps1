@@ -17,9 +17,11 @@ amd64 runs the release target under Windows' x64 emulation.
 
 .PARAMETER ReferenceMachine
 Asserts this is the PRD's reference machine: 64-bit Intel or AMD, four or more
-cores, 16 GB RAM, Windows 11, not elevated. The script refuses a machine that is
-not, and a target that is missed or not measured then fails the run. Elsewhere
-the performance results are recorded without failing it.
+cores, 16 GB RAM installed, Windows 11, not elevated, and not on a hard disk. The
+script refuses a machine that is not, and a target that is missed or not measured
+then fails the run. Elsewhere the performance results are recorded without
+failing it. Windows does not report a CPU's age, so whoever passes this switch
+confirms the CPU is from 2020 or later; the report records its name.
 
 .PARAMETER OutputDirectory
 Where the result file goes; relative paths are resolved from the repository root.
@@ -86,6 +88,22 @@ function Add-Check {
     [void]$checks.Add([ordered]@{ name = $Name; passed = $Passed; seconds = $Seconds; detail = $Detail })
 }
 
+# Get-SourceState reads the commit and the working tree's status, leaving out a
+# result folder inside the repository, whose files are this script's own.
+function Get-SourceState {
+    $arguments = @("status", "--porcelain")
+    $repository = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+    $results = [System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/')
+    if ($results.StartsWith($repository + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        $relative = $results.Substring($repository.Length + 1).Replace('\', '/')
+        $arguments += @("--", ".", ":(exclude,literal)$relative")
+    }
+    return [pscustomobject]@{
+        Commit = (& git rev-parse HEAD).Trim()
+        Status = (@(& git @arguments) -join "`n")
+    }
+}
+
 function Read-Benchmark {
     param([string[]]$Lines, [string]$Name)
     $results = New-Object System.Collections.ArrayList
@@ -115,30 +133,55 @@ function New-Target {
 
 Push-Location $root
 try {
-    $hostArchitecture = (& go env GOHOSTARCH).Trim()
+    # The processor, not the Go toolchain: an x64 Go under emulation on Windows
+    # on Arm reports amd64 as its host.
+    $processors = @(Get-CimInstance Win32_Processor)
+    $hostArchitecture = switch ([int]$processors[0].Architecture) {
+        9 { "amd64" }
+        12 { "arm64" }
+        default { throw "Unrecognized processor architecture $($processors[0].Architecture)." }
+    }
     $target = if ($Architecture -eq "native") { $hostArchitecture } else { $Architecture }
     $goEnvironment = @{ GOOS = "windows"; GOARCH = $target; CGO_ENABLED = "0" }
 
+    # Read before anything is built or run, so the report names the source the
+    # results came from.
+    $sourceAtStart = Get-SourceState
+
     $os = Get-CimInstance Win32_OperatingSystem
     $computer = Get-CimInstance Win32_ComputerSystem
-    $processors = @(Get-CimInstance Win32_Processor)
     $cores = ($processors | Measure-Object -Property NumberOfCores -Sum).Sum
     $memoryGiB = [math]::Round($computer.TotalPhysicalMemory / 1GB, 1)
+    # Usable memory excludes what firmware and an integrated GPU reserve, so the
+    # installed amount is what decides a 16 GB machine. A virtual machine may
+    # report no modules.
+    $installedBytes = (@(Get-CimInstance Win32_PhysicalMemory) | Measure-Object -Property Capacity -Sum).Sum
+    $installedGiB = if ($installedBytes -gt 0) { [math]::Round($installedBytes / 1GB, 1) } else { $memoryGiB }
+    $systemDiskMedia = "Unknown"
+    try {
+        $systemDisk = Get-Partition -DriveLetter $env:SystemDrive[0] | Get-Disk
+        $physicalDisk = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq "$($systemDisk.Number)" }
+        if ($physicalDisk) { $systemDiskMedia = "$($physicalDisk.MediaType)" }
+    } catch {
+        Write-Host "Could not read the system disk's type: $_"
+    }
     $version = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion"
     $build = [int]$os.BuildNumber
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     $elevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     # Windows 11 is build 22000 or later, on a client edition (product type 1).
-    $supportedOS = ($build -ge 22000) -and ($os.ProductType -eq 1)
+    # This does not say whether Microsoft still supports the release.
+    $windows11Client = ($build -ge 22000) -and ($os.ProductType -eq 1)
 
     if ($ReferenceMachine) {
         $refused = @()
         if ($target -ne "amd64" -or $hostArchitecture -ne "amd64") { $refused += "it is not 64-bit Intel or AMD" }
         if ($cores -lt 4) { $refused += "it has $cores cores" }
-        # 16 GB of installed memory reports slightly less as usable.
-        if ($memoryGiB -lt 15) { $refused += "it has $memoryGiB GB of memory" }
-        if (-not $supportedOS) { $refused += "it is not Windows 11" }
+        # A virtual machine's fallback is usable memory, slightly under 16 GB.
+        if ($installedGiB -lt 15) { $refused += "it has $installedGiB GB of memory installed" }
+        if ($systemDiskMedia -eq "HDD") { $refused += "its system drive is a hard disk" }
+        if (-not $windows11Client) { $refused += "it is not Windows 11" }
         if ($elevated) { $refused += "this shell is elevated" }
         if ($refused.Count -gt 0) {
             throw "This is not the reference machine: $($refused -join '; ')."
@@ -193,7 +236,8 @@ try {
 
     function Invoke-Benchmark {
         param([string]$Name, [string]$Package, [string]$Pattern, [string[]]$Options, [hashtable]$Environment)
-        $arguments = @("test", "-run", "^$", "-timeout=30m", "-bench", $Pattern) + $Options + @($Package)
+        # The workflow's job limit allows for this timeout on every benchmark.
+        $arguments = @("test", "-run", "^$", "-timeout=15m", "-bench", $Pattern) + $Options + @($Package)
         $result = Invoke-Go -Name "benchmark: $Name" -Arguments $arguments -Environment $Environment
         Add-Check -Name "benchmark: $Name" -Passed $result.Passed -Seconds $result.Seconds
         return $result
@@ -215,7 +259,9 @@ try {
     $launchMs = if ($launchRuns.Count -gt 0) { $launchRuns[0]["ns/op"] / 1e6 } else { $null }
     $launchMaxMs = if ($launchRuns.Count -gt 0) { $launchRuns[0]["max-ms"] } else { $null }
     $freeMs = if ($freeRuns.Count -gt 0) { $freeRuns[0]["ns/op"] / 1e6 } else { $null }
+    $freeMaxMs = if ($freeRuns.Count -gt 0) { $freeRuns[0]["max-ms"] } else { $null }
     $presetMs = if ($presetRuns.Count -gt 0) { $presetRuns[0]["ns/op"] / 1e6 } else { $null }
+    $presetMaxMs = if ($presetRuns.Count -gt 0) { $presetRuns[0]["max-ms"] } else { $null }
 
     # NFR-012 is defined at 3840 x 2160. The capture benchmark reads the whole
     # virtual desktop, so its throughput is converted to that region's bytes.
@@ -237,8 +283,10 @@ try {
     $targets = @(
         (New-Target "NFR-010" "warm launch to a responsive main window, mean of 20" "ms" 2000 $launchMs),
         (New-Target "NFR-010" "warm launch, slowest of 20" "ms" 2000 $launchMaxMs),
-        (New-Target "NFR-011" "Free Rectangle overlay appears" "ms" 300 $freeMs),
-        (New-Target "NFR-011" "Preset Rectangle overlay appears" "ms" 300 $presetMs),
+        (New-Target "NFR-011" "Free Rectangle overlay appears, mean of 30" "ms" 300 $freeMs),
+        (New-Target "NFR-011" "Free Rectangle overlay appears, slowest of 30" "ms" 300 $freeMaxMs),
+        (New-Target "NFR-011" "Preset Rectangle overlay appears, mean of 30" "ms" 300 $presetMs),
+        (New-Target "NFR-011" "Preset Rectangle overlay appears, slowest of 30" "ms" 300 $presetMaxMs),
         (New-Target "NFR-012" "3840 x 2160 capture to clipboard" "ms" 1000 $captureToClipboardMs),
         (New-Target "NFR-013" "100 mixed 12 MP JPEGs to 1024 x 1024, slowest of 3" "ms" 120000 $batchMs),
         (New-Target "NFR-014" "peak heap during the batch" "MiB" 1024 $peakHeap)
@@ -246,44 +294,51 @@ try {
 
     $scales = @($displays | ForEach-Object { [int]$_.scalePercent } | Sort-Object -Unique)
     $negative = @($displays | Where-Object { $_.x -lt 0 -or $_.y -lt 0 }).Count -gt 0
-    $commit = (& git rev-parse HEAD).Trim()
-    $dirty = [bool](& git status --porcelain)
     $goVersion = (& go version).Trim()
+
+    # Each step compiled the working tree as it stood then, so a change during
+    # the run would leave results from more than one state of the source.
+    $sourceAtEnd = Get-SourceState
+    $sourceUnchanged = ($sourceAtEnd.Commit -eq $sourceAtStart.Commit) -and ($sourceAtEnd.Status -eq $sourceAtStart.Status)
+    Add-Check -Name "source unchanged during the run" -Passed $sourceUnchanged -Seconds 0
 
     $checksPassed = @($checks | Where-Object { -not $_.passed }).Count -eq 0
     $targetsMet = @($targets | Where-Object { $_.status -ne "met" }).Count -eq 0
     $passed = $checksPassed -and ((-not $ReferenceMachine) -or $targetsMet)
 
     $report = [ordered]@{
-        schema      = 1
-        recordedUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", $invariant)
-        commit      = $commit
-        dirtyTree   = $dirty
-        go          = $goVersion
-        target      = "windows/$target"
-        environment = [ordered]@{
+        schema         = 2
+        recordedUtc    = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", $invariant)
+        commit         = $sourceAtStart.Commit
+        dirtyTree      = [bool]$sourceAtStart.Status
+        go             = $goVersion
+        target         = "windows/$target"
+        environment    = [ordered]@{
             os                = $os.Caption
             displayVersion    = $version.DisplayVersion
             build             = $build
             revision          = $version.UBR
             hostArchitecture  = $hostArchitecture
-            supportedOS       = $supportedOS
+            windows11Client   = $windows11Client
             processor         = $processors[0].Name
             cores             = $cores
             logicalProcessors = $computer.NumberOfLogicalProcessors
             memoryGiB         = $memoryGiB
+            installedGiB      = $installedGiB
+            systemDiskMedia   = $systemDiskMedia
             elevated          = $elevated
             referenceMachine  = [bool]$ReferenceMachine
         }
-        displays    = [ordered]@{
+        displays       = [ordered]@{
             connected           = $displays
             scalesPercent       = $scales
             mixedScaling        = ($scales.Count -gt 1)
             negativeCoordinates = $negative
         }
-        checks      = $checks
-        targets     = $targets
-        passed      = $passed
+        checks         = $checks
+        targets        = $targets
+        peakRuntimeMiB = $peakRuntime
+        passed         = $passed
     }
 
     $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMdd-HHmmss", $invariant)

@@ -21,9 +21,11 @@ From the repository root, in an interactive desktop session, with GameDevTools c
 The script moves windows, takes the foreground, and **replaces the clipboard**. It records the machine and its displays, runs `go vet`, the whole test suite, the release executable end to end, and the release build, measures NFR-010 through NFR-014, and writes one JSON file to `bin/validation`. The file holds no computer, user, or monitor name.
 
 - `-Architecture amd64` builds and runs the x64 release target, under emulation on Windows on Arm.
-- `-ReferenceMachine` asserts this is the PRD's reference machine and refuses one that is not: 64-bit Intel or AMD, four or more cores, 16 GB RAM, Windows 11, not elevated. A target missed or not measured then fails the run. Elsewhere, performance figures are recorded without failing it.
+- `-ReferenceMachine` asserts this is the PRD's reference machine and refuses one that is not: 64-bit Intel or AMD by its processor, four or more cores, 16 GB RAM installed, Windows 11, not elevated, and not on a hard disk. Windows does not report a CPU's age, so whoever passes the switch confirms the CPU is from 2020 or later; the result file records its name. A target missed or not measured then fails the run. Elsewhere, performance figures are recorded without failing it.
 
-The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) runs the same script on x64 Windows Server. It is started by hand, or by a pull request that changes the validation.
+The result file names the commit and working-tree state from before the first step, and the run fails if either changes before the last.
+
+The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) runs the same script on x64 Windows Server. It is started by hand, or by a pull request that changes the validation or the tests and benchmarks it runs.
 
 ## Environment of record
 
@@ -45,12 +47,12 @@ Results below were recorded on 2026-11-22 from commit `e1a6bc3`, with a clean wo
 | Windows 11 26H2 on ARM64, `windows/amd64` under x64 emulation | **Passed.** The release target's code, but not on x64 hardware |
 | x64 Windows 11, on the reference machine | **Not run** (QLT-04A) |
 | Each other Windows 11 release Microsoft supports | **Not run** (QLT-04A) |
-| x64 Windows Server 2025 and 2022, GitHub-hosted | Run by the `Validation matrix` workflow. Not supported targets: they exercise the x64 executable and the suite, and do not stand in for Windows 11 |
+| x64 Windows Server 2025 and 2022, GitHub-hosted | **Not run yet.** The `Validation matrix` workflow is written to run them and has not run. Not supported targets: they exercise the x64 executable and the suite, and do not stand in for Windows 11 |
 | Windows 10 22H2 | **Not supported** |
 
 ## Running without administrator rights
 
-`app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` builds the executable with the release flags and runs it with its per-user folders in a temporary workspace. It confirms the process has no enabled Administrators group, its window appears and answers, a second launch exits and leaves the first window in place (APP-005), its settings are written, it exits with code 0 and releases the single-instance mutex (AC-A05), and it restarts from the file it wrote with no recovery or temporary file (AC-A01). On an elevated host, such as a GitHub-hosted runner, the test first drops to a restricted, medium-integrity token.
+`app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` builds the executable with the release flags and runs it with its per-user folders in a temporary workspace. It confirms the process has no enabled Administrators group, its window appears and answers, a second launch exits and leaves the first window in place (APP-005), its settings are written, it exits with code 0 and releases the single-instance mutex (AC-A05), and it restarts from the file it wrote with no recovery or temporary file (AC-A01). On an elevated host, such as a GitHub-hosted runner, the test is written to drop first to a restricted, medium-integrity token; that path has not run yet, as this machine's runs were not elevated.
 
 ## Performance
 
@@ -60,8 +62,8 @@ Each figure comes from the validation script's benchmarks on the environment of 
 |---|---|---|---|---|
 | NFR-010 | Warm launch to a responsive main window, mean of 20 | 2 s | 163 ms | 195 ms |
 | NFR-010 | Warm launch, slowest of 20 | 2 s | 235 ms | 245 ms |
-| NFR-011 | Free Rectangle overlay appears, 5360 × 1823 desktop | 300 ms | 63 ms | 70 ms |
-| NFR-011 | 1280 × 720 Preset Rectangle frame appears | 300 ms | 18 ms | 31 ms |
+| NFR-011 | Free Rectangle overlay appears, 5360 × 1823 desktop, mean of 30 | 300 ms | 63 ms | 70 ms |
+| NFR-011 | 1280 × 720 Preset Rectangle frame appears, mean of 30 | 300 ms | 18 ms | 31 ms |
 | NFR-012 | 3840 × 2160 capture to clipboard | 1 s | 108 ms | 128 ms |
 | NFR-013 | 100 mixed 12 MP JPEGs to 1024 × 1024, slowest of 3 | 120 s | 7.5 s | 10.8 s |
 | NFR-014 | Peak heap during that batch | 1 GiB budget | 220 MiB | 220 MiB |
@@ -70,6 +72,8 @@ Each figure comes from the validation script's benchmarks on the environment of 
 Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's throughput converted to that region's size.
 
 Figures vary between runs. An earlier run of the same code, minutes before, measured native launch at 268 ms and the native batch at 11.4 s, and the x64 batch at 20.3 s. Every run met every target.
+
+The figures above are from the runs at `e1a6bc3`. The script has since gained a slowest-of-30 target for each overlay, which those runs did not measure, so this table has no figure for it; a QLT-04A run records it.
 
 ## Display matrix
 
@@ -82,7 +86,7 @@ Figures vary between runs. An earlier run of the same code, minutes before, meas
 | Rotated display | **Not run** (QLT-04A) |
 | Live disconnect and reconnect during a selection (AC-S12) | **Not run** (QLT-04A); simulated topology changes covered by tests |
 
-`capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` captures a 1280 × 720 region on every connected display and across every shared edge and logs each display's scaling, and the result file records the layout, so a QLT-04A run on other hardware reports what it covered without changing the test.
+`capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` captures a 1280 × 720 region on every connected display and across every shared edge, over four windows of known colors that meet at the region's center, and checks the size and the pixels on both sides of each seam, so a displaced or scaled capture fails. It logs each display's scaling, and the result file records the layout, so a QLT-04A run on other hardware reports what it covered without changing the test.
 
 ## Results by requirement
 
@@ -105,7 +109,7 @@ Figures vary between runs. An earlier run of the same code, minutes before, meas
 
 ## What these results do not cover
 
-- **x64 hardware.** The x64 build ran only under emulation on this machine, apart from the hosted Windows Server runs.
+- **x64 hardware.** The x64 build ran only under emulation on this machine. The hosted Windows Server runs have not happened yet.
 - **Other Windows 11 releases.** Only build 26300 was run.
 - **Any scaling but 100%.** Mixed-DPI behavior has still never been exercised live, which is the blocker [ADR-0001](adr/0001-native-windows-stack.md) recorded.
 - **Other drives.** Every result was written to the internal NVMe SSD.

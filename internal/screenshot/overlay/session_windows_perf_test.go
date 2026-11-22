@@ -5,6 +5,7 @@ package overlay
 import (
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
@@ -31,16 +32,21 @@ func benchmarkOverlayAppear(b *testing.B, mode Mode, size display.Point) {
 			b.Skipf("virtual desktop %v is too small for a %d × %d frame", bounds, size.X, size.Y)
 		}
 	}
+	var slowest time.Duration
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StartTimer()
+		started := time.Now()
 		err := controller.Begin(0, 0, mode, size, Events{})
+		elapsed := time.Since(started)
 		b.StopTimer()
 		if err != nil {
 			b.Fatal(err)
 		}
+		slowest = max(slowest, elapsed)
 		controller.Cancel()
 	}
+	b.ReportMetric(float64(slowest)/float64(time.Millisecond), "max-ms")
 }
 
 // BenchmarkOverlayAppearFreeRectangle times the full-virtual-desktop tint

@@ -32,7 +32,11 @@ func TestMain(m *testing.M) {
 	const dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3)
 	r, _, err := procSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorAwareV2)
 	if r == 0 {
-		fmt.Fprintf(os.Stderr, "TestMain: SetProcessDpiAwarenessContext failed, tests run DPI-unaware: %v\n", err)
+		// Running DPI-unaware would read every display as 100% and could pass,
+		// or record that layout for the validation report, on virtualized
+		// coordinates.
+		fmt.Fprintf(os.Stderr, "TestMain: SetProcessDpiAwarenessContext failed, aborting: %v\n", err)
+		os.Exit(1)
 	}
 	os.Exit(m.Run())
 }

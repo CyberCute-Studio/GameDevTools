@@ -168,6 +168,15 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 		Right:  primary.Bounds.Left + 110 + width,
 		Bottom: primary.Bounds.Top + 110 + height,
 	}
+	return showSolidWindow(t, region, fill), region
+}
+
+// showSolidWindow shows a topmost popup filled with one known color over
+// region, in physical pixels.
+func showSolidWindow(t *testing.T, region display.Rect, fill color.RGBA) windows.Handle {
+	t.Helper()
+	startWindowThread()
+	width, height := region.Width(), region.Height()
 
 	className, err := windows.UTF16PtrFromString(fmt.Sprintf("GameDevToolsCaptureTest%d", classCounter.Add(1)))
 	if err != nil {
@@ -224,7 +233,7 @@ func createSolidWindow(t *testing.T, monitor *display.Monitor, width, height int
 		t.Fatalf("CreateWindowExW: %v", createErr)
 	}
 	t.Cleanup(func() { runOnWindowThread(func() { procDestroyWindow.Call(hwnd) }) })
-	return windows.Handle(hwnd), region
+	return windows.Handle(hwnd)
 }
 
 // insetPixelsMatch reports whether every pixel inside the image, minus a
@@ -400,13 +409,66 @@ func TestCaptureSpanningDisplayBoundary(t *testing.T) {
 	}
 }
 
+// seamSample is one pixel of a capture beside a seam of the quadrant pattern,
+// and the color that belongs there.
+type seamSample struct {
+	x, y int
+	want color.RGBA
+}
+
+// quadrantSeamSamples returns the pixels on both sides of the two seams where
+// four colors, in reading order, meet at (centerX, centerY) in a width × height
+// image. They are taken halfway along each seam, clear of the corners DWM may
+// round, so a capture displaced or scaled by even one pixel fails.
+func quadrantSeamSamples(width, height, centerX, centerY int, colors [4]color.RGBA) []seamSample {
+	upper, lower := centerY/2, centerY+(height-centerY)/2
+	left, right := centerX/2, centerX+(width-centerX)/2
+	return []seamSample{
+		{centerX - 1, upper, colors[0]}, {centerX, upper, colors[1]},
+		{centerX - 1, lower, colors[2]}, {centerX, lower, colors[3]},
+		{left, centerY - 1, colors[0]}, {left, centerY, colors[2]},
+		{right, centerY - 1, colors[1]}, {right, centerY, colors[3]},
+	}
+}
+
+func TestQuadrantSeamSamplesStraddleBothSeams(t *testing.T) {
+	colors := [4]color.RGBA{{R: 1}, {R: 2}, {R: 3}, {R: 4}}
+	want := []seamSample{
+		{59, 20, colors[0]}, {60, 20, colors[1]},
+		{59, 70, colors[2]}, {60, 70, colors[3]},
+		{30, 39, colors[0]}, {30, 40, colors[2]},
+		{90, 39, colors[1]}, {90, 40, colors[3]},
+	}
+	got := quadrantSeamSamples(120, 100, 60, 40, colors)
+	if len(got) != len(want) {
+		t.Fatalf("got %d samples, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("sample %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 // TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries is AC-S02 on the
-// displays connected now: a preset-sized region centered on each display and
-// across each edge two displays share comes back at exactly its physical
-// size. It logs each display's scaling, so a run on a mixed-DPI or
-// negative-coordinate arrangement records what it covered.
+// displays connected now. Over a preset-sized region centered on each display
+// and across each edge two displays share, it shows four windows of known
+// colors meeting at the region's center, on the shared edge when there is one,
+// so no window spans two displays. The capture must have the region's exact
+// physical size and each color on its own side of both seams, which a capture
+// that is displaced or scaled does not. It logs each display's scaling, so a
+// run on a mixed-DPI or negative-coordinate arrangement records what it covered.
 func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
 	const presetWidth, presetHeight = 1280, 720
+	// Each quadrant must be large enough that a seam's midpoint is clear of
+	// DWM's rounded corners.
+	const smallestQuadrant = 48
+	colors := [4]color.RGBA{
+		{R: 0xC9, G: 0x14, B: 0x4B, A: 0xFF},
+		{R: 0x21, G: 0x9F, B: 0x53, A: 0xFF},
+		{R: 0x1F, G: 0x4F, B: 0xD8, A: 0xFF},
+		{R: 0xE8, G: 0xB4, B: 0x0C, A: 0xFF},
+	}
 	monitor := display.NewMonitor()
 	displays, err := monitor.Displays()
 	if err != nil {
@@ -414,13 +476,46 @@ func TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries(t *testing.T) {
 	}
 	check := func(t *testing.T, region display.Rect) {
 		t.Helper()
-		img, err := CaptureRect(monitor, region)
-		if err != nil {
-			t.Fatalf("CaptureRect(%v): %v", region, err)
+		centerX, centerY := (region.Left+region.Right)/2, (region.Top+region.Bottom)/2
+		if min(centerX-region.Left, region.Right-centerX, centerY-region.Top, region.Bottom-centerY) < smallestQuadrant {
+			t.Skipf("%v is too small to compare pixels beside its seams", region)
 		}
-		if got := img.Bounds(); got.Dx() != int(region.Width()) || got.Dy() != int(region.Height()) {
-			t.Fatalf("capture of %v is %d × %d, want %d × %d", region, got.Dx(), got.Dy(), region.Width(), region.Height())
+		showSolidWindow(t, display.Rect{Left: region.Left, Top: region.Top, Right: centerX, Bottom: centerY}, colors[0])
+		showSolidWindow(t, display.Rect{Left: centerX, Top: region.Top, Right: region.Right, Bottom: centerY}, colors[1])
+		showSolidWindow(t, display.Rect{Left: region.Left, Top: centerY, Right: centerX, Bottom: region.Bottom}, colors[2])
+		showSolidWindow(t, display.Rect{Left: centerX, Top: centerY, Right: region.Right, Bottom: region.Bottom}, colors[3])
+		samples := quadrantSeamSamples(int(region.Width()), int(region.Height()), int(centerX-region.Left), int(centerY-region.Top), colors)
+
+		var img *image.RGBA
+		var wrong *seamSample
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(25 * time.Millisecond) {
+			captured, err := CaptureRect(monitor, region)
+			if err != nil {
+				t.Fatalf("CaptureRect(%v): %v", region, err)
+			}
+			img = captured
+			if got := img.Bounds(); got.Dx() != int(region.Width()) || got.Dy() != int(region.Height()) {
+				t.Fatalf("capture of %v is %d × %d, want %d × %d", region, got.Dx(), got.Dy(), region.Width(), region.Height())
+			}
+			wrong = nil
+			for i := range samples {
+				got := img.RGBAAt(samples[i].x, samples[i].y)
+				if got.R != samples[i].want.R || got.G != samples[i].want.G || got.B != samples[i].want.B {
+					wrong = &samples[i]
+					break
+				}
+			}
+			if wrong == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				break
+			}
 		}
+		if uniformlyBlack(img) && os.Getenv("CI") != "" {
+			t.Skipf("CI session composites no display; captures are uniformly black")
+		}
+		t.Fatalf("capture of %v has %v at (%d, %d), want %v", region, img.RGBAAt(wrong.x, wrong.y), wrong.x, wrong.y, wrong.want)
 	}
 	for _, item := range displays {
 		t.Run(item.DeviceName, func(t *testing.T) {

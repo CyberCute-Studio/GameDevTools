@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -337,9 +338,17 @@ func TestReleaseExecutableRunsAsStandardUserAndExitsCleanly(t *testing.T) {
 
 	restarted := launchRelease(t, executable, workspace)
 	restarted.close(t)
-	leftovers, err := filepath.Glob(configFile + ".*")
+	// Named as the settings store names its backups and its temporary files.
+	entries, err := os.ReadDir(filepath.Dir(configFile))
 	if err != nil {
 		t.Fatal(err)
+	}
+	var leftovers []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "settings.json.") || (strings.HasPrefix(name, ".settings-") && strings.HasSuffix(name, ".tmp")) {
+			leftovers = append(leftovers, name)
+		}
 	}
 	if len(leftovers) != 0 {
 		t.Fatalf("a restart left recovery or temporary files: %v", leftovers)
