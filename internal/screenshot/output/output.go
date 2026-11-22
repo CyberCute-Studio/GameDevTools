@@ -31,6 +31,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"os"
 	"time"
 
@@ -176,11 +177,12 @@ func encode(writer io.Writer, img *image.RGBA, options screenshot.CaptureOptions
 }
 
 // save encodes img into a temporary file inside the destination folder and
-// finalizes it under a collision-free timestamped name. The final name is
-// claimed with a hard link, which the filesystem refuses to create over an
-// existing file, so a save racing another writer can never silently
-// overwrite it (SCR-065). On any failure the temporary file is removed, so
-// no partial image remains at a final or temporary path (SCR-066).
+// finalizes it under a collision-free timestamped name. claimName takes the
+// final name in a way the filesystem refuses over an existing file, so a save
+// racing another writer can never silently overwrite it (SCR-065). On any
+// failure the temporary file is removed, so no partial image remains at a
+// final or temporary path (SCR-066); if another program holds it open past a
+// bounded wait, the returned error says it was left behind.
 func save(img *image.RGBA, options screenshot.CaptureOptions, now time.Time) (string, error) {
 	return saveWithEncoder(img, options, now, encode)
 }
@@ -189,7 +191,7 @@ func save(img *image.RGBA, options screenshot.CaptureOptions, now time.Time) (st
 // exercise encode failures and partial-write cleanup.
 func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now time.Time,
 	encoder func(io.Writer, *image.RGBA, screenshot.CaptureOptions) error,
-) (string, error) {
+) (saved string, err error) {
 	// A stored folder Windows would read as another place is refused here
 	// rather than by option validation, which would reject the whole settings
 	// file for it. Creating the folder, the temporary file, and the final
@@ -217,9 +219,13 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	// The final name is claimed only after encoding succeeded; every return
 	// before then must remove the temporary file.
 	succeeded := false
+	var wait heldWait
 	defer func() {
-		if !succeeded {
-			os.Remove(temporaryPath)
+		if succeeded {
+			return
+		}
+		if removeErr := removeTemporary(temporaryPath, &wait); removeErr != nil {
+			err = fmt.Errorf("%w; the temporary file was left behind: %v", err, removeErr)
 		}
 	}()
 	if err := encoder(temporary, img, options); err != nil {
@@ -240,11 +246,16 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 			name = fmt.Sprintf("%s_%d", base, suffix)
 		}
 		final := pathform.Join(folder, name+options.Format.Extension())
-		if err := os.Link(temporaryPath, final); err != nil {
+		moved, err := claimName(temporaryPath, final, &wait)
+		if err != nil {
 			if os.IsExist(err) {
 				continue
 			}
 			return "", kindError(KindWrite, "finalize saved file", err)
+		}
+		if moved {
+			succeeded = true
+			return final, nil
 		}
 		if err := os.Remove(temporaryPath); err != nil {
 			// The final file already exists and is complete; an orphaned
@@ -259,4 +270,49 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	return "", kindError(KindWrite, "choose filename",
 		fmt.Errorf("no unused filename found after %d attempts for %s", maxSuffixAttempts,
 			base+options.Format.Extension()))
+}
+
+// removeTemporary removes a failed save's temporary file, using what is left
+// of the save's wait, since a program holding the file may be why the save
+// failed. A file that has already gone counts as removed.
+func removeTemporary(path string, wait *heldWait) error {
+	err := wait.retry(func() error { return os.Remove(path) })
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// linkForTest, when a test sets it, stands in for os.Link on a volume without
+// hard links.
+var linkForTest func(oldname, newname string) error
+
+// claimName gives the finished temporary file the final name without ever
+// replacing a file that has it, and reports whether it moved the file, which
+// leaves no temporary name to remove. A hard link is tried first. Volumes
+// such as FAT32 and exFAT have none, and the error differs by file system and
+// network redirector, so any failure other than the name being taken falls
+// back to a rename that refuses an existing name just as a link does. When
+// both fail, the error carries both causes; a name taken is returned as it
+// is, so the caller can try the next one.
+func claimName(temporary, final string, wait *heldWait) (moved bool, err error) {
+	link := os.Link
+	if linkForTest != nil {
+		link = linkForTest
+	}
+	linkErr := link(temporary, final)
+	if linkErr == nil || os.IsExist(linkErr) {
+		return false, linkErr
+	}
+	if err := moveNoReplace(temporary, final, wait); err != nil {
+		if os.IsExist(err) {
+			return false, err
+		}
+		var linkFailure *os.LinkError
+		if errors.As(linkErr, &linkFailure) {
+			linkErr = linkFailure.Err
+		}
+		return false, fmt.Errorf("%w (hard link: %w)", err, linkErr)
+	}
+	return true, nil
 }

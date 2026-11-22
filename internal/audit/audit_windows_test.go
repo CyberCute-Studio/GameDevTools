@@ -128,7 +128,7 @@ var reviewedSystemFunctions = []string{
 	"windows.CloseHandle", "windows.CreateFile", "windows.DeleteFile", "windows.FindClose",
 	"windows.FindFirstFile", "windows.FlushFileBuffers", "windows.FullPath",
 	"windows.GetFileInformationByHandle", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
-	"windows.NewCallback", "windows.NewLazySystemDLL", "windows.NtSetInformationFile",
+	"windows.MoveFileEx", "windows.NewCallback", "windows.NewLazySystemDLL", "windows.NtSetInformationFile",
 	"windows.SetFileInformationByHandle", "windows.UTF16FromString", "windows.UTF16PtrFromString",
 	"windows.UTF16ToString", "windows.WriteFile",
 }
@@ -189,10 +189,12 @@ var reviewedFileSites = map[string]string{
 	"internal/settings/store.go Store.write os.Remove":                  settingsFolder,
 	"internal/settings/store.go Store.write os.Rename":                  settingsFolder,
 
-	"internal/screenshot/output/output.go saveWithEncoder os.CreateTemp": screenshotFolder,
-	"internal/screenshot/output/output.go saveWithEncoder os.Link":       screenshotFolder,
-	"internal/screenshot/output/output.go saveWithEncoder os.MkdirAll":   screenshotFolder,
-	"internal/screenshot/output/output.go saveWithEncoder os.Remove":     screenshotFolder,
+	"internal/screenshot/output/output.go saveWithEncoder os.CreateTemp":              screenshotFolder,
+	"internal/screenshot/output/output.go claimName os.Link":                          screenshotFolder,
+	"internal/screenshot/output/finalize_windows.go moveNoReplace windows.MoveFileEx": screenshotFolder,
+	"internal/screenshot/output/output.go removeTemporary os.Remove":                  screenshotFolder,
+	"internal/screenshot/output/output.go saveWithEncoder os.MkdirAll":                screenshotFolder,
+	"internal/screenshot/output/output.go saveWithEncoder os.Remove":                  screenshotFolder,
 
 	"internal/imageresizer/output/identity_windows.go mkdirAll os.MkdirAll":                         resizerFolder,
 	"internal/imageresizer/output/identity_windows.go open windows.CreateFile":                      inspectOnly,

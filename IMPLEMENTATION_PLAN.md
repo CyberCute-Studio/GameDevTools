@@ -1,8 +1,8 @@
 # GameDevTools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.0\
-**Last updated:** 2026-11-10\
+**Version:** 1.1\
+**Last updated:** 2026-11-22\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
 
@@ -32,8 +32,8 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M0 — Technical validation and application foundation | 1–7 | Pending |
 | M1 — Screenshot module | 8–18 | Pending |
 | M2 — Image Resizer module | 19–27 | Pending |
-| M3 — Cross-cutting quality and hardening | 28–31 | Pending |
-| M4 — Distribution and release | 32–34 | Pending |
+| M3 — Cross-cutting quality and hardening | 28–33 | Pending |
+| M4 — Distribution and release | 34–36 | Pending |
 
 ## 4. Milestone M0 — Technical validation and application foundation
 
@@ -271,8 +271,22 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Verify:** Run both core workflows with networking disabled; inspect logs for image/clipboard content and unnecessary filenames; verify writes stay within approved paths; record dependency licenses and review results.
     - **Notes:** No telemetry or cloud fallback may be introduced to satisfy another requirement. The audit, its findings, and the result for each requirement are recorded in [docs/privacy-verification.md](docs/privacy-verification.md); every requirement and AC-A02 pass. `app.TestCoreWorkflowsRunOffline` runs a real Full Display capture and a real resize job on the main window inside a Windows AppContainer with no capabilities, which denies the process the network without administrator rights or touching the machine's adapters. The new `internal/audit` tests hold the result in place: the modules linked, by version and license text and with none replaced; no network, process-launching, or plugin package and no connecting code in the executable; File Explorer, through one reviewed call, as the only program the application starts; the Windows libraries its own code loads, every Windows function it binds, and every `syscall` and `x/sys/windows` function it uses; every use of a listed function that changes a file; and the fixed catalog of log events. Fixes: copied screenshots carry the `CanUploadToCloudClipboard` opt-out and stay in the local clipboard history (PRD 1.3, section 20), and the copy stays on one OS thread, for a hidden owner window, while the clipboard is open; release builds move from the unsupported Go 1.24.0 to a pinned go1.27.4, which a CI step checks; `x/sys` moves to v0.47.0, with `go 1.25.0`, for GO-2026-5024, which the application did not link; Explorer is started by its full path and given a spelling it reads as the same file or folder, or the action reports an error when it has none; a Screenshot save refuses, before creating anything, an output folder Windows would read as another place, such as one through a name ending in a space or a period, a reserved device name, or a file stream, on a stricter form of the Image Resizer's folder rules, and a stored folder of that kind is reported at startup; and both modules read output folders, and the Image Resizer its source names, through `internal/pathform`, the same way on Go 1.26 and 1.27, whose `path/filepath` changed how it parses `\\?\UNC` paths and paths with `..` in a volume name. A run with the adapters off and real clipboard sync remain manual pre-release checks, and the Go and `x/sys` license notices must ship with the package in REL-01.
 
-31. **QLT-04 — Validate the supported Windows matrix and combined performance**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03
+31. **QLT-03A — Save Screenshots on volumes without hard links**
+    - **Status:** In Progress | **PR:** [#31](https://github.com/CyberCute-Studio/GameDevTools/pull/31) | **Depends on:** QLT-03
+    - **Requirements:** SCR-060, SCR-065, SCR-066, NFR-023.
+    - **Deliver:** Screenshot file finalization that works on FAT32, exFAT, and any other volume without hard links, never replaces an existing file, and never exposes a partial image under a final name.
+    - **Verify:** Save with hard links refused; confirm the result, numbered names past an existing file or folder, a brief open by another program, a failed rename, a temporary file another program keeps open, and a path past 260 characters. Run on a real FAT32 or exFAT drive where one is available.
+    - **Notes:** QLT-03's review found that `saveWithEncoder` claimed the final name only with `os.Link`, so a capture to a drive without hard links failed. `claimName` still tries the hard link first, so NTFS saves are unchanged, and on any failure other than the name being taken renames the finished file with `MoveFileEx` without `MOVEFILE_REPLACE_EXISTING`, which refuses an existing name as a link does, waiting up to about 775 ms for a program that has just opened the file, whether Windows reports that as a sharing violation or as access denied. A failed save's cleanup uses what is left of that same wait, so it does not go on waiting after the rename gave up and delete a finished image once the hold ends; a hold that ends in the instant between the last rename attempt and the cleanup still can, and the save is then reported as failed with the capture on the clipboard. A temporary file that still cannot be removed is reported in the save error. The tests make the hard link fail as such a volume does and run the rename on NTFS; no real FAT32 or exFAT drive was available, so saving to one remains a manual pre-release check.
+
+32. **QLT-03B — Fix the remaining Screenshot output-folder defects**
+    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03A
+    - **Requirements:** SCR-063, SCR-069, NFR-032, UX-010.
+    - **Deliver:** Report a stored device, volume, or server path as an unusable Screenshot folder; store the folder the picker's user chose rather than a shortened name; report a failed Reveal for a file that has gone; and handle a missing parent Windows 10 may read as a device.
+    - **Verify:** Test each case through the code that handles it, confirming each defect first. Record any case that cannot be reproduced on the available Windows version rather than fixing it blind.
+    - **Notes:** These are the defects QLT-03 recorded as already on `main` and left out of its scope.
+
+33. **QLT-04 — Validate the supported Windows matrix and combined performance**
+    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03B
     - **Requirements:** NFR-001, NFR-002, NFR-003, NFR-004, NFR-010 through NFR-014, AC-A01 through AC-A05, all remaining P0 acceptance scenarios.
     - **Deliver:** Windows 10 22H2 and supported Windows 11 test matrix, non-admin validation, launch/overlay/capture/resize performance report, multi-monitor DPI matrix, combined-module regression run, and fixes for cross-module defects.
     - **Verify:** Run the application and acceptance suite on each supported OS without administrator rights. Confirm 100–500% scaling coverage, reference performance targets, clean exit, offline operation, persistence, and responsive batch behavior.
@@ -285,21 +299,21 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Milestone status:** Pending\
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
-32. **REL-01 — Finalize product identity, packaging, and distribution**
+34. **REL-01 — Finalize product identity, packaging, and distribution**
     - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-04
     - **Requirements:** TECH-010 and PRD Section 19 open decisions.
     - **Deliver:** Final product/executable name, version metadata and application icon, installer and/or portable ZIP decision, code-signing decision, update-strategy decision, reproducible release build, and selected packaging implementation.
     - **Verify:** Install/run or extract/run the packaged app in a clean non-admin Windows environment without Go installed. Confirm settings paths, shortcuts, file associations if any, uninstall behavior if applicable, and artifact integrity/signing according to the chosen strategy.
     - **Notes:** If the selected distribution or update approach cannot fit one PR, split this item before starting it and preserve backward-only dependencies.
 
-33. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
+35. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-01
     - **Requirements:** PRD Sections 9.8, 10.6, 18, and 19; TECH-009.
     - **Deliver:** Setup and usage documentation for both modules, hotkey/configuration help, output/collision behavior, protected-content and metadata limitations, troubleshooting, test/verification guide, release notes, and PRD-to-implementation traceability update.
     - **Verify:** Follow the documentation on a clean machine to perform every core workflow. Confirm documented behavior and limitations match the packaged application and no deferred P0 requirement is presented as complete.
     - **Notes:** Update the PRD and this plan if approved behavior changed during implementation.
 
-34. **REL-03 — Validate the release candidate and close the implementation baseline**
+36. **REL-03 — Validate the release candidate and close the implementation baseline**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02
     - **Requirements:** All P0 requirements and all acceptance criteria in PRD Section 15.
     - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
@@ -316,7 +330,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 |---|---|---|
 | APP-001 through APP-005 | FND-03, FND-04, SCR-09, QLT-02 | QLT-04, REL-03 |
 | PRESET-001 through PRESET-008 | FND-06, FND-07, SCR-01, RSZ-01 | QLT-02, QLT-04 |
-| SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01 | SCR-11, QLT-04, REL-03 |
+| SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01; output-folder and finalization fixes in QLT-03A and QLT-03B | SCR-11, QLT-04, REL-03 |
 | RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08 | RSZ-09, QLT-04, REL-03 |
 | SET-001 through SET-007 | FND-04, FND-06, module settings items, QLT-02, QLT-03 | QLT-04, REL-03 |
 | UX-001 through UX-010 | FND-05 and all feature UI items | QLT-01, QLT-04 |
@@ -334,3 +348,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-11-10 | Initial ordered, milestone-based implementation plan derived from PRD 1.0. |
+| 1.1 | 2026-11-22 | Inserted QLT-03A and QLT-03B for the Screenshot defects QLT-03 found already on `main`; QLT-04 now depends on QLT-03B, and later items are renumbered. |
