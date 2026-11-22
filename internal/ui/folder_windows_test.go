@@ -199,6 +199,7 @@ func TestSavedFileFailureDoesNotBlameAMissingDrive(t *testing.T) {
 	missing := func(string) (fs.FileInfo, error) { return nil, notFound(windows.ERROR_PATH_NOT_FOUND) }
 	present := func(string) (fs.FileInfo, error) { return nil, nil }
 	refused := func(string) (fs.FileInfo, error) { return nil, notFound(windows.ERROR_ACCESS_DENIED) }
+	noFolders := func(string) (fs.FileInfo, error) { return nil, notFound(windows.ERROR_FILE_NOT_FOUND) }
 	for _, test := range []struct {
 		code windows.Errno
 		stat func(string) (fs.FileInfo, error)
@@ -209,7 +210,7 @@ func TestSavedFileFailureDoesNotBlameAMissingDrive(t *testing.T) {
 		{windows.ERROR_PATH_NOT_FOUND, refused, errSavedFileGone},
 		{windows.ERROR_FILE_NOT_FOUND, present, errSavedFileGone},
 	} {
-		if got := savedFileFailure(`Z:\Shots\a.png`, nil, notFound(test.code), test.stat); !errors.Is(got, test.want) {
+		if got := savedFileFailure(`Z:\Shots\a.png`, nil, notFound(test.code), test.stat, noFolders); !errors.Is(got, test.want) {
 			t.Errorf("savedFileFailure(%v) = %v, want %v", test.code, got, test.want)
 		}
 	}
@@ -218,14 +219,65 @@ func TestSavedFileFailureDoesNotBlameAMissingDrive(t *testing.T) {
 		savedFileFailure(target, nil, notFound(windows.ERROR_PATH_NOT_FOUND), func(path string) (fs.FileInfo, error) {
 			asked = path
 			return nil, nil
-		})
+		}, noFolders)
 		if asked != root {
 			t.Errorf("for %q the root asked was %q, want %q", target, asked, root)
 		}
 	}
 	denied := notFound(windows.ERROR_ACCESS_DENIED)
-	if got := savedFileFailure(`Z:\Shots\a.png`, nil, denied, present); !errors.Is(got, denied) {
+	if got := savedFileFailure(`Z:\Shots\a.png`, nil, denied, present, noFolders); !errors.Is(got, denied) {
 		t.Errorf("another failure = %v, want it reported as it is", got)
+	}
+}
+
+// modeInfo is a FileInfo that reports only a mode.
+type modeInfo struct {
+	fs.FileInfo
+	mode fs.FileMode
+}
+
+func (i modeInfo) Mode() fs.FileMode { return i.mode }
+
+// TestSavedFileFailureNamesABrokenFolderLink pins that a file reached through
+// a junction or folder mount that cannot be followed, as one to a drive since
+// unplugged, is not called moved or deleted while the volume its path names
+// still answers. The file system is asked through stand-ins, so no link or
+// drive is touched.
+func TestSavedFileFailureNamesABrokenFolderLink(t *testing.T) {
+	failure := func(code windows.Errno) error {
+		return &fs.PathError{Op: "CreateFile", Path: `C:\t`, Err: code}
+	}
+	const link = fs.ModeIrregular
+	for _, test := range []struct {
+		name    string
+		target  string
+		folders map[string]fs.FileMode
+		linkErr error
+		want    error
+	}{
+		{"junction holding the file", `C:\t\Art\a.png`, map[string]fs.FileMode{`C:\t\Art`: link, `C:\t`: fs.ModeDir}, failure(windows.ERROR_PATH_NOT_FOUND), errSavedLinkBroken},
+		{"junction above a missing name", `C:\t\Art\sub\a.png`, map[string]fs.FileMode{`C:\t\Art`: link, `C:\t`: fs.ModeDir}, failure(windows.ERROR_FILE_NOT_FOUND), errSavedLinkBroken},
+		{"symbolic link", `C:\t\Art\a.png`, map[string]fs.FileMode{`C:\t\Art`: fs.ModeSymlink, `C:\t`: fs.ModeDir}, failure(windows.ERROR_PATH_NOT_FOUND), errSavedLinkBroken},
+		{"working link above a removed folder", `C:\t\Art\sub\a.png`, map[string]fs.FileMode{`C:\t\Art`: link, `C:\t`: fs.ModeDir}, nil, errSavedFileGone},
+		{"link whose target refuses access", `C:\t\Art\sub\a.png`, map[string]fs.FileMode{`C:\t\Art`: link, `C:\t`: fs.ModeDir}, failure(windows.ERROR_ACCESS_DENIED), errSavedFileGone},
+		{"ordinary folder", `C:\t\gone\a.png`, map[string]fs.FileMode{`C:\t`: fs.ModeDir}, nil, errSavedFileGone},
+		{"nothing below the root", `C:\gone\a.png`, nil, nil, errSavedFileGone},
+	} {
+		stat := func(path string) (fs.FileInfo, error) {
+			if path == `C:\` {
+				return nil, nil
+			}
+			return nil, test.linkErr
+		}
+		lstat := func(path string) (fs.FileInfo, error) {
+			if mode, found := test.folders[path]; found {
+				return modeInfo{mode: mode}, nil
+			}
+			return nil, failure(windows.ERROR_FILE_NOT_FOUND)
+		}
+		if got := savedFileFailure(test.target, nil, failure(windows.ERROR_PATH_NOT_FOUND), stat, lstat); !errors.Is(got, test.want) {
+			t.Errorf("%s: savedFileFailure = %v, want %v", test.name, got, test.want)
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/overlay"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
@@ -556,6 +557,41 @@ func TestNativeViewLateRevealFailureKeepsANewerResult(t *testing.T) {
 	dispatcher.runNext(t)
 	if got := view.status.Text(); got != newer {
 		t.Fatalf("status after the late failure = %q, want the newer result %q", got, newer)
+	}
+}
+
+// TestNativeViewLateRevealFailureKeepsANewerAttempt pins that a reveal failing
+// after another capture was started leaves that attempt's outcome in the
+// status area even when it saved nothing, as a selection that could not open
+// leaves the saved file unchanged.
+func TestNativeViewLateRevealFailureKeepsANewerAttempt(t *testing.T) {
+	parent := newViewTestParent(t)
+	folder := testFolder(t)
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(t.TempDir(), "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, folder, parent)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+
+	const saved = `C:\Screenshots\Screenshot_1.png`
+	release := make(chan struct{})
+	view.reveal = func(string) error {
+		<-release
+		return errors.New("explorer unavailable")
+	}
+	view.finishCapture(CaptureResult{Path: saved}, displayCaptureMessages)
+	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	view.sessions = nil
+	view.NativeAction()
+	newer := view.status.Text()
+	if !strings.Contains(newer, ui.OverlayServiceUnavailable) {
+		t.Fatalf("status after the refused capture = %q", newer)
+	}
+	close(release)
+	dispatcher.runNext(t)
+	if got := view.status.Text(); got != newer {
+		t.Fatalf("status after the late failure = %q, want the newer outcome %q", got, newer)
 	}
 }
 

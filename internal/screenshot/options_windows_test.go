@@ -128,7 +128,7 @@ func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
 		`\\.\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`, `\\\localhost\pipe\x`,
 		`\??\C:`, `\??\pipe`, `\??\NUL`, `\??\UNC`, `\??\Volume{00000000-0000-0000-0000-000000000000}`,
 	} {
-		if err := manager.SetOutputFolder(folder); err == nil || err.Error() != ui.OutputFolderRootInvalid {
+		if err := manager.SetOutputFolder(folder); err == nil || err.Error() != ui.ScreenshotFolderRootInvalid {
 			t.Errorf("SetOutputFolder(%q) = %v, want the root refusal", folder, err)
 		}
 		if got := manager.Options().OutputFolder; got != usable {
@@ -143,6 +143,18 @@ func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
 			t.Errorf("FolderWarning = %q, want %q", got, want)
 		}
 		manager.options.OutputFolder = usable
+	}
+}
+
+// TestDefaultFolderReportsAPathThatNamesNoFolder pins that a Pictures folder
+// leading through a device or IPC share is refused for that reason rather than
+// for a name Windows would change. Both calls only read the path's text.
+func TestDefaultFolderReportsAPathThatNamesNoFolder(t *testing.T) {
+	for _, pictures := range []string{`\\.\pipe\Pictures`, `\\nas\pipe\Pictures`, `\\nas\IPC$\Pictures`} {
+		_, err := defaultFolderIn(pictures)
+		if err == nil || !strings.HasSuffix(err.Error(), ": "+ui.OutputFolderRootReason) {
+			t.Errorf("defaultFolderIn(%q) = %v, want the root reason", pictures, err)
+		}
 	}
 }
 

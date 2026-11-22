@@ -186,7 +186,7 @@ func (m *OptionsManager) SetOutputFolder(folder string) error {
 		return err
 	}
 	if pathform.NamesNoFolder(folder) {
-		return errors.New(ui.OutputFolderRootInvalid)
+		return errors.New(ui.ScreenshotFolderRootInvalid)
 	}
 	if !pathform.NamesOneFolder(folder) {
 		return errors.New(ui.OutputFolderNameInvalid)

@@ -109,7 +109,7 @@ var errFolderReadTwoWays = errors.New(ui.OutputFolderNameInvalid)
 // errFolderNamesNoFolder is the cause of the KindFolder error for an output
 // folder whose path names a drive, volume, device, or server rather than a
 // folder on it. Creating it could open the device.
-var errFolderNamesNoFolder = errors.New(ui.OutputFolderRootInvalid)
+var errFolderNamesNoFolder = errors.New(ui.ScreenshotFolderRootInvalid)
 
 // Result reports the two independent outcomes of one delivery (SCR-060).
 // A nil Clipboard or Save field means that destination succeeded. Path is

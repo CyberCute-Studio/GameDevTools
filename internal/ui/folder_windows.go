@@ -233,7 +233,7 @@ func RevealInFolder(path string) error {
 		return errNoDriveOrShare
 	}
 	info, err := os.Stat(path)
-	if err := savedFileFailure(target, info, err, os.Stat); err != nil {
+	if err := savedFileFailure(target, info, err, os.Stat, os.Lstat); err != nil {
 		return err
 	}
 	explorer, err := explorerPath()
@@ -262,14 +262,19 @@ func savedFileGone(info fs.FileInfo, err error) bool {
 // letter with nothing behind it, as for a USB drive since unplugged, where
 // the file may be intact, so the volume's root is looked at, through stat,
 // before such a file is called gone. A root that refuses access is there, as
-// on a share whose top folder the user cannot read, so the file is gone. The
-// target is the file's ordinary drive or UNC spelling.
-func savedFileFailure(target string, info fs.FileInfo, err error, stat func(string) (fs.FileInfo, error)) error {
+// on a share whose top folder the user cannot read, so the file is gone. A
+// path that leads through a folder link that cannot be followed, as a junction
+// to a drive since unplugged, is reported as that link, for the same reason.
+// The target is the file's ordinary drive or UNC spelling.
+func savedFileFailure(target string, info fs.FileInfo, err error, stat, lstat func(string) (fs.FileInfo, error)) error {
 	switch {
 	case savedFileGone(info, err):
 		if errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
 			if _, rootErr := stat(pathform.VolumeName(target) + `\`); rootErr != nil && !errors.Is(rootErr, fs.ErrPermission) {
 				return errSavedDriveMissing
+			}
+			if leadsThroughBrokenLink(target, stat, lstat) {
+				return errSavedLinkBroken
 			}
 		}
 		return errSavedFileGone
@@ -277,6 +282,25 @@ func savedFileFailure(target string, info fs.FileInfo, err error, stat func(stri
 		return err
 	}
 	return nil
+}
+
+// leadsThroughBrokenLink reports whether the nearest folder still present on
+// the target's path is a link, such as a junction or a folder mount, that
+// cannot be followed. Windows reports such a path as not found while the
+// volume the path names answers. A link whose target refuses access is there.
+func leadsThroughBrokenLink(target string, stat, lstat func(string) (fs.FileInfo, error)) bool {
+	for folder := pathform.Dir(target); folder != pathform.Dir(folder); folder = pathform.Dir(folder) {
+		info, err := lstat(folder)
+		if err != nil {
+			continue
+		}
+		if info.Mode()&(fs.ModeSymlink|fs.ModeIrregular) == 0 {
+			return false
+		}
+		_, err = stat(folder)
+		return err != nil && !errors.Is(err, fs.ErrPermission)
+	}
+	return false
 }
 
 var (
@@ -291,6 +315,9 @@ var (
 	// errSavedDriveMissing is RevealInFolder's failure for a file on a drive
 	// that is not there now, where it may be intact.
 	errSavedDriveMissing = errors.New("the drive that holds the saved file is not available")
+	// errSavedLinkBroken is RevealInFolder's failure for a file reached through
+	// a folder link that cannot be followed now, where it may be intact.
+	errSavedLinkBroken = errors.New("the folder link that leads to the saved file points to a drive or folder that is not available")
 	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a
 	// path File Explorer cannot be pointed at, as it has no drive or share.
 	errNoDriveOrShare = errors.New("File Explorer cannot show a path that has no drive letter or network share")
