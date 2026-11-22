@@ -83,4 +83,4 @@ The following acceptance behavior cannot be exercised live on the environment of
 - **Rotated displays.** Capture a portrait-orientation display at its native dimensions (SCR-042).
 - **Live monitor disconnect and reconnect during a selection.** Disconnect the display under an active selection and confirm the session ends with an explanation and no invisible input-capturing surface remains (AC-S12); reconnect and confirm a new session can start.
 
-When suitable hardware is available, run the full suite and benchmarks above on it, update the environment table and results, and close out the corresponding rows.
+QLT-04A owns these runs. When suitable hardware is available, run `scripts/validate.ps1` on it, as the [platform record](platform-verification.md#how-to-run-the-validation) describes, update the environment table and results, and close out the corresponding rows.

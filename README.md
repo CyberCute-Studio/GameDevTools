@@ -101,6 +101,12 @@ Settings migration, recovery, restore, and application shutdown are recorded in 
 
 Offline operation, privacy, file access, and dependencies are recorded in [Offline, privacy, file access, and dependency verification](docs/privacy-verification.md): the test that runs both core workflows in a sandbox with no network, the network, account, and telemetry audit, every place the application changes a file, what its logs can hold, the dependency and license inventory, and the vulnerability review.
 
+The application supports 64-bit Windows 11; Windows 10 is not supported. Supported platforms, running without administrator rights, display scaling, and combined performance are recorded in [Windows platform and combined performance verification](docs/platform-verification.md), including what has not yet been run. To repeat the validation on a machine, with GameDevTools closed and nothing else using the desktop, run the script below. It moves windows, takes the foreground, replaces the clipboard, and writes a JSON result file to `bin/validation`:
+
+```powershell
+./scripts/validate.ps1
+```
+
 ## FND-01 technical spike
 
 Build the spike directly with:
