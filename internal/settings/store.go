@@ -416,7 +416,7 @@ func (s *Store) Hold() (write func(Settings) error) {
 func (s *Store) Restore(current Settings, reset func(replaced Settings) (Settings, error)) (Settings, string, error) {
 	replaced := current
 	var data []byte
-	exists, creating := false, false
+	exists, creating, loadedLegacy := false, false, false
 	if s.path != "" {
 		var err error
 		data, err = os.ReadFile(s.path)
@@ -432,7 +432,7 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 				case legacyErr != nil:
 					return Settings{}, "", notRestored{fmt.Errorf("read the earlier build's settings at %s: %w; close whatever holds the file and try again, or move it out of that folder to go on without its presets", s.legacyPath, legacyErr)}
 				default:
-					data, exists = legacy, true
+					data, exists, loadedLegacy = legacy, true, !s.unloaded
 				}
 			}
 		case errors.Is(err, os.ErrNotExist) && s.blocked != nil:
@@ -443,12 +443,14 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		default:
 			exists = true
 		}
-		if exists && (s.unloaded || s.createOnly) {
+		if exists && !loadedLegacy && (s.unloaded || s.createOnly) {
 			// A file that still does not decode is kept only in its copy, as
 			// recovery from a malformed file keeps it, and the session's
 			// settings are the ones the restore replaces. With createOnly the
 			// session holds the legacy file's settings or the defaults, not
-			// this file's.
+			// this file's. A legacy file the session did load, whose migration
+			// backup failed, is left out: the session holds its settings with
+			// the edits made since, which decoding it again would undo.
 			if stored, _, err := s.decode(data); err == nil {
 				replaced = stored
 			}

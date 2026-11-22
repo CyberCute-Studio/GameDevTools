@@ -225,6 +225,38 @@ func TestStoreRestoreBacksUpALegacyFileThatBecameReadable(t *testing.T) {
 	requireFileContent(t, paths.LegacyConfigFile, legacyResizerSettings)
 }
 
+// A session that loaded the legacy file but could not back it up for its
+// migration holds that file's settings with its own edits, so the restore
+// derives from those and does not bring back what the session changed.
+func TestStoreRestoreAfterABlockedMigrationKeepsTheSessionsEdits(t *testing.T) {
+	legacy := strings.Replace(legacyResizerSettings, `"version":1`, `"version":0`, 1)
+	paths := legacyPaths(t, legacy)
+	store := NewStore(paths, appearingMigration{func() {}})
+	store.readBack = func(string) ([]byte, error) { return nil, errors.New("backup unreadable") }
+	result := store.Load()
+	if err := store.Save(result.Settings); err == nil {
+		t.Fatal("saving was not blocked")
+	}
+	store.readBack = os.ReadFile
+
+	session := result.Settings
+	session.Modules = map[string]json.RawMessage{"screenshot": json.RawMessage(`{"format":"jpeg"}`)}
+	_, backup, err := store.Restore(session, func(replaced Settings) (Settings, error) {
+		if got := string(replaced.Modules["screenshot"]); got != `{"format":"jpeg"}` {
+			t.Errorf("replaced section = %s, want the session's", got)
+		}
+		return Default(), nil
+	})
+	if err != nil || backup == "" {
+		t.Fatalf("Restore() backup = %q, error = %v", backup, err)
+	}
+	requireFileContent(t, backup, legacy)
+	requireFileContent(t, paths.LegacyConfigFile, legacy)
+	if _, err := os.Stat(paths.ConfigFile); err != nil {
+		t.Fatalf("the restored settings were not written: %v", err)
+	}
+}
+
 // A settings file the restore did not see, as one on a share that was
 // reported missing, is neither replaced nor unprotected.
 func TestStoreRestoreFromALegacyBlockLeavesASettingsFileThatAppeared(t *testing.T) {

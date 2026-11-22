@@ -1,7 +1,7 @@
 // Package release holds the product's release identity and builds what a
 // release ships: the Windows resources linked into the executable and the
-// portable ZIP. It uses only the standard library, and the application does
-// not link it.
+// portable ZIP. It needs no resource compiler or C toolchain, takes the
+// product's names from internal/ui, and the application does not link it.
 package release
 
 import (

@@ -48,7 +48,8 @@ cybercute-dev-tools.exe with the one from the new ZIP. Your settings are kept.
 Uninstall
 ---------
 Close the app and delete the folder you extracted. To remove your settings and
-logs too, delete the two CyberCute Dev Tools folders listed above and, if you
-used a build named GameDevTools, %APPDATA%\GameDevTools and
-%LOCALAPPDATA%\GameDevTools. Your screenshots and resized images are never
-removed.
+logs too, delete %APPDATA%\CyberCute Dev Tools and
+%LOCALAPPDATA%\CyberCute Dev Tools and, if you used a build named GameDevTools,
+%APPDATA%\GameDevTools and %LOCALAPPDATA%\GameDevTools. Leave the folders in
+Pictures: they hold your screenshots and resized images, which uninstalling
+does not remove.

@@ -18,6 +18,12 @@ $root = Split-Path -Parent $PSScriptRoot
 if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
     $OutputDirectory = Join-Path $root $OutputDirectory
 }
+# Windows PowerShell quotes a path with a space for a native command without
+# doubling a trailing backslash, which then escapes the closing quote and gives
+# go a path ending in a quote. A drive root needs its backslash and has no space
+# to quote.
+$trimmed = $OutputDirectory.TrimEnd('\', '/')
+if ($trimmed -and $trimmed -notmatch '^[A-Za-z]:$') { $OutputDirectory = $trimmed }
 
 $toolchain = (Select-String -LiteralPath (Join-Path $root "go.mod") -Pattern '^toolchain (go\S+)$').Matches.Groups[1].Value
 if (-not $toolchain) { throw "go.mod names no toolchain." }
