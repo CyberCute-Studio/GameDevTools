@@ -6,9 +6,9 @@ image resizing. It works offline and needs no administrator rights.
 
 Run it
 ------
-Extract the whole ZIP to a folder you can write to, such as
-Documents\CyberCute Dev Tools, then open cybercute-dev-tools.exe. Nothing is
-installed. Pin it to Start or the taskbar if you want a shortcut.
+Extract the whole ZIP to a folder you can write to, such as Documents. It
+creates a CyberCute Dev Tools folder there; open cybercute-dev-tools.exe inside
+it. Nothing is installed. Pin it to Start or the taskbar if you want a shortcut.
 
 This build is not code-signed, so Windows SmartScreen may say it does not
 recognize the app. Check the download first (below), then choose
@@ -32,6 +32,8 @@ Resized:      Pictures\CyberCute Dev Tools\Resized (by default)
 If you used a build named GameDevTools, its settings are copied the first time
 this version starts. Output folders you had selected stay selected, and the old
 %APPDATA%\GameDevTools folder is left in place. You may delete it afterwards.
+While it exists, its settings are copied again whenever the new settings file
+is missing.
 
 Update
 ------
@@ -41,5 +43,7 @@ cybercute-dev-tools.exe with the one from the new ZIP. Your settings are kept.
 Uninstall
 ---------
 Close the app and delete the folder you extracted. To remove your settings and
-logs too, delete the two CyberCute Dev Tools folders listed above. Your
-screenshots and resized images are never removed.
+logs too, delete the two CyberCute Dev Tools folders listed above and, if you
+used a build named GameDevTools, %APPDATA%\GameDevTools and
+%LOCALAPPDATA%\GameDevTools. Your screenshots and resized images are never
+removed.

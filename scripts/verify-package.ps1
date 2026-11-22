@@ -23,6 +23,13 @@ $exitWait = 30
 Add-Type -Namespace PackageCheck -Name Native -MemberDefinition @'
 [DllImport("user32.dll")]
 public static extern IntPtr GetClassLongPtrW(IntPtr window, int index);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern IntPtr FindResourceW(IntPtr module, IntPtr name, IntPtr type);
+[DllImport("kernel32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool FreeLibrary(IntPtr module);
 '@
 
 function Write-Check([string]$Name) { Write-Output "PASS  $Name" }
@@ -123,10 +130,18 @@ try {
     }
     Write-Check "version metadata ($($info.ProductVersion))"
 
-    Add-Type -AssemblyName System.Drawing
-    $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable)
-    if ($null -eq $icon) { throw "The executable has no icon." }
-    $icon.Dispose()
+    # The shell gives a generic icon for a file with none, so the check reads
+    # the resource: RT_GROUP_ICON (14), ID 1, loaded as data so an x64 file can
+    # be inspected from any architecture.
+    $module = [PackageCheck.Native]::LoadLibraryExW($executable, [IntPtr]::Zero, 0x22)
+    if ($module -eq [IntPtr]::Zero) { throw "The executable could not be opened to read its icon." }
+    try {
+        if ([PackageCheck.Native]::FindResourceW($module, [IntPtr]1, [IntPtr]14) -eq [IntPtr]::Zero) {
+            throw "The executable has no application icon resource."
+        }
+    } finally {
+        [void][PackageCheck.Native]::FreeLibrary($module)
+    }
     Write-Check "application icon"
 
     $signature = Get-AuthenticodeSignature -LiteralPath $executable

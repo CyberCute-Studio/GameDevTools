@@ -99,7 +99,7 @@ CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsign
 ./scripts/package.ps1
 ```
 
-The ZIP and its `.sha256` file are written to `bin/release`, and the same commit gives the same bytes from any checkout path. To check a package as a user receives it, with the application closed, run the command below. It confirms the checksum, contents, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade from a GameDevTools settings file:
+The ZIP and its `.sha256` file are written to `bin/release`, and the same commit gives the same bytes from any checkout path and Go configuration. To check a package as a user receives it, with the application closed, run the command below. It confirms the checksum, contents, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade from a GameDevTools settings file:
 
 ```powershell
 ./scripts/verify-package.ps1 -Package bin/release/cybercute-dev-tools-1.0.0-windows-x64.zip

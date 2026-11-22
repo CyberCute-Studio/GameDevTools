@@ -1,6 +1,8 @@
 package settings
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,10 @@ import (
 )
 
 const legacyResizerSettings = `{"version":1,"shell":{"selectedModule":"image-resizer","window":{"x":0,"y":0,"width":1100,"height":700,"maximized":false,"hasPosition":false}},"modules":{"screenshot":{"format":"png"}}}`
+
+// currentSettingsFile is a settings file at the new location, told from the
+// legacy settings by its selected module.
+const currentSettingsFile = `{"version":1,"shell":{"selectedModule":"settings","window":{"x":0,"y":0,"width":1100,"height":700,"maximized":false,"hasPosition":false}}}`
 
 // legacyPaths are settings paths in a temporary folder, with the file of a
 // build from before the rename holding content.
@@ -124,6 +130,153 @@ func TestStoreUnreadableLegacySettingsBlockSaving(t *testing.T) {
 	}
 	if _, err := os.Stat(paths.ConfigFile); !os.IsNotExist(err) {
 		t.Fatalf("the settings file was created: %v", err)
+	}
+}
+
+// unreadableLegacyStore is a store whose Load found no settings file and could
+// not read the legacy one, which a folder in its place stands for, so saving
+// is blocked.
+func unreadableLegacyStore(t *testing.T) (*Store, Paths) {
+	t.Helper()
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(paths.LegacyConfigFile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	store.Load()
+	if err := store.Save(Default()); err == nil {
+		t.Fatal("saving was not blocked")
+	}
+	return store, paths
+}
+
+// Restore Default Settings is the way out of a block an unreadable legacy file
+// causes: it creates the new file and leaves the old one where it is.
+func TestStoreRestoreClearsTheBlockOfAnUnreadableLegacyFile(t *testing.T) {
+	store, paths := unreadableLegacyStore(t)
+	restored, backup, err := store.Restore(Default(), restoreTo(Default()))
+	if err != nil || backup != "" {
+		t.Fatalf("Restore() backup = %q, error = %v", backup, err)
+	}
+	if info, err := os.Stat(paths.LegacyConfigFile); err != nil || !info.IsDir() {
+		t.Fatalf("the legacy path was changed: %v, %v", info, err)
+	}
+	if _, err := os.Stat(paths.ConfigFile); err != nil {
+		t.Fatalf("the restored settings were not written: %v", err)
+	}
+	if err := store.Save(restored); err != nil {
+		t.Fatalf("saving is still blocked: %v", err)
+	}
+}
+
+// A legacy file readable by the time of the restore is backed up, and its
+// settings are the ones the restore derives from.
+func TestStoreRestoreBacksUpALegacyFileThatBecameReadable(t *testing.T) {
+	store, paths := unreadableLegacyStore(t)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.LegacyConfigFile, []byte(legacyResizerSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, backup, err := store.Restore(Default(), func(replaced Settings) (Settings, error) {
+		if replaced.Shell.SelectedModule != string(shell.ModuleImageResizer) {
+			t.Errorf("replaced module = %q, want the legacy file's", replaced.Shell.SelectedModule)
+		}
+		return Default(), nil
+	})
+	if err != nil || backup == "" {
+		t.Fatalf("Restore() backup = %q, error = %v", backup, err)
+	}
+	requireFileContent(t, backup, legacyResizerSettings)
+	requireFileContent(t, paths.LegacyConfigFile, legacyResizerSettings)
+}
+
+// A settings file the restore did not see, as one on a share that was
+// reported missing, is neither replaced nor unprotected.
+func TestStoreRestoreFromALegacyBlockLeavesASettingsFileThatAppeared(t *testing.T) {
+	store, paths := unreadableLegacyStore(t)
+	_, backup, err := store.Restore(Default(), func(Settings) (Settings, error) {
+		if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Default(), nil
+	})
+	if !errors.Is(err, ErrNotRestored) || backup != "" {
+		t.Fatalf("Restore() backup = %q, error = %v, want ErrNotRestored", backup, err)
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+	if copies, _ := filepath.Glob(paths.ConfigFile + ".reset-*"); len(copies) != 0 {
+		t.Fatalf("backups left behind: %v", copies)
+	}
+	if err := store.Save(Default()); err == nil {
+		t.Fatal("a failed restore unblocked saving")
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+}
+
+// appearingMigration migrates version 0 to 1, calling appear on the way.
+type appearingMigration struct{ appear func() }
+
+func (appearingMigration) FromVersion() int { return 0 }
+
+func (m appearingMigration) Migrate(data json.RawMessage) (json.RawMessage, error) {
+	m.appear()
+	return json.RawMessage(strings.Replace(string(data), `"version":0`, `"version":1`, 1)), nil
+}
+
+// A read can report the settings file missing when it is not, as on a
+// redirected folder whose share is reconnecting. Adopting the legacy settings
+// then must not replace it, whichever way they are written.
+func TestStoreAdoptionNeverReplacesASettingsFile(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		legacy string
+		arm    func(*Store, func())
+	}{
+		{"adopted", legacyResizerSettings, func(store *Store, appear func()) {
+			store.RegisterModuleValidator("screenshot", func(json.RawMessage) error {
+				appear()
+				return nil
+			})
+		}},
+		{"malformed", legacyResizerSettings, func(store *Store, appear func()) {
+			store.RegisterModuleValidator("screenshot", func(json.RawMessage) error {
+				appear()
+				return errors.New("invalid section")
+			})
+		}},
+		{"migrated", strings.Replace(legacyResizerSettings, `"version":1`, `"version":0`, 1), func(store *Store, appear func()) {
+			store.migrations[0] = appearingMigration{appear}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := legacyPaths(t, test.legacy)
+			store := NewStore(paths)
+			test.arm(store, func() {
+				if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			})
+			result := store.Load()
+			requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+			requireFileContent(t, paths.LegacyConfigFile, test.legacy)
+			if len(result.Warnings) != 0 || result.Settings.Shell.SelectedModule != string(shell.ModuleSettings) {
+				t.Fatalf("load = %+v, want the settings file's settings", result)
+			}
+			if err := store.Save(result.Settings); err != nil {
+				t.Fatalf("saving is blocked: %v", err)
+			}
+		})
 	}
 }
 

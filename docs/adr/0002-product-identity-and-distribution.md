@@ -24,7 +24,7 @@ PRD section 19 left four decisions open until public distribution: the final nam
 
 Per-user data moves to `%APPDATA%\CyberCute Dev Tools` and `%LOCALAPPDATA%\CyberCute Dev Tools\Logs`, and the default output folders to `Pictures\CyberCute Dev Tools`.
 
-While the new settings file does not exist, the first launch reads `%APPDATA%\GameDevTools\settings.json` and writes its settings to the new location. The old file is left in place, so an older build still works. An old file that cannot be read blocks saving, as an unreadable settings file already does, because a save would create the new file and so abandon the old settings. Output folders stored in the settings stay as they are, so a user's output does not move without their asking. Old logs are not copied.
+While the new settings file does not exist, the first launch reads `%APPDATA%\GameDevTools\settings.json` and writes its settings to the new location. The old file is left in place, so an older build still works, and its settings are taken again if the new file is later deleted while it remains. Taking them only ever creates the new file, so one a redirected folder merely reported missing is not replaced. An old file that cannot be read blocks saving, as an unreadable settings file already does, because a save would create the new file and so abandon the old settings; Restore Default Settings lifts that block by creating the new file and leaving the old one in place. Output folders stored in the settings stay as they are, so a user's output does not move without their asking. Old logs are not copied.
 
 These identifiers keep their old names on purpose:
 
@@ -38,7 +38,7 @@ The icon and version resource are linked from `cmd/gamedevtools/resource_windows
 
 ### Reproducible builds
 
-The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, and `scripts/package.ps1` pins the toolchain from `go.mod`. ZIP entries are sorted and carry a fixed date. The same commit gives the same executable and ZIP bytes from any checkout path.
+The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, and `scripts/package.ps1` pins the toolchain from `go.mod`, turns off the user's `go env -w` file, and fixes `GOAMD64` at `v1` with no `GOEXPERIMENT` or `GOFLAGS`. ZIP entries are sorted and carry a fixed date. The same commit gives the same executable and ZIP bytes from any checkout path and Go configuration.
 
 ## Alternatives considered
 

@@ -30,12 +30,14 @@ const (
 
 // COFF values for the object file the Go linker takes resources from.
 const (
-	machineAMD64      = 0x8664
-	machineARM64      = 0xAA64
-	relocAMD64Addr32  = 3
-	relocARM64Addr32  = 2
-	sectionCharacters = 0x40000040 // initialized data, readable
-	symbolClassStatic = 3
+	machineAMD64 = 0x8664
+	machineARM64 = 0xAA64
+	// The ADDR32NB relocations, which hold an address relative to the image
+	// base, as the resource directory's data entries need.
+	relocAMD64Addr32NB = 3
+	relocARM64Addr32NB = 2
+	sectionCharacters  = 0x40000040 // initialized data, readable
+	symbolClassStatic  = 3
 )
 
 // resource is one leaf of the resource tree.
@@ -53,9 +55,9 @@ func BuildResources(icon []byte, architecture string) ([]byte, error) {
 	var machine, relocation uint16
 	switch architecture {
 	case "amd64":
-		machine, relocation = machineAMD64, relocAMD64Addr32
+		machine, relocation = machineAMD64, relocAMD64Addr32NB
 	case "arm64":
-		machine, relocation = machineARM64, relocARM64Addr32
+		machine, relocation = machineARM64, relocARM64Addr32NB
 	default:
 		return nil, fmt.Errorf("unsupported architecture %q", architecture)
 	}
