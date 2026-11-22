@@ -261,13 +261,14 @@ func savedFileGone(info fs.FileInfo, err error) bool {
 // or nil if it can. Windows also says the path was not found for a drive
 // letter with nothing behind it, as for a USB drive since unplugged, where
 // the file may be intact, so the volume's root is looked at, through stat,
-// before such a file is called gone. The target is the file's ordinary drive
-// or UNC spelling.
+// before such a file is called gone. A root that refuses access is there, as
+// on a share whose top folder the user cannot read, so the file is gone. The
+// target is the file's ordinary drive or UNC spelling.
 func savedFileFailure(target string, info fs.FileInfo, err error, stat func(string) (fs.FileInfo, error)) error {
 	switch {
 	case savedFileGone(info, err):
 		if errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
-			if _, rootErr := stat(pathform.VolumeName(target) + `\`); rootErr != nil {
+			if _, rootErr := stat(pathform.VolumeName(target) + `\`); rootErr != nil && !errors.Is(rootErr, fs.ErrPermission) {
 				return errSavedDriveMissing
 			}
 		}

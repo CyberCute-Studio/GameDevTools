@@ -198,6 +198,7 @@ func TestSavedFileFailureDoesNotBlameAMissingDrive(t *testing.T) {
 	}
 	missing := func(string) (fs.FileInfo, error) { return nil, notFound(windows.ERROR_PATH_NOT_FOUND) }
 	present := func(string) (fs.FileInfo, error) { return nil, nil }
+	refused := func(string) (fs.FileInfo, error) { return nil, notFound(windows.ERROR_ACCESS_DENIED) }
 	for _, test := range []struct {
 		code windows.Errno
 		stat func(string) (fs.FileInfo, error)
@@ -205,6 +206,7 @@ func TestSavedFileFailureDoesNotBlameAMissingDrive(t *testing.T) {
 	}{
 		{windows.ERROR_PATH_NOT_FOUND, missing, errSavedDriveMissing},
 		{windows.ERROR_PATH_NOT_FOUND, present, errSavedFileGone},
+		{windows.ERROR_PATH_NOT_FOUND, refused, errSavedFileGone},
 		{windows.ERROR_FILE_NOT_FOUND, present, errSavedFileGone},
 	} {
 		if got := savedFileFailure(`Z:\Shots\a.png`, nil, notFound(test.code), test.stat); !errors.Is(got, test.want) {

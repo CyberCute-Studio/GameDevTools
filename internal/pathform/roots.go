@@ -95,6 +95,8 @@ func NamesNoFolder(folder string) bool {
 // reads those as its named pipes and mailslots rather than as folders, so
 // creating \\localhost\pipe\x connects to the program serving that pipe. Only
 // the share is judged: a folder named pipe on an ordinary share is a folder.
+// Trailing spaces and periods are ignored, since a verbatim path keeps them
+// and what a server makes of such a share name cannot be judged from here.
 func leadsThroughIPCShare(clean string) bool {
 	unc, found := "", false
 	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`, `\\.\UNC\`} {
@@ -113,8 +115,9 @@ func leadsThroughIPCShare(clean string) bool {
 	if len(names) < 2 {
 		return false
 	}
+	named := strings.TrimRight(names[1], " .")
 	for _, share := range []string{"pipe", "mailslot", "IPC$"} {
-		if strings.EqualFold(names[1], share) {
+		if strings.EqualFold(named, share) {
 			return true
 		}
 	}
