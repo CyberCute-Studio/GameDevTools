@@ -1,7 +1,7 @@
 # GameDevTools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.1\
+**Version:** 1.2\
 **Last updated:** 2026-11-22\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
@@ -32,8 +32,8 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M0 — Technical validation and application foundation | 1–7 | Pending |
 | M1 — Screenshot module | 8–18 | Pending |
 | M2 — Image Resizer module | 19–27 | Pending |
-| M3 — Cross-cutting quality and hardening | 28–33 | Pending |
-| M4 — Distribution and release | 34–36 | Pending |
+| M3 — Cross-cutting quality and hardening | 28–34 | Pending |
+| M4 — Distribution and release | 35–37 | Pending |
 
 ## 4. Milestone M0 — Technical validation and application foundation
 
@@ -283,10 +283,17 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Requirements:** SCR-063, SCR-069, NFR-032, UX-010.
     - **Deliver:** Report a stored device, volume, or server path as an unusable Screenshot folder; store the folder the picker's user chose rather than a shortened name; report a failed Reveal for a file that has gone; and handle a missing parent Windows 10 may read as a device.
     - **Verify:** Test each case through the code that handles it, confirming each defect first. Record any case that cannot be reproduced on the available Windows version rather than fixing it blind.
-    - **Notes:** These are the defects QLT-03 recorded as already on `main` and left out of its scope. A Screenshot folder that names only a drive, volume, device, or server, or leads through another device such as `\\.\pipe\x` or a server's `pipe`, `mailslot`, or `IPC$` share such as `\\localhost\pipe\x`, is now refused when chosen and before a save opens anything, and reported at startup when stored, while still passing validation so it cannot reset the settings file, a `\??\` path that names only a volume or device such as `\??\C:` included, while a bare `C:`, a relative path, is still rejected as malformed; the rule is the Image Resizer's, moved into `internal/pathform`, with the server shares and a refusal of any path with more than two leading separators added for Screenshot only, so the Image Resizer's rule is unchanged and still accepts such a share or a path with three leading separators. The folder picker, shared by both modules' Browse, refuses a choice whose reported path does not exist or ends in a separator after a name: measured on the environment of record, the shell gives a folder named `v2..` as `v2` and one named `...` as its parent with a trailing separator, so the picker could store a different folder or one that does not exist. Its check runs off the GUI thread, which waits at most two seconds before refusing the choice as not responding. It cannot detect a shortened name that matches a real folder, as when `v2` and `v2..` stand side by side, names File Explorer cannot create. Reveal in Explorer reports a saved file it cannot find, which may have been moved or deleted or be on a drive or share that is not available, as Windows reports those alike, and runs off the GUI thread so that looking at the file on a drive that does not respond cannot freeze the window; a repeated click does not start a second reveal of the same file, and a late failure does not replace a newer capture's result or the outcome of a capture started since. The fourth defect, `os.MkdirAll` reading a missing parent such as `con.d` as a device, was **not changed**: it was reported for Windows 10 and does not reproduce on the available Windows 11 build, so it stays open for the QLT-04 Windows 10 run.
+    - **Notes:** These are the defects QLT-03 recorded as already on `main` and left out of its scope. A Screenshot folder that names only a drive, volume, device, or server, or leads through another device such as `\\.\pipe\x` or a server's `pipe`, `mailslot`, or `IPC$` share such as `\\localhost\pipe\x`, is now refused when chosen and before a save opens anything, and reported at startup when stored, while still passing validation so it cannot reset the settings file, a `\??\` path that names only a volume or device such as `\??\C:` included, while a bare `C:`, a relative path, is still rejected as malformed; the rule is the Image Resizer's, moved into `internal/pathform`, with the server shares and a refusal of any path with more than two leading separators added for Screenshot only, so the Image Resizer's rule was unchanged here; QLT-03C extends the share check to it. The folder picker, shared by both modules' Browse, refuses a choice whose reported path does not exist or ends in a separator after a name: measured on the environment of record, the shell gives a folder named `v2..` as `v2` and one named `...` as its parent with a trailing separator, so the picker could store a different folder or one that does not exist. Its check runs off the GUI thread, which waits at most two seconds before refusing the choice as not responding. It cannot detect a shortened name that matches a real folder, as when `v2` and `v2..` stand side by side, names File Explorer cannot create. Reveal in Explorer reports a saved file it cannot find, which may have been moved or deleted or be on a drive or share that is not available, as Windows reports those alike, and runs off the GUI thread so that looking at the file on a drive that does not respond cannot freeze the window; a repeated click does not start a second reveal of the same file, and a late failure does not replace a newer capture's result or the outcome of a capture started since. The fourth defect, `os.MkdirAll` reading a missing parent such as `con.d` as a device, was **not changed**: it was reported for Windows 10 and does not reproduce on the available Windows 11 build, so it stays open for the QLT-04 Windows 10 run.
 
-33. **QLT-04 — Validate the supported Windows matrix and combined performance**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03B
+33. **QLT-03C — Refuse IPC shares as Image Resizer output folders**
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** QLT-03B
+    - **Requirements:** RSZ-030, NFR-032, UX-010.
+    - **Deliver:** Refuse a server's `pipe`, `mailslot`, or `IPC$` share as an Image Resizer output folder in every spelling, before a job creates or inspects anything, without resetting a settings file that stores one.
+    - **Verify:** Table-test every UNC spelling and similar ordinary names at string level, and that a job fails before touching a file system. Open no pipe, mailslot, or device in any test or probe.
+    - **Notes:** QLT-03B's review found that `output.ValidateFolder` accepted these shares, which Screenshot already refused. It now applies the same `pathform.LeadsThroughIPCShare` check to the path as Windows resolves it, which writes every spelling alike, including one with three leading separators, and refuses it as `ErrFolderRoot`. A stored folder of this kind follows the existing path for one the rules refuse: the default folder is selected with a startup warning. The Image Resizer's looser rule for names such as `Photos ` that a longer path leads through is unchanged.
+
+34. **QLT-04 — Validate the supported Windows matrix and combined performance**
+    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-03C
     - **Requirements:** NFR-001, NFR-002, NFR-003, NFR-004, NFR-010 through NFR-014, AC-A01 through AC-A05, all remaining P0 acceptance scenarios.
     - **Deliver:** Windows 10 22H2 and supported Windows 11 test matrix, non-admin validation, launch/overlay/capture/resize performance report, multi-monitor DPI matrix, combined-module regression run, and fixes for cross-module defects.
     - **Verify:** Run the application and acceptance suite on each supported OS without administrator rights. Confirm 100–500% scaling coverage, reference performance targets, clean exit, offline operation, persistence, and responsive batch behavior.
@@ -299,21 +306,21 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Milestone status:** Pending\
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
-34. **REL-01 — Finalize product identity, packaging, and distribution**
+35. **REL-01 — Finalize product identity, packaging, and distribution**
     - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-04
     - **Requirements:** TECH-010 and PRD Section 19 open decisions.
     - **Deliver:** Final product/executable name, version metadata and application icon, installer and/or portable ZIP decision, code-signing decision, update-strategy decision, reproducible release build, and selected packaging implementation.
     - **Verify:** Install/run or extract/run the packaged app in a clean non-admin Windows environment without Go installed. Confirm settings paths, shortcuts, file associations if any, uninstall behavior if applicable, and artifact integrity/signing according to the chosen strategy.
     - **Notes:** If the selected distribution or update approach cannot fit one PR, split this item before starting it and preserve backward-only dependencies.
 
-35. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
+36. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-01
     - **Requirements:** PRD Sections 9.8, 10.6, 18, and 19; TECH-009.
     - **Deliver:** Setup and usage documentation for both modules, hotkey/configuration help, output/collision behavior, protected-content and metadata limitations, troubleshooting, test/verification guide, release notes, and PRD-to-implementation traceability update.
     - **Verify:** Follow the documentation on a clean machine to perform every core workflow. Confirm documented behavior and limitations match the packaged application and no deferred P0 requirement is presented as complete.
     - **Notes:** Update the PRD and this plan if approved behavior changed during implementation.
 
-36. **REL-03 — Validate the release candidate and close the implementation baseline**
+37. **REL-03 — Validate the release candidate and close the implementation baseline**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02
     - **Requirements:** All P0 requirements and all acceptance criteria in PRD Section 15.
     - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
@@ -331,7 +338,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 | APP-001 through APP-005 | FND-03, FND-04, SCR-09, QLT-02 | QLT-04, REL-03 |
 | PRESET-001 through PRESET-008 | FND-06, FND-07, SCR-01, RSZ-01 | QLT-02, QLT-04 |
 | SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01; output-folder and finalization fixes in QLT-03A and QLT-03B | SCR-11, QLT-04, REL-03 |
-| RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08 | RSZ-09, QLT-04, REL-03 |
+| RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08; output-folder fix in QLT-03C | RSZ-09, QLT-04, REL-03 |
 | SET-001 through SET-007 | FND-04, FND-06, module settings items, QLT-02, QLT-03 | QLT-04, REL-03 |
 | UX-001 through UX-010 | FND-05 and all feature UI items | QLT-01, QLT-04 |
 | NFR-001 through NFR-004 | SCR-02, REL-01 | QLT-04, REL-03 |
@@ -349,3 +356,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 |---|---|---|
 | 1.0 | 2026-11-10 | Initial ordered, milestone-based implementation plan derived from PRD 1.0. |
 | 1.1 | 2026-11-22 | Inserted QLT-03A and QLT-03B for the Screenshot defects QLT-03 found already on `main`; QLT-04 now depends on QLT-03B, and later items are renumbered. |
+| 1.2 | 2026-11-22 | Inserted QLT-03C for the Image Resizer defect QLT-03B found already on `main`; QLT-04 now depends on QLT-03C, and later items are renumbered. |

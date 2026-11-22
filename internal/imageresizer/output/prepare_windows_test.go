@@ -1174,6 +1174,68 @@ func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
 // device path can, a confirmed Overwrite renames rather than replaces. A
 // drive root or a drive's volume names no file however it is reached, so it
 // is not opened either, and a confirmed Overwrite still replaces.
+// TestValidateFolderRefusesServerIPCShares pins that a server's pipe,
+// mailslot, or IPC$ share is refused in every spelling, as creating a folder
+// there would connect to the program serving that pipe, and that an ordinary
+// folder or share with a similar name is not. ValidateFolder only resolves
+// the path's text, so no pipe is opened here.
+func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
+	for _, folder := range []string{
+		`\\localhost\pipe\x`,
+		`\\127.0.0.1\pipe\x`,
+		`//localhost/pipe/x`,
+		`\\server\PIPE`,
+		`\\?\UNC\localhost\pipe\x`,
+		`\??\UNC\localhost\pipe\x`,
+		`//?/unc/localhost/pipe/x`,
+		`\\.\UNC\localhost\pipe\x`,
+		`//./UNC/localhost/pipe/x`,
+		`\\\localhost\pipe\x`,
+		`\\server\mailslot\x`,
+		`\\?\UNC\server\MailSlot\x`,
+		`\\server\IPC$`,
+		`\\server\ipc$\x`,
+		`\\server\pipe.\x`,
+		`\\server\pipe \x`,
+		`\\?\UNC\server\pipe.\x`,
+		`\\?\UNC\server\pipe \x`,
+	} {
+		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
+			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
+		}
+	}
+	// Refused as a name Windows would change, before the share is judged.
+	for _, folder := range []string{`\\server\\pipe\x`, `\\\\localhost\pipe\x`} {
+		if err := ValidateFolder(folder); err == nil {
+			t.Errorf("ValidateFolder(%q) accepted a path to an IPC share", folder)
+		}
+	}
+	for _, folder := range []string{
+		`\\server\share\pipe`,
+		`\\server\share\pipe\x`,
+		`\\server\share\IPC$`,
+		`\\server\pipes\x`,
+		`\\pipe\share\x`,
+		`\\?\UNC\server\share\pipe\x`,
+		`C:\pipe\x`,
+		`\\?\C:\pipe\x`,
+	} {
+		if err := ValidateFolder(folder); err != nil {
+			t.Errorf("ValidateFolder(%q) = %v, want none", folder, err)
+		}
+	}
+}
+
+// TestPrepareRefusesAnIPCShareBeforeTouchingIt pins that a job for such a
+// folder fails before anything is created or inspected: the planner is given
+// no file system, so any use of one would panic.
+func TestPrepareRefusesAnIPCShareBeforeTouchingIt(t *testing.T) {
+	_, err := prepare(context.Background(), jobRequest(`\\localhost\pipe\Resized`, CollisionRename, png(`C:\In\a.png`)), nil)
+	if !errors.Is(err, ErrFolderRoot) {
+		t.Fatalf("prepare = %v, want %v", err, ErrFolderRoot)
+	}
+}
+
 func TestPrepareNeverOpensListedDevices(t *testing.T) {
 	in := t.TempDir()
 	pipe := "GameDevTools-" + filepath.Base(in)

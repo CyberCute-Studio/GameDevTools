@@ -73,12 +73,12 @@ func ShareRoot(volume string) bool {
 // volume, device, or server rather than a folder on it, or leads through a
 // device other than a drive, a volume, or a share, such as the named pipe
 // \\.\pipe\x, which creating the folder would open, or the same pipe on a
-// server, \\localhost\pipe\x (leadsThroughIPCShare). A path with more than two
+// server, \\localhost\pipe\x (LeadsThroughIPCShare). A path with more than two
 // leading separators is refused too: Windows keeps the extra ones in the UNC
 // path it builds, so its server and share cannot be judged from the names.
 func NamesNoFolder(folder string) bool {
 	clean := SaveFolder(folder)
-	if strings.HasPrefix(clean, `\\\`) || RootDepth(clean) < 0 || leadsThroughIPCShare(clean) {
+	if strings.HasPrefix(clean, `\\\`) || RootDepth(clean) < 0 || LeadsThroughIPCShare(clean) {
 		return true
 	}
 	for _, prefix := range []string{`\\.\`, `\??\`} {
@@ -90,14 +90,14 @@ func NamesNoFolder(folder string) bool {
 	return NamesDevice(clean)
 }
 
-// leadsThroughIPCShare reports whether a cleaned path's share, in any UNC
-// spelling and letter case, is a server's pipe, mailslot, or IPC$. Windows
+// LeadsThroughIPCShare reports whether a cleaned or resolved path's share, in
+// any UNC spelling and letter case, is a server's pipe, mailslot, or IPC$. Windows
 // reads those as its named pipes and mailslots rather than as folders, so
 // creating \\localhost\pipe\x connects to the program serving that pipe. Only
 // the share is judged: a folder named pipe on an ordinary share is a folder.
 // Trailing spaces and periods are ignored, since a verbatim path keeps them
 // and what a server makes of such a share name cannot be judged from here.
-func leadsThroughIPCShare(clean string) bool {
+func LeadsThroughIPCShare(clean string) bool {
 	unc, found := "", false
 	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`, `\\.\UNC\`} {
 		if len(clean) >= len(prefix) && strings.EqualFold(clean[:len(prefix)], prefix) {

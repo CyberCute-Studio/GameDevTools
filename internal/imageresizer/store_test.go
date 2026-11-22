@@ -186,7 +186,8 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 	if volume := filepath.VolumeName(folder); volume != "" {
 		legacyFolders = append(legacyFolders, folder+".", folder+" ", filepath.Join(folder+".", "Resized"),
 			filepath.Join(folder, "NUL"), folder+"::$INDEX_ALLOCATION", filepath.Join(folder, "x:y"),
-			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`, `\\.\pipe\Resized`)
+			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`, `\\.\pipe\Resized`,
+			`\\localhost\pipe\Resized`, `\\server\mailslot\Resized`, `\\?\UNC\server\IPC$\Resized`)
 	}
 	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")

@@ -308,8 +308,11 @@ var (
 // device, such as the named pipe \\.\pipe\x or the NT device path
 // \\?\GLOBALROOT\Device\..., names a device or something on one rather than
 // a folder, and creating it, as Prepare does, would open that device, which
-// for a named pipe connects to the program serving it. Such a path is
-// refused as ErrFolderRoot.
+// for a named pipe connects to the program serving it. A server's pipe,
+// mailslot, or IPC$ share, as in \\localhost\pipe\x, is the same device
+// reached through a share, and is judged on the path as Windows resolves it,
+// which writes every spelling of it alike. Such a path is refused as
+// ErrFolderRoot.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -327,7 +330,7 @@ func ValidateFolder(folder string) error {
 		return ErrFolderName
 	}
 	resolved := resolvedPath(folder)
-	if pathform.NamesDevice(resolved) {
+	if pathform.NamesDevice(resolved) || pathform.LeadsThroughIPCShare(resolved) {
 		return ErrFolderRoot
 	}
 	if resolved != resolvedPath(clean) {
