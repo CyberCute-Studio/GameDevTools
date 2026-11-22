@@ -3,6 +3,7 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -15,6 +16,9 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
+	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 )
 
 const (
@@ -344,11 +348,87 @@ func (a *launchedApp) awaitExit(tb testing.TB) {
 	}
 }
 
+// restartPresetID is the custom preset changeSavedSettings adds.
+const restartPresetID = "custom.0123456789abcdef0123456789abcdef"
+
+// readSavedSettings decodes the settings file a run of the application wrote.
+func readSavedSettings(tb testing.TB, path string) settings.Settings {
+	tb.Helper()
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var saved settings.Settings
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		tb.Fatalf("decode the settings file: %v", err)
+	}
+	return saved
+}
+
+// changeSavedSettings makes the file hold what no default supplies, the Image
+// Resizer as the current module and a selected custom Screenshot preset, so
+// that only loading the file can bring them back after a restart (AC-A01).
+func changeSavedSettings(tb testing.TB, path string) {
+	tb.Helper()
+	saved := readSavedSettings(tb, path)
+	saved.Shell.SelectedModule = string(core.ModuleImageResizer)
+	section := map[string]json.RawMessage{}
+	if existing, ok := saved.Modules["screenshot"]; ok {
+		if err := json.Unmarshal(existing, &section); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	section["presets"] = json.RawMessage(`{"version":1,"custom":[{"id":"` + restartPresetID +
+		`","name":"Kept across a restart","width":320,"height":240}],"selectedPresetId":"` + restartPresetID + `"}`)
+	encodedSection, err := json.Marshal(section)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if saved.Modules == nil {
+		saved.Modules = make(map[string]json.RawMessage)
+	}
+	saved.Modules["screenshot"] = encodedSection
+	encoded, err := json.Marshal(saved)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		tb.Fatal(err)
+	}
+}
+
+// requireSavedSettingsKept fails unless the file still holds what
+// changeSavedSettings put there. The application writes the file as it exits,
+// so one that started from the defaults instead would have replaced them.
+func requireSavedSettingsKept(tb testing.TB, path string) {
+	tb.Helper()
+	saved := readSavedSettings(tb, path)
+	if saved.Shell.SelectedModule != string(core.ModuleImageResizer) {
+		tb.Fatalf("the selected module after a restart is %q, want %q", saved.Shell.SelectedModule, core.ModuleImageResizer)
+	}
+	var section struct {
+		Presets struct {
+			Custom []struct {
+				ID string `json:"id"`
+			} `json:"custom"`
+			SelectedPresetID string `json:"selectedPresetId"`
+		} `json:"presets"`
+	}
+	if err := json.Unmarshal(saved.Modules["screenshot"], &section); err != nil {
+		tb.Fatalf("decode the Screenshot settings: %v", err)
+	}
+	presets := section.Presets
+	if len(presets.Custom) != 1 || presets.Custom[0].ID != restartPresetID || presets.SelectedPresetID != restartPresetID {
+		tb.Fatalf("the custom preset did not survive a restart: %+v", presets)
+	}
+}
+
 // TestReleaseExecutableRunsAsStandardUserAndExitsCleanly runs the executable
 // that ships, end to end, without administrator rights (NFR-002): it starts,
 // answers, refuses to run twice (APP-005), persists its settings, exits with
-// nothing left holding the instance (AC-A05), and starts again from the file
-// it wrote without any recovery (AC-A01).
+// nothing left holding the instance (AC-A05), and, given a settings file
+// changed to hold another module and a custom preset, starts again, keeps
+// both, and needs no recovery (AC-A01).
 func TestReleaseExecutableRunsAsStandardUserAndExitsCleanly(t *testing.T) {
 	requireValidationRun(t)
 	executable := buildReleaseExecutable(t)
@@ -373,9 +453,11 @@ func TestReleaseExecutableRunsAsStandardUserAndExitsCleanly(t *testing.T) {
 	if _, err := os.Stat(configFile); err != nil {
 		t.Fatalf("the settings file was not written: %v", err)
 	}
+	changeSavedSettings(t, configFile)
 
 	restarted := launchRelease(t, executable, workspace)
 	restarted.close(t)
+	requireSavedSettingsKept(t, configFile)
 	// Named as the settings store names its backups and its temporary files.
 	entries, err := os.ReadDir(filepath.Dir(configFile))
 	if err != nil {

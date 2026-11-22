@@ -25,6 +25,8 @@ confirms the CPU is from 2020 or later; the report records its name.
 
 .PARAMETER OutputDirectory
 Where the result file goes; relative paths are resolved from the repository root.
+A folder holding tracked files is refused, because the check that the source did
+not change during the run leaves this folder out.
 #>
 [CmdletBinding()]
 param(
@@ -40,9 +42,24 @@ $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
     $OutputDirectory = Join-Path $root $OutputDirectory
 }
-# The run's own files would read as source changing under it.
-if ([System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/') -ieq [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')) {
+# The run's own files would read as source changing under it, so the source
+# check leaves a result folder inside the repository out. That must not hide
+# source, so the repository root and any folder holding tracked files are refused.
+$repositoryPath = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
+$resultsPath = [System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/')
+if ($resultsPath -ieq $repositoryPath) {
     throw "The output directory cannot be the repository root."
+}
+$resultsInRepository = $null
+if ($resultsPath.StartsWith($repositoryPath + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    $resultsInRepository = $resultsPath.Substring($repositoryPath.Length + 1).Replace('\', '/')
+    $trackedInResults = @(& git -C $root ls-files -- ":(literal,icase)$resultsInRepository")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not list the tracked files in the output directory."
+    }
+    if ($trackedInResults.Count -gt 0) {
+        throw "The output directory cannot be a folder holding tracked files: $resultsInRepository."
+    }
 }
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
@@ -134,18 +151,17 @@ function Read-GitOutput {
 # Get-SourceState reads the commit, the working tree's status, and a fingerprint
 # of the content of its changed and untracked files, since status alone does not
 # change when a file already listed is edited again. It leaves out a result
-# folder inside the repository, whose files are this script's own.
+# folder inside the repository, whose files are this script's own. The diff
+# turns off external diff tools and textconv, which would replace the content
+# being fingerprinted.
 function Get-SourceState {
     $pathspec = @()
-    $repository = [System.IO.Path]::GetFullPath($root).TrimEnd('\', '/')
-    $results = [System.IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\', '/')
-    if ($results.StartsWith($repository + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        $relative = $results.Substring($repository.Length + 1).Replace('\', '/')
-        $pathspec = @("--", ".", ":(exclude,literal)$relative")
+    if ($resultsInRepository) {
+        $pathspec = @("--", ".", ":(exclude,literal,icase)$resultsInRepository")
     }
     $hasher = [System.Security.Cryptography.SHA256]::Create()
     try {
-        [byte[]]$changes = Read-GitOutput (@("diff", "--binary", "HEAD") + $pathspec)
+        [byte[]]$changes = Read-GitOutput (@("diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD") + $pathspec)
         $parts = New-Object System.Collections.ArrayList
         [void]$parts.Add([BitConverter]::ToString($hasher.ComputeHash($changes)))
         [byte[]]$listing = Read-GitOutput (@("ls-files", "--others", "--exclude-standard", "-z") + $pathspec)
@@ -268,7 +284,17 @@ try {
         $captureCoverage = @(Get-Content -Raw -LiteralPath $coverageFile | ConvertFrom-Json | ForEach-Object { $_ })
         Remove-Item -LiteralPath $coverageFile
     }
-    Add-Check -Name "capture coverage recorded" -Passed ($captureCoverage.Count -gt 0) -Seconds 0
+    # A region is skipped on a session that composites no display, or when a
+    # shared edge is too short to compare, so a list of only skipped regions
+    # checked no pixels: that reads as skipped, not passed. A reference-machine
+    # run must check every region.
+    $captureRegions = $captureCoverage.Count
+    $captureChecked = @($captureCoverage | Where-Object { $_.result -eq "passed" }).Count
+    $captureSkipped = @($captureCoverage | Where-Object { $_.result -eq "skipped" }).Count
+    $captureDetail = if ($captureRegions -eq 0) { "no region recorded" } elseif ($captureChecked -lt $captureRegions) { "$captureChecked of $captureRegions regions passed" } else { "" }
+    $captureAllSkipped = ($captureRegions -gt 0) -and ($captureSkipped -eq $captureRegions)
+    $capturePassed = ($captureChecked -gt 0) -and (($captureChecked + $captureSkipped) -eq $captureRegions) -and (-not ($ReferenceMachine -and ($captureSkipped -gt 0)))
+    Add-Check -Name "capture coverage recorded" -Passed $capturePassed -Skipped ($captureAllSkipped -and (-not $ReferenceMachine)) -Seconds 0 -Detail $captureDetail
 
     $layoutFile = Join-Path $OutputDirectory "displays-$PID.json"
     $layoutEnvironment = $goEnvironment + @{ GAMEDEVTOOLS_VALIDATION_DISPLAYS = $layoutFile }
@@ -355,18 +381,22 @@ try {
     $presetMaxMs = if ($presetRuns.Count -gt 0) { $presetRuns[0]["max-ms"] } else { $null }
 
     # NFR-012 is defined at 3840 x 2160. The capture benchmark reads the whole
-    # virtual desktop, whose areas no display covers are cheaper to read, so
-    # its time is scaled by the pixels the displays hold. That charges the empty
-    # areas' time to those pixels, so they can raise the estimate but not lower
-    # it, and the measure says so and names the sizes.
+    # virtual desktop, whose areas no display covers are cheaper to read. When
+    # the displays hold fewer pixels than that region, the time is scaled up by
+    # the pixels they hold, which charges the empty areas' time to them. When
+    # they hold more it is not scaled down, since a capture's fixed cost does
+    # not shrink with the region. Either way the estimate can only err high,
+    # and the measure says which was done and names the sizes.
     $captureToClipboardMs = $null
     $captureToClipboardMeasure = "3840 x 2160 capture to clipboard"
     $displayMegapixels = [double](($displays | ForEach-Object { [double]$_.width * [double]$_.height } | Measure-Object -Sum).Sum) / 1e6
     if ($captureRuns.Count -gt 0 -and $clipboardRuns.Count -gt 0 -and $captureRuns[0]["MP"] -gt 0 -and $displayMegapixels -gt 0) {
         $fourKMegapixels = 3840 * 2160 / 1e6
-        $captureMs = ($captureRuns[0]["ns/op"] / 1e6) * $fourKMegapixels / $displayMegapixels
+        $captureScale = [math]::Max(1, $fourKMegapixels / $displayMegapixels)
+        $captureMs = ($captureRuns[0]["ns/op"] / 1e6) * $captureScale
         $captureToClipboardMs = $captureMs + ($clipboardRuns[0]["ns/op"] / 1e6)
-        $captureToClipboardMeasure += ", capture time scaled from a $($captureRuns[0]["MP"].ToString("0.0", $invariant)) MP desktop capture holding $($displayMegapixels.ToString("0.0", $invariant)) MP of display pixels"
+        $captureBasis = if ($captureScale -gt 1) { "scaled from" } else { "not scaled down from" }
+        $captureToClipboardMeasure += ", capture time $captureBasis a $($captureRuns[0]["MP"].ToString("0.0", $invariant)) MP desktop capture holding $($displayMegapixels.ToString("0.0", $invariant)) MP of display pixels"
     }
 
     $batchMs = $null

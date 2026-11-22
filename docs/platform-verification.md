@@ -4,7 +4,7 @@ This document is the QLT-04 record for the supported Windows platforms, running 
 
 ## Result
 
-Every check that could run passed, and the combined run found no cross-module defect, so QLT-04 changes no production code. **One performance target was missed:** under x64 emulation, the slowest Free Rectangle overlay exceeded NFR-011's 300 ms in 2 of 6 batches of 30, at 312 and 317 ms ([details](#the-missed-overlay-target)). **Three things were not run, because this environment does not have them, and they are QLT-04A's scope:** x64 Windows 11 on real hardware, including the PRD's reference machine; any display scaling other than 100%; and a live display disconnect. Until QLT-04A passes, NFR-001, NFR-003, NFR-011, AC-S02, and AC-S12 are not fully verified, and the NFR-010, NFR-012, and NFR-013 figures below are indicative rather than results on the reference machine.
+Every check that could run passed, and the combined run found no cross-module defect, so QLT-04 changes no production code. **One performance target was missed:** under x64 emulation, the slowest Free Rectangle overlay exceeded NFR-011's 300 ms in 2 of 6 batches of 30, at 312 and 317 ms ([details](#the-missed-overlay-target)). **These were not run, because this environment's hardware and display arrangement do not provide them, and they are QLT-04A's scope:** x64 Windows 11 on real hardware, including the PRD's reference machine; any other supported Windows 11 release; any display scaling other than 100%; negative virtual-desktop coordinates; a rotated display; and a live display disconnect. Until QLT-04A passes, NFR-001, NFR-003, NFR-011, SCR-042 on a rotated display, AC-S02, and AC-S12 are not fully verified, and the NFR-010, NFR-012, and NFR-013 figures below are indicative rather than results on the reference machine.
 
 ## Support policy
 
@@ -23,9 +23,9 @@ The script moves windows, takes the foreground, and **replaces the clipboard**. 
 - `-Architecture amd64` builds and runs the x64 release target, under emulation on Windows on Arm.
 - `-ReferenceMachine` asserts this is the PRD's reference machine and refuses one that is not: 64-bit Intel or AMD by its processor, four or more cores, 16 GB RAM installed, Windows 11, not elevated, and an SSD shown to hold both the system drive and the temporary files the benchmarks use. Windows does not report a CPU's age, so whoever passes the switch confirms the CPU is from 2020 or later; the result file records its name. A target missed or not measured then fails the run. Elsewhere, performance figures are recorded without failing it.
 
-A benchmark that reports it cannot run on a machine, such as the 1280 × 720 preset on a smaller desktop, is recorded as skipped and its target as not measured. A benchmark that produces no result and reports no skip, such as one that was renamed, fails the run.
+A benchmark that reports it cannot run on a machine, such as the 1280 × 720 preset on a smaller desktop, is recorded as skipped and its target as not measured. A benchmark that produces no result and reports no skip, such as one that was renamed, fails the run. A capture region the test could not check is listed as skipped. If no region could be checked, the coverage check reads skipped rather than passed, and a `-ReferenceMachine` run fails if any region was skipped.
 
-The result file names the commit and working-tree state from before the first step, and the run fails if either changes before the last, including the content of a file that was already changed or untracked.
+The result file names the commit and working-tree state from before the first step, and the run fails if either changes before the last, including the content of a file that was already changed or untracked. That check leaves out the output folder, so `-OutputDirectory` refuses a folder holding tracked files.
 
 The `Validation matrix` workflow (`.github/workflows/validation-matrix.yml`) runs the same script on x64 Windows Server. It is started by hand, or by a pull request that changes the script, the workflow, the build script, the Go module files, or a file holding a test or benchmark the script runs by name. A change to any other test file does not start it, although the script runs the whole suite.
 
@@ -54,7 +54,7 @@ Results below were recorded on 2026-11-22 from commit `8c06406`, with a clean wo
 
 ## Running without administrator rights
 
-`app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` builds the executable with the release flags and runs it with its per-user folders in a temporary workspace. It confirms the process has no enabled Administrators group, its window appears and answers, a second launch exits and leaves the first window in place (APP-005), its settings are written, it exits with code 0 and releases the single-instance mutex (AC-A05), and it restarts from the file it wrote with no recovery or temporary file (AC-A01). On an elevated host, such as a GitHub-hosted runner, the test is written to drop first to a restricted, medium-integrity token; that path has not run yet, as this machine's runs were not elevated.
+`app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` builds the executable with the release flags and runs it with its per-user folders in a temporary workspace. It confirms the process has no enabled Administrators group, its window appears and answers, a second launch exits and leaves the first window in place (APP-005), its settings are written, it exits with code 0 and releases the single-instance mutex (AC-A05), and, with the file then changed to select the other module and a custom preset, it restarts and keeps both, with no recovery or temporary file (AC-A01). The runs recorded below, from `8c06406`, predate the check that those changed values are kept. On an elevated host, such as a GitHub-hosted runner, the test is written to drop first to a restricted, medium-integrity token; that path has not run yet, as this machine's runs were not elevated.
 
 ## Performance
 
@@ -73,7 +73,7 @@ Each figure comes from the validation script's benchmarks on the environment of 
 | NFR-014 | Peak heap during that batch | 1 GiB budget | 220.2 MiB | 220.3 MiB |
 | NFR-014 | Peak runtime footprint during that batch | — | 244.2 MiB | 260.5 MiB |
 
-Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's time, scaled to that region by the pixels the displays hold, 7.3 MP of the 9.8 MP virtual desktop here, because parts no display covers are cheaper to read.
+Launch is timed from just before the process is created until its main window is visible and its message loop answers, after an untimed first launch. NFR-012 adds the clipboard benchmark at 3840 × 2160 to the capture benchmark's time, scaled to that region by the pixels the displays hold, 7.3 MP of the 9.8 MP virtual desktop here, because parts no display covers are cheaper to read. A desktop whose displays hold more than 3840 × 2160 is not scaled down, so the estimate can only err high.
 
 ### The missed overlay target
 
@@ -123,5 +123,6 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 - **x64 hardware.** The x64 build ran only under emulation on this machine. The hosted Windows Server runs have not happened yet.
 - **Other Windows 11 releases.** Only build 26300 was run.
 - **Any scaling but 100%.** Mixed-DPI behavior has still never been exercised live, which is the blocker [ADR-0001](adr/0001-native-windows-stack.md) recorded.
+- **Other display arrangements.** No display had negative coordinates or was rotated, and none was disconnected during a selection.
 - **Other drives.** Every result was written to the internal NVMe SSD.
 - **Manual pre-release checks** recorded by earlier items remain open, including a screen reader, the contrast themes, a real sign-out, FAT32 or exFAT saves, a run with network adapters off, and clipboard sync.
