@@ -153,16 +153,48 @@ func unreadableLegacyStore(t *testing.T) (*Store, Paths) {
 	return store, paths
 }
 
-// Restore Default Settings is the way out of a block an unreadable legacy file
-// causes: it creates the new file and leaves the old one where it is.
-func TestStoreRestoreClearsTheBlockOfAnUnreadableLegacyFile(t *testing.T) {
+// makeLegacyReadable puts the legacy settings back in place of the folder that
+// stood for an unreadable file.
+func makeLegacyReadable(t *testing.T, paths Paths) {
+	t.Helper()
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.LegacyConfigFile, []byte(legacyResizerSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// While the legacy file exists but cannot be read, a restore would create the
+// new file without the presets it promises to keep and stop the old file ever
+// being taken, so it changes nothing and names the file.
+func TestStoreRestoreRefusesWhileTheLegacyFileIsUnreadable(t *testing.T) {
 	store, paths := unreadableLegacyStore(t)
+	_, backup, err := store.Restore(Default(), restoreTo(Default()))
+	if !errors.Is(err, ErrNotRestored) || backup != "" {
+		t.Fatalf("Restore() backup = %q, error = %v, want ErrNotRestored", backup, err)
+	}
+	if !strings.Contains(err.Error(), paths.LegacyConfigFile) {
+		t.Fatalf("the error does not name the legacy file: %v", err)
+	}
+	if _, err := os.Stat(paths.ConfigFile); !os.IsNotExist(err) {
+		t.Fatalf("the settings file was created: %v", err)
+	}
+	if err := store.Save(Default()); err == nil {
+		t.Fatal("a refused restore unblocked saving")
+	}
+}
+
+// Moving the unreadable legacy file away is the way out of its block: the
+// restore then creates the new file.
+func TestStoreRestoreClearsTheBlockOnceTheLegacyFileIsMovedAway(t *testing.T) {
+	store, paths := unreadableLegacyStore(t)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
 	restored, backup, err := store.Restore(Default(), restoreTo(Default()))
 	if err != nil || backup != "" {
 		t.Fatalf("Restore() backup = %q, error = %v", backup, err)
-	}
-	if info, err := os.Stat(paths.LegacyConfigFile); err != nil || !info.IsDir() {
-		t.Fatalf("the legacy path was changed: %v, %v", info, err)
 	}
 	if _, err := os.Stat(paths.ConfigFile); err != nil {
 		t.Fatalf("the restored settings were not written: %v", err)
@@ -176,12 +208,7 @@ func TestStoreRestoreClearsTheBlockOfAnUnreadableLegacyFile(t *testing.T) {
 // settings are the ones the restore derives from.
 func TestStoreRestoreBacksUpALegacyFileThatBecameReadable(t *testing.T) {
 	store, paths := unreadableLegacyStore(t)
-	if err := os.Remove(paths.LegacyConfigFile); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(paths.LegacyConfigFile, []byte(legacyResizerSettings), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	makeLegacyReadable(t, paths)
 	_, backup, err := store.Restore(Default(), func(replaced Settings) (Settings, error) {
 		if replaced.Shell.SelectedModule != string(shell.ModuleImageResizer) {
 			t.Errorf("replaced module = %q, want the legacy file's", replaced.Shell.SelectedModule)
@@ -199,6 +226,7 @@ func TestStoreRestoreBacksUpALegacyFileThatBecameReadable(t *testing.T) {
 // reported missing, is neither replaced nor unprotected.
 func TestStoreRestoreFromALegacyBlockLeavesASettingsFileThatAppeared(t *testing.T) {
 	store, paths := unreadableLegacyStore(t)
+	makeLegacyReadable(t, paths)
 	_, backup, err := store.Restore(Default(), func(Settings) (Settings, error) {
 		if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
 			t.Fatal(err)
@@ -276,7 +304,129 @@ func TestStoreAdoptionNeverReplacesASettingsFile(t *testing.T) {
 			if err := store.Save(result.Settings); err != nil {
 				t.Fatalf("saving is blocked: %v", err)
 			}
+			// The abandoned adoption leaves no backup nothing names.
+			if left, _ := filepath.Glob(paths.ConfigFile + ".*"); len(left) != 0 {
+				t.Fatalf("files left beside the settings file: %v", left)
+			}
 		})
+	}
+}
+
+// unwrittenAdoption is a store whose Load took the legacy settings but could
+// not write them, with what stopped it removed again and the settings folder
+// in place.
+func unwrittenAdoption(t *testing.T) (*Store, Paths, Settings) {
+	t.Helper()
+	paths := legacyPaths(t, legacyResizerSettings)
+	blocker := filepath.Dir(paths.ConfigFile)
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	result := store.Load()
+	if result.Unwritten == "" {
+		t.Fatalf("the adoption was written: %+v", result)
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return store, paths, result.Settings
+}
+
+// A settings file that was only reported missing when the adoption failed is
+// kept by every later save, and Restore can still back it up and replace it.
+func TestStoreSaveAfterAnUnwrittenAdoptionKeepsASettingsFile(t *testing.T) {
+	store, paths, session := unwrittenAdoption(t)
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := store.Save(session); err == nil {
+			t.Fatal("a save replaced a settings file the session never loaded")
+		}
+		requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+	}
+	_, backup, err := store.Restore(session, func(replaced Settings) (Settings, error) {
+		if replaced.Shell.SelectedModule != string(shell.ModuleSettings) {
+			t.Errorf("replaced module = %q, want the settings file's", replaced.Shell.SelectedModule)
+		}
+		return Default(), nil
+	})
+	if err != nil || backup == "" {
+		t.Fatalf("Restore() backup = %q, error = %v", backup, err)
+	}
+	requireFileContent(t, backup, currentSettingsFile)
+	if err := store.Save(Default()); err != nil {
+		t.Fatalf("saving is still blocked: %v", err)
+	}
+}
+
+// A restore in the same state only creates the settings file, so one that
+// appears while it runs is kept.
+func TestStoreRestoreAfterAnUnwrittenAdoptionOnlyCreatesTheFile(t *testing.T) {
+	store, paths, session := unwrittenAdoption(t)
+	_, backup, err := store.Restore(session, func(Settings) (Settings, error) {
+		if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Default(), nil
+	})
+	if !errors.Is(err, ErrNotRestored) || backup != "" {
+		t.Fatalf("Restore() backup = %q, error = %v, want ErrNotRestored", backup, err)
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+}
+
+// With saving not blocked, a restore that cannot create the file is a failed
+// write like any other: the session takes the restored settings, and a later
+// save still only creates the file.
+func TestStoreRestoreAfterAnUnwrittenAdoptionReportsAFailedWrite(t *testing.T) {
+	store, paths, session := unwrittenAdoption(t)
+	folder := filepath.Dir(paths.ConfigFile)
+	if err := os.Remove(folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(folder, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, backup, err := store.Restore(session, restoreTo(Default()))
+	if err == nil || errors.Is(err, ErrNotRestored) || backup != "" {
+		t.Fatalf("Restore() backup = %q, error = %v, want a failed write", backup, err)
+	}
+	if restored.Shell.SelectedModule != Default().Shell.SelectedModule {
+		t.Fatalf("restored module = %q", restored.Shell.SelectedModule)
+	}
+	if err := os.Remove(folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(restored); err == nil {
+		t.Fatal("a save replaced a settings file the session never loaded")
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+}
+
+// The first save that reaches the settings file ends the adoption, so later
+// saves replace the file as usual.
+func TestStoreSaveCompletesAnUnwrittenAdoption(t *testing.T) {
+	store, paths, session := unwrittenAdoption(t)
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	session.Shell.SelectedModule = string(shell.ModuleSettings)
+	if err := store.Save(session); err != nil {
+		t.Fatalf("a second save failed: %v", err)
+	}
+	if got := NewStore(paths).Load().Settings.Shell.SelectedModule; got != string(shell.ModuleSettings) {
+		t.Fatalf("selected module after restart = %q", got)
 	}
 }
 

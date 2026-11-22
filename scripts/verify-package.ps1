@@ -116,8 +116,16 @@ try {
     $extracted = Join-Path $scratch "Extracted"
     Expand-Archive -LiteralPath $Package -DestinationPath $extracted
     $folder = Join-Path $extracted $productName
-    $found = @(Get-ChildItem -LiteralPath $extracted -Recurse -File | ForEach-Object { $_.FullName.Substring($folder.Length + 1) } | Sort-Object)
-    $wanted = @("README.txt", "THIRD-PARTY-NOTICES.txt", $executableName) | Sort-Object
+    # Names come from the ZIP rather than the extracted paths, which Windows
+    # may report in a longer form than an 8.3 TEMP path gives them.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($Package)
+    try {
+        $found = @($zip.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+    } finally {
+        $zip.Dispose()
+    }
+    $wanted = @("README.txt", "THIRD-PARTY-NOTICES.txt", $executableName) | ForEach-Object { "$productName/$_" } | Sort-Object
     if (($found -join "|") -ne ($wanted -join "|")) { throw "The ZIP holds: $($found -join ', ')." }
     Write-Check "contents"
 

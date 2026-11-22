@@ -10,5 +10,7 @@ func renameNoReplace(from, to string) error {
 	if err := os.Link(from, to); err != nil {
 		return err
 	}
-	return os.Remove(from)
+	// The link is the commit, so a temporary name that stays is not a failure.
+	_ = os.Remove(from)
+	return nil
 }

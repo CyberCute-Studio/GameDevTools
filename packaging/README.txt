@@ -33,7 +33,8 @@ If you used a build named GameDevTools, its settings are copied the first time
 this version starts. Output folders you had selected stay selected, and the old
 %APPDATA%\GameDevTools folder is left in place. You may delete it afterwards.
 While it exists, its settings are copied again whenever the new settings file
-is missing.
+is missing. If you never chose an output folder, new images go to the default
+folders above, and the images you already saved stay in Pictures\GameDevTools.
 
 Update
 ------

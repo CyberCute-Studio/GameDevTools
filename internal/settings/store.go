@@ -116,9 +116,11 @@ type Store struct {
 	validators map[string][]ModuleValidator
 	blocked    error
 	// fromLegacy is whether Load, finding no settings file, went to the legacy
-	// file. A block it leaves then protects that file, which stays in place
-	// whatever is written, so Restore can lift it by creating the settings
-	// file.
+	// file and nothing has reached the settings file since. Until something
+	// has, a write only creates that file, as its absence may be a share that
+	// is reconnecting. A block Load leaves then protects the legacy file, which
+	// stays in place whatever is written, so Restore can lift it by creating
+	// the settings file.
 	fromLegacy bool
 	// unloaded is whether the settings file holds settings the session never
 	// took: Load could not read or decode the file and started the session
@@ -251,6 +253,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		result.Warnings = append(result.Warnings, result.Recovered)
 		if saveErr := s.saveLoaded(result.Settings); saveErr != nil {
 			if s.fromLegacy && errors.Is(saveErr, os.ErrExist) {
+				os.Remove(backup)
 				return result, false
 			}
 			result.Unwritten = fmt.Sprintf(ui.DefaultSettingsWriteFailed, saveErr)
@@ -260,9 +263,10 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	}
 
 	result.Settings = decoded
-	kept := source
+	kept, backup := source, ""
 	if migrated {
-		backup, backupErr := s.backup(data, "migration")
+		var backupErr error
+		backup, backupErr = s.backup(data, "migration")
 		if backupErr != nil {
 			s.blocked = backupErr
 			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.SettingsMigrationBackupFailed, backupErr, source))
@@ -273,6 +277,9 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	if migrated || s.fromLegacy {
 		if saveErr := s.saveLoaded(decoded); saveErr != nil {
 			if s.fromLegacy && errors.Is(saveErr, os.ErrExist) {
+				if backup != "" {
+					os.Remove(backup)
+				}
 				return result, false
 			}
 			result.Unwritten = fmt.Sprintf(ui.MigratedSettingsWriteFailed, saveErr, kept)
@@ -344,12 +351,18 @@ func (s *Store) Hold() (write func(Settings) error) {
 // that fails after the copy is returned as Save returns
 // it, leaving the original in place beside its copy, as is the failure
 // without a settings path, ErrPathUnavailable, where there is no file to
-// copy. A block that came from the legacy file, with no settings file found
-// now, is the exception to saving again only once a copy exists: that file is
-// not replaced, so the restore backs it up if it can be read, creates the
-// settings file, and lifts the block. It creates the file without replacing
-// one, so a settings file that was only reported missing is kept, and when it
-// cannot be created nothing changes and the block stays.
+// copy. A session whose settings came from the legacy file and have not
+// reached the settings file, with none found now, is the exception to saving
+// again only once a copy exists: the legacy file is not replaced, so the
+// restore creates the settings file. When Load's block protects the legacy
+// file, the restore first backs it up, and while it exists but still cannot
+// be read the restore changes nothing, as the presets the restore keeps may
+// be in it and the new file would stop it ever being taken. It creates the
+// file without replacing one, so a settings file that was only reported
+// missing is kept: when one turns out to exist, or a block cannot be lifted
+// because the file cannot be created, nothing changes. Without a block, a file
+// that cannot be created is a failed write, returned as Save returns it, and
+// later saves still only create the file.
 func (s *Store) Restore(current Settings, reset func(replaced Settings) (Settings, error)) (Settings, string, error) {
 	replaced := current
 	var data []byte
@@ -358,11 +371,16 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		var err error
 		data, err = os.ReadFile(s.path)
 		switch {
-		case errors.Is(err, os.ErrNotExist) && s.blocked != nil && s.fromLegacy:
+		case errors.Is(err, os.ErrNotExist) && s.fromLegacy:
 			creating = true
-			var legacyErr error
-			data, legacyErr = os.ReadFile(s.legacyPath)
-			exists = legacyErr == nil
+			if s.blocked != nil {
+				var legacyErr error
+				data, legacyErr = os.ReadFile(s.legacyPath)
+				if legacyErr != nil && !errors.Is(legacyErr, os.ErrNotExist) {
+					return Settings{}, "", notRestored{fmt.Errorf("read the earlier build's settings at %s: %w; close whatever holds the file and try again, or move it out of that folder to go on without its presets", s.legacyPath, legacyErr)}
+				}
+				exists = legacyErr == nil
+			}
 		case errors.Is(err, os.ErrNotExist) && s.blocked != nil:
 			return Settings{}, "", notRestored{fmt.Errorf("read the current settings: %w", err)}
 		case errors.Is(err, os.ErrNotExist):
@@ -371,10 +389,11 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		default:
 			exists = true
 		}
-		if exists && s.unloaded {
+		if exists && (s.unloaded || s.fromLegacy) {
 			// A file that still does not decode is kept only in its copy, as
 			// recovery from a malformed file keeps it, and the session's
-			// settings are the ones the restore replaces.
+			// settings are the ones the restore replaces. With fromLegacy the
+			// session holds the legacy file's settings, not this file's.
 			if stored, _, err := s.decode(data); err == nil {
 				replaced = stored
 			}
@@ -401,6 +420,9 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 	}
 	if creating {
 		if err := s.create(value); err != nil {
+			if s.blocked == nil && !errors.Is(err, os.ErrExist) {
+				return value, "", err
+			}
 			if backup != "" {
 				os.Remove(backup)
 			}
@@ -409,7 +431,7 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		s.blocked, s.unloaded, s.fromLegacy = nil, false, false
 		return value, backup, nil
 	}
-	s.blocked, s.unloaded = nil, false
+	s.blocked, s.unloaded, s.fromLegacy = nil, false, false
 	return value, backup, s.write(value)
 }
 
@@ -449,7 +471,15 @@ func (s *Store) save(value Settings) error {
 	if err := s.check(value); err != nil {
 		return err
 	}
-	return s.write(value)
+	err := s.write(value)
+	if s.fromLegacy && errors.Is(err, os.ErrExist) {
+		// The file was only reported missing when Load took the legacy
+		// settings. It holds settings this session never took, so it is kept
+		// for the next launch to load, and Restore can back it up.
+		s.blocked, s.unloaded, s.fromLegacy = err, true, false
+		return fmt.Errorf("saving is disabled because a settings file this session did not load exists: %w", err)
+	}
+	return err
 }
 
 // check validates value as every write requires: the shell's settings and
@@ -461,8 +491,13 @@ func (s *Store) check(value Settings) error {
 	return s.validateModules(value)
 }
 
-// write replaces the settings file with value, which check has accepted.
+// write puts value, which check has accepted, in the settings file, replacing
+// it, or only creating it while the settings the session took from the legacy
+// file have not reached it (fromLegacy).
 func (s *Store) write(value Settings) error {
+	if s.fromLegacy {
+		return s.create(value)
+	}
 	return s.place(value, os.Rename)
 }
 
@@ -508,7 +543,7 @@ func (s *Store) place(value Settings, rename func(from, to string) error) error 
 	if err := rename(temporaryPath, s.path); err != nil {
 		return fmt.Errorf("replace settings file: %w", err)
 	}
-	s.unloaded = false
+	s.unloaded, s.fromLegacy = false, false
 	return nil
 }
 

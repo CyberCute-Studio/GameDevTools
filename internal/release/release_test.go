@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"debug/pe"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -145,6 +147,28 @@ func TestNoticesCarryTheLinkedLicenses(t *testing.T) {
 	for _, name := range []string{"golang.org/x/sys", "Go standard library"} {
 		if !strings.Contains(notices, name) {
 			t.Errorf("THIRD-PARTY-NOTICES.txt does not name %s", name)
+		}
+	}
+}
+
+// TestNoticesNameTheLinkedVersions fails when go.mod moves the toolchain or
+// x/sys and the notices still state the old version.
+func TestNoticesNameTheLinkedVersions(t *testing.T) {
+	notices := strings.Join(strings.Fields(string(repositoryFile(t, "packaging", "THIRD-PARTY-NOTICES.txt"))), " ")
+	goMod := string(repositoryFile(t, "go.mod"))
+	for name, test := range map[string]struct {
+		pattern string
+		format  string
+	}{
+		"toolchain": {`(?m)^toolchain (go\S+)\s*$`, "runtime (%s)"},
+		"x/sys":     {`(?m)golang\.org/x/sys (v\S+)`, "golang.org/x/sys (%s)"},
+	} {
+		match := regexp.MustCompile(test.pattern).FindStringSubmatch(goMod)
+		if match == nil {
+			t.Fatalf("go.mod names no %s version", name)
+		}
+		if want := fmt.Sprintf(test.format, match[1]); !strings.Contains(notices, want) {
+			t.Errorf("THIRD-PARTY-NOTICES.txt does not state %q", want)
 		}
 	}
 }

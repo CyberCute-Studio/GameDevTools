@@ -24,14 +24,17 @@ if (-not $toolchain) { throw "go.mod names no toolchain." }
 
 $executable = Join-Path $OutputDirectory "cybercute-dev-tools.exe"
 $saved = @{}
-foreach ($name in "GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140") {
+foreach ($name in "GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140", "GOWORK") {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 try {
     # An emptied variable falls back to the user's `go env -w` file, so that
     # file is turned off: nothing in this machine's Go configuration can change
-    # the bytes or raise the CPU the executable needs above baseline x64.
+    # the bytes or raise the CPU the executable needs above baseline x64. A
+    # go.work file in a parent folder could change the modules linked, so
+    # workspace mode is off too.
     $env:GOENV = "off"
+    $env:GOWORK = "off"
     $env:GOTOOLCHAIN = $toolchain
     $env:GOFLAGS = ""
     $env:GOEXPERIMENT = ""
@@ -42,9 +45,11 @@ try {
     $env:CGO_ENABLED = "0"
     & (Join-Path $PSScriptRoot "build.ps1") -Configuration Release -OutputPath $executable | Out-Null
 
-    # The packager runs on this machine, so it builds for this machine.
-    $env:GOOS = $saved["GOOS"]
-    $env:GOARCH = $saved["GOARCH"]
+    # The packager runs on this machine, so it builds for this machine: with
+    # the env file off, no GOOS or GOARCH means the host, whatever the caller's
+    # shell had set.
+    $env:GOOS = ""
+    $env:GOARCH = ""
     Push-Location $root
     try {
         $archive = & go run ./cmd/release package -exe $executable -packaging packaging -out $OutputDirectory

@@ -185,6 +185,7 @@ var reviewedFileSites = map[string]string{
 	"internal/settings/store.go Store.backup os.MkdirAll":                    settingsFolder,
 	"internal/settings/store.go Store.backup os.OpenFile":                    settingsFolder,
 	"internal/settings/store.go Store.backup os.Remove":                      settingsFolder,
+	"internal/settings/store.go Store.load os.Remove":                        settingsFolder,
 	"internal/settings/store.go Store.place os.CreateTemp":                   settingsFolder,
 	"internal/settings/store.go Store.place os.MkdirAll":                     settingsFolder,
 	"internal/settings/store.go Store.place os.Remove":                       settingsFolder,
