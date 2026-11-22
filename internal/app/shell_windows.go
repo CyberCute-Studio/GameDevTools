@@ -1386,8 +1386,8 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 	case err != nil && backup != "":
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreSaveFailed, err, backup)}
 	case err != nil:
-		// There was no settings file, so none holds the previous settings
-		// and nothing was backed up.
+		// No settings file was found, so nothing was backed up, though one
+		// on a share that is down may still hold the previous settings.
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreSaveFailedNoFile, err)}
 	case backup != "":
 		notice.Message = fmt.Sprintf(ui.SettingsRestored, backup)
@@ -1408,8 +1408,8 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 
 // settleNotice brings the shell's note up to date once the default settings
 // are restored and the module views show them, err being the restore's
-// failed write, if any. The settings file was then backed up, or there was
-// none to back up, so the warnings about the file the session started from,
+// failed write, if any. The settings file was then backed up, or none was
+// found to back up, so the warnings about the file the session started from,
 // such as saving disabled to protect it or settings that could not be
 // written to it, no longer apply — but for a session without a settings
 // path (settings.ErrPathUnavailable), whose warning about that still does,

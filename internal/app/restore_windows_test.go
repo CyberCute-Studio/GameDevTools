@@ -334,8 +334,9 @@ func TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails(t *testing.T) {
 // TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails pins the outcome
 // of a restore that finds no settings file and cannot write one: the
 // defaults are in use for the session, and the outcome says that nothing
-// was backed up rather than that a settings file still holds the previous
-// settings, as there is none.
+// was backed up, and that a file on an unavailable drive was not changed,
+// rather than that a settings file still holds the previous settings, as none
+// was found.
 func TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails(t *testing.T) {
 	shell, _ := newExitTestShell(t, &exitRecordingView{})
 	blocker := filepath.Join(t.TempDir(), "not a folder")
@@ -345,7 +346,7 @@ func TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails(t *testing.T) {
 	shell.store = settings.NewStore(settings.Paths{ConfigFile: filepath.Join(blocker, "settings.json")})
 
 	notice := shell.restoreDefaults()
-	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") || !strings.HasSuffix(notice.Message, "There was no settings file to back up.") {
+	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") || !strings.HasSuffix(notice.Message, "No settings file was found to back up; a file on a drive or network share that is unavailable has not been changed.") {
 		t.Fatalf("outcome = %+v, want the write failure without a settings file", notice)
 	}
 	if strings.Contains(notice.Message, "still holds") {

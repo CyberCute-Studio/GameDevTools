@@ -389,6 +389,62 @@ func TestStoreRestoreAfterAFreshStartReportsAFailedWrite(t *testing.T) {
 	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
 }
 
+// A restore that finds the loaded file missing may be looking at a share that
+// is down. When it cannot create the file either, no copy of the file exists,
+// so a later save only creates: a file that returns is kept, for a restore to
+// back up, and a file that is really gone is written as usual.
+func TestStoreFailedRestoreOfAMissingFileNeverReplacesIt(t *testing.T) {
+	failedRestore := func(t *testing.T) (*Store, Paths, Settings, string) {
+		t.Helper()
+		paths := legacyPaths(t, legacyResizerSettings)
+		if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		store := NewStore(paths)
+		store.Load()
+		away := paths.ConfigFile + ".away"
+		if err := os.Rename(paths.ConfigFile, away); err != nil {
+			t.Fatal(err)
+		}
+		store.renameNew = failingCreate
+		restored, backup, err := store.Restore(Default(), restoreTo(Default()))
+		store.renameNew = renameNoReplace
+		if err == nil || errors.Is(err, ErrNotRestored) || backup != "" {
+			t.Fatalf("Restore() backup = %q, error = %v, want a failed write", backup, err)
+		}
+		return store, paths, restored, away
+	}
+
+	t.Run("file returns", func(t *testing.T) {
+		store, paths, restored, away := failedRestore(t)
+		if err := os.Rename(away, paths.ConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(restored); err == nil {
+			t.Fatal("a save replaced a returned settings file with no copy made")
+		}
+		requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+		_, backup, err := store.Restore(restored, restoreTo(Default()))
+		if err != nil || backup == "" {
+			t.Fatalf("Restore() backup = %q, error = %v, want the file backed up", backup, err)
+		}
+		requireFileContent(t, backup, currentSettingsFile)
+	})
+
+	t.Run("file really gone", func(t *testing.T) {
+		store, paths, restored, _ := failedRestore(t)
+		if err := store.Save(restored); err != nil {
+			t.Fatalf("a save with no file to keep failed: %v", err)
+		}
+		if _, err := os.Stat(paths.ConfigFile); err != nil {
+			t.Fatalf("the save wrote no settings file: %v", err)
+		}
+	})
+}
+
 // Invariant: the legacy file is never modified, whether the adoption is
 // written or fails, and whatever the session does after it.
 func TestInvariantLegacyFileIsNeverModified(t *testing.T) {
@@ -707,7 +763,7 @@ func TestStoreDanglingSettingsFolderIsNotAFoundSettingsFile(t *testing.T) {
 			t.Fatalf("load = %+v, want one warning naming the legacy file", result)
 		}
 		err := store.Save(result.Settings)
-		if err == nil || strings.Contains(err.Error(), "did not load") || !strings.Contains(err.Error(), "saving is disabled") {
+		if err == nil || strings.Contains(err.Error(), "has not backed up") || !strings.Contains(err.Error(), "saving is disabled") {
 			t.Fatalf("Save() = %v, want saving blocked by the failed adoption", err)
 		}
 		if err := os.Mkdir(target, 0o700); err != nil {
@@ -733,14 +789,58 @@ func TestStoreDanglingSettingsFolderIsNotAFoundSettingsFile(t *testing.T) {
 		if err := os.Remove(paths.LegacyConfigFile); err != nil {
 			t.Fatal(err)
 		}
-		dangling(t, paths)
+		target := dangling(t, paths)
 		store := NewStore(paths)
 		result := store.Load()
+		if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.ConfigFile) || !strings.Contains(result.Warnings[0], "Reconnect") {
+			t.Fatalf("warnings = %v, want one naming the settings file and saying to reconnect", result.Warnings)
+		}
 		err := store.Save(result.Settings)
-		if err == nil || strings.Contains(err.Error(), "did not load") {
-			t.Fatalf("Save() = %v, want a plain failed write", err)
+		if err == nil || strings.Contains(err.Error(), "has not backed up") || !strings.Contains(err.Error(), "saving is disabled") {
+			t.Fatalf("Save() = %v, want saving blocked by the unreachable folder", err)
+		}
+		if err := os.Mkdir(target, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(result.Settings); err == nil {
+			t.Fatal("a save replaced the settings file behind the returned junction")
+		}
+		requireFileContent(t, paths.ConfigFile, currentSettingsFile)
+		if err := os.Remove(paths.ConfigFile); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(target); err != nil {
+			t.Fatal(err)
 		}
 	})
+}
+
+// With no legacy file, the legacy folder answering says nothing about the
+// settings folder, which may be on another volume that is down.
+func TestStoreBlocksSavingWhenOnlyTheSettingsFolderCannotBeReached(t *testing.T) {
+	paths := legacyPaths(t, legacyResizerSettings)
+	if err := os.Remove(paths.LegacyConfigFile); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	store.reachable = func(path string) bool { return path != paths.ConfigFile }
+	result := store.Load()
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], paths.ConfigFile) || !strings.Contains(result.Warnings[0], "Reconnect") {
+		t.Fatalf("warnings = %v, want one naming the settings file and saying to reconnect", result.Warnings)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.ConfigFile, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(result.Settings); err == nil {
+		t.Fatal("a save succeeded with the settings folder unreachable at launch")
+	}
+	requireFileContent(t, paths.ConfigFile, currentSettingsFile)
 }
 
 // The warning for a folder that cannot be reached asks for the share back

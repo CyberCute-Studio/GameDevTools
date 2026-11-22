@@ -100,8 +100,9 @@ const (
 	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file exists at %s to restore (%v). Resolve the problem the startup warning describes, then start the application again"
 	SettingsRestoreSaveFailed = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
 	// SettingsRestoreSaveFailedNoFile is the restore's failed write when
-	// there was no settings file to back up or keep.
-	SettingsRestoreSaveFailedNoFile = "Default settings are in use for this session, but they could not be saved: %v. There was no settings file to back up."
+	// no settings file was found to back up, which may be one on a drive or
+	// share that is down.
+	SettingsRestoreSaveFailedNoFile = "Default settings are in use for this session, but they could not be saved: %v. No settings file was found to back up; a file on a drive or network share that is unavailable has not been changed."
 	SettingsRestoreInMemory         = "Default settings are in use for this session, but they cannot be saved: %v. Changes will remain in memory for this session."
 	// SettingsRestoreFollowUp joins what a module still needs after the
 	// restore, such as a default shortcut another application holds, to the

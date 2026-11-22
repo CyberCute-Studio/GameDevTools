@@ -134,9 +134,10 @@ type Store struct {
 	migrations map[int]Migration
 	validators map[string][]ModuleValidator
 	blocked    error
-	// createOnly is whether Load found no settings file and nothing has
-	// reached it since. Until something has, a write only creates that file,
-	// as its absence may be a share that is reconnecting.
+	// createOnly is whether Load, or a restore whose write then failed, found
+	// no settings file and nothing has reached it since. Until something has,
+	// a write only creates that file, as its absence may be a share that is
+	// reconnecting.
 	createOnly bool
 	// unloaded is whether the settings file holds settings the session never
 	// took: Load could not read or decode the file and started the session
@@ -255,8 +256,8 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		// and is not read again once the settings file exists. One that
 		// cannot be read blocks saving, as an unreadable settings file does,
 		// because a save would create the settings file and so abandon it.
-		// So does finding neither file when the folders cannot be reached:
-		// a share that is down reports both missing, and a save once it
+		// So does finding neither file when either folder cannot be reached:
+		// a share that is down reports its file missing, and a save once it
 		// returns would replace the one file or abandon the other. A real
 		// first run still only creates the file with its first write, as a
 		// share can return just after the reads here. A legacy file that was
@@ -265,10 +266,18 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 		var gone bool
 		data, gone, err = s.readLegacy()
 		if gone {
-			if _, statErr := os.Stat(s.path); !errors.Is(statErr, os.ErrNotExist) {
+			// The settings folder can be on another volume than the legacy
+			// one, so it is asked too, before the look that decides, in case
+			// its share returned since the first read.
+			reachable := s.reachable(s.path)
+			_, statErr := os.Stat(s.path)
+			if !errors.Is(statErr, os.ErrNotExist) {
 				return result, false
 			}
-			return result, true
+			if reachable {
+				return result, true
+			}
+			source, err = s.path, statErr
 		}
 	}
 	if err != nil {
@@ -432,7 +441,8 @@ func (s *Store) Hold() (write func(Settings) error) {
 // launch to take. Any other restore that finds no settings file creates one
 // without replacing one, so a file that was only reported missing is kept:
 // when one turns out to exist nothing changes, and a file that cannot be
-// created is a failed write, returned as Save returns it.
+// created is a failed write, returned as Save returns it, after which later
+// saves only create the file too, as no copy of one that returns was made.
 func (s *Store) Restore(current Settings, reset func(replaced Settings) (Settings, error)) (Settings, string, error) {
 	replaced := current
 	var data []byte
@@ -486,7 +496,12 @@ func (s *Store) Restore(current Settings, reset func(replaced Settings) (Setting
 		if foundSettingsFile(err) {
 			return Settings{}, "", notRestored{fmt.Errorf("write the restored settings: %w", err)}
 		}
-		s.unloaded = false
+		if err != nil {
+			// The session takes the restored settings, and the file may only
+			// have been reported missing, so a save once it returns must not
+			// replace it with no copy made.
+			s.createOnly = true
+		}
 		return value, "", err
 	}
 	s.blocked, s.unloaded, s.createOnly = nil, false, false
@@ -575,11 +590,11 @@ func (s *Store) save(value Settings) error {
 	}
 	err := s.write(value)
 	if s.createOnly && foundSettingsFile(err) {
-		// The file was only reported missing when Load looked for it. It
-		// holds settings this session never took, so it is kept for the next
-		// launch to load, and Restore can back it up.
+		// The file was only reported missing when Load or a restore looked
+		// for it. It holds settings this session has no copy of, so it is
+		// kept for the next launch to load, and Restore can back it up.
 		s.blocked, s.unloaded, s.createOnly = err, true, false
-		return fmt.Errorf("saving is disabled because a settings file this session did not load exists: %w", err)
+		return fmt.Errorf("saving is disabled because a settings file exists that this session has not backed up: %w", err)
 	}
 	return err
 }
