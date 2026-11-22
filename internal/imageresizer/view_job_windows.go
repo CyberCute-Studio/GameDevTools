@@ -6,13 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"time"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
+	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -263,14 +264,14 @@ func (n *NativeView) startJob(start jobStart) {
 		rechecks:       start.rechecks,
 		checkedAgain:   make(map[uint64]bool, len(start.rechecks)),
 		reserved:       make(map[jobLayout]int32),
-		folder:         filepath.Clean(start.request.Folder),
+		folder:         output.CleanFolder(start.request.Folder),
 		previousFolder: n.outputFolder,
 		cancel:         cancel,
 		progress:       job.Progress{Total: len(start.ids), Pending: len(start.ids)},
 		done:           make(chan struct{}),
 	}
 	for _, input := range start.request.Inputs {
-		if name := filepath.Base(input.Path); len(name) > len(active.longest) {
+		if name := pathform.Base(input.Path); len(name) > len(active.longest) {
 			active.longest = name
 		}
 	}
@@ -537,7 +538,7 @@ func (n *NativeView) releaseJob(active *activeJob) {
 func (n *NativeView) showJobProgress(active *activeJob, announce bool) {
 	current, others := "", 0
 	if count := len(active.processing); count > 0 {
-		current = filepath.Base(active.processing[count-1].source)
+		current = pathform.Base(active.processing[count-1].source)
 		others = count - 1
 	}
 	notice := ui.Notice{Kind: ui.NoticeInfo, Message: progressMessage(active.progress, current, others, active.cancelling)}

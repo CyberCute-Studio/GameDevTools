@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/encode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -157,7 +157,7 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 	}
 	profile, homeErr := home()
 	if homeErr == nil {
-		folder, err := defaultFolderIn(filepath.Join(profile, "Pictures"))
+		folder, err := defaultFolderIn(pathform.Join(profile, "Pictures"))
 		if err == nil {
 			return folder, nil
 		}
@@ -183,7 +183,7 @@ func defaultFolder(known string, knownErr error, home func() (string, error)) (s
 // colon, is reported as unavailable, as one that cannot be located is,
 // rather than selected.
 func defaultFolderIn(pictures string) (string, error) {
-	folder := filepath.Join(resolveFolder(pictures), "GameDevTools", "Resized")
+	folder := pathform.Join(resolveFolder(pictures), "GameDevTools", "Resized")
 	if err := output.ValidateFolder(folder); err != nil {
 		return "", fmt.Errorf("%s: %w", folder, err)
 	}

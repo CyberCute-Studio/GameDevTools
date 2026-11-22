@@ -76,4 +76,9 @@ func TestParsePickedPaths(t *testing.T) {
 	if len(multi) != 3 || multi[0] != `C:\Images\one.png` || multi[1] != `C:\Images\two.jpg` || multi[2] != `C:\Images\three.jpeg` {
 		t.Fatalf("multi selection = %v", multi)
 	}
+	// Go 1.27's filepath.Join would move this folder to the current drive.
+	share := parsePickedPaths(pack(`\\server\..\dir`, "one.png", "two.png"))
+	if len(share) != 2 || share[0] != `\\server\..\dir\one.png` || share[1] != `\\server\..\dir\two.png` {
+		t.Fatalf("selection under a share = %v", share)
+	}
 }

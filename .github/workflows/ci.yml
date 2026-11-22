@@ -46,6 +46,17 @@ jobs:
           CGO_ENABLED: "0"
         run: ./scripts/build.ps1 -Configuration Release -OutputPath bin/gamedevtools-windows-amd64.exe
 
+      - name: Check release toolchain
+        shell: pwsh
+        run: |
+          $pinned = (Select-String -Path go.mod -Pattern '^toolchain (go\S+)$').Matches.Groups[1].Value
+          if (-not $pinned) { throw "go.mod names no toolchain." }
+          $reported = go version bin/gamedevtools-windows-amd64.exe
+          if ($LASTEXITCODE -ne 0) { throw "go version failed with exit code $LASTEXITCODE" }
+          $built = ($reported -split '\s+')[-1]
+          if ($built -ne $pinned) { throw "The release executable was built with $built, but go.mod pins $pinned." }
+          Write-Output "Release executable built with $built."
+
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:

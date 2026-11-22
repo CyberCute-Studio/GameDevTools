@@ -188,7 +188,7 @@ func TestEncodedFormatAndExtension(t *testing.T) {
 // TestValidateFolder: Windows must resolve an output folder's path as
 // written, except an extended-length path, which Windows takes verbatim; and
 // the path must name a folder, not only a drive, volume, device, or server,
-// where filepath.Join would put a file name straight after the volume.
+// where pathform.Join would put a file name straight after the volume.
 func TestValidateFolder(t *testing.T) {
 	tests := []struct {
 		folder string
@@ -211,7 +211,7 @@ func TestValidateFolder(t *testing.T) {
 		{`\\server`, ErrFolderRoot},
 		{`\\?\`, ErrFolderRoot},
 		// A share is a folder however it is spelled, and a server without a
-		// share is none. filepath.VolumeName ends \\?\UNC and \??\UNC before
+		// share is none. pathform.VolumeName ends \\?\UNC and \??\UNC before
 		// the server, and takes the server and share into \\.\UNC's.
 		{`\\?\UNC\server\share`, nil},
 		{`\??\UNC\server\share`, nil},
@@ -276,7 +276,7 @@ func TestValidateFolder(t *testing.T) {
 		{`\\?\UNC\server\share\x:y`, ErrFolderName},
 		// No server or share name may hold a colon either, and one path gets
 		// one answer however the share is spelled, though
-		// filepath.VolumeName takes both names into the volume name of
+		// pathform.VolumeName takes both names into the volume name of
 		// \\server\share and \\.\UNC\server\share.
 		{`\\server\share:x\Resized`, ErrFolderName},
 		{`\\.\UNC\server\share:x\Resized`, ErrFolderName},
@@ -285,7 +285,7 @@ func TestValidateFolder(t *testing.T) {
 		{`\\server:x\share\Resized`, ErrFolderName},
 		{`\\.\UNC\server:x\share\Resized`, ErrFolderName},
 		{`\\?\UNC\server:x\share\Resized`, ErrFolderName},
-		// Prepare plans into the path as filepath.Clean writes it, so the path
+		// Prepare plans into the path as pathform.Clean writes it, so the path
 		// as written must resolve to that same folder. Clean keeps ".." inside
 		// \\.\UNC\server\share, while Windows takes \\.\UNC as the root of
 		// that spelling and resolves the path to the share x; in the other
@@ -298,6 +298,15 @@ func TestValidateFolder(t *testing.T) {
 		{`C:\Art\..\Resized`, nil},
 		{`C:\Art\.\Resized\`, nil},
 		{`\\.\C:\Art\..\Resized`, nil},
+		// A ".." where a server or share belongs stays in the volume name on
+		// every Go release, so a folder a settings file holds keeps its
+		// answer rather than turning relative under Go 1.27.
+		{`\\server\..\x`, nil},
+		{`//server/../x`, nil},
+		{`\\server\..`, ErrFolderName},
+		{`\\.\UNC\server\..\x`, ErrFolderName},
+		{`\\?\..\x`, ErrFolderRoot},
+		{`\??\..\x`, ErrFolderRoot},
 		// A device path holds folders only on a drive, a volume named by its
 		// GUID, or a share, in every spelling; any other device, such as a
 		// named pipe, a mailslot, a serial port, or an NT device path, holds

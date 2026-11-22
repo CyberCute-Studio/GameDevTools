@@ -724,3 +724,17 @@ func TestNativeViewEmptyDropReportsNothingFound(t *testing.T) {
 		t.Fatalf("status after empty folder drop = %q", got)
 	}
 }
+
+// TestInaccessibleShareRootIsListedByItsName pins that a share root that
+// cannot be read, named by an extended-length path, is listed under the
+// share's name, where Go 1.27's filepath.Base gives a lone separator.
+func TestInaccessibleShareRootIsListedByItsName(t *testing.T) {
+	for _, path := range []string{`\\?\UNC\server\share`, `\??\UNC\server\share`} {
+		inventory := NewInventory()
+		var summary AddSummary
+		inventory.addInaccessible(path, errors.New("the share cannot be read"), &summary)
+		if got := inventory.Item(0).Name; got != "share" {
+			t.Errorf("%s is listed as %q, want share", path, got)
+		}
+	}
+}

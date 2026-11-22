@@ -85,6 +85,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 )
 
 // maxSuffix bounds the Rename search, so a folder crowded with earlier
@@ -260,7 +261,7 @@ var (
 // An absolute path that is only a volume name, such as \\?\C: or \\.\C:
 // without the root folder's separator, or a server without a share, such as
 // \\server or \\?\UNC\server, names a volume, device, or server rather than
-// a folder: no folder can be created or opened there, and filepath.Join puts
+// a folder: no folder can be created or opened there, and pathform.Join puts
 // a file name straight after it, giving \\?\C:x.png, so its destinations
 // would not lie in it. A share is its own root folder, however it is
 // spelled: \\server\share, \\?\UNC\server\share, or \\.\UNC\server\share.
@@ -282,7 +283,7 @@ var (
 // own resolution of it rather than with a model of its rules, so a path
 // through a name Windows keeps there, such as "Photos " or "v2..", is
 // accepted, and Prepare creates any missing folder in it under the name the
-// path gives. Prepare creates and plans into the path as filepath.Clean
+// path gives. Prepare creates and plans into the path as pathform.Clean
 // writes it, so the path as written must resolve to the same folder as its
 // cleaned form: Clean writes \\.\UNC\server\share\..\x as
 // \\.\UNC\server\share\x, while Windows resolves it to \\.\UNC\server\x, the
@@ -299,7 +300,7 @@ var (
 // the comparison with the sources' paths, and a folder such as x:y cannot
 // be created at all. Such a path is refused, and so is one with a colon in
 // a share's server or share name, which neither may hold, however the share
-// is spelled: filepath.VolumeName takes both names into the volume name of
+// is spelled: pathform.VolumeName takes both names into the volume name of
 // \\server\share and \\.\UNC\server\share, but not of \\?\UNC\server\share.
 //
 // A device path, however it is written, holds folders only on a drive, a
@@ -315,10 +316,10 @@ func ValidateFolder(folder string) error {
 		return ErrFolderEmpty
 	case strings.ContainsRune(folder, 0), strings.ContainsRune(folder, utf8.RuneError):
 		return ErrFolderText
-	case !filepath.IsAbs(folder):
+	case !pathform.IsAbs(folder):
 		return ErrFolderNotAbsolute
 	}
-	clean := filepath.Clean(folder)
+	clean := pathform.Clean(folder)
 	if namesRoot(clean) {
 		return ErrFolderRoot
 	}
@@ -335,9 +336,13 @@ func ValidateFolder(folder string) error {
 	return nil
 }
 
+// CleanFolder is the form of an output folder's path that Prepare creates
+// and plans into.
+func CleanFolder(folder string) string { return pathform.Clean(folder) }
+
 // verbatim reports whether a path, as written, is an extended-length path,
 // which Windows takes verbatim: one that starts with \\?\ or \??\ with
-// backslashes only. filepath.Clean writes //?/ as \\?\, so the path is
+// backslashes only. pathform.Clean writes //?/ as \\?\, so the path is
 // tested before it is cleaned.
 func verbatim(path string) bool {
 	return strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`)
@@ -357,11 +362,11 @@ func pathNames(path string) []string {
 // server, without even its root folder, such as \\?\C:, \\.\NUL, \\server,
 // or \\?\UNC\server. A share is its own root folder however it is spelled.
 // For the extended-length UNC prefixes, \\?\UNC and \??\UNC,
-// filepath.VolumeName stops before the server and share, which it takes
+// pathform.VolumeName stops before the server and share, which it takes
 // into the volume name of \\server\share and \\.\UNC\server\share, so for
 // those the path's first two names are the server and the share.
 func rootDepth(path string) int {
-	volume := filepath.VolumeName(path)
+	volume := pathform.VolumeName(path)
 	rest := path[len(volume):]
 	names := len(pathNames(rest))
 	switch {
@@ -388,7 +393,7 @@ func namesVolume(resolved string) bool { return rootDepth(resolved) <= 0 }
 // writes every device path Windows resolves, \\.\ or //?/, as \\?\, as it
 // does the NT spelling \??\.
 func namesDevice(resolved string) bool {
-	device, extended := strings.CutPrefix(filepath.VolumeName(resolved), `\\?\`)
+	device, extended := strings.CutPrefix(pathform.VolumeName(resolved), `\\?\`)
 	if !extended {
 		return false
 	}
@@ -404,7 +409,7 @@ func namesDevice(resolved string) bool {
 	return true
 }
 
-// shareRoot reports whether a volume name, as filepath.VolumeName gives it
+// shareRoot reports whether a volume name, as pathform.VolumeName gives it
 // for a cleaned path, names a share, \\server\share or \\.\UNC\server\share,
 // which is a folder, rather than a drive (C:), a server without a share
 // (\\server, \\.\UNC\server), or the first element of a device path (\\?\C:,
@@ -793,7 +798,7 @@ func prepare(ctx context.Context, request Request, files fileSystem) (Plan, erro
 	if err := ctx.Err(); err != nil {
 		return Plan{}, kindError(KindCanceled, "plan outputs", err)
 	}
-	folder := filepath.Clean(request.Folder)
+	folder := CleanFolder(request.Folder)
 	if err := prepareFolder(files, folder); err != nil {
 		return Plan{}, err
 	}
@@ -849,7 +854,7 @@ func validatePath(path string) error {
 	if strings.ContainsRune(path, 0) {
 		return errors.New("the path contains a NUL character")
 	}
-	if !filepath.IsAbs(path) {
+	if !pathform.IsAbs(path) {
 		return errors.New("the path is not absolute")
 	}
 	return nil
@@ -864,7 +869,7 @@ func validateFile(path string) error {
 	if err := validatePath(path); err != nil {
 		return err
 	}
-	switch name := filepath.Base(path); {
+	switch name := pathform.Base(path); {
 	case name == ".", name == "..", name == string(filepath.Separator), namesVolume(resolvedPath(path)):
 		return errors.New("the path does not name a file")
 	}
@@ -928,7 +933,7 @@ func fileInTheWay(files fileSystem, folder string) bool {
 		if _, err := files.Lstat(path); err == nil {
 			return true
 		}
-		parent := filepath.Dir(path)
+		parent := pathform.Dir(path)
 		if parent == path {
 			return false
 		}
@@ -956,7 +961,7 @@ func fileMissing(files fileSystem, err error) bool {
 	if !nameNotFound(err) || !errors.As(err, &pathErr) {
 		return false
 	}
-	info, statErr := files.Stat(filepath.Dir(resolvedPath(pathErr.Path)))
+	info, statErr := files.Stat(pathform.Dir(resolvedPath(pathErr.Path)))
 	return statErr == nil && info.IsDir()
 }
 
@@ -1185,7 +1190,7 @@ func (p *planner) plan() ([]Item, error) {
 		item := Item{
 			Source:      source.Path,
 			Format:      format,
-			Destination: filepath.Join(p.folder, stem(p.listed[index].resolved)+Extension(format)),
+			Destination: pathform.Join(p.folder, stem(p.listed[index].resolved)+Extension(format)),
 			DuplicateOf: -1,
 		}
 		resolved, err := p.natural(index, &item)
@@ -1225,7 +1230,7 @@ func (p *planner) reserved(key string) (Reason, int) {
 // folder that can no longer be reached, is returned; a destination failure
 // is attached to the item.
 func (p *planner) natural(index int, item *Item) (bool, error) {
-	name := filepath.Base(item.Destination)
+	name := pathform.Base(item.Destination)
 	if tooLong(name) {
 		p.fail(item, "name output file", fmt.Errorf("%s: %w", name, ErrNameTooLong))
 		return true, nil
@@ -1234,7 +1239,7 @@ func (p *planner) natural(index int, item *Item) (bool, error) {
 	// colon after the name's last period with the extension, so photo.png:alt
 	// would give photo.png. The output folder holds no colon, so a stream the
 	// path names is the source name's.
-	if source := filepath.Base(p.listed[index].resolved); namesStream(filepath.Join(p.folder, source)) {
+	if source := pathform.Base(p.listed[index].resolved); namesStream(pathform.Join(p.folder, source)) {
 		// The destination's path key is no listed path's, though writing it
 		// would add a stream to the file before the colon, and every numbered
 		// name would too.
@@ -1302,7 +1307,7 @@ func (p *planner) resolve(index int, item *Item) error {
 		}
 		return nil
 	}
-	base := filepath.Base(item.Destination)
+	base := pathform.Base(item.Destination)
 	extension := filepath.Ext(base)
 	prefix := strings.TrimSuffix(base, extension)
 	// The pattern folds case as PathKey does, so two names that differ only
@@ -1320,7 +1325,7 @@ func (p *planner) resolve(index int, item *Item) error {
 			p.fail(item, "name output file", fmt.Errorf("%s: %w", name, ErrNameTooLong))
 			return nil
 		}
-		candidate := filepath.Join(p.folder, name)
+		candidate := pathform.Join(p.folder, name)
 		key := PathKey(candidate)
 		if reason, _ := p.reserved(key); reason != ReasonNone {
 			continue
@@ -1394,7 +1399,7 @@ func (p *planner) probe(key, path string) probe {
 		return cached
 	}
 	var found probe
-	if key != foldCase(filepath.Join(p.resolved, filepath.Base(path))) {
+	if key != foldCase(pathform.Join(p.resolved, pathform.Base(path))) {
 		found = probe{exists: true, device: true, mode: fs.ModeDevice}
 		p.probes[key] = found
 		return found
@@ -1458,7 +1463,7 @@ func (p *planner) ownFile(key, path string, mode fs.FileMode) Reason {
 // than as a folder or a link, or under a long name the path reaches through
 // an 8.3 short name.
 func ownEntry(listed entry, path string) bool {
-	return listed.file && foldCase(listed.name) == foldCase(filepath.Base(path))
+	return listed.file && foldCase(listed.name) == foldCase(pathform.Base(path))
 }
 
 // replaceable decides whether an Overwrite job may replace the existing file
@@ -1596,7 +1601,7 @@ func (p *planner) unreadable(listed listedPath) {
 			return
 		}
 	}
-	folder := filepath.Dir(listed.path)
+	folder := pathform.Dir(listed.path)
 	found := p.identity(PathKey(folder), folder)
 	if found.err != nil {
 		p.unverified = true
@@ -1633,7 +1638,7 @@ func (p *planner) mayBeUnverified(links uint32) bool {
 // photo.png followed by a period Windows drops, which is photo.png, gives
 // photo rather than photo.png.
 func stem(resolved string) string {
-	base := filepath.Base(resolved)
+	base := pathform.Base(resolved)
 	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 

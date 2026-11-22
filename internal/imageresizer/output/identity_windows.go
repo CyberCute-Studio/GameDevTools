@@ -6,10 +6,11 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 )
 
 // fileID identifies a file on its volume, the way os.SameFile compares
@@ -153,11 +154,11 @@ func windowsPath(op, path string) (*uint16, error) {
 // cleaned, so spellings Windows resolves to one name — with or without the
 // extended-length prefix, as a \??\ or \\.\ device path, or with trailing
 // spaces and periods that Windows drops from the last name — compare alike.
-// The path is resolved before it is cleaned because filepath.Clean writes a
+// The path is resolved before it is cleaned because pathform.Clean writes a
 // //?/ device path, which Windows resolves, as the \\?\ path it takes
 // verbatim.
 func resolvedPath(path string) string {
-	return filepath.Clean(extendedPath(path))
+	return pathform.Clean(extendedPath(path))
 }
 
 // resolvesAsWritten reports whether Windows resolves a cleaned absolute path,
@@ -165,7 +166,7 @@ func resolvedPath(path string) string {
 // keeping every name in it as written: GetFullPathName, which Windows
 // applies to such a path before it opens or creates anything, neither drops
 // a trailing space or period from a name nor reads a name as a device. A
-// //?/ path, which filepath.Clean writes as \\?\, resolves as Windows
+// //?/ path, which pathform.Clean writes as \\?\, resolves as Windows
 // resolves it too, as GetFullPathName resolves the \\?\ spelling alike.
 func resolvesAsWritten(clean string) bool {
 	full, err := windows.FullPath(clean)
@@ -180,7 +181,7 @@ func resolvesAsWritten(clean string) bool {
 // a share puts both names after its volume name, so every spelling of one
 // path gets one answer.
 func namesStream(clean string) bool {
-	volume := filepath.VolumeName(clean)
+	volume := pathform.VolumeName(clean)
 	if strings.ContainsRune(clean[len(volume):], ':') {
 		return true
 	}
@@ -231,7 +232,7 @@ func extendedPath(path string) string {
 	if strings.HasPrefix(path, `\??\`) {
 		return `\\?\` + path[4:]
 	}
-	if strings.HasPrefix(path, `\\?\`) || !filepath.IsAbs(path) {
+	if strings.HasPrefix(path, `\\?\`) || !pathform.IsAbs(path) {
 		return path
 	}
 	full, err := windows.FullPath(path)

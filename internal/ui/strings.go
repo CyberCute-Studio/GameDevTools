@@ -167,9 +167,21 @@ const (
 	OutputFolderNameInvalid = "The output folder cannot be used: " + outputFolderNameRule + ", so results would not be saved in the folder named. Choose another folder."
 	OutputFolderRootInvalid = "The output folder cannot be used: " + outputFolderRootRule + ". Choose a folder with Browse."
 
+	// OutputFolderNameReason is why the default Screenshot folder is
+	// unavailable when its path breaks the folder name rule.
+	OutputFolderNameReason = outputFolderNameRule
+	// OutputFolderNotAbsoluteReason is why the default Screenshot folder is
+	// unavailable when the Pictures folder it lies under has a relative path.
+	OutputFolderNotAbsoluteReason = "its path is not absolute"
+	// OutputFolderTextReason is why the default Screenshot folder is
+	// unavailable when its path holds text no capture could save under.
+	OutputFolderTextReason = "its path contains characters that are not valid text"
+	// OutputFolderStoredRefused is the startup warning about a saved
+	// Screenshot folder every capture would refuse.
+	OutputFolderStoredRefused = "The saved output folder for screenshots, %s, cannot be used: " + outputFolderNameRule + ". Captures are still copied to the clipboard, but are not saved until you choose another folder with Browse."
+
 	// outputFolderNameRule and outputFolderRootRule state the two output
-	// folder rules that only output planning applies, for every message
-	// that reports a folder breaking one.
+	// folder rules, for every message that reports a folder breaking one.
 	outputFolderNameRule = "Windows would change a name in its path, such as a name that ends in a space or a period, or read one as a device name such as NUL, or as a file stream because it contains a colon"
 	outputFolderRootRule = "its path names a drive, volume, device, or server rather than a folder on it"
 

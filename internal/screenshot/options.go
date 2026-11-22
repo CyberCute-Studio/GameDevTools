@@ -3,10 +3,10 @@ package screenshot
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
@@ -110,7 +110,7 @@ func validateOutputFolder(folder string) error {
 	if strings.ContainsRune(folder, 0) || strings.ContainsRune(folder, '�') {
 		return errors.New(ui.OutputFolderInvalid)
 	}
-	if !filepath.IsAbs(folder) {
+	if !pathform.IsAbs(folder) {
 		return errors.New(ui.OutputFolderNotAbsolute)
 	}
 	return nil
@@ -170,14 +170,33 @@ func (m *OptionsManager) SetJPEGQuality(quality int) error {
 	return m.save()
 }
 
+// SetOutputFolder selects a new output folder. Beyond what Validate requires
+// of every stored folder, it refuses one Windows would read as another place,
+// which every capture would then refuse too, so the choice fails where the
+// user made it. Validate does not refuse it, as that would reject a whole
+// settings file over one stored folder.
 func (m *OptionsManager) SetOutputFolder(folder string) error {
 	updated := m.options
 	updated.OutputFolder = folder
 	if err := updated.Validate(); err != nil {
 		return err
 	}
+	if !pathform.NamesOneFolder(folder) {
+		return errors.New(ui.OutputFolderNameInvalid)
+	}
 	m.options = updated
 	return m.save()
+}
+
+// FolderWarning returns the startup warning about a stored output folder that
+// every capture would refuse, or "" when there is none. Such a folder stays
+// selected, as Validate accepts it, so the user learns before the first
+// capture that its file would not be saved.
+func (m *OptionsManager) FolderWarning() string {
+	if folder := m.options.OutputFolder; folder != "" && !pathform.NamesOneFolder(folder) {
+		return fmt.Sprintf(ui.OutputFolderStoredRefused, folder)
+	}
+	return ""
 }
 
 func (m *OptionsManager) SetShortcut(shortcut Shortcut) error {

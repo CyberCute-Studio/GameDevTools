@@ -32,10 +32,11 @@ import (
 	"image/png"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 // timestampLayout renders the date and time portion of the SCR-064
@@ -100,6 +101,10 @@ func kindError(kind Kind, op string, err error) *Error {
 	return &Error{Kind: kind, Op: op, Err: err}
 }
 
+// errFolderReadTwoWays is the cause of the KindFolder error for an output
+// folder whose path Windows would read as another place.
+var errFolderReadTwoWays = errors.New(ui.OutputFolderNameInvalid)
+
 // Result reports the two independent outcomes of one delivery (SCR-060).
 // A nil Clipboard or Save field means that destination succeeded. Path is
 // the final saved file. It is set whenever the file was fully written and
@@ -129,7 +134,7 @@ func Deliver(img *image.RGBA, options screenshot.CaptureOptions) Result {
 		return Result{Clipboard: err, Save: err}
 	}
 	result := Result{}
-	if err := setClipboardImage(0, img); err != nil {
+	if err := setClipboardImage(img); err != nil {
 		result.Clipboard = err
 	}
 	path, err := save(img, options, time.Now())
@@ -185,7 +190,14 @@ func save(img *image.RGBA, options screenshot.CaptureOptions, now time.Time) (st
 func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now time.Time,
 	encoder func(io.Writer, *image.RGBA, screenshot.CaptureOptions) error,
 ) (string, error) {
-	folder := options.OutputFolder
+	// A stored folder Windows would read as another place is refused here
+	// rather than by option validation, which would reject the whole settings
+	// file for it. Creating the folder, the temporary file, and the final
+	// name all take the one spelling pathform.SaveFolder gives.
+	if !pathform.NamesOneFolder(options.OutputFolder) {
+		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
+	}
+	folder := pathform.SaveFolder(options.OutputFolder)
 	if err := os.MkdirAll(folder, 0o755); err != nil {
 		return "", kindError(KindFolder, "create output folder", err)
 	}
@@ -227,7 +239,7 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 		if suffix > 1 {
 			name = fmt.Sprintf("%s_%d", base, suffix)
 		}
-		final := filepath.Join(folder, name+options.Format.Extension())
+		final := pathform.Join(folder, name+options.Format.Extension())
 		if err := os.Link(temporaryPath, final); err != nil {
 			if os.IsExist(err) {
 				continue

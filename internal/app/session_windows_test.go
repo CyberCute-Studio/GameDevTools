@@ -236,6 +236,30 @@ func TestOpenSessionUpgradesEverySettingsFormat(t *testing.T) {
 	}
 }
 
+// TestRefusedScreenshotFolderAloneRecordsNoRecovery pins that a sound settings
+// file storing a Screenshot folder captures refuse warns the user without
+// logging a settings recovery at every start, while any other startup warning
+// beside it still records the event.
+func TestRefusedScreenshotFolderAloneRecordsNoRecovery(t *testing.T) {
+	stored := bytes.Replace(readFixture(t, "rsz-01"), []byte(`D:\\Captures`), []byte(`D:\\Captures.`), 1)
+	state, _ := openFixtureSession(t, stored)
+	startup := state.startupWarnings()
+	if startup.text() != state.capture.FolderWarning() || startup.text() == "" {
+		t.Fatalf("startup warnings = %q, want only the stored folder's", startup.text())
+	}
+	if state.recordsRecovery(startup) {
+		t.Fatal("a refused Screenshot folder alone recorded a settings recovery")
+	}
+	startup.settingsFile = []string{"the settings file could not be read"}
+	if !state.recordsRecovery(startup) {
+		t.Fatal("a settings file warning beside the refused folder recorded no recovery")
+	}
+	clean, _ := openFixtureSession(t, readFixture(t, "rsz-01"))
+	if clean.recordsRecovery(clean.startupWarnings()) {
+		t.Fatal("a session without warnings recorded a settings recovery")
+	}
+}
+
 // TestOpenSessionRecoversFromMalformedSettings pins recovery with every
 // section owner's validator registered, as the application starts (SET-006,
 // PRESET-008): settings malformed anywhere — the file, the shell, the

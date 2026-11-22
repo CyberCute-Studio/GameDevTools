@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,84 @@ func TestSaveRejectsFolderBlockedByFile(t *testing.T) {
 	}
 	_, err := save(sampleImage(2, 2), optionsFor(blocker, screenshot.FormatPNG), time.Now())
 	assertKind(t, err, KindFolder)
+}
+
+// TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace pins NFR-032 for a
+// stored folder: a path through a name ending in a space or a period, which
+// Windows may shorten by where it falls, through a reserved device name, or
+// naming a file stream is refused before anything is created, and a real
+// folder of that name and its neighbor receive nothing.
+func TestSaveRefusesAFolderWindowsWouldReadAsAnotherPlace(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows reads a name differently by where it falls in a path")
+	}
+	root := t.TempDir()
+	real := []string{"x .", "x ", "x", "v2..", "v2"}
+	for _, name := range real {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, rest := range []string{
+		`\x `, `\x .`, `\x .\`, `\x .\Shots`, `\v2..`, `\v2..\Shots`, `\Missing `, `\Missing.`, `\Photos \Shots`,
+		`\COM1\Shots`, `\CON\Shots`, `\NUL\Shots`, `\Shots::$INDEX_ALLOCATION`, `\x:y\Shots`,
+	} {
+		_, err := save(sampleImage(2, 2), optionsFor(root+rest, screenshot.FormatPNG), time.Now())
+		assertKind(t, err, KindFolder)
+		if !errors.Is(err, errFolderReadTwoWays) {
+			t.Fatalf("save to %q = %v, want %v", rest, err, errFolderReadTwoWays)
+		}
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(real) {
+		t.Fatalf("the refused saves left %v in the output root", entries)
+	}
+	for _, name := range real {
+		if inside, err := os.ReadDir(`\\?\` + root + `\` + name); err != nil || len(inside) != 0 {
+			t.Fatalf("a refused save left %v in %q (read error %v)", inside, name, err)
+		}
+	}
+}
+
+// TestSaveUsesTheCleanedFolder pins that a stored folder with a ".." is
+// created and written as Windows reads it, leaving no stray folder for the
+// name the ".." removes.
+func TestSaveUsesTheCleanedFolder(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the stored spelling is a Windows path")
+	}
+	root := t.TempDir()
+	path, err := save(sampleImage(2, 2), optionsFor(root+`\Missing\Old\..\New`, screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if want := filepath.Join(root, "Missing", "New", filepath.Base(path)); path != want {
+		t.Fatalf("saved to %q, want %q", path, want)
+	}
+	decodeFile(t, path)
+	if _, err := os.Stat(filepath.Join(root, "Missing", "Old")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the name the .. removes: %v, want it never created", err)
+	}
+}
+
+// TestSaveCreatesAMissingFolderThroughADevicePath pins that a \\.\ folder is
+// created as written.
+func TestSaveCreatesAMissingFolderThroughADevicePath(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows has device paths")
+	}
+	root := t.TempDir()
+	path, err := save(sampleImage(2, 2), optionsFor(`\\.\`+root+`\New\Shots`, screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	decodeFile(t, path)
+	if info, err := os.Stat(filepath.Join(root, "New", "Shots", filepath.Base(path))); err != nil || info.IsDir() {
+		t.Fatalf("the saved file is not in the created folder: %v", err)
+	}
 }
 
 func TestSaveEncodeFailureLeavesNoFiles(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/decode"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/job"
 	"github.com/CyberCute-Studio/GameDevTools/internal/imageresizer/output"
+	"github.com/CyberCute-Studio/GameDevTools/internal/pathform"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
@@ -363,7 +364,7 @@ func (v *Inventory) addFolder(folder string, summary *AddSummary) {
 		if entry.IsDir() || !SupportedExtension(entry.Name()) {
 			continue
 		}
-		v.addFile(filepath.Join(folder, entry.Name()), summary)
+		v.addFile(pathform.Join(folder, entry.Name()), summary)
 	}
 }
 
@@ -376,7 +377,7 @@ func (v *Inventory) addInaccessible(path string, cause error, summary *AddSummar
 	}
 	v.items = append(v.items, SourceItem{
 		ID:     id,
-		Name:   filepath.Base(path),
+		Name:   pathform.Base(path),
 		Path:   path,
 		Status: StatusInaccessible,
 		Detail: cause.Error(),
@@ -393,7 +394,7 @@ func (v *Inventory) addFile(path string, summary *AddSummary) {
 	if !claimed {
 		return
 	}
-	item := SourceItem{ID: id, Name: filepath.Base(path), Path: path, Status: StatusChecking, key: key}
+	item := SourceItem{ID: id, Name: pathform.Base(path), Path: path, Status: StatusChecking, key: key}
 	if !SupportedExtension(path) {
 		item.Status = StatusUnsupported
 		item.Detail = ui.SourceUnsupportedDetail

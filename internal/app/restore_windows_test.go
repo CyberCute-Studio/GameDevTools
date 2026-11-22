@@ -582,6 +582,61 @@ func TestRestoreDefaultsReportsAFolderWithoutADefaultOnce(t *testing.T) {
 	}
 }
 
+// folderChoosingView is a module view whose next command chooses an output
+// folder, as Browse does once the picker returns.
+type folderChoosingView struct {
+	nativeView
+	choose func() error
+}
+
+func (v folderChoosingView) NativeCommand(int32, uint16) bool {
+	if err := v.choose(); err != nil {
+		panic(err)
+	}
+	return true
+}
+
+// TestChoosingAFolderEndsItsWarningAtOnce pins that the warning about a stored
+// Screenshot folder leaves the shell's note with the command that chooses
+// another, so it does not go on saying captures are not saved, and that a
+// note showing something else, such as a failed save, stays.
+func TestChoosingAFolderEndsItsWarningAtOnce(t *testing.T) {
+	stored := bytes.Replace(readFixture(t, "rsz-01"), []byte(`D:\\Captures`), []byte(`D:\\Captures.`), 1)
+	// Each case has a subtest so its window is gone before the next opens: the
+	// audit shell's cleanup drains the thread's messages, and another open
+	// window's pending WM_PAINT would never leave the queue.
+	for name, failedSave := range map[string]string{"warning": "", "failed save": "The settings could not be saved."} {
+		t.Run(name, func(t *testing.T) {
+			shell := newAuditShellOn(t, stored)
+			shell.selectModule(t, core.ModuleScreenshot)
+			warning := ui.Notice{Kind: ui.NoticeWarning, Message: shell.capture.FolderWarning()}.Text()
+			if got := shell.note.Text(); got != warning {
+				t.Fatalf("note at startup = %q, want %q", got, warning)
+			}
+			if failedSave != "" {
+				shell.notice = failedSave
+				shell.showNote()
+			}
+			real := shell.nativeViews[core.ModuleScreenshot]
+			shell.nativeViews[core.ModuleScreenshot] = folderChoosingView{nativeView: real, choose: func() error {
+				return shell.capture.SetOutputFolder(filepath.Join(filepath.Dir(shell.path), "Chosen"))
+			}}
+			shellWindowProc(shell.hwnd, wmCommand, uintptr(9999), nil)
+			shell.nativeViews[core.ModuleScreenshot] = real
+			if shell.capture.FolderWarning() != "" {
+				t.Fatal("the chosen folder still has a warning")
+			}
+			want := ""
+			if failedSave != "" {
+				want = ui.Notice{Kind: ui.NoticeWarning, Message: failedSave}.Text()
+			}
+			if got := shell.note.Text(); got != want {
+				t.Fatalf("note after choosing a folder = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // presetSummary lists a library's selected preset and its custom presets,
 // for comparing two libraries.
 func presetSummary(custom []preset.Preset, selected string) []string {

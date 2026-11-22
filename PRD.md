@@ -1,8 +1,8 @@
 # GameDevTools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.2\
-**Last updated:** 2026-11-20\
+**Version:** 1.3\
+**Last updated:** 2026-11-21\
 **Product name:** GameDevTools (working name)\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
@@ -724,6 +724,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - The initial release draws every window in the Windows system colors, so it follows the Windows contrast (high-contrast) themes, and does not follow the Windows dark app mode, which the standard Win32 controls it uses have no documented way to render; the application stays light and legible when Windows apps are set to dark (UX-008).
 - Restoring the default settings (SET-005) backs the settings file up first and keeps each module's custom presets and its selected preset, the window placement, and the current module; every other setting — the global shortcut, the capture and resize options, and both output folders — returns to its default.
 - Closing the application while a resize job runs asks first, as closing cancels the job. Signing out of, restarting, or shutting down Windows asks nothing: the application saves its settings and stops all work.
+- Screenshots copied to the clipboard are marked so that Windows clipboard sync does not upload them (NFR-031). They stay in the local clipboard history (Win+V). An image that cannot be marked is not placed on the clipboard, which is reported as a clipboard failure while the saved file is kept (SCR-060).
 
 ## 21. Revision history
 
@@ -732,3 +733,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.0 | 2026-11-10 | Initial detailed PRD for the Windows Go application, Screenshot module, and Image Resizer module. |
 | 1.1 | 2026-11-20 | QLT-01: resolved the theme open decision — system colors and contrast themes, no dark app mode in the initial release (section 20, a future consideration in section 18) — and added SCR-015, keyboard completion of Free Rectangle capture. |
 | 1.2 | 2026-11-20 | QLT-02: confirmed what restoring the default settings keeps and resets (SET-005), that closing while a resize job runs asks first, and that the end of the Windows session asks nothing (section 20). |
+| 1.3 | 2026-11-21 | QLT-03: confirmed that copied screenshots opt out of Windows clipboard sync and stay in the local clipboard history (NFR-031, section 20). |

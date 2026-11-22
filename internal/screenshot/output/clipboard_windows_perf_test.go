@@ -16,7 +16,7 @@ func BenchmarkSetClipboardImage4K(b *testing.B) {
 	b.SetBytes(int64(len(img.Pix)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := setClipboardImage(0, img); err != nil {
+		if err := setClipboardImage(img); err != nil {
 			b.Fatal(err)
 		}
 	}

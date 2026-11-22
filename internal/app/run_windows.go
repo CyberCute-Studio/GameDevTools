@@ -73,7 +73,7 @@ func runNative() error {
 		return err
 	}
 	startup := state.startupWarnings()
-	warned := startup.text() != ""
+	warned := state.recordsRecovery(startup)
 	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
 		startup.other = append(startup.other, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
@@ -190,15 +190,29 @@ func (state *session) startupWarnings() startupWarnings {
 	return warnings
 }
 
+// recordsRecovery reports whether the startup warnings call for the
+// settings.load event in the diagnostic log. A saved Screenshot folder that
+// captures refuse is warned about at every start until another is chosen,
+// though the settings file is sound and nothing was recovered, so that
+// warning alone records no event.
+func (state *session) recordsRecovery(startup startupWarnings) bool {
+	text := startup.text()
+	return text != "" && text != state.capture.FolderWarning()
+}
+
 // folderWarnings returns the warnings the output folders give as the
 // options now hold them: the Screenshot default folder that could not be
-// resolved while no folder is chosen, and the Image Resizer's folder
-// warning, such as a stored folder the default one replaced
-// (imageresizer.OptionsManager.FolderWarning).
+// resolved while no folder is chosen, a stored Screenshot folder every
+// capture would refuse (screenshot.OptionsManager.FolderWarning), and the
+// Image Resizer's folder warning, such as a stored folder the default one
+// replaced (imageresizer.OptionsManager.FolderWarning).
 func (state *session) folderWarnings() []string {
 	var warnings []string
 	if state.folders.screenshotErr != nil && state.capture.Options().OutputFolder == "" {
 		warnings = append(warnings, fmt.Sprintf(ui.OutputFolderUnavailable, state.folders.screenshotErr))
+	}
+	if warning := state.capture.FolderWarning(); warning != "" {
+		warnings = append(warnings, warning)
 	}
 	if warning := state.resize.FolderWarning(state.folders.resizerErr); warning != "" {
 		warnings = append(warnings, warning)
