@@ -69,8 +69,14 @@ type NativeView struct {
 	displayErr       error
 	inProgress       bool
 	savedPath        string
-	shown            bool
-	font             windows.Handle
+	// captureAttempts counts Start Capture actions, on the GUI thread, so a
+	// late Reveal failure can tell that one has begun since.
+	captureAttempts uint64
+	// revealing holds the files whose reveal is running, under revealMu.
+	revealMu  sync.Mutex
+	revealing map[string]bool
+	shown     bool
+	font      windows.Handle
 	// shortcutNotice is the status area's revision once
 	// presentShortcutFailure last showed a failure there, which
 	// NativeAnnounceNotice compares to tell whether a later notice replaced
@@ -400,7 +406,7 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		}
 		folder, chosen, err := n.browse(n.parent, ui.BrowseFolderDialogTitle)
 		if err != nil {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}, 0)
+			n.presentResult(err, "")
 			return true
 		}
 		if !chosen {
@@ -419,13 +425,59 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		if notification != 0 || n.savedPath == "" {
 			return true
 		}
-		if err := n.reveal(n.savedPath); err != nil {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
-		}
+		n.revealSaved()
 	default:
 		return n.presets.NativeCommand(id, notification)
 	}
 	return true
+}
+
+// revealSaved shows the saved file in File Explorer, only on the user's
+// request. Looking at the file and handing it to the shell each block for as
+// long as its drive does not respond, as a network share that went offline
+// after the capture, so they run on a goroutine of their own, which must not
+// freeze the window (TECH-005). A click while the same file's reveal is still
+// running starts no second one, or a drive that recovers would open one
+// Explorer window for each. A failure is shown through the dispatcher, only
+// while this file is still the latest capture's and no capture has been
+// started since, so that it cannot replace a newer capture's result, or the
+// reason one ended without a result, as a cancelled or lost selection does.
+func (n *NativeView) revealSaved() {
+	path, reveal, attempt := n.savedPath, n.reveal, n.captureAttempts
+	if n.dispatcher == nil || !n.startReveal(path) {
+		return
+	}
+	go func() {
+		err := reveal(path)
+		n.endReveal(path)
+		if err != nil {
+			n.post(func() {
+				if n.savedPath == path && n.captureAttempts == attempt {
+					_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
+				}
+			})
+		}
+	}()
+}
+
+// startReveal records a reveal of the file, unless one is already running.
+func (n *NativeView) startReveal(path string) bool {
+	n.revealMu.Lock()
+	defer n.revealMu.Unlock()
+	if n.revealing[path] {
+		return false
+	}
+	if n.revealing == nil {
+		n.revealing = map[string]bool{}
+	}
+	n.revealing[path] = true
+	return true
+}
+
+func (n *NativeView) endReveal(path string) {
+	n.revealMu.Lock()
+	defer n.revealMu.Unlock()
+	delete(n.revealing, path)
 }
 
 func (n *NativeView) NativeDestroy() {
@@ -444,6 +496,7 @@ func (n *NativeView) NativeDestroy() {
 // the rectangle modes open the selection overlay session (SCR-050), whose
 // Capture command captures the drawn rectangle end to end.
 func (n *NativeView) NativeAction() {
+	n.captureAttempts++
 	if n.inProgress {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureInProgress}, 0)
 		return

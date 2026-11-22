@@ -185,7 +185,7 @@ func namesStream(clean string) bool {
 	if strings.ContainsRune(clean[len(volume):], ':') {
 		return true
 	}
-	return shareRoot(volume) && strings.ContainsRune(volume, ':')
+	return pathform.ShareRoot(volume) && strings.ContainsRune(volume, ':')
 }
 
 // mkdirAll creates a folder, and every missing folder that holds it, through

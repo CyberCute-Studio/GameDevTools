@@ -152,10 +152,12 @@ func decodeOptions(section json.RawMessage) (decodedOptions, error) {
 		// period, one with a folder name in its path that ends in a period,
 		// one with a colon that names a file stream, one that names only a
 		// volume or a server, and one on a device that holds no folders, such
-		// as a named pipe, which jobs now refuse. Such a folder gives
-		// way to the default folder on load, with a warning, rather than the
-		// whole settings file failing validation and every module losing its
-		// settings.
+		// as a named pipe, and builds before QLT-03C still accepted a server's
+		// pipe, mailslot, or IPC$ share and a network path with no plain server
+		// and share name, such as \\server\..\x, all of which jobs now refuse.
+		// Such a folder gives way to the default folder on load, with a warning,
+		// rather than the whole settings file failing validation and every
+		// module losing its settings.
 		found.legacyFolder = true
 	default:
 		return decodedOptions{}, fmt.Errorf("validate stored resize options: %w", folderMessage(err))

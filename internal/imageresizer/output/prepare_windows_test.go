@@ -1167,6 +1167,102 @@ func TestPrepareStopsReadingIdentitiesOnceNothingCanBeReplaced(t *testing.T) {
 	}
 }
 
+// TestValidateFolderRefusesServerIPCShares pins that a server's pipe,
+// mailslot, or IPC$ share is refused in every spelling, as creating a folder
+// there would connect to the program serving that pipe, and that an ordinary
+// folder or share with a similar name is not. ValidateFolder only resolves
+// the path's text, so no pipe is opened here.
+func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
+	for _, folder := range []string{
+		`\\localhost\pipe\x`,
+		`\\127.0.0.1\pipe\x`,
+		`//localhost/pipe/x`,
+		`\\server\PIPE`,
+		`\\?\UNC\localhost\pipe\x`,
+		`\??\UNC\localhost\pipe\x`,
+		`//?/unc/localhost/pipe/x`,
+		`\\.\UNC\localhost\pipe\x`,
+		`//./UNC/localhost/pipe/x`,
+		`\\server\mailslot\x`,
+		`\\?\UNC\server\MailSlot\x`,
+		`\\server\IPC$`,
+		`\\server\ipc$\x`,
+		`\\server\pipe.\x`,
+		`\\server\pipe \x`,
+		`\\?\UNC\server\pipe.\x`,
+		`\\?\UNC\server\pipe \x`,
+		// The share is judged by its name, whichever redirector reads it.
+		`\\dav.example.com@SSL\pipe\Resized`,
+		// A server's or share's place that holds no plain name cannot be
+		// judged from the text.
+		`\\\localhost\pipe\x`,
+		`\\\pipe\x`,
+		`\\\nas\photos`,
+		`\\..\pipe\x`,
+		`//../pipe/x`,
+		`\\..\localhost\pipe\x`,
+		`\\...\localhost\pipe\x`,
+		`\\ \localhost\pipe\x`,
+		`\\localhost\..\pipe\x`,
+		`\\localhost\.\pipe\x`,
+		`\\a\..\localhost\pipe\x`,
+		`\\server\..\share\photos`,
+		`\\;LanmanRedirector\localhost\pipe\x`,
+		`\\;LanmanRedirector\nas\photos`,
+		`\\;x\pipe\y`,
+		`\\nas\;x\photos`,
+		`\\?\UNC\;LanmanRedirector\localhost\pipe\x`,
+		`\\.\UNC\;LanmanRedirector\localhost\pipe\x`,
+		`\??\UNC\;LanmanRedirector\localhost\mailslot\x`,
+		`\\ ;LanmanRedirector\localhost\pipe\x`,
+		`\\.;LanmanRedirector\localhost\pipe\x`,
+		`\\?\UNC\ ;x\localhost\pipe\x`,
+		`\\server\ pipe\x`,
+	} {
+		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
+			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
+		}
+	}
+	// Refused as a name Windows would change, before the share is judged.
+	for _, folder := range []string{`\\server\\pipe\x`, `\\\\localhost\pipe\x`, `\\server\pipe.`, `//./UNC//server/pipe/x`} {
+		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderName) {
+			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderName)
+		}
+	}
+	for _, folder := range []string{
+		`\\server\share`,
+		`\\server\share\pipe`,
+		`\\server\share\pipe\x`,
+		`\\server\share\IPC$`,
+		`\\server\share\Art\..\x`,
+		`\\server\pipes\x`,
+		`\\server\.pipe\x`,
+		`\\.nas\share\x`,
+		`\\pipe\share\x`,
+		`\\nas.example.com.\share\x`,
+		`\\?\UNC\server\share\pipe\x`,
+		`\\dav.example.com@SSL\DavWWWRoot\pipe`,
+		`C:\pipe\x`,
+		`\\?\C:\pipe\x`,
+	} {
+		if err := ValidateFolder(folder); err != nil {
+			t.Errorf("ValidateFolder(%q) = %v, want none", folder, err)
+		}
+	}
+}
+
+// TestPrepareRefusesAnIPCShareBeforeTouchingIt pins that a job for such a
+// folder fails before anything is created or inspected: the planner is given
+// no file system, so any use of one would panic.
+func TestPrepareRefusesAnIPCShareBeforeTouchingIt(t *testing.T) {
+	for _, folder := range []string{`\\localhost\pipe\Resized`, `\\server\..\x`, `\\\nas\photos`, `\\;x\nas\photos`} {
+		_, err := prepare(context.Background(), jobRequest(folder, CollisionRename, png(`C:\In\a.png`)), nil)
+		if !errors.Is(err, ErrFolderRoot) {
+			t.Errorf("prepare(%q) = %v, want %v", folder, err, ErrFolderRoot)
+		}
+	}
+}
+
 // TestPrepareNeverOpensListedDevices pins RSZ-026 for listed paths through a
 // device other than a drive, a volume, or a share: planning never opens one,
 // as opening a named pipe connects to the program serving it and opening a

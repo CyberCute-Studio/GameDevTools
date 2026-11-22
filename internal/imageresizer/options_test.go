@@ -58,12 +58,8 @@ func TestDefaultFolderIn(t *testing.T) {
 		// path that leads to no drive, volume, or share holds no folder.
 		refused[pictures+`\x:y`] = output.ErrFolderName
 		refused[`\\.\pipe\Pictures`] = output.ErrFolderRoot
-		// Go 1.27's filepath.Join would read this path as relative and
-		// report the default as unavailable.
-		const share = `\\server\..\me\Pictures`
-		if folder, err := defaultFolderIn(share); err != nil || folder != share+`\GameDevTools\Resized` {
-			t.Errorf("defaultFolderIn(%q) = %q, %v", share, folder, err)
-		}
+		// A ".." where a share belongs names no plain share.
+		refused[`\\server\..\me\Pictures`] = output.ErrFolderRoot
 	}
 	for _, spelling := range spellings {
 		if folder, err := defaultFolderIn(spelling); err != nil || folder != want {

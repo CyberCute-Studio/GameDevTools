@@ -249,7 +249,7 @@ var (
 	ErrFolderEmpty       = errors.New("the output folder is empty")
 	ErrFolderText        = errors.New("the path contains a NUL or replacement character")
 	ErrFolderNotAbsolute = errors.New("the path is not absolute")
-	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it")
+	ErrFolderRoot        = errors.New("the path names a drive, volume, device, or server rather than a folder on it, leads through a server's pipe, mailslot, or IPC$ share, or has no plain server and share name")
 	ErrFolderName        = errors.New("Windows would change a name in the path, such as one that ends in a space or a period, or read one as a device name, or as a file stream because it holds a colon")
 )
 
@@ -308,8 +308,13 @@ var (
 // device, such as the named pipe \\.\pipe\x or the NT device path
 // \\?\GLOBALROOT\Device\..., names a device or something on one rather than
 // a folder, and creating it, as Prepare does, would open that device, which
-// for a named pipe connects to the program serving it. Such a path is
-// refused as ErrFolderRoot.
+// for a named pipe connects to the program serving it. A server's pipe,
+// mailslot, or IPC$ share, as in \\localhost\pipe\x, is the same device
+// reached through a share, and a network path whose server or share is not a
+// plain name, as in \\\localhost\pipe\x or \\a\..\localhost\pipe\x, may be
+// too, as its text does not say what Windows would connect to. Such a path is
+// refused as ErrFolderRoot, unless the name rule has already refused it as
+// ErrFolderName, as it does \\server\pipe. for its trailing period.
 func ValidateFolder(folder string) error {
 	switch {
 	case folder == "":
@@ -327,7 +332,7 @@ func ValidateFolder(folder string) error {
 		return ErrFolderName
 	}
 	resolved := resolvedPath(folder)
-	if namesDevice(resolved) {
+	if pathform.NamesDevice(resolved) || pathform.LeadsThroughIPCShare(clean) {
 		return ErrFolderRoot
 	}
 	if resolved != resolvedPath(clean) {
@@ -348,85 +353,14 @@ func verbatim(path string) bool {
 	return strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`)
 }
 
-// pathNames splits a path, or the part of one after its volume name, into
-// its names.
-func pathNames(path string) []string {
-	return strings.FieldsFunc(path, func(character rune) bool {
-		return character == '\\' || character == '/'
-	})
-}
-
-// rootDepth is how many names an absolute path, cleaned or as resolvedPath
-// gives it, holds below its root folder: 0 for a drive, volume, or share
-// root, and -1 for a path that names only a drive, volume, device, or
-// server, without even its root folder, such as \\?\C:, \\.\NUL, \\server,
-// or \\?\UNC\server. A share is its own root folder however it is spelled.
-// For the extended-length UNC prefixes, \\?\UNC and \??\UNC,
-// pathform.VolumeName stops before the server and share, which it takes
-// into the volume name of \\server\share and \\.\UNC\server\share, so for
-// those the path's first two names are the server and the share.
-func rootDepth(path string) int {
-	volume := pathform.VolumeName(path)
-	rest := path[len(volume):]
-	names := len(pathNames(rest))
-	switch {
-	case strings.EqualFold(volume, `\\?\UNC`), strings.EqualFold(volume, `\??\UNC`):
-		return max(names-2, -1)
-	case rest == "" && !shareRoot(volume):
-		return -1
-	}
-	return names
-}
-
 // namesRoot reports whether a cleaned absolute path names only a drive,
 // volume, device, or server rather than a folder on it.
-func namesRoot(clean string) bool { return rootDepth(clean) < 0 }
+func namesRoot(clean string) bool { return pathform.RootDepth(clean) < 0 }
 
 // namesVolume reports whether a path, as resolvedPath gives it, names a
 // drive, volume, or share root, or a volume, device, or server itself.
 // However such a path is reached, it names no file in a folder.
-func namesVolume(resolved string) bool { return rootDepth(resolved) <= 0 }
-
-// namesDevice reports whether a path, as resolvedPath gives it, is a device
-// path that leads to no drive, volume, or share: one whose first element is
-// neither a drive letter, nor a volume's GUID name, nor UNC. resolvedPath
-// writes every device path Windows resolves, \\.\ or //?/, as \\?\, as it
-// does the NT spelling \??\.
-func namesDevice(resolved string) bool {
-	device, extended := strings.CutPrefix(pathform.VolumeName(resolved), `\\?\`)
-	if !extended {
-		return false
-	}
-	const guid = "Volume{"
-	switch {
-	case len(device) == 2 && device[1] == ':' && 'a' <= device[0]|0x20 && device[0]|0x20 <= 'z':
-		return false
-	case strings.EqualFold(device, "UNC"):
-		return false
-	case len(device) > len(guid)+1 && strings.EqualFold(device[:len(guid)], guid) && strings.HasSuffix(device, "}"):
-		return false
-	}
-	return true
-}
-
-// shareRoot reports whether a volume name, as pathform.VolumeName gives it
-// for a cleaned path, names a share, \\server\share or \\.\UNC\server\share,
-// which is a folder, rather than a drive (C:), a server without a share
-// (\\server, \\.\UNC\server), or the first element of a device path (\\?\C:,
-// \\.\NUL), which are not.
-func shareRoot(volume string) bool {
-	if len(volume) < 2 || !os.IsPathSeparator(volume[0]) || !os.IsPathSeparator(volume[1]) {
-		return false
-	}
-	unc := volume[2:]
-	const device = `.\UNC`
-	if len(unc) >= len(device) && strings.EqualFold(unc[:len(device)], device) &&
-		(len(unc) == len(device) || os.IsPathSeparator(unc[len(device)])) {
-		unc = unc[min(len(unc), len(device)+1):]
-	}
-	server, share, found := strings.Cut(unc, string(filepath.Separator))
-	return found && server != "" && share != "" && server != "." && server != "?"
-}
+func namesVolume(resolved string) bool { return pathform.RootDepth(resolved) <= 0 }
 
 // PathKey normalizes a full path for comparison. On Windows the path is
 // resolved as Windows resolves it, so spellings of one name, such as
@@ -1547,7 +1481,7 @@ func (p *planner) listedAs(id fileID) (Reason, error) {
 // not opened either.
 func (p *planner) load(listed listedPath) {
 	switch {
-	case namesDevice(listed.resolved):
+	case pathform.NamesDevice(listed.resolved):
 		p.unverified = true
 	case namesVolume(listed.resolved):
 		// No file to compare.

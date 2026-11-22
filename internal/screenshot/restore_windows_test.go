@@ -3,6 +3,7 @@
 package screenshot
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,6 +157,25 @@ func TestNativeViewRestoreDefaultsClearsAReplacedOptionsNotice(t *testing.T) {
 	view.NativeRestoreDefaults()
 	if got := view.status.Text(); got != result.Text() {
 		t.Fatalf("status after the restore = %q, want the later capture's result kept", got)
+	}
+}
+
+// TestNativeViewRestoreDefaultsClearsAPickerRefusal pins that the picker's
+// request to choose another folder does not stay beside the default folder
+// the restore selects.
+func TestNativeViewRestoreDefaultsClearsAPickerRefusal(t *testing.T) {
+	view, _ := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
+	view.browse = func(windows.Handle, string) (string, bool, error) {
+		return "", false, errors.New("choose another folder")
+	}
+	view.NativeCommand(optionsCommandBase+browseCommand, 0)
+	if got := view.status.Text(); !strings.Contains(got, "choose another folder") {
+		t.Fatalf("status after the refusal = %q", got)
+	}
+	delete(view.options.settings.Modules, string(moduleID))
+	view.NativeRestoreDefaults()
+	if got := view.status.Text(); got != "" {
+		t.Fatalf("status after the restore = %q, want the refusal cleared", got)
 	}
 }
 

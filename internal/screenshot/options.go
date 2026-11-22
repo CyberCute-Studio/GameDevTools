@@ -110,7 +110,11 @@ func validateOutputFolder(folder string) error {
 	if strings.ContainsRune(folder, 0) || strings.ContainsRune(folder, '�') {
 		return errors.New(ui.OutputFolderInvalid)
 	}
-	if !pathform.IsAbs(folder) {
+	// A \??\ path that names only a volume or device, such as \??\C:, has no
+	// separator after its volume name, so IsAbs calls it relative. It is not
+	// malformed: like its \\?\ spelling, it is refused when chosen and at a
+	// save and reported at startup, and must not fail the whole settings file.
+	if !pathform.IsAbs(folder) && (!strings.HasPrefix(folder, `\??\`) || !pathform.NamesNoFolder(folder)) {
 		return errors.New(ui.OutputFolderNotAbsolute)
 	}
 	return nil
@@ -181,6 +185,9 @@ func (m *OptionsManager) SetOutputFolder(folder string) error {
 	if err := updated.Validate(); err != nil {
 		return err
 	}
+	if pathform.NamesNoFolder(folder) {
+		return errors.New(ui.OutputFolderRootInvalid)
+	}
 	if !pathform.NamesOneFolder(folder) {
 		return errors.New(ui.OutputFolderNameInvalid)
 	}
@@ -193,7 +200,12 @@ func (m *OptionsManager) SetOutputFolder(folder string) error {
 // selected, as Validate accepts it, so the user learns before the first
 // capture that its file would not be saved.
 func (m *OptionsManager) FolderWarning() string {
-	if folder := m.options.OutputFolder; folder != "" && !pathform.NamesOneFolder(folder) {
+	folder := m.options.OutputFolder
+	switch {
+	case folder == "":
+	case pathform.NamesNoFolder(folder):
+		return fmt.Sprintf(ui.OutputFolderStoredRootRefused, folder)
+	case !pathform.NamesOneFolder(folder):
 		return fmt.Sprintf(ui.OutputFolderStoredRefused, folder)
 	}
 	return ""
