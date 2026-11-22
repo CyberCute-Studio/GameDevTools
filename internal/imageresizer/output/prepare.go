@@ -321,6 +321,8 @@ func ValidateFolder(folder string) error {
 		return ErrFolderEmpty
 	case strings.ContainsRune(folder, 0), strings.ContainsRune(folder, utf8.RuneError):
 		return ErrFolderText
+	case pathform.NamesBareNTVolume(folder):
+		return ErrFolderRoot
 	case !pathform.IsAbs(folder):
 		return ErrFolderNotAbsolute
 	}

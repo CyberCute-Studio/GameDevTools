@@ -189,7 +189,8 @@ func TestStoredFolderEarlierBuildsAcceptedFallsBackToTheDefault(t *testing.T) {
 			filepath.Join(folder, "NUL"), folder+"::$INDEX_ALLOCATION", filepath.Join(folder, "x:y"),
 			`\\server\share.`, `\\?\`+volume, `\\?\UNC\server`, `\\.\pipe\Resized`,
 			`\\localhost\pipe\Resized`, `\\server\mailslot\Resized`, `\\?\UNC\server\IPC$\Resized`,
-			`\\server\..\x`, `\\\nas\photos`, `\\;x\nas\photos`, `\\nas\;x\photos`)
+			`\\server\..\x`, `\\\nas\photos`, `\\;x\nas\photos`, `\\nas\;x\photos`,
+			`\??\`+volume, `\??\pipe`, `\??\UNC`, `\??\Volume{00000000-0000-0000-0000-000000000000}`)
 	}
 	for _, saved := range legacyFolders {
 		path := filepath.Join(t.TempDir(), "settings.json")
