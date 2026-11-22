@@ -11,28 +11,35 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// heldAttempts and heldRetryWait bound how long retryWhileHeld waits for a
-// program that has just opened the finished file, as a virus scanner or the
-// search indexer does, to close it: the attempts span about 375 milliseconds.
+// heldRetries and heldRetryWait bound how long one save waits for a program
+// that has just opened the finished file, as a virus scanner or the search
+// indexer does, to close it: the retries span about 775 milliseconds.
 const (
-	heldAttempts  = 5
+	heldRetries   = 5
 	heldRetryWait = 25 * time.Millisecond
 )
 
-// retryWhileHeld runs change until it succeeds, fails in a way waiting cannot
-// help, or the attempts run out, and returns its last error. A scanner's hold
-// on a file surfaces as a sharing violation or, through its filter driver, as
-// access denied, so a denial that lasts is returned only after the wait.
-func retryWhileHeld(change func() error) error {
-	wait := heldRetryWait
-	for attempt := 1; ; attempt++ {
+// heldWait is the one bounded wait a save has for such a program. The rename
+// and a failed save's cleanup draw on the same wait, so the cleanup never
+// waits out a hold the rename gave up on: that wait could only end by deleting
+// a finished image the rename would then have saved.
+type heldWait struct {
+	retries int
+}
+
+// retry runs change until it succeeds, fails in a way waiting cannot help, or
+// the wait is spent, and returns its last error. A scanner's hold on a file
+// surfaces as a sharing violation or, through its filter driver, as access
+// denied, so a denial that lasts is returned only after the wait.
+func (w *heldWait) retry(change func() error) error {
+	for {
 		err := change()
-		if err == nil || attempt == heldAttempts ||
+		if err == nil || w.retries == heldRetries ||
 			!(errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED)) {
 			return err
 		}
-		time.Sleep(wait)
-		wait *= 2
+		time.Sleep(heldRetryWait << w.retries)
+		w.retries++
 	}
 }
 
@@ -42,7 +49,7 @@ func retryWhileHeld(change func() error) error {
 // be written through, but Microsoft spells out that flag's guarantee only for
 // a move done as a copy and delete, which this is not, so nothing here relies
 // on the new name having reached a removable drive when it returns.
-func moveNoReplace(from, to string) error {
+func moveNoReplace(from, to string, wait *heldWait) error {
 	failure := func(err error) error {
 		return &os.LinkError{Op: "move", Old: from, New: to, Err: err}
 	}
@@ -54,7 +61,7 @@ func moveNoReplace(from, to string) error {
 	if err != nil {
 		return failure(err)
 	}
-	err = retryWhileHeld(func() error {
+	err = wait.retry(func() error {
 		return windows.MoveFileEx(source, target, windows.MOVEFILE_WRITE_THROUGH)
 	})
 	if err != nil {

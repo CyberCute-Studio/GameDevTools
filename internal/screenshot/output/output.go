@@ -219,11 +219,12 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	// The final name is claimed only after encoding succeeded; every return
 	// before then must remove the temporary file.
 	succeeded := false
+	var wait heldWait
 	defer func() {
 		if succeeded {
 			return
 		}
-		if removeErr := removeTemporary(temporaryPath); removeErr != nil {
+		if removeErr := removeTemporary(temporaryPath, &wait); removeErr != nil {
 			err = fmt.Errorf("%w; the temporary file was left behind: %v", err, removeErr)
 		}
 	}()
@@ -245,7 +246,7 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 			name = fmt.Sprintf("%s_%d", base, suffix)
 		}
 		final := pathform.Join(folder, name+options.Format.Extension())
-		moved, err := claimName(temporaryPath, final)
+		moved, err := claimName(temporaryPath, final, &wait)
 		if err != nil {
 			if os.IsExist(err) {
 				continue
@@ -271,11 +272,11 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 			base+options.Format.Extension()))
 }
 
-// removeTemporary removes a failed save's temporary file, waiting as the
-// rename does, since a program holding the file may be why the save failed. A
-// file that has already gone counts as removed.
-func removeTemporary(path string) error {
-	err := retryWhileHeld(func() error { return os.Remove(path) })
+// removeTemporary removes a failed save's temporary file, using what is left
+// of the save's wait, since a program holding the file may be why the save
+// failed. A file that has already gone counts as removed.
+func removeTemporary(path string, wait *heldWait) error {
+	err := wait.retry(func() error { return os.Remove(path) })
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -294,7 +295,7 @@ var linkForTest func(oldname, newname string) error
 // back to a rename that refuses an existing name just as a link does. When
 // both fail, the error carries both causes; a name taken is returned as it
 // is, so the caller can try the next one.
-func claimName(temporary, final string) (moved bool, err error) {
+func claimName(temporary, final string, wait *heldWait) (moved bool, err error) {
 	link := os.Link
 	if linkForTest != nil {
 		link = linkForTest
@@ -303,7 +304,7 @@ func claimName(temporary, final string) (moved bool, err error) {
 	if linkErr == nil || os.IsExist(linkErr) {
 		return false, linkErr
 	}
-	if err := moveNoReplace(temporary, final); err != nil {
+	if err := moveNoReplace(temporary, final, wait); err != nil {
 		if os.IsExist(err) {
 			return false, err
 		}

@@ -133,6 +133,25 @@ func TestSaveWithoutHardLinksWaitsForABriefOpen(t *testing.T) {
 	}
 }
 
+// TestSaveWithoutHardLinksOutlastsALongerOpen pins that a hold ending after the
+// rename's first attempts still saves the capture, rather than the failed
+// save's cleanup deleting the finished image the moment the hold ends.
+func TestSaveWithoutHardLinksOutlastsALongerOpen(t *testing.T) {
+	withoutHardLinks(t, func(temporary string) {
+		handle := holdOpen(t, temporary)
+		time.AfterFunc(450*time.Millisecond, func() { windows.CloseHandle(handle) })
+	})
+	folder := t.TempDir()
+	path, err := save(sampleImage(2, 2), optionsFor(folder, screenshot.FormatPNG), time.Now())
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	decodeFile(t, path)
+	if names := folderNames(t, folder); len(names) != 1 {
+		t.Fatalf("the folder holds %v, want only the capture", names)
+	}
+}
+
 // TestSaveWithoutHardLinksReportsAFailedMove pins that a rename that fails is
 // a write failure that leaves no file behind (SCR-066).
 func TestSaveWithoutHardLinksReportsAFailedMove(t *testing.T) {
@@ -191,34 +210,35 @@ func TestRemoveTemporaryWaitsForABriefOpen(t *testing.T) {
 	}
 	handle := holdOpen(t, path)
 	time.AfterFunc(60*time.Millisecond, func() { windows.CloseHandle(handle) })
-	if err := removeTemporary(path); err != nil {
+	if err := removeTemporary(path, &heldWait{}); err != nil {
 		t.Fatalf("removeTemporary: %v", err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("the file is still there: %v", err)
 	}
-	if err := removeTemporary(path); err != nil {
+	if err := removeTemporary(path, &heldWait{}); err != nil {
 		t.Fatalf("removing a file that has gone: %v", err)
 	}
 }
 
-// TestRetryWhileHeld pins which failures are waited out and that the wait is
+// TestHeldWaitRetry pins which failures are waited out and that the wait is
 // bounded.
-func TestRetryWhileHeld(t *testing.T) {
+func TestHeldWaitRetry(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		err   error
 		calls int
 	}{
-		{"sharing violation", windows.ERROR_SHARING_VIOLATION, heldAttempts},
-		{"access denied", windows.ERROR_ACCESS_DENIED, heldAttempts},
-		{"wrapped access denied", &os.PathError{Op: "remove", Path: "x", Err: windows.ERROR_ACCESS_DENIED}, heldAttempts},
+		{"sharing violation", windows.ERROR_SHARING_VIOLATION, heldRetries + 1},
+		{"access denied", windows.ERROR_ACCESS_DENIED, heldRetries + 1},
+		{"wrapped access denied", &os.PathError{Op: "remove", Path: "x", Err: windows.ERROR_ACCESS_DENIED}, heldRetries + 1},
 		{"already exists", windows.ERROR_ALREADY_EXISTS, 1},
 		{"not found", windows.ERROR_FILE_NOT_FOUND, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
-			err := retryWhileHeld(func() error {
+			var wait heldWait
+			err := wait.retry(func() error {
 				calls++
 				return test.err
 			})
@@ -228,7 +248,8 @@ func TestRetryWhileHeld(t *testing.T) {
 		})
 	}
 	calls := 0
-	if err := retryWhileHeld(func() error {
+	var wait heldWait
+	if err := wait.retry(func() error {
 		calls++
 		if calls < 3 {
 			return windows.ERROR_ACCESS_DENIED
@@ -236,6 +257,24 @@ func TestRetryWhileHeld(t *testing.T) {
 		return nil
 	}); err != nil || calls != 3 {
 		t.Fatalf("err = %v after %d calls, want success on the third", err, calls)
+	}
+}
+
+// TestHeldWaitIsSpentOnce pins that a cleanup following a rename that used the
+// whole wait tries once, so it cannot wait for the hold to end and then delete
+// the finished image.
+func TestHeldWaitIsSpentOnce(t *testing.T) {
+	var wait heldWait
+	held := func() error { return windows.ERROR_SHARING_VIOLATION }
+	if err := wait.retry(held); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("err = %v", err)
+	}
+	calls := 0
+	if err := wait.retry(func() error {
+		calls++
+		return held()
+	}); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) || calls != 1 {
+		t.Fatalf("err = %v after %d calls, want one call once the wait is spent", err, calls)
 	}
 }
 

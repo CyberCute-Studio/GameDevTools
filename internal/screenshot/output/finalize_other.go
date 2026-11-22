@@ -7,14 +7,17 @@ import (
 	"os"
 )
 
-// moveNoReplace is a Windows-only capability; the production application
-// only runs on Windows.
-func moveNoReplace(from, to string) error {
-	return &os.LinkError{Op: "move", Old: from, New: to, Err: errors.ErrUnsupported}
+// heldWait has nothing to wait for: only Windows refuses to change a file
+// another program holds open.
+type heldWait struct{}
+
+// retry runs change once.
+func (*heldWait) retry(change func() error) error {
+	return change()
 }
 
-// retryWhileHeld runs change once: only Windows refuses to change a file
-// another program holds open.
-func retryWhileHeld(change func() error) error {
-	return change()
+// moveNoReplace is a Windows-only capability; the production application
+// only runs on Windows.
+func moveNoReplace(from, to string, _ *heldWait) error {
+	return &os.LinkError{Op: "move", Old: from, New: to, Err: errors.ErrUnsupported}
 }
