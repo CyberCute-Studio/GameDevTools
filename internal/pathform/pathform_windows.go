@@ -281,8 +281,7 @@ func SaveFolder(folder string) string {
 // reserved for a device, wherever it falls. A path marked \\?\ or \??\ is one
 // Windows takes verbatim, so it names one folder unless it holds a stream or
 // Clean would rewrite it. A path that names no folder at all, by
-// NamesNoFolder, which also refuses any path with more than two leading
-// separators, names no one folder either.
+// NamesNoFolder, names no one folder either.
 func NamesOneFolder(folder string) bool {
 	if NamesNoFolder(folder) {
 		return false

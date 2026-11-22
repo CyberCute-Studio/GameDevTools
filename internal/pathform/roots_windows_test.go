@@ -68,11 +68,13 @@ func TestNamesNoFolder(t *testing.T) {
 		{`\\ \localhost\pipe\x`, true},
 		{`\\dav.example.com@SSL\pipe\Resized`, true},
 
-		{`\\server\..\x`, false},
-		{`\\server\..\pipes\x`, false},
+		{`\\server\..\x`, true},
+		{`\\server\..\pipes\x`, true},
+		{`\\;LanmanRedirector\nas\photos\pipe`, true},
+		{`\\nas\;x\pipe`, true},
+		{`\\\nas\photos`, true},
+
 		{`\\dav.example.com@SSL\DavWWWRoot\pipe`, false},
-		{`\\;LanmanRedirector\nas\photos\pipe`, false},
-		{`\\nas\;x\pipe`, false},
 		{`\\?\UNC\server\pipe.d\x`, false},
 		{`\\server\share\pipe`, false},
 		{`\\server\share\pipe\x`, false},

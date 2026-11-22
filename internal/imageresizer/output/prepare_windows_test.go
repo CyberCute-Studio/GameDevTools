@@ -1183,7 +1183,6 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`//?/unc/localhost/pipe/x`,
 		`\\.\UNC\localhost\pipe\x`,
 		`//./UNC/localhost/pipe/x`,
-		`\\\localhost\pipe\x`,
 		`\\server\mailslot\x`,
 		`\\?\UNC\server\MailSlot\x`,
 		`\\server\IPC$`,
@@ -1192,55 +1191,29 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		`\\server\pipe \x`,
 		`\\?\UNC\server\pipe.\x`,
 		`\\?\UNC\server\pipe \x`,
-		// Windows keeps a ".." or "." where a server or share belongs, so it
-		// must not hide the share after it.
+		// The share is judged by its name, whichever redirector reads it.
+		`\\dav.example.com@SSL\pipe\Resized`,
+		// A server's or share's place that holds no plain name cannot be
+		// judged from the text.
+		`\\\localhost\pipe\x`,
+		`\\\pipe\x`,
+		`\\\nas\photos`,
 		`\\..\pipe\x`,
 		`//../pipe/x`,
-		`//../pipe`,
-		`//../mailslot/x`,
-		`//../IPC$/x`,
-		`\\\..\pipe\x`,
-		`\\localhost\..\pipe\x`,
-		`//localhost/../pipe/x`,
-		`\\localhost\..\IPC$\x`,
-		`\\127.0.0.1\..\mailslot\x`,
-		`\\localhost\.\pipe\x`,
-		// A job inspects a folder it could not create without that "..", so
-		// the share it would reach that way is refused too.
 		`\\..\localhost\pipe\x`,
-		`//../localhost/IPC$/x`,
-		`\\a\..\localhost\pipe\x`,
-		`\\..\..\server\mailslot\x`,
-		`\\server\..\share\pipe`,
-		`\\;LanmanRedirector\..\localhost\pipe\x`,
-		`\\localhost\..\;LanmanRedirector\server\pipe\x`,
-		// A first name of only spaces and periods leaves the server in doubt.
 		`\\...\localhost\pipe\x`,
-		`\\.. \localhost\pipe\x`,
 		`\\ \localhost\pipe\x`,
-		// With no server, Windows takes the first name as the share.
-		`\\\pipe\x`,
-		`\\\pipe\photos`,
-		`//\pipe/x`,
-		`\\\mailslot\x`,
-		`\\\IPC$\x`,
-		// A network provider's name comes before the server, and a name no
-		// provider has may be the server itself.
+		`\\localhost\..\pipe\x`,
+		`\\localhost\.\pipe\x`,
+		`\\a\..\localhost\pipe\x`,
+		`\\server\..\share\photos`,
 		`\\;LanmanRedirector\localhost\pipe\x`,
-		`\\;LanmanRedirector\server\IPC$\x`,
-		`\\;LanmanRedirector\pipe\x`,
-		`\\;LanmanRedirector\;b\pipe\x`,
+		`\\;LanmanRedirector\nas\photos`,
 		`\\;x\pipe\y`,
-		`\\;x\IPC$\y`,
-		`\\?\UNC\;x\mailslot\y`,
-		`\\;\server\pipe\x`,
-		`\\\;LanmanRedirector\localhost\pipe\x`,
+		`\\nas\;x\photos`,
 		`\\?\UNC\;LanmanRedirector\localhost\pipe\x`,
 		`\\.\UNC\;LanmanRedirector\localhost\pipe\x`,
 		`\??\UNC\;LanmanRedirector\localhost\mailslot\x`,
-		// The share is judged by its name, whichever redirector reads it.
-		`\\dav.example.com@SSL\pipe\Resized`,
-		`\\dav.example.com@8080\mailslot`,
 	} {
 		if err := ValidateFolder(folder); !errors.Is(err, ErrFolderRoot) {
 			t.Errorf("ValidateFolder(%q) = %v, want %v", folder, err, ErrFolderRoot)
@@ -1253,17 +1226,15 @@ func TestValidateFolderRefusesServerIPCShares(t *testing.T) {
 		}
 	}
 	for _, folder := range []string{
+		`\\server\share`,
 		`\\server\share\pipe`,
 		`\\server\share\pipe\x`,
 		`\\server\share\IPC$`,
+		`\\server\share\Art\..\x`,
 		`\\server\pipes\x`,
 		`\\pipe\share\x`,
+		`\\nas.example.com.\share\x`,
 		`\\?\UNC\server\share\pipe\x`,
-		`\\server\..\pipes\x`,
-		`\\\nas\photos`,
-		`\\\nas\photos\pipe`,
-		`\\;LanmanRedirector\nas\photos\pipe`,
-		`\\nas\;x\pipe`,
 		`\\dav.example.com@SSL\DavWWWRoot\pipe`,
 		`C:\pipe\x`,
 		`\\?\C:\pipe\x`,

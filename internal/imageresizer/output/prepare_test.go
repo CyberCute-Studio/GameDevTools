@@ -298,11 +298,12 @@ func TestValidateFolder(t *testing.T) {
 		{`C:\Art\..\Resized`, nil},
 		{`C:\Art\.\Resized\`, nil},
 		{`\\.\C:\Art\..\Resized`, nil},
-		// A ".." where a server or share belongs stays in the volume name on
-		// every Go release, so a folder a settings file holds keeps its
-		// answer rather than turning relative under Go 1.27.
-		{`\\server\..\x`, nil},
-		{`//server/../x`, nil},
+		// A ".." where a share belongs stays in the volume name on every Go
+		// release, so the path does not turn relative under Go 1.27, which
+		// would reset the settings file. It names no plain share, so it is
+		// refused, and a stored one gives way to the default folder.
+		{`\\server\..\x`, ErrFolderRoot},
+		{`//server/../x`, ErrFolderRoot},
 		{`\\server\..`, ErrFolderName},
 		{`\\.\UNC\server\..\x`, ErrFolderName},
 		{`\\?\..\x`, ErrFolderRoot},
