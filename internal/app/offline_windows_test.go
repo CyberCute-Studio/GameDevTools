@@ -45,6 +45,9 @@ const (
 	// offlineDone is printed by the sandboxed test as its last act, so a run
 	// that skipped or stopped early cannot pass for one that finished.
 	offlineDone = "offline workflows completed"
+	// offlineClipboardDenied is printed by the sandboxed test when the session
+	// denied it the clipboard, for the parent to check from outside.
+	offlineClipboardDenied = "offline clipboard denied to the sandbox"
 	// offlineSentinel is in every source's file name, and is looked for in
 	// what the application persists.
 	offlineSentinel = "offline-sentinel-private-name"
@@ -69,33 +72,68 @@ var (
 	procOfflineGetForegroundWindow    = user32.NewProc("GetForegroundWindow")
 )
 
-// clipboardDiagnosis tries the clipboard for three seconds from this process
-// and says what it found. OpenClipboard fails with the same access error
-// whether another program holds the clipboard or the session denies this
-// process it, so a failure is told apart by whether any attempt succeeds, and
-// by whether a process outside the sandbox can open it.
-func clipboardDiagnosis() string {
+// clipboardProbe is what three seconds of trying the clipboard found.
+// OpenClipboard fails with the same access error whether another program
+// holds the clipboard or the session denies this process it, so the two are
+// told apart by whether any attempt succeeds and by who holds it.
+type clipboardProbe struct {
+	opened, attempts int
+	last             error
+	holder           uint32
+	foreground       bool
+}
+
+func probeClipboard() clipboardProbe {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	const attempts = 30
-	opened := 0
-	var last error
-	for range attempts {
+	probe := clipboardProbe{attempts: 30}
+	for range probe.attempts {
 		if result, _, err := procOfflineOpenClipboard.Call(0); result != 0 {
 			procOfflineCloseClipboard.Call()
-			opened++
+			probe.opened++
 		} else {
-			last = err
+			probe.last = err
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	var holder uint32
 	if window, _, _ := procOfflineGetOpenClipboardWindow.Call(); window != 0 {
-		procOfflineGetWindowProcessID.Call(window, uintptr(unsafe.Pointer(&holder)))
+		procOfflineGetWindowProcessID.Call(window, uintptr(unsafe.Pointer(&probe.holder)))
 	}
 	foreground, _, _ := procOfflineGetForegroundWindow.Call()
+	probe.foreground = foreground != 0
+	return probe
+}
+
+func (p clipboardProbe) String() string {
 	return fmt.Sprintf("process %d opened the clipboard %d of %d times (last error: %v; held by process %d; foreground window: %v)",
-		os.Getpid(), opened, attempts, last, holder, foreground != 0)
+		os.Getpid(), p.opened, p.attempts, p.last, p.holder, p.foreground)
+}
+
+// deniedToSandbox reports what a hosted CI runner's session shows from inside
+// the AppContainer: no foreground window, nobody holding the clipboard, and
+// every attempt refused. A desktop session has a foreground window, so a
+// clipboard failure there stays a test failure.
+func (p clipboardProbe) deniedToSandbox() bool {
+	return p.opened == 0 && errors.Is(p.last, windows.ERROR_ACCESS_DENIED) && p.holder == 0 && !p.foreground
+}
+
+// TestClipboardProbeAcceptsOnlyASessionThatDeniesTheSandbox pins how narrowly
+// the offline test excuses a clipboard failure.
+func TestClipboardProbeAcceptsOnlyASessionThatDeniesTheSandbox(t *testing.T) {
+	denied := clipboardProbe{attempts: 30, last: windows.ERROR_ACCESS_DENIED}
+	if !denied.deniedToSandbox() {
+		t.Fatal("a session that refuses every attempt, with no holder or foreground window, was not recognized")
+	}
+	for name, probe := range map[string]clipboardProbe{
+		"an attempt succeeded":     {opened: 1, attempts: 30, last: windows.ERROR_ACCESS_DENIED},
+		"another program holds it": {attempts: 30, last: windows.ERROR_ACCESS_DENIED, holder: 42},
+		"a desktop session":        {attempts: 30, last: windows.ERROR_ACCESS_DENIED, foreground: true},
+		"another error":            {attempts: 30, last: windows.ERROR_INVALID_HANDLE},
+	} {
+		if probe.deniedToSandbox() {
+			t.Errorf("%s: excused as a session that denies the sandbox", name)
+		}
+	}
 }
 
 // securityCapabilities is SECURITY_CAPABILITIES with no capabilities, which
@@ -361,7 +399,14 @@ func TestCoreWorkflowsRunOffline(t *testing.T) {
 	before := profileFiles(t, profile)
 	code, output := runInContainer(t, sid, workspace, executable, "TestOfflineWorkflowsInContainer", listener.Addr().(*net.TCPAddr).Port)
 	if code != 0 || !strings.Contains(output, offlineDone) {
-		t.Fatalf("the sandboxed workflows exited with %d; outside the sandbox, %s:\n%s", code, clipboardDiagnosis(), output)
+		t.Fatalf("the sandboxed workflows exited with %d; outside the sandbox, %v:\n%s", code, probeClipboard(), output)
+	}
+	if strings.Contains(output, offlineClipboardDenied) {
+		outside := probeClipboard()
+		if outside.opened == 0 {
+			t.Fatalf("the clipboard is unavailable outside the sandbox too, so the failure is not the sandbox's: %v", outside)
+		}
+		t.Logf("this session denies the AppContainer the clipboard, so the run covered the save but not the copy; outside the sandbox, %v", outside)
 	}
 	if count := accepted.Load(); count != 0 {
 		t.Fatalf("the sandboxed process reached this machine's loopback listener %d time(s)", count)
@@ -431,7 +476,7 @@ func TestOfflineWorkflowsInContainer(t *testing.T) {
 	checkNetworkDenied(t)
 	shell, paths := openOfflineShell(t, workspace)
 
-	saved := runOfflineCapture(t, shell, workspace)
+	saved, copied := runOfflineCapture(t, shell, workspace)
 	if file, err := os.Open(saved); err != nil {
 		t.Fatal(err)
 	} else {
@@ -456,6 +501,9 @@ func TestOfflineWorkflowsInContainer(t *testing.T) {
 		t.Fatal("the settings file records a source image's name")
 	}
 	checkOfflineWrites(t, workspace, paths)
+	if !copied {
+		fmt.Println(offlineClipboardDenied)
+	}
 	fmt.Println(offlineDone)
 }
 
@@ -563,10 +611,12 @@ func openOfflineShell(t *testing.T, workspace string) (*auditShell, settings.Pat
 }
 
 // runOfflineCapture runs Start Capture in Full Display mode until a capture
-// is both saved and on the clipboard, and returns the saved file. A test in
-// another package holding the shared clipboard makes one attempt report a
-// clipboard failure, so a failure of that kind is tried again.
-func runOfflineCapture(t *testing.T, shell *auditShell, workspace string) string {
+// is both saved and on the clipboard, and returns the saved file and whether
+// it was copied. A test in another package holding the shared clipboard makes
+// one attempt report a clipboard failure, so a failure of that kind is tried
+// again. A capture that was saved counts without the copy only in a session
+// that denies the sandbox the clipboard (clipboardProbe.deniedToSandbox).
+func runOfflineCapture(t *testing.T, shell *auditShell, workspace string) (string, bool) {
 	t.Helper()
 	if err := shell.capture.SetMode(screenshot.ModeFullDisplay); err != nil {
 		t.Fatal(err)
@@ -574,10 +624,10 @@ func runOfflineCapture(t *testing.T, shell *auditShell, workspace string) string
 	shell.selectModule(t, core.ModuleScreenshot)
 	folder := filepath.Join(workspace, "Pictures", "GameDevTools", "Screenshots")
 	seen := map[string]bool{}
-	var last string
+	var last, saved string
 	for range 5 {
 		shell.nativeViews[core.ModuleScreenshot].(nativeActionHandler).NativeAction()
-		var saved string
+		saved = ""
 		shell.pump(t, 60*time.Second, func() bool {
 			entries, err := os.ReadDir(folder)
 			if err != nil {
@@ -601,12 +651,16 @@ func runOfflineCapture(t *testing.T, shell *auditShell, workspace string) string
 		})
 		seen[filepath.Base(saved)] = true
 		if strings.HasPrefix(last, ui.NoticeSuccessLabel+":") {
-			return saved
+			return saved, true
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("no capture reached both destinations; the last outcome was %q; inside the sandbox, %s", last, clipboardDiagnosis())
-	return ""
+	inside := probeClipboard()
+	if strings.Contains(last, fmt.Sprintf(ui.CaptureClipboardFailed, saved, "")) && inside.deniedToSandbox() {
+		return saved, false
+	}
+	t.Fatalf("no capture reached both destinations; the last outcome was %q; inside the sandbox, %v", last, inside)
+	return "", false
 }
 
 // runOfflineResize runs a real Image Resizer job and checks its results and

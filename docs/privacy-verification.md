@@ -50,7 +50,7 @@ Results below were recorded on 2026-11-21:
 | The process token is an AppContainer with zero capabilities | Pass |
 | A TCP connection to `192.0.2.1`, an address reserved for documentation that routes nowhere, fails with the sandbox's access error (the test also accepts a no-route error, which a machine with no network may report first; that case has not been run) | Pass |
 | A TCP connection to a listener the parent test holds on loopback is dropped by the sandbox, which shows as a timed-out connection (the test also accepts an access error), and the listener accepts nothing | Pass |
-| Full Display capture through Start Capture on the real main window saves a complete PNG and reports the clipboard copy as successful | Pass |
+| Full Display capture through Start Capture on the real main window saves a complete PNG and reports the clipboard copy as successful. On a session with no foreground window, such as the hosted CI runner, Windows denies the sandbox the clipboard, so there the test requires the saved PNG, every clipboard attempt refused with nobody holding it, and a process outside the sandbox able to open it | Pass |
 | A real Image Resizer job through Start Resize saves every result and leaves every source byte-identical | Pass |
 | The window closes through the end-of-session path and saves its settings | Pass |
 | The log holds only well-formed events and no file name, folder, or workspace path | Pass |
@@ -164,6 +164,7 @@ The logs and the dependency set needed no change.
 ## What these results do not cover
 
 - **A machine with its adapters off.** The offline test denies the network to the application's process, and has not itself been run with the adapters off. Before release, turn on airplane mode and run a capture and a resize job by hand.
+- **The clipboard copy in the sandbox on CI.** The hosted runner refused the sandboxed process the clipboard in 30 of 30 attempts while a process outside the sandbox opened it in 30 of 30, so CI's offline run covers the save but not the copy. The sandboxed copy was verified on the desktop environment of record, and CI covers clipboard delivery outside the sandbox through the `internal/screenshot/output` tests.
 - **Name resolution inside the sandbox.** Windows resolves names in a system service, so the sandbox is not shown to block a lookup. That path is covered by the executable holding no name-resolution code.
 - **A write the sandbox refused.** A denied write outside the workspace leaves no trace the test can read, so the review of every file-changing site is what covers it.
 - **Real clipboard sync.** The marker is the documented opt-out, and the test reads it back, but no signed-in account was used to observe that nothing was uploaded. A third-party clipboard manager may ignore the marker.
