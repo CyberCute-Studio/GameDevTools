@@ -126,7 +126,7 @@ var reviewedProcedures = []string{
 var reviewedSystemFunctions = []string{
 	"syscall.SyscallN",
 	"windows.CloseHandle", "windows.CreateFile", "windows.DeleteFile", "windows.FindClose",
-	"windows.FindFirstFile", "windows.FlushFileBuffers", "windows.FullPath",
+	"windows.FindFirstFile", "windows.FindNextFile", "windows.FlushFileBuffers", "windows.FullPath",
 	"windows.GetFileInformationByHandle", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
 	"windows.MoveFileEx", "windows.NewCallback", "windows.NewLazySystemDLL", "windows.NtSetInformationFile",
 	"windows.SetFileInformationByHandle", "windows.UTF16FromString", "windows.UTF16PtrFromString",

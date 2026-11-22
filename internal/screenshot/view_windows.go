@@ -419,13 +419,27 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 		if notification != 0 || n.savedPath == "" {
 			return true
 		}
-		if err := n.reveal(n.savedPath); err != nil {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
-		}
+		n.revealSaved()
 	default:
 		return n.presets.NativeCommand(id, notification)
 	}
 	return true
+}
+
+// revealSaved shows the saved file in File Explorer, only on the user's
+// request. Looking at the file and handing it to the shell each block for as
+// long as its drive does not respond, as a network share that went offline
+// after the capture, so they run on a goroutine of their own, which must not
+// freeze the window (TECH-005). A failure is shown through the dispatcher.
+func (n *NativeView) revealSaved() {
+	path, reveal := n.savedPath, n.reveal
+	go func() {
+		if err := reveal(path); err != nil {
+			n.post(func() {
+				_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
+			})
+		}
+	}()
 }
 
 func (n *NativeView) NativeDestroy() {

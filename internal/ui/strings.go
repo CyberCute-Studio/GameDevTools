@@ -179,6 +179,9 @@ const (
 	// OutputFolderStoredRefused is the startup warning about a saved
 	// Screenshot folder every capture would refuse.
 	OutputFolderStoredRefused = "The saved output folder for screenshots, %s, cannot be used: " + outputFolderNameRule + ". Captures are still copied to the clipboard, but are not saved until you choose another folder with Browse."
+	// OutputFolderStoredRootRefused is that warning for a saved folder that
+	// names no folder at all.
+	OutputFolderStoredRootRefused = "The saved output folder for screenshots, %s, cannot be used: " + outputFolderRootRule + ". Captures are still copied to the clipboard, but are not saved until you choose another folder with Browse."
 
 	// outputFolderNameRule and outputFolderRootRule state the two output
 	// folder rules, for every message that reports a folder breaking one.

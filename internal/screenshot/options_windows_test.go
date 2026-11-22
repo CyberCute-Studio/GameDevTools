@@ -116,6 +116,33 @@ func TestDefaultFolderIsOneACaptureCanUse(t *testing.T) {
 	}
 }
 
+// TestAPathThatNamesNoFolderIsRefusedAndReported pins that a device, volume,
+// or server path is refused when chosen and reported at startup when stored,
+// by the reason that fits it, and still passes Validate, so a hand-edited
+// settings file holding one cannot reset every other setting.
+func TestAPathThatNamesNoFolderIsRefusedAndReported(t *testing.T) {
+	root := t.TempDir()
+	usable := filepath.Join(root, "Shots")
+	manager, _ := newTestOptionsManager(t, filepath.Join(root, "settings.json"), usable)
+	for _, folder := range []string{`\\.\pipe\x`, `\\?\C:`, `\\.\C:`, `\\server`, `\\?\UNC\server`} {
+		if err := manager.SetOutputFolder(folder); err == nil || err.Error() != ui.OutputFolderRootInvalid {
+			t.Errorf("SetOutputFolder(%q) = %v, want the root refusal", folder, err)
+		}
+		if got := manager.Options().OutputFolder; got != usable {
+			t.Fatalf("after refusing %q the folder is %q, want %q", folder, got, usable)
+		}
+		options := DefaultOptions(folder)
+		if err := options.Validate(); err != nil {
+			t.Errorf("Validate with stored folder %q: %v", folder, err)
+		}
+		manager.options.OutputFolder = folder
+		if got, want := manager.FolderWarning(), fmt.Sprintf(ui.OutputFolderStoredRootRefused, folder); got != want {
+			t.Errorf("FolderWarning = %q, want %q", got, want)
+		}
+		manager.options.OutputFolder = usable
+	}
+}
+
 // TestFolderWarningNamesAStoredFolderEveryCaptureRefuses pins that a stored
 // folder the save rule refuses is reported at startup and stays selected, and
 // that choosing a usable one ends the warning.

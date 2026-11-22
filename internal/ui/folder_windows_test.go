@@ -61,6 +61,49 @@ func TestInitializeCOMBalancesEverySuccessfulCall(t *testing.T) {
 	}
 }
 
+// TestShellShortenedNameFindsAFolderTheShellMisnames pins the picker's check.
+// The shell reports a folder without the periods its name ends in, so each
+// path below is what it gives for the folder in the comment.
+func TestShellShortenedNameFindsAFolderTheShellMisnames(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{`v2..`, `Real.`, `both`, `both..`, `Mid.`, `Mid.\Sub`, `plain`, `plain.d`, `Shots `, `x .`} {
+		if err := os.Mkdir(`\\?\`+root+`\`+name, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{root + `\v2`, true},      // v2.., with no v2 beside it
+		{root + `\Real`, true},    // Real.
+		{root + `\both`, true},    // both.. or both, which cannot be told apart
+		{root + `\Mid\Sub`, true}, // Sub, inside Mid.
+		{root + `\x `, true},      // x .
+		{root + `\plain`, false},  // a sibling with an extension is another name
+		{root + `\plain.d`, false},
+		{root + `\Shots `, false}, // reported whole; the output rules refuse it
+		{root, false},
+		{filepath.VolumeName(root) + `\`, false},
+	} {
+		if got := shellShortenedName(test.path); got != test.want {
+			t.Errorf("shellShortenedName(%q) = %v, want %v", test.path, got, test.want)
+		}
+	}
+}
+
+// TestRevealRefusesAFileThatHasGone pins that a saved file since moved or
+// deleted is reported rather than handed to Explorer, which would open some
+// other folder and report success. Neither case starts Explorer.
+func TestRevealRefusesAFileThatHasGone(t *testing.T) {
+	folder := t.TempDir()
+	for _, path := range []string{filepath.Join(folder, "gone.png"), filepath.Join(folder, "gone", "a.png"), folder} {
+		if err := RevealInFolder(path); !errors.Is(err, errSavedFileGone) {
+			t.Errorf("RevealInFolder(%q) = %v, want %v", path, err, errSavedFileGone)
+		}
+	}
+}
+
 // TestExplorerPathIsTheWindowsFoldersExplorer pins that RevealInFolder runs
 // Explorer by its full path in the Windows folder, so no explorer.exe in the
 // application's or the current folder can be run in its place.

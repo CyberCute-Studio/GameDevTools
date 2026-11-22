@@ -5,6 +5,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,6 +87,9 @@ func initializeCOM() (uninitialize func()) {
 
 // BrowseForFolder opens the modal folder picker and returns the chosen
 // absolute folder. It reports false without an error when the user cancels.
+// The shell reports a folder without the periods its name ends in, so a
+// folder named v2.. comes back as v2, which is another folder or none. Such a
+// choice is refused with an error rather than returned.
 func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) {
 	// The picker requires an initialized COM apartment on the calling thread.
 	defer initializeCOM()()
@@ -106,7 +110,66 @@ func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) 
 	if result == 0 {
 		return "", false, callError("SHGetPathFromIDListW", err)
 	}
-	return windows.UTF16ToString(path), true, nil
+	folder := windows.UTF16ToString(path)
+	if shellShortenedName(folder) {
+		return "", false, errShellShortenedName
+	}
+	return folder, true, nil
+}
+
+// shellShortenedName reports whether a path the shell gave for a chosen
+// folder may have lost periods from a name. The shell does not say, and
+// reports the same path for both folders when v2 and v2.. stand side by side,
+// so a path that does not exist, or that has a name with such a sibling, is
+// one it may have shortened. A path that cannot be inspected for another
+// reason, such as a denied folder, is left for the save to report.
+func shellShortenedName(folder string) bool {
+	// The verbatim spelling keeps a name's trailing space, which any other
+	// spelling would lose.
+	prefix, rest := `\\?\`, folder
+	if strings.HasPrefix(folder, `\\`) {
+		prefix, rest = `\\?\UNC\`, folder[2:]
+	}
+	verbatim := prefix + rest
+	if _, err := os.Stat(verbatim); errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return true
+	}
+	volume := len(prefix) + len(pathform.VolumeName(folder)) - (len(folder) - len(rest))
+	parent := verbatim[:volume]
+	for name := range strings.SplitSeq(verbatim[volume:], `\`) {
+		if name == "" {
+			continue
+		}
+		if hasPeriodSibling(parent, name) {
+			return true
+		}
+		parent += `\` + name
+	}
+	return false
+}
+
+// hasPeriodSibling reports whether the folder holds an entry named name with
+// one or more periods after it.
+func hasPeriodSibling(parent, name string) bool {
+	pattern, err := windows.UTF16PtrFromString(parent + `\` + name + ".*")
+	if err != nil {
+		return false
+	}
+	var data windows.Win32finddata
+	handle, err := windows.FindFirstFile(pattern, &data)
+	if err != nil {
+		return false
+	}
+	defer windows.FindClose(handle)
+	for {
+		found := windows.UTF16ToString(data.FileName[:])
+		if len(found) > len(name) && strings.EqualFold(strings.TrimRight(found, "."), name) {
+			return true
+		}
+		if windows.FindNextFile(handle, &data) != nil {
+			return false
+		}
+	}
 }
 
 // OpenFolder opens the given folder in File Explorer. It runs only on
@@ -151,7 +214,12 @@ func OpenFolder(folder string) error {
 // application's and the current folder, where another explorer.exe could be
 // waiting. The file is named as shellPath spells it. Explorer's /select does
 // not read a path through a volume GUID, opening another folder without
-// reporting a failure, so such a file is refused with an error.
+// reporting a failure, so such a file is refused with an error, and so is a
+// file that has been moved or deleted, for which Explorer opens some other
+// folder and reports success. Looking at the file and the shell's call each
+// block for as long as its drive does not respond, so the GUI thread calls it
+// on a goroutine of its own, which it keeps on one thread while it holds the
+// COM apartment it initializes, as OpenFolder does.
 func RevealInFolder(path string) error {
 	target, err := shellPath(path)
 	if err != nil {
@@ -160,14 +228,29 @@ func RevealInFolder(path string) error {
 	if strings.HasPrefix(target, `\\?\`) {
 		return errNoDriveOrShare
 	}
+	info, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist), err == nil && info.IsDir():
+		return errSavedFileGone
+	case err != nil:
+		return err
+	}
 	explorer, err := explorerPath()
 	if err != nil {
 		return err
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer initializeCOM()()
 	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
 
 var (
+	// errShellShortenedName is BrowseForFolder's failure for a folder whose
+	// exact name the shell did not report.
+	errShellShortenedName = errors.New("Windows does not report the exact name of this folder, because a name in its path ends in a period. Choose another folder")
+	// errSavedFileGone is RevealInFolder's failure for a file no longer there.
+	errSavedFileGone = errors.New("the saved file has been moved or deleted")
 	// errNoDriveOrShare is shellPath's and RevealInFolder's failure for a
 	// path File Explorer cannot be pointed at, as it has no drive or share.
 	errNoDriveOrShare = errors.New("File Explorer cannot show a path that has no drive letter or network share")

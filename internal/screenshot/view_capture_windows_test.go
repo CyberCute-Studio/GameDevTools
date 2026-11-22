@@ -418,26 +418,41 @@ func TestNativeViewOpenFolderRevealsSavedFile(t *testing.T) {
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, folder, parent)
 
-	revealed := ""
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.dispatcher = dispatcher
+	revealed := make(chan string, 1)
 	view.reveal = func(path string) error {
-		revealed = path
+		revealed <- path
 		return nil
 	}
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
-	if revealed != "" {
-		t.Fatal("Open Folder acted before any capture was saved")
+	select {
+	case path := <-revealed:
+		t.Fatalf("Open Folder revealed %q before any capture was saved", path)
+	case <-time.After(50 * time.Millisecond):
 	}
 
 	view.finishCapture(CaptureResult{Path: `C:\Screenshots\Screenshot_1.png`}, displayCaptureMessages)
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
-	if revealed != `C:\Screenshots\Screenshot_1.png` {
-		t.Fatalf("revealed path = %q", revealed)
+	select {
+	case path := <-revealed:
+		if path != `C:\Screenshots\Screenshot_1.png` {
+			t.Fatalf("revealed path = %q", path)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Open Folder revealed nothing")
 	}
 
+	// The reveal runs off the GUI thread, so a drive that does not respond
+	// cannot freeze the window: this command returns while it is held.
+	release := make(chan struct{})
 	view.reveal = func(string) error {
+		<-release
 		return errors.New("explorer unavailable")
 	}
 	view.NativeCommand(optionsCommandBase+openFolderCommand, 0)
+	close(release)
+	dispatcher.runNext(t)
 	if got := view.status.Text(); !strings.HasPrefix(got, "Error:") || !strings.Contains(got, "explorer unavailable") {
 		t.Fatalf("status after failed reveal = %q", got)
 	}

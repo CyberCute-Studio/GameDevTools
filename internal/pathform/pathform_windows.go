@@ -280,9 +280,12 @@ func SaveFolder(folder string) string {
 // that ends a server's fully qualified name, and every name after the volume
 // name that is reserved for a device, wherever it falls. A path marked \\?\
 // or \??\ is one Windows takes verbatim, so it names one folder unless it
-// holds a stream or Clean would rewrite it. A path through a device other
-// than a drive, such as \\.\pipe\x, is not judged here.
+// holds a stream or Clean would rewrite it. A path that names no folder at
+// all, by NamesNoFolder, names no one folder either.
 func NamesOneFolder(folder string) bool {
+	if NamesNoFolder(folder) {
+		return false
+	}
 	clean := SaveFolder(folder)
 	if holdsStream(clean) {
 		return false

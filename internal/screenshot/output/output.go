@@ -106,6 +106,11 @@ func kindError(kind Kind, op string, err error) *Error {
 // folder whose path Windows would read as another place.
 var errFolderReadTwoWays = errors.New(ui.OutputFolderNameInvalid)
 
+// errFolderNamesNoFolder is the cause of the KindFolder error for an output
+// folder whose path names a drive, volume, device, or server rather than a
+// folder on it. Creating it could open the device.
+var errFolderNamesNoFolder = errors.New(ui.OutputFolderRootInvalid)
+
 // Result reports the two independent outcomes of one delivery (SCR-060).
 // A nil Clipboard or Save field means that destination succeeded. Path is
 // the final saved file. It is set whenever the file was fully written and
@@ -196,6 +201,9 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 	// rather than by option validation, which would reject the whole settings
 	// file for it. Creating the folder, the temporary file, and the final
 	// name all take the one spelling pathform.SaveFolder gives.
+	if pathform.NamesNoFolder(options.OutputFolder) {
+		return "", kindError(KindFolder, "open output folder", errFolderNamesNoFolder)
+	}
 	if !pathform.NamesOneFolder(options.OutputFolder) {
 		return "", kindError(KindFolder, "open output folder", errFolderReadTwoWays)
 	}
