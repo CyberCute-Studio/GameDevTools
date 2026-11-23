@@ -90,8 +90,7 @@ type NativeSession interface {
 type CreateRequest struct {
 	// Mode selects free drawing or the preset frame behavior.
 	Mode Mode
-	// Monitor resolves the displays for toolbar placement and the cursor
-	// display for DPI.
+	// Monitor resolves the cursor display for toolbar placement and DPI.
 	Monitor *display.Monitor
 	// Bounds is the virtual-desktop rectangle the session works in. Free
 	// Rectangle sessions cover it with the tint overlay; Preset Rectangle

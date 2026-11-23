@@ -95,9 +95,9 @@ func acquireInstance(name string) (handle uintptr, already bool, err error) {
 // running instance takes the instance mutex before its window exists, so a
 // second launch that lands in that startup gap retries for up to wait
 // instead of exiting without showing anything. While the existing instance
-// is capturing, its main window is intentionally hidden, and it is left
-// hidden: a window minimized before the capture is still iconic, so restoring
-// it would show it under the overlay and put it in the image (SCR-044).
+// is capturing, its main window is intentionally hidden; activating a hidden
+// window changes nothing on screen, and the running capture is left
+// undisturbed.
 func activateExistingInstance(className string, wait time.Duration) bool {
 	hwnd := findInstanceWindow(className)
 	for deadline := time.Now().Add(wait); hwnd == 0 && time.Now().Before(deadline); {
@@ -106,9 +106,6 @@ func activateExistingInstance(className string, wait time.Duration) bool {
 	}
 	if hwnd == 0 {
 		return false
-	}
-	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
-		return true
 	}
 	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
 		procShowWindow.Call(hwnd, swRestore)

@@ -370,6 +370,11 @@ Capture
   is still reported as a success.
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
+- Where displays differ in size or are offset, the capture toolbar can land in
+  a part of the desktop that no display shows. Move the selection to bring the
+  toolbar back, or press Escape to cancel.
+- If the window was minimized before a capture, do not start the application
+  again during that capture. The window can reappear and end up in the image.
 - A capture's result, including a failed save, appears only in the Screenshot
   view. While the window is minimized or shows another tool, nothing tells you
   that a capture from the global shortcut was not saved, so check the Screenshot

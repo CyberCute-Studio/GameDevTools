@@ -239,66 +239,6 @@ func TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay(t *testing.T) {
 	}
 }
 
-// TestReachableToolbarPlacementStaysOnADisplay covers displays of different
-// sizes, where the virtual desktop includes areas no display shows.
-func TestReachableToolbarPlacementStaysOnADisplay(t *testing.T) {
-	tall := display.Rect{Left: 0, Top: 0, Right: 2560, Bottom: 1400}
-	short := display.Rect{Left: 2560, Top: 0, Right: 4480, Bottom: 1040}
-	uneven := []display.Rect{tall, short}
-	desktop := display.Rect{Left: 0, Top: 0, Right: 4480, Bottom: 1440}
-
-	tests := []struct {
-		name      string
-		workAreas []display.Rect
-		selection display.Rect
-		wantX     int32
-		wantY     int32
-	}{
-		{
-			name:      "below the selection when a display shows it",
-			workAreas: uneven,
-			selection: display.Rect{Left: 100, Top: 100, Right: 900, Bottom: 400},
-			wantX:     260,
-			wantY:     416,
-		},
-		{
-			name:      "above the selection when below is off the shorter display",
-			workAreas: uneven,
-			selection: display.Rect{Left: 3000, Top: 200, Right: 3800, Bottom: 1020},
-			wantX:     3160,
-			wantY:     84,
-		},
-		{
-			name:      "into the display when neither side has room",
-			workAreas: uneven,
-			selection: short,
-			wantX:     3280,
-			wantY:     940,
-		},
-		{
-			name:      "across the boundary of two displays",
-			workAreas: []display.Rect{{Left: 0, Top: 0, Right: 1920, Bottom: 1040}, {Left: 1920, Top: 0, Right: 3840, Bottom: 1040}},
-			selection: display.Rect{Left: 1700, Top: 100, Right: 2100, Bottom: 400},
-			wantX:     1660,
-			wantY:     416,
-		},
-		{
-			name:      "desktop position when the displays are unknown",
-			selection: display.Rect{Left: 3000, Top: 200, Right: 3800, Bottom: 1020},
-			wantX:     3160,
-			wantY:     1036,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			x, y := reachableToolbarPlacement(test.workAreas, desktop, tall, test.selection, 480, 100, 16)
-			if x != test.wantX || y != test.wantY {
-				t.Fatalf("reachableToolbarPlacement() = (%d, %d), want (%d, %d)", x, y, test.wantX, test.wantY)
-			}
-		})
-	}
-}
-
 func TestToolbarPlacementFollowsTheSelection(t *testing.T) {
 	desktop := display.Rect{Left: -1920, Top: -200, Right: 3840, Bottom: 1080}
 	anchor := display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1040}

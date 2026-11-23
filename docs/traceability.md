@@ -7,7 +7,7 @@ The evidence column names representative checks, not all of them, as `package.Te
 ## Status
 
 - **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as using a real screen reader, and has not been done.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, M10, M12, M15, M16, M17, or M18 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, stand-ins for the file picker, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, and a result written to a view that is not showing. M18 cannot pass until the application reports that result where the user can see it. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, M10, M12, M15, M16, M17, or M18 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, stand-ins for the file picker, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, and a result written to a view that is not showing. M18 cannot pass until REL-02A makes the application report that result where the user can see it. Those that name REL-02A have a known defect on `main`, which that item fixes. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
 
 `M1` to `M18` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's.
 
@@ -15,14 +15,14 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 101 | 23 |
+| P0 requirements | 124 | 99 | 25 |
 | P1 requirements | 20 | 8 | 12 |
 | Acceptance scenarios | 32 | 24 | 8 |
-| **All** | **176** | **133** | **43** |
+| **All** | **176** | **131** | **45** |
 
-Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes or it receives an approved resolution, as PRD section 16 requires:
+Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes, the defect it names is fixed, or it receives an approved resolution, as PRD section 16 requires:
 
-SCR-002, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-026, SCR-042, SCR-043, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S12, AC-A04.
+SCR-002, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-042, SCR-043, SCR-044, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S12, AC-A04.
 
 The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
@@ -70,7 +70,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
 | SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | M9: no real pointer has dragged the production frame |
 | SCR-024 | P0 | Toolbar has Capture, Cancel, and dimensions | SCR-07, SCR-08 | `overlay.TestToolbarCaptureCommandDeliversSelection`, `overlay.TestToolbarCancelCommandCancelsSession`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
-| SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08 | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay`, `overlay.TestReachableToolbarPlacementStaysOnADisplay` | Pass |  |
+| SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08, REL-02A | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay` | **Partial** | REL-02A: where displays differ in size or are offset, the toolbar can land where no display shows it |
 | SCR-026 | P0 | Moves across displays without a size change | SCR-08 | `capture.TestCaptureSpanningDisplayBoundary`, `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | QLT-04A: across a mixed-scaling boundary |
 | SCR-027 | P0 | Arrow keys move 1 px, Shift+Arrow 10 px | SCR-08 | `overlay.TestPresetFrameKeyboardNudges` | Pass |  |
 | SCR-028 | P1 | X/Y readout, including negative coordinates | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `display.TestVirtualDesktopBounds` | **Partial** | QLT-04A: a display at negative coordinates |
@@ -81,7 +81,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-041 | P0 | Picker shows number, name, resolution, primary | SCR-02, SCR-05 | `screenshot.TestDisplayListItemDescribesDisplay`, `display.TestNumberDisplays` | Pass |  |
 | SCR-042 | P0 | Native pixel dimensions and orientation | SCR-03, SCR-05 | `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a rotated display |
 | SCR-043 | P0 | Any display, including other DPI scaling | SCR-02, SCR-05 | `screenshot.TestNativeViewDisplayPickerTracksMode`, `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a secondary display at other scaling |
-| SCR-044 | P0 | Main window and overlays absent from the image | SCR-03, SCR-05 | `capture.TestHideExcludesWindowFromCapture`, `execute.TestFullDisplayRunsHideCaptureRestoreDeliverInOrder`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | Pass |  |
+| SCR-044 | P0 | Main window and overlays absent from the image | SCR-03, SCR-05, REL-02A | `capture.TestHideExcludesWindowFromCapture`, `execute.TestFullDisplayRunsHideCaptureRestoreDeliverInOrder` | **Partial** | REL-02A: a second launch during a capture started while minimized can restore the window into the image |
 | SCR-050 | P0 | Main window hides before the overlay shows | SCR-06 | `overlay.TestBeginHidesMainWindowBeforeCreatingOverlay` | Pass |  |
 | SCR-051 | P0 | Cancel changes no clipboard or file | SCR-06, SCR-07 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |
 | SCR-052 | P0 | Failure leaves no invisible overlay | SCR-06, SCR-10 | `overlay.TestBeginFailureRestoresMainWindow`, `screenshot.TestNativeViewOverlayFailureRestoresMainWindow` | Pass |  |
@@ -89,7 +89,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-054 | P0 | Display change revalidates the selection | SCR-10 | `overlay.TestDisplayChangeKeepsFittingSession`, `overlay.TestDisplayChangeEndsSessionThatCannotFit` | **Partial** | QLT-04A: a live disconnect and reconnect |
 | SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | **Partial** | M9: activation simulated, no real click in another application |
 | SCR-056 | P0 | Exit removes overlays and restores input | SCR-06, SCR-10 | `overlay.TestShutdownRemovesSessionSilently`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
-| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | **Partial** | M18: a shortcut capture's failure is not shown while the Screenshot view is hidden |
+| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | **Partial** | REL-02A, then M18: a shortcut capture's failure is not shown while the Screenshot view is hidden |
 | SCR-061 | P0 | PNG or JPEG, PNG by default | SCR-01, SCR-04 | `screenshot.TestDefaultOptions`, `screenshot.TestNativeViewFormatQualityAndPattern` | Pass |  |
 | SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `screenshot/output.TestDeliverJPEGDoesNotDegradeClipboard`, `screenshot/output.TestSetClipboardImageRoundTrip` | **Partial** | M8: no real application has pasted the image |
 | SCR-063 | P0 | Default Pictures folder; another can be chosen | SCR-01, SCR-04, QLT-03B, QLT-03C | `screenshot.TestDefaultFolderIsOneACaptureCanUse`, `screenshot.TestNativeViewBrowseForOutputFolder` | **Partial** | M16: the real folder picker has not been opened |
@@ -221,8 +221,8 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | AC-S05 | — | Free rectangle adjustment | SCR-11 | `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestOverlayMoveAndResizeAdjustSelection` | **Partial** | M15: no selection has been drawn with a real pointer |
 | AC-S06 | — | Full secondary display | SCR-11 | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | Pass |  |
 | AC-S07 | — | Cancellation | SCR-11 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |
-| AC-S08 | — | Clipboard success with save failure | SCR-11 | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes` | **Partial** | M18: a shortcut capture's failed save is not shown while the Screenshot view is hidden |
-| AC-S09 | — | Save success with clipboard failure | SCR-11 | `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes` | **Partial** | M18: a shortcut capture's clipboard failure is not shown while the Screenshot view is hidden |
+| AC-S08 | — | Clipboard success with save failure | SCR-11, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes` | **Partial** | REL-02A, then M18: a shortcut capture's failed save is not shown while the Screenshot view is hidden |
+| AC-S09 | — | Save success with clipboard failure | SCR-11, REL-02A | `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes` | **Partial** | REL-02A, then M18: a shortcut capture's clipboard failure is not shown while the Screenshot view is hidden |
 | AC-S10 | — | Filename collision | SCR-11 | `screenshot/output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
 | AC-S11 | — | Shortcut conflict | SCR-11 | `screenshot.TestHotkeyConflictKeepsPreviousRegistration`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | Pass |  |
 | AC-S12 | — | Monitor removal | SCR-11, QLT-04A | `overlay.TestDisplayChangeEndsSessionThatCannotFit`, `screenshot.TestNativeViewDisplayChangeEndsStaleSession` | **Partial** | QLT-04A: a live disconnect |

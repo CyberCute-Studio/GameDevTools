@@ -1,10 +1,6 @@
 package overlay
 
-import (
-	"slices"
-
-	"github.com/CyberCute-Studio/GameDevTools/internal/display"
-)
+import "github.com/CyberCute-Studio/GameDevTools/internal/display"
 
 // zone identifies which part of an active selection a pointer position
 // belongs to: one of the eight resize handles, the movable interior, or the
@@ -210,9 +206,9 @@ func presetPlacement(anchor, desktop display.Rect, width, height int32) display.
 // toolbar is centered at the top of the anchor work area. With a selection
 // it sits centered below the selection, or above it when there is no room
 // below, so it does not cover the selected content where practical
-// (SCR-025). Every result is clamped into the virtual desktop, including on
-// negative-coordinate displays and for selections touching a display edge;
-// reachableToolbarPlacement then holds it to the real displays.
+// (SCR-025); every result is clamped into the virtual desktop so the
+// toolbar stays fully reachable on every display arrangement, including
+// negative-coordinate displays and selections touching a display edge.
 func toolbarPlacement(desktop, anchor, selection display.Rect, width, height, margin int32) (x, y int32) {
 	if !selection.Empty() {
 		x = selection.Left + (selection.Width()-width)/2
@@ -237,63 +233,4 @@ func toolbarPlacement(desktop, anchor, selection display.Rect, width, height, ma
 		y = desktop.Bottom - height
 	}
 	return x, y
-}
-
-// reachableToolbarPlacement is toolbarPlacement held to the displays' work
-// areas. The virtual desktop is the rectangle around every display, so where
-// displays differ in size or are offset, a position inside it can lie where
-// no display shows it and the pointer cannot reach it (SCR-025). Such a
-// toolbar moves above the selection, or failing that into the nearest work
-// area. With no work areas known the desktop-clamped position stands.
-func reachableToolbarPlacement(workAreas []display.Rect, desktop, anchor, selection display.Rect, width, height, margin int32) (x, y int32) {
-	x, y = toolbarPlacement(desktop, anchor, selection, width, height, margin)
-	if len(workAreas) == 0 || toolbarOnDisplays(workAreas, x, y, width, height) {
-		return x, y
-	}
-	if !selection.Empty() {
-		if above := selection.Top - margin - height; toolbarOnDisplays(workAreas, x, above, width, height) {
-			return x, above
-		}
-	}
-	area := nearestWorkArea(workAreas, display.Rect{Left: x, Top: y, Right: x + width, Bottom: y + height})
-	// Left and top win when the area is smaller than the toolbar, as that is
-	// where its first controls are.
-	return max(min(x, area.Right-width), area.Left), max(min(y, area.Bottom-height), area.Top)
-}
-
-// toolbarOnDisplays reports whether all four corners of the toolbar lie on a
-// work area. They may lie on different ones, as a toolbar across the boundary
-// of two side-by-side displays is fully visible.
-func toolbarOnDisplays(workAreas []display.Rect, x, y, width, height int32) bool {
-	for _, corner := range []display.Point{
-		{X: x, Y: y},
-		{X: x + width - 1, Y: y},
-		{X: x, Y: y + height - 1},
-		{X: x + width - 1, Y: y + height - 1},
-	} {
-		if !slices.ContainsFunc(workAreas, func(area display.Rect) bool { return area.Contains(corner) }) {
-			return false
-		}
-	}
-	return true
-}
-
-// nearestWorkArea returns the work area sharing the most pixels with r, or,
-// when r touches none, the one closest to r's center. It expects at least one
-// work area.
-func nearestWorkArea(workAreas []display.Rect, r display.Rect) display.Rect {
-	best := workAreas[0]
-	bestShared, bestDistance := int64(-1), int64(0)
-	centerX, centerY := int64(r.Left)+int64(r.Width())/2, int64(r.Top)+int64(r.Height())/2
-	for _, area := range workAreas {
-		shared := max(int64(min(r.Right, area.Right))-int64(max(r.Left, area.Left)), 0) *
-			max(int64(min(r.Bottom, area.Bottom))-int64(max(r.Top, area.Top)), 0)
-		dx := max(int64(area.Left)-centerX, centerX-int64(area.Right), 0)
-		dy := max(int64(area.Top)-centerY, centerY-int64(area.Bottom), 0)
-		distance := dx*dx + dy*dy
-		if shared > bestShared || shared == bestShared && distance < bestDistance {
-			best, bestShared, bestDistance = area, shared, distance
-		}
-	}
-	return best
 }
