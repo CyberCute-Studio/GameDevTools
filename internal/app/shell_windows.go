@@ -222,6 +222,13 @@ type nativeNoticeAnnouncer interface {
 	NativeAnnounceNotice()
 }
 
+// nativeActivationAware is implemented by module views that act when the
+// main window is activated while they are the current module, as the
+// Screenshot view takes back the problems its result card was holding.
+type nativeActivationAware interface {
+	NativeActivated()
+}
+
 // nativeShutdown is implemented by module views with background work, such
 // as an in-flight capture, that must finish delivering before the process
 // exits. The shell calls NativeShutdown once the window is destroyed, on a
@@ -1616,6 +1623,9 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		// background does, and without scrolling the control into view
 		// (wmAppRestoreFocus).
 		if shell != nil {
+			if lowWord(wParam) != waInactive {
+				_ = postShellMessage(uintptr(hwnd), wmAppActivated)
+			}
 			switch lowWord(wParam) {
 			case waInactive:
 				if focused, _, _ := procGetFocus.Call(); focused != 0 {
@@ -1629,6 +1639,14 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				shell.clickActivating = false
 				return r
 			}
+		}
+	case wmAppActivated:
+		if shell != nil {
+			if aware, ok := shell.nativeViews[shell.navigator.Current().ID()].(nativeActivationAware); ok {
+				aware.NativeActivated()
+				shell.layout()
+			}
+			return 0
 		}
 	case wmSetFocus:
 		if shell != nil {

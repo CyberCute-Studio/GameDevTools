@@ -623,7 +623,7 @@ func createDIB(memory uintptr, width, height int32) (uintptr, unsafe.Pointer, er
 
 func (s *windowsSession) createToolbar(request CreateRequest) error {
 	width, height := s.toolbarSize.Width, s.toolbarSize.Height
-	x, y := toolbarPlacement(request.Bounds, s.anchor, s.selection, width, height, s.margin)
+	x, y := s.toolbarPosition()
 	toolbar, _, err := procCreateWindowExW.Call(
 		wsExTopmost|wsExToolWindow,
 		uintptr(unsafe.Pointer(utf16(toolbarClassName))),
@@ -1345,10 +1345,24 @@ func (s *windowsSession) placeToolbar() {
 		// session, after the toolbar is already gone.
 		return
 	}
-	x, y := toolbarPlacement(s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
+	x, y := s.toolbarPosition()
 	procSetWindowPos.Call(uintptr(s.toolbar), 0,
 		uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,
 		swpNoSize|swpNoZOrder|swpNoActivate)
+}
+
+// toolbarPosition places the toolbar on the displays as they are now. If they
+// cannot be read, the position is kept inside the virtual desktop.
+func (s *windowsSession) toolbarPosition() (x, y int32) {
+	var workAreas []display.Rect
+	if s.monitor != nil {
+		if displays, err := s.monitor.Displays(); err == nil {
+			for _, item := range displays {
+				workAreas = append(workAreas, item.WorkArea)
+			}
+		}
+	}
+	return reachableToolbarPlacement(workAreas, s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
 }
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's

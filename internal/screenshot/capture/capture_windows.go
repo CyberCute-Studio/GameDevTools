@@ -21,9 +21,11 @@ const (
 
 	swHide = 0
 
-	// swShowNoActivate restores a hidden window without activating it, so
-	// Restore never moves input focus to the revealed window.
-	swShowNoActivate = 4
+	// swShowNA shows a hidden window in its current state without activating
+	// it, so Restore never moves input focus to the revealed window and a
+	// maximized window comes back maximized, where SW_SHOWNOACTIVATE would
+	// bring it back at its normal size.
+	swShowNA = 8
 	// swShowMinNoActivate restores a window that was minimized when Hide
 	// ran to the minimized state, without activating it.
 	swShowMinNoActivate = 7
@@ -183,8 +185,9 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 }
 
 // Restore returns each window to the state Hide found it in: windows that
-// were visible are shown again, minimized windows are shown minimized
-// again, and windows that were already hidden stay hidden, so Restore
+// were visible are shown again, maximized ones still maximized, minimized
+// windows are shown minimized again, and windows that were already hidden
+// stay hidden, so Restore
 // never resurrects a window another flow hid or pops open one the user
 // minimized. Nothing is activated, so restoring after capture never moves
 // input focus. Restore is idempotent and safe for concurrent use, so a
@@ -202,7 +205,7 @@ func (e *Exclusion) Restore() {
 		case window.wasMinimized:
 			procShowWindow.Call(window.hwnd, swShowMinNoActivate)
 		default:
-			procShowWindow.Call(window.hwnd, swShowNoActivate)
+			procShowWindow.Call(window.hwnd, swShowNA)
 		}
 	}
 }

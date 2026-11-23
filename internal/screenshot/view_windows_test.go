@@ -91,12 +91,44 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 	view.hotkeyFactory = func(uintptr, int32) hotkeyRegistrar {
 		return &fakeHotkeyRegistrar{}
 	}
+	view.card = &fakeResultCard{}
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(view.NativeDestroy)
 	return view
 }
+
+// fakeResultCard records what the view reports on the result card without
+// putting a topmost window on the desktop.
+type fakeResultCard struct {
+	reports   []ui.CardEntry
+	suspended bool
+	suspends  int
+	resumes   int
+	moves     int
+	destroyed bool
+}
+
+func (f *fakeResultCard) Report(notice ui.Notice, path string) {
+	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Path: path})
+}
+func (f *fakeResultCard) Suspend() { f.suspended = true; f.suspends++ }
+func (f *fakeResultCard) Resume()  { f.suspended = false; f.resumes++ }
+func (f *fakeResultCard) Reposition() {
+	f.moves++
+}
+func (f *fakeResultCard) Take() []ui.CardEntry {
+	var problems []ui.CardEntry
+	for _, entry := range f.reports {
+		if entry.Notice.Kind >= ui.NoticeWarning {
+			problems = append(problems, entry)
+		}
+	}
+	f.reports = nil
+	return problems
+}
+func (f *fakeResultCard) Destroy() { f.destroyed = true }
 
 // fakeHotkeyRegistrar records the view's hotkey calls without touching the
 // machine-global RegisterHotKey state. applyFunc can fail specific

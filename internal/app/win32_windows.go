@@ -38,6 +38,9 @@ const (
 	// wmAppRestoreFocus asks the shell to give the focus back once a click
 	// that activated the window has been handled, as wmActivate describes.
 	wmAppRestoreFocus = wmApp + 2
+	// wmAppActivated tells the current module the window was activated, once
+	// the activation's own focus handling has finished.
+	wmAppActivated = wmApp + 3
 
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000

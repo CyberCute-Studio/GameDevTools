@@ -227,7 +227,7 @@ func showSolidWindow(t *testing.T, region display.Rect, fill color.RGBA) windows
 		// SW_SHOWNOACTIVATE keeps the test window from taking activation
 		// away from the user's foreground window on interactive runs; the
 		// topmost popup composites either way.
-		procShowWindow.Call(hwnd, swShowNoActivate)
+		procShowWindow.Call(hwnd, swShowNA)
 		procUpdateWindow.Call(hwnd)
 	})
 	if hwnd == 0 {
@@ -692,6 +692,32 @@ func TestHideKeepsPreviouslyHiddenWindowHidden(t *testing.T) {
 	exclusion.Restore()
 	if r, _, _ := procIsWindowVisible.Call(uintptr(hwnd)); r != 0 {
 		t.Fatal("Restore showed a window that was already hidden before Hide")
+	}
+}
+
+// TestRestoreKeepsAMaximizedWindowMaximized covers a capture from a maximized
+// main window, which SW_SHOWNOACTIVATE brought back at its normal size, so
+// closing the application then saved it as not maximized (SET-002).
+func TestRestoreKeepsAMaximizedWindowMaximized(t *testing.T) {
+	const swMaximize = 3
+	isZoomed := user32.NewProc("IsZoomed")
+	monitor := display.NewMonitor()
+	hwnd, _ := createSolidWindow(t, monitor, 240, 180, color.RGBA{R: 0x10, G: 0x60, B: 0xA0, A: 0xFF})
+	procShowWindow.Call(uintptr(hwnd), swMaximize)
+	if zoomed, _, _ := isZoomed.Call(uintptr(hwnd)); zoomed == 0 {
+		t.Skip("the test window could not be maximized")
+	}
+
+	exclusion, err := Hide(uintptr(hwnd))
+	if err != nil {
+		t.Fatalf("Hide: %v", err)
+	}
+	exclusion.Restore()
+	if visible, _, _ := procIsWindowVisible.Call(uintptr(hwnd)); visible == 0 {
+		t.Fatal("Restore did not show the window again")
+	}
+	if zoomed, _, _ := isZoomed.Call(uintptr(hwnd)); zoomed == 0 {
+		t.Fatal("Restore brought a maximized window back at its normal size")
 	}
 }
 

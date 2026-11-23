@@ -227,6 +227,19 @@ const (
 	OpenFolderAction       = "Open Folder"
 	OpenFolderFailed       = "The folder of the saved screenshot could not be opened: %v"
 
+	// The result card that reports a capture while the Screenshot view cannot
+	// be seen.
+	CardWindowTitle    = AppName + " capture result"
+	CardDismissAction  = "Dismiss"
+	CardEarlierResults = "%d earlier problem(s) not yet dismissed."
+	// CaptureProblemsWhileHidden joins the problems the card was holding when
+	// the Screenshot view can show them itself.
+	CaptureProblemsWhileHidden = "%d capture problems while this view was not showing:\n%s"
+	// CaptureTemporaryLeftBehind follows the result of a capture that was
+	// saved but whose temporary name could not be removed. The temporary name
+	// is a hard link to the saved image, so removing it loses nothing.
+	CaptureTemporaryLeftBehind = " A temporary name for the saved image could not be removed, and can be deleted: %v"
+
 	CaptureInProgress      = "A capture is already in progress. Wait for it to finish."
 	CaptureFailed          = "The display could not be captured: %v"
 	CaptureDisplayChanged  = "The display layout changed or a display disconnected before the capture could finish: %v. Check the connected displays and try again."

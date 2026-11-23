@@ -37,14 +37,12 @@ choose More info, then Run anyway.
 Nothing is installed. To keep a shortcut, pin the executable to Start or the
 taskbar. README.txt also covers updating and uninstalling.
 
-Only one copy runs at a time. Starting it again brings the open window forward,
-unless a capture is under way: see section 11.
+Only one copy runs at a time. Starting it again brings the open window forward.
+During a selection it leaves the selection as it is.
 
 Closing the window exits the application, because it has no tray icon. The
 global shortcut works only while the application is running, so minimize the
-window instead of closing it if you want to keep using the shortcut. A capture
-reports its result only in the Screenshot view, so check there after each
-capture: see section 10.
+window instead of closing it if you want to keep using the shortcut.
 
 
 2. The main window
@@ -68,9 +66,8 @@ not saved.
 -------------
 
 Choose a Capture mode, then press Start Capture. The main window hides so that
-it cannot appear in the image. When the capture ends it returns, and a window
-you minimized stays minimized. A maximized window returns at its normal size:
-see section 10.
+it cannot appear in the image. When the capture ends it returns as it was,
+maximized or minimized.
 
   Free Rectangle    Draw any rectangle on the screen.
   Preset Rectangle  Float a frame of an exact size over your work.
@@ -124,8 +121,7 @@ Full Display
   The display under the pointer is selected when the application starts. The
   selection then stays until you change it or that display is disconnected, so
   it does not follow the pointer: check it before capturing with the global
-  shortcut. A failure to list the displays can also change it: see section 10.
-  Start Capture takes the picture at once, at the display's full native
+  shortcut. Start Capture takes the picture at once, at the display's full native
   resolution.
 
 What a capture gives you
@@ -148,6 +144,21 @@ What a capture gives you
   The main window returns without taking the keyboard focus, so that you stay in
   the application you were using. Use Alt+Tab to go back to it.
 
+The result card
+
+  When the global shortcut starts a capture and the Screenshot view is not in
+  front of you, a small card in the corner of the display under the pointer
+  reports the result. It never takes the keyboard focus from the application
+  you are using, and it is hidden during every capture, so it cannot appear in
+  an image.
+
+  - A success disappears after a few seconds.
+  - A warning or error stays until you press Dismiss, so a later capture cannot
+    hide it. The card says how many earlier problems are waiting.
+  - Open Folder shows the saved file, when there is one.
+  - Opening the Screenshot view moves any waiting problems there and closes the
+    card. That is also how to reach them with the keyboard.
+
 
 4. The global shortcut
 ----------------------
@@ -164,8 +175,8 @@ the field has the focus.
 
 If another application already owns the combination, the field says so and your
 previous shortcut keeps working until you choose another one. If it is taken
-when the application starts, no shortcut is active and only the Screenshot view
-says so: see section 10.
+when the application starts, no shortcut is active. The Screenshot view says so,
+and the result card does too when another tool is showing.
 
 Pressing the shortcut during a selection brings the selection's toolbar back
 instead of starting a second selection.
@@ -384,37 +395,6 @@ Capture
   is still reported as a success.
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
-- Where displays differ in size or are offset, the capture toolbar can land in
-  a part of the desktop that no display shows. If you cannot see it, press the
-  global shortcut and then Escape to cancel, and start again with the selection
-  in another place.
-- If Windows fails to list the displays, Full Display can forget the selected
-  display and capture the one under the pointer, reporting a success. The
-  message "The display list is unavailable" appears only in the Screenshot view.
-  With more than one display, check the Display list before capturing. If it is
-  empty, choose another Capture mode, then Full Display again, and select the
-  display you want.
-- A maximized main window returns at its normal size after a capture or a
-  cancelled selection, and closing the application then remembers that size.
-  Maximize it again.
-- If the window was minimized before a capture, do not start the application
-  again during that capture. The window can reappear and end up in the image.
-- Starting the application again during a selection can take the keyboard from
-  the capture toolbar, so Escape and the arrow keys stop working. Click the
-  toolbar or press the global shortcut to get it back.
-- A capture's result appears only in the Screenshot view. That includes the
-  saved path, a failed save or clipboard copy, a capture the global shortcut
-  could not start, such as with a preset larger than the desktop or an invalid
-  JPEG quality, and a selection that ended because a display changed. While the
-  window is minimized or shows another tool, nothing tells you about any of
-  these. The view keeps only the latest result, so a later capture hides an
-  earlier failure: check it after each shortcut capture, before taking the next.
-- A global shortcut another application already owns when this one starts is
-  reported only in the Screenshot view. If another tool was showing when you
-  last closed the application, nothing tells you the shortcut is not working
-  until you open that view.
-- If Windows cannot remove a capture's temporary file, the result can say saving
-  failed although the image was saved. See section 11 before deleting anything.
 - After a capture, the keyboard focus stays outside the application. Use
   Alt+Tab to return to it.
 
@@ -449,18 +429,15 @@ Windows says it protected your PC.
 Nothing happens when I start the application again.
   It is already running, and the existing window was brought forward. Look for it
   on the taskbar. During a selection the window stays hidden and has no taskbar
-  button, unless it was minimized before the capture, when it can reappear: see
-  section 10. The toolbar can also lose the keyboard: click the capture toolbar
-  or press the global shortcut to bring it forward, then finish or cancel the
-  selection.
+  button: finish or cancel the selection on its toolbar.
 
 The global shortcut does nothing.
   The application must be running. The shortcut is paused while the Global
   shortcut field has the focus, so leave the field first. Then open the
   Screenshot view. If the field shows a "Shortcut registration error", another
   application owns the combination, so choose a different one. Otherwise the
-  view says why a capture could not start, such as a preset larger than the
-  desktop or an invalid JPEG quality.
+  result card or the view says why a capture could not start, such as a preset
+  larger than the desktop or an invalid JPEG quality.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is
@@ -473,6 +450,10 @@ A screenshot is black.
 "The display layout changed..."
   A display was connected, disconnected, or rearranged. Start the capture again.
 
+"The display list is unavailable"
+  Windows could not list the displays, so nothing was captured. Start the
+  capture again. The display you selected stays selected.
+
 The capture was copied but not saved, or saved but not copied.
   The message says which part failed. To fix saving, choose another Output folder
   or free space on its drive. To fix copying, close any application that may be
@@ -480,7 +461,8 @@ The capture was copied but not saved, or saved but not copied.
 
   If the message mentions a temporary file, the image may or may not have been
   saved, and a .gamedevtools-*.tmp file may hold the only copy. Do not delete
-  one until you have followed the entry for those files below.
+  one until you have followed the entry for those files below. A message saying
+  a saved image's temporary name can be deleted means only the file it names.
 
 "The output folder cannot be used."
   Windows would read that path as a different place, for example because a name

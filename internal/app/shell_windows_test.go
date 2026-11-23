@@ -315,6 +315,28 @@ func TestShellWindowProcRoutesHotkeys(t *testing.T) {
 	}
 }
 
+type activationRecordingView struct {
+	recordingNativeView
+	activations int
+}
+
+func (v *activationRecordingView) NativeActivated() { v.activations++ }
+
+// TestShellTellsTheCurrentViewItWasActivated is how the Screenshot view takes
+// back the problems its result card holds once the user returns to it.
+func TestShellTellsTheCurrentViewItWasActivated(t *testing.T) {
+	native := &activationRecordingView{}
+	shell := newCommandTestShell(t, native)
+	layouts := native.layouts
+	shellWindowProc(shell.hwnd, wmAppActivated, 0, 0)
+	if native.activations != 1 {
+		t.Fatalf("activations = %d, want 1", native.activations)
+	}
+	if native.layouts == layouts {
+		t.Fatal("the view's new notice was not laid out")
+	}
+}
+
 // TestShellWindowProcForwardsEditSetFocusToView pins the regression where
 // the shell's scroll-into-view branch swallowed EN_SETFOCUS before the
 // module view saw it: the Screenshot shortcut field suspends its global

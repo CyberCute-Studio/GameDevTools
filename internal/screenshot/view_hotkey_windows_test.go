@@ -60,6 +60,7 @@ func newConflictedHotkeyView(t *testing.T) *NativeView {
 	}}
 	view := NewNativeView(manager, options, display.NewMonitor(), nil, nil, nil)
 	view.hotkeyFactory = func(uintptr, int32) hotkeyRegistrar { return conflicted }
+	view.card = &fakeResultCard{}
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatalf("a startup shortcut conflict must not fail view creation (AC-S11): %v", err)
 	}
