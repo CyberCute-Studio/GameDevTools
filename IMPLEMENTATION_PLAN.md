@@ -328,7 +328,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** Started by explicit request while QLT-04A remains Pending, so this item cannot be Done until it is. Decisions (PRD 1.5, [ADR-0002](docs/adr/0002-product-identity-and-distribution.md)): the product is CyberCute Dev Tools, shipped as an unsigned portable x64 ZIP with a SHA-256 checksum and no update check. The first launch takes over a GameDevTools settings file and leaves it in place. `scripts/verify-package.ps1` checks the exact ZIP with no Go on `PATH` and its per-user folders in a temporary workspace, as a first run and an upgrade, and runs in CI. No clean machine was available, as this one has no Hyper-V or Windows Sandbox, so the clean-machine run stays with REL-03. The project has no license of its own, which must be settled before public distribution.
 
 38. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
-    - **Status:** In Progress | **PR:** TBD | **Depends on:** REL-01
+    - **Status:** In Progress | **PR:** [#37](https://github.com/CyberCute-Studio/GameDevTools/pull/37) | **Depends on:** REL-01
     - **Requirements:** PRD Sections 9.8, 10.6, 18, and 19; TECH-009.
     - **Deliver:** Setup and usage documentation for both modules, hotkey/configuration help, output/collision behavior, protected-content and metadata limitations, troubleshooting, test/verification guide, release notes, and PRD-to-implementation traceability update.
     - **Verify:** Follow the documentation on a clean machine to perform every core workflow. Confirm documented behavior and limitations match the packaged application and no deferred P0 requirement is presented as complete.
