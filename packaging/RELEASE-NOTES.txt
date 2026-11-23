@@ -77,39 +77,22 @@ These have not been run, so this version makes no claim about them:
 
 Known issues
 
-- A capture's result appears only in the Screenshot view, including a failed
-  save or clipboard copy, a capture the global shortcut could not start, and a
-  selection ended by a display change. While the window is minimized or shows
-  another tool, nothing tells you about any of these. The view keeps only the
-  latest result, so a later capture hides an earlier failure: check it after
-  each shortcut capture, before taking the next.
+Sections 10 and 11 of USER-GUIDE.txt say what to do about each of these.
+
+- A capture's result, including a failure, appears only in the Screenshot view,
+  which keeps only the latest one. A capture from the global shortcut can fail
+  with no visible message while the window is minimized or shows another tool.
 - A global shortcut another application already owns when this one starts is
-  reported only in the Screenshot view, so it can go unnoticed while another
-  tool is showing.
+  reported only in the Screenshot view.
 - Where displays differ in size or are offset, the capture toolbar can land in
-  a part of the desktop that no display shows. Escape still cancels. Enter
-  still captures unless the focus is in a size field, where it only applies the
-  size, or on Cancel, so after typing a size press Tab to reach Capture first.
-  After clicking in another application, press the global shortcut first.
-  Moving the selection brings the toolbar back, but moving it back hides the
-  toolbar again. Set a new size while the toolbar shows: a size that does not
-  fit at the selection's position is refused only on the toolbar, and a capture
-  then saves the old size and reports a success.
-- If Windows fails to list the displays, Full Display can forget the selected
-  display although it is still connected, then capture the one under the
-  pointer and report a success. The message "The display list is unavailable"
-  appears only in the Screenshot view with Full Display selected, so this can
-  happen with no warning. Check the Display list before each Full Display
-  capture. If it is empty, choose another Capture mode, then Full Display again.
-  Then select your display.
-- Starting the application again during a capture that began while its window
-  was minimized can bring the window back into the image. Starting it again
-  during any selection can take the keyboard from the capture toolbar: click
-  the toolbar or press the global shortcut to get it back.
-- If Windows cannot remove a capture's temporary file, the result can say
-  saving failed although the image was saved. A .gamedevtools-*.tmp file may
-  hold a capture's only copy, so follow section 11 of USER-GUIDE.txt before
-  deleting one.
+  a part of the desktop that no display shows.
+- If Windows fails to list the displays, Full Display can capture the display
+  under the pointer instead of the selected one, and report a success.
+- Starting the application again during a capture can bring a window minimized
+  before it into the image, or take the keyboard from the capture toolbar.
+- If Windows cannot remove a capture's temporary file, the result can say saving
+  failed although the image was saved. A .gamedevtools-*.tmp file may hold a
+  capture's only copy, so do not delete one before reading section 11.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

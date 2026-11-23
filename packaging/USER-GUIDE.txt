@@ -381,22 +381,14 @@ Capture
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
 - Where displays differ in size or are offset, the capture toolbar can land in
-  a part of the desktop that no display shows. It still takes the keyboard:
-  Escape cancels, and Enter captures unless the focus is in W (px) or H (px),
-  where it only applies the size, or on Cancel. If you clicked in another
-  application, press the global shortcut first. Moving the selection brings
-  the toolbar back, but moving it back hides the toolbar again, so set a new
-  size while the toolbar shows: a size that does not fit at the selection's
-  position is refused only on the toolbar, and a capture then saves the old
-  size and reports a success. After typing a size, press Tab to reach Capture:
-  once from H (px), twice from W (px).
+  a part of the desktop that no display shows. If you cannot see it, press the
+  global shortcut and then Escape to cancel, and start again with the selection
+  in another place.
 - If Windows fails to list the displays, Full Display can forget the selected
-  display although it is still connected, and select the one under the pointer.
-  A capture then saves that other display and reports a success. The message
-  "The display list is unavailable" appears only in the Screenshot view with
-  Full Display selected, so this can happen with no warning. Check the Display
-  list before each Full Display capture. If it is empty, choose another Capture
-  mode, then Full Display again. Then select your display.
+  display and capture the one under the pointer, reporting a success. The
+  message "The display list is unavailable" appears only in the Screenshot view.
+  With more than one display, check the Display list before capturing. If it is
+  empty, choose another Capture mode, then Full Display again.
 - If the window was minimized before a capture, do not start the application
   again during that capture. The window can reappear and end up in the image.
 - Starting the application again during a selection can take the keyboard from
