@@ -114,7 +114,8 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 | AC-A03 — Keyboard access | Pass | [Accessibility record](accessibility-verification.md) |
 | AC-A04 — Responsive batch UI | **Partial** | [Image Resizer record](image-resizer-verification.md); a real drag during a job is manual check [M12](testing.md#manual-pre-release-checks) |
 | AC-A05 — Clean exit | Pass | The exit matrix in the [reliability record](reliability-verification.md) and the release executable test |
-| AC-S01, AC-S06, AC-S07, AC-S10, AC-S11 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
+| AC-S01, AC-S06, AC-S07, AC-S10 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
+| AC-S11 — Shortcut conflict | **Partial** | [Screenshot record](screenshot-verification.md); REL-02A must show a conflict found at startup while the Screenshot view is hidden |
 | AC-S08, AC-S09 — Independent output failures | **Partial** | [Screenshot record](screenshot-verification.md); telling a user whose window is minimized or on another tool is manual check [M18](testing.md#manual-pre-release-checks) |
 | AC-S03 — Click-through interaction | **Partial** | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S04 — Precision placement | **Partial** | [Screenshot record](screenshot-verification.md); a real drag of the production frame's border is manual check [M9](testing.md#manual-pre-release-checks) |

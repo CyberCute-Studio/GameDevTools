@@ -78,11 +78,19 @@ Known issues
   selection ended by a display change. While the window is minimized or shows
   another tool, nothing tells you about any of these, so check the Screenshot
   view after using the shortcut.
+- A global shortcut another application already owns when this one starts is
+  reported only in the Screenshot view, so it can go unnoticed while another
+  tool is showing.
 - Where displays differ in size or are offset, the capture toolbar can land in
   a part of the desktop that no display shows. Move the selection to bring it
   back, or press Escape to cancel.
 - Starting the application again during a capture that began while its window
-  was minimized can bring the window back into the image.
+  was minimized can bring the window back into the image. Starting it again
+  during any selection can take the keyboard from the capture toolbar: click
+  the toolbar or press the global shortcut to get it back.
+- If Windows cannot remove a capture's temporary file after saving the image,
+  the result says saving failed although the image was saved. Open Folder shows
+  it, and the leftover .gamedevtools-*.tmp file can be deleted.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

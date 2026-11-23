@@ -487,6 +487,10 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		return strings.Compare(a, b)
 	})
 	for _, name := range slices.Compact(names) {
+		if name == "" {
+			t.Error("a control's text reduces to an empty label")
+			continue
+		}
 		var found bool
 		if guide, found = takeLabel(guide, name); !found {
 			t.Errorf("USER-GUIDE.txt does not mention %q on its own", name)

@@ -15,14 +15,14 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 97 | 27 |
+| P0 requirements | 124 | 96 | 28 |
 | P1 requirements | 20 | 8 | 12 |
-| Acceptance scenarios | 32 | 24 | 8 |
-| **All** | **176** | **129** | **47** |
+| Acceptance scenarios | 32 | 23 | 9 |
+| **All** | **176** | **127** | **49** |
 
 Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes, the defect it names is fixed, or it receives an approved resolution, as PRD section 16 requires:
 
-SCR-002, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S12, AC-A04.
+SCR-002, SCR-003, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S11, AC-S12, AC-A04.
 
 The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
@@ -34,7 +34,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | APP-002 | P0 | Current module and primary action are obvious | FND-03 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestShellDisablesAnUnavailablePrimaryAction` | Pass | M1 |
 | APP-003 | P1 | Restores the last module | FND-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | APP-004 | P0 | Work keeps unsaved edits and the other module's state | QLT-02 | `app.TestStartingWorkKeepsUnsavedEditsAndTheOtherModule` | Pass |  |
-| APP-005 | P1 | Single instance; second launch activates the window | SCR-09 | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | **Partial** | M17: nothing has confirmed that a second launch brings the window to the foreground |
+| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | **Partial** | M17: nothing has confirmed that a second launch brings the window to the foreground. REL-02A: a second launch during a selection takes the keyboard from the capture toolbar |
 
 ## Presets
 
@@ -55,7 +55,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 |---|---|---|---|---|---|---|
 | SCR-001 | P0 | Start the selected mode from the main window | SCR-05, SCR-09 | `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestNativeViewRectangleModesStartOverlaySession` | Pass |  |
 | SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys` | **Partial** | M10: never pressed with another application focused |
-| SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09 | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | Pass |  |
+| SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09, REL-02A | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | **Partial** | REL-02A: a conflict found at startup is not shown while the Screenshot view is hidden, as when another tool is the remembered one |
 | SCR-004 | P0 | Shortcut changes persist without reinstalling | SCR-09 | `screenshot.TestNativeViewShortcutCommitAppliesAndPersists` | Pass |  |
 | SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | **Partial** | M10: the toolbar has not been seen coming back from another application |
 | SCR-006 | P0 | Shortcut released on exit | SCR-09 | `screenshot.TestNativeViewDestroyReleasesHotkey`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
@@ -89,7 +89,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-054 | P0 | Display change revalidates the selection | SCR-10, REL-02A | `overlay.TestDisplayChangeKeepsFittingSession`, `overlay.TestDisplayChangeEndsSessionThatCannotFit` | **Partial** | QLT-04A: a live disconnect and reconnect. REL-02A: why a session ended is not shown while the Screenshot view is hidden |
 | SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | **Partial** | M9: activation simulated, no real click in another application |
 | SCR-056 | P0 | Exit removes overlays and restores input | SCR-06, SCR-10 | `overlay.TestShutdownRemovesSessionSilently`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
-| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | **Partial** | REL-02A, then M18: a shortcut capture's failure is not shown while the Screenshot view is hidden |
+| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | **Partial** | REL-02A, then M18: a shortcut capture's failure is not shown while the Screenshot view is hidden. REL-02A: an image saved with its temporary name left behind is reported as a failed save |
 | SCR-061 | P0 | PNG or JPEG, PNG by default | SCR-01, SCR-04 | `screenshot.TestDefaultOptions`, `screenshot.TestNativeViewFormatQualityAndPattern` | Pass |  |
 | SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `screenshot/output.TestDeliverJPEGDoesNotDegradeClipboard`, `screenshot/output.TestSetClipboardImageRoundTrip` | **Partial** | M8: no real application has pasted the image |
 | SCR-063 | P0 | Default Pictures folder; another can be chosen | SCR-01, SCR-04, QLT-03B, QLT-03C | `screenshot.TestDefaultFolderIsOneACaptureCanUse`, `screenshot.TestNativeViewBrowseForOutputFolder` | **Partial** | M16: the real folder picker has not been opened |
@@ -224,7 +224,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | AC-S08 | — | Clipboard success with save failure | SCR-11, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes` | **Partial** | REL-02A, then M18: a shortcut capture's failed save is not shown while the Screenshot view is hidden |
 | AC-S09 | — | Save success with clipboard failure | SCR-11, REL-02A | `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes` | **Partial** | REL-02A, then M18: a shortcut capture's clipboard failure is not shown while the Screenshot view is hidden |
 | AC-S10 | — | Filename collision | SCR-11 | `screenshot/output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
-| AC-S11 | — | Shortcut conflict | SCR-11 | `screenshot.TestHotkeyConflictKeepsPreviousRegistration`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | Pass |  |
+| AC-S11 | — | Shortcut conflict | SCR-11, REL-02A | `screenshot.TestHotkeyConflictKeepsPreviousRegistration`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut`, `screenshot.TestNativeViewStartupConflictIsReported` | **Partial** | REL-02A: a conflict found at startup is not shown while the Screenshot view is hidden, as when another tool is the remembered one |
 | AC-S12 | — | Monitor removal | SCR-11, QLT-04A, REL-02A | `overlay.TestDisplayChangeEndsSessionThatCannotFit`, `screenshot.TestNativeViewDisplayChangeEndsStaleSession` | **Partial** | QLT-04A: a live disconnect. REL-02A: the request to restart the session is not shown while the Screenshot view is hidden |
 
 ## Image Resizer acceptance
