@@ -13,7 +13,27 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
 
-var procWindowFromPoint = user32.NewProc("WindowFromPoint")
+var (
+	procWindowFromPoint             = user32.NewProc("WindowFromPoint")
+	procWTSQuerySessionInformationW = windows.NewLazySystemDLL("wtsapi32.dll").NewProc("WTSQuerySessionInformationW")
+)
+
+// sessionLockedOrInactive reports whether Windows says this session is locked
+// or not the active one. The lock screen is over every topmost window on the
+// same desktop, so Windows' own hit test finds it rather than the overlay.
+func sessionLockedOrInactive() bool {
+	const currentSession, sessionInfoEx = ^uint32(0), 25
+	const stateActive, flagsLocked = 0, 0
+	// WTSINFOEX level 1: the level, padding, the session's ID, state, and flags.
+	var info *[5]int32
+	var size uint32
+	if ok, _, _ := procWTSQuerySessionInformationW.Call(0, uintptr(currentSession), sessionInfoEx,
+		uintptr(unsafe.Pointer(&info)), uintptr(unsafe.Pointer(&size))); ok == 0 {
+		return false
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(info)))
+	return info[3] != stateActive || info[4] == flagsLocked
+}
 
 // sendMouse delivers a mouse message to the overlay at client coordinates,
 // mirroring a real pointer action on the dimmed surface.
@@ -138,7 +158,9 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	}
 	// Windows' own hit test decides where a real click goes, which the mouse
 	// messages this test sends directly to the overlay do not exercise.
-	if hit := windowUnderOverlayPoint(native, 200, 150); windows.Handle(hit) != native.overlay {
+	if sessionLockedOrInactive() {
+		t.Log("the session is locked or inactive, so the real hit test is skipped")
+	} else if hit := windowUnderOverlayPoint(native, 200, 150); windows.Handle(hit) != native.overlay {
 		t.Fatalf("a real click inside the selection would reach window %#x, not the overlay %#x (SCR-012, SCR-052)", hit, native.overlay)
 	}
 

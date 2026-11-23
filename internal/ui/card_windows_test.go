@@ -414,6 +414,42 @@ func TestResultCardAnnouncesAProblemAfterItsSuccessEndedForACapture(t *testing.T
 	}
 }
 
+// TestResultCardProblemBehindASuccessKeepsIt is a refused press while a
+// capture's success is on the card: the saved path and Open Folder stay, and
+// the problem shows and is read out, once, as the success leaves.
+func TestResultCardProblemBehindASuccessKeepsIt(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	const path = `C:\Shots\one.png`
+	refused := Notice{Kind: NoticeWarning, Message: "press refused"}
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, path)
+	announcements, settle := watchCardAnnouncements(t, card)
+
+	card.ReportSettingBehind(refused)
+	settle()
+	if got := card.message.Text(); !strings.Contains(got, "saved") || card.path != path {
+		t.Fatalf("message = %q, path = %q, want the success kept", got, card.path)
+	}
+	if *announcements != 0 {
+		t.Fatalf("the success was read out again or the problem early: %d", *announcements)
+	}
+
+	cardWindowProc(card.hwnd, cardWMTimer, cardTimerID, 0)
+	settle()
+	if got := card.message.Text(); !strings.Contains(got, "press refused") {
+		t.Fatalf("message after the success left = %q", got)
+	}
+	if *announcements != 1 {
+		t.Fatalf("the problem was announced %d time(s), want 1", *announcements)
+	}
+
+	// With no success on the card, it shows at once.
+	card.DismissProblem()
+	card.ReportSettingBehind(refused)
+	if got := card.message.Text(); !cardVisible(card.hwnd) || !strings.Contains(got, "press refused") {
+		t.Fatalf("message with no success = %q", got)
+	}
+}
+
 // watchCardAnnouncements counts the live-region events of the card's message.
 // settle lets those already raised arrive.
 func watchCardAnnouncements(t *testing.T, card *ResultCard) (announcements *int, settle func()) {

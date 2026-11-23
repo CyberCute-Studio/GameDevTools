@@ -657,12 +657,36 @@ func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
 	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutDialogOpen {
 		t.Fatalf("card with the status out of sight = %+v", card.reports)
 	}
+	if card.behind != 1 {
+		t.Fatalf("refusals that keep a success on the card = %d, want 1", card.behind)
+	}
 
-	// With the status area in sight the refusal stays off the card.
+	// With the status area in sight on another display and another
+	// application in front, the user still hears of it on the card.
 	showViewOffScreen(t, view)
+	view.foregroundWindow = func() windows.Handle { return 0 }
 	view.NativeHotkey(globalShortcutHotkeyID)
-	if len(card.reports) != 1 {
-		t.Fatalf("card with the status in sight = %+v", card.reports)
+	if len(card.reports) != 2 {
+		t.Fatalf("card with another application in front = %+v", card.reports)
+	}
+
+	// With the user at the dialog, which the main window owns, the refusal
+	// stays off the card.
+	const wsPopup = 0x80000000
+	className, err := windows.UTF16PtrFromString("STATIC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialog, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), 0, wsPopup,
+		0, 0, 10, 10, uintptr(view.parent), 0, 0, 0)
+	if dialog == 0 {
+		t.Fatalf("CreateWindowExW(owned dialog): %v", err)
+	}
+	t.Cleanup(func() { procDestroyWindow.Call(dialog) })
+	view.foregroundWindow = func() windows.Handle { return windows.Handle(dialog) }
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 2 {
+		t.Fatalf("card with the user at the dialog = %+v", card.reports)
 	}
 	if got := view.status.Text(); !strings.Contains(got, ui.CaptureShortcutDialogOpen) {
 		t.Fatalf("status = %q", got)

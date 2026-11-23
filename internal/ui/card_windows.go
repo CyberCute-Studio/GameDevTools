@@ -211,6 +211,24 @@ func (c *ResultCard) ReportSetting(notice Notice) {
 	c.add(CardEntry{Notice: notice, Setting: true})
 }
 
+// ReportSettingBehind adds a problem with a setting, as ReportSetting does,
+// without ending a success on the card, whose saved path and Open Folder the
+// problem would otherwise take away. The problem shows, and is read out, as
+// that success leaves.
+func (c *ResultCard) ReportSettingBehind(notice Notice) {
+	if c.destroyed {
+		return
+	}
+	if c.queue.passing == nil {
+		c.ReportSetting(notice)
+		return
+	}
+	c.queue.pushBehind(CardEntry{Notice: notice, Setting: true})
+	c.unheard = true
+	c.present(false)
+	c.tellProblems()
+}
+
 func (c *ResultCard) add(entry CardEntry) {
 	if c.destroyed {
 		return

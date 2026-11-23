@@ -62,6 +62,14 @@ func (q *cardQueue) push(entry CardEntry) {
 	q.problems = append(q.problems, entry)
 }
 
+// pushBehind adds a problem without ending a passing success, which leaves by
+// itself and uncovers it.
+func (q *cardQueue) pushBehind(entry CardEntry) {
+	passing := q.passing
+	q.push(entry)
+	q.passing = passing
+}
+
 // current returns the result to show: a passing success, or else the newest
 // problem.
 func (q *cardQueue) current() (CardEntry, bool) {

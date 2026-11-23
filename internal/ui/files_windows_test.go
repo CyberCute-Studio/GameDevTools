@@ -5,7 +5,6 @@ package ui
 import (
 	"runtime"
 	"slices"
-	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -41,53 +40,49 @@ func TestImagePickerFilterIsATerminatedPairList(t *testing.T) {
 }
 
 // TestPickImageFilesOpensTheRealPicker opens the real common dialog, which
-// the view's tests replace with a stand-in, and cancels it. Should the picker
-// not close, its parent is closed after a while, which ends its modal loop, so
-// the test fails by itself rather than hanging the package.
+// the view's tests replace with a stand-in, and cancels it. The picker runs on
+// a thread of its own, so the test fails at its limit even if a shell call
+// blocks that thread and the picker never returns.
 func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
 	const title = "CyberCute Dev Tools picker test"
-	const idCancel, wmClose = 2, 0x0010
+	const idCancel = 2
 	const limit = 30 * time.Second
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	parent := newTestParent(t)
-	var opened, timedOut atomic.Bool
-	stop := make(chan struct{})
-	finished := make(chan struct{})
+	type outcome struct {
+		paths  []string
+		picked bool
+		err    error
+	}
+	done := make(chan outcome, 1)
 	go func() {
-		defer close(finished)
-		deadline := time.After(limit)
-		for {
-			select {
-			case <-stop:
-				return
-			case <-deadline:
-				timedOut.Store(true)
-				procPostMessageW.Call(uintptr(parent), wmClose, 0, 0)
-				deadline = nil
-			case <-time.After(50 * time.Millisecond):
-			}
-			dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
-			if dialog != 0 {
-				opened.Store(true)
-				procPostMessageW.Call(dialog, wmCommand, idCancel, 0)
-			}
-		}
+		// Never unlocked, so the thread ends with this goroutine.
+		runtime.LockOSThread()
+		paths, picked, err := PickImageFiles(0, title)
+		done <- outcome{paths, picked, err}
 	}()
-	paths, picked, err := PickImageFiles(parent, title)
-	close(stop)
-	<-finished
-	if timedOut.Load() {
-		t.Fatalf("the picker was still open after %v (found: %v)", limit, opened.Load())
-	}
-	if err != nil {
-		t.Fatalf("the picker could not be opened: %v", err)
-	}
-	if !opened.Load() {
-		t.Fatal("PickImageFiles returned without showing the picker")
-	}
-	if picked || paths != nil {
-		t.Fatalf("a cancelled picker returned %v, %v", paths, picked)
+	opened := false
+	deadline := time.After(limit)
+	for {
+		select {
+		case result := <-done:
+			if result.err != nil {
+				t.Fatalf("the picker could not be opened: %v", result.err)
+			}
+			if !opened {
+				t.Fatal("PickImageFiles returned without showing the picker")
+			}
+			if result.picked || result.paths != nil {
+				t.Fatalf("a cancelled picker returned %v, %v", result.paths, result.picked)
+			}
+			return
+		case <-deadline:
+			t.Fatalf("the picker was still open after %v (found: %v)", limit, opened)
+		case <-time.After(50 * time.Millisecond):
+		}
+		dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
+		if dialog != 0 {
+			opened = true
+			procPostMessageW.Call(dialog, wmCommand, idCancel, 0)
+		}
 	}
 }
 

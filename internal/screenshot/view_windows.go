@@ -57,8 +57,11 @@ var (
 	procViewMapWindowPoints     = viewUser32.NewProc("MapWindowPoints")
 )
 
-// viewGARoot is GetAncestor's GA_ROOT.
-const viewGARoot = 2
+// viewGARoot and viewGARootOwner are GetAncestor's GA_ROOT and GA_ROOTOWNER.
+const (
+	viewGARoot      = 2
+	viewGARootOwner = 3
+)
 
 // controlCoverStep is the most pixels controlCovered leaves between two points
 // it checks along a control, less than any window that could hide a message.
@@ -87,6 +90,7 @@ type hotkeyRegistrar interface {
 type resultCard interface {
 	Report(notice ui.Notice, path string)
 	ReportSetting(notice ui.Notice)
+	ReportSettingBehind(notice ui.Notice)
 	WithdrawSettings()
 	WithdrawSetting(notice ui.Notice)
 	Suspend()
@@ -885,11 +889,11 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 	// A capture already running keeps startCapture's refusal, as the main
 	// window is back, and a dialog can be open, while its file is written.
 	if !n.inProgress && n.dialogForbidsCapture() {
-		if n.statusInSight() {
+		if n.statusInSight() && n.foregroundIsOwn() {
 			_ = n.status.Show(shortcutDialogRefusal, 0)
 		} else {
 			n.status.Update(shortcutDialogRefusal)
-			n.card.ReportSetting(shortcutDialogRefusal)
+			n.card.ReportSettingBehind(shortcutDialogRefusal)
 		}
 		return true
 	}
@@ -898,8 +902,17 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 }
 
 // shortcutDialogRefusal answers the shortcut while a dialog is open. On the
-// card it is a withdrawable entry, which the next capture to start removes.
+// card it is a withdrawable entry, which the next capture to start removes,
+// and it waits behind a success there rather than ending it.
 var shortcutDialogRefusal = ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutDialogOpen}
+
+// foregroundIsOwn reports whether the window in front is the main window or a
+// dialog it owns. Otherwise the user is in another application, and a status
+// area in sight on another display is not where they are looking.
+func (n *NativeView) foregroundIsOwn() bool {
+	root, _, _ := procViewGetAncestor.Call(uintptr(n.foregroundWindow()), viewGARootOwner)
+	return windows.Handle(root) == n.parent
+}
 
 // dialogForbidsCapture reports whether a modal dialog of the application is
 // open, which disables the main window it belongs to. The dialog's own message
