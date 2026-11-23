@@ -12,7 +12,6 @@ import (
 const (
 	wmDestroy         = 0x0002
 	wmSize            = 0x0005
-	sizeMinimized     = 1
 	wmActivate        = 0x0006
 	wmSetFocus        = 0x0007
 	wmGetDlgCode      = 0x0087
@@ -39,9 +38,6 @@ const (
 	// wmAppRestoreFocus asks the shell to give the focus back once a click
 	// that activated the window has been handled, as wmActivate describes.
 	wmAppRestoreFocus = wmApp + 2
-	// wmAppActivated tells the current module the window was activated, once
-	// the activation's own focus handling has finished.
-	wmAppActivated = wmApp + 3
 
 	wsClipChildren     = 0x02000000
 	wsOverlappedWindow = 0x00cf0000
@@ -141,7 +137,6 @@ var (
 	procUpdateWindow                  = user32.NewProc("UpdateWindow")
 	procMoveWindow                    = user32.NewProc("MoveWindow")
 	procGetClientRect                 = user32.NewProc("GetClientRect")
-	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
 	procGetWindowRect                 = user32.NewProc("GetWindowRect")
 	procGetWindowPlacement            = user32.NewProc("GetWindowPlacement")
 	procIsZoomed                      = user32.NewProc("IsZoomed")

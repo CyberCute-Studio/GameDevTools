@@ -107,11 +107,3 @@ func (q *cardQueue) withdrawSettings() bool {
 	q.problems = slices.DeleteFunc(q.problems, func(entry CardEntry) bool { return entry.Setting })
 	return len(q.problems) != before
 }
-
-// take empties the queue and returns its problems, oldest first.
-func (q *cardQueue) take() []CardEntry {
-	problems := q.problems
-	q.problems = nil
-	q.passing = nil
-	return problems
-}

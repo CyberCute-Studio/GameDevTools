@@ -62,20 +62,6 @@ func TestCardQueueListsARepeatedProblemOnce(t *testing.T) {
 	}
 }
 
-func TestCardQueueTakeReturnsProblemsOldestFirst(t *testing.T) {
-	var queue cardQueue
-	queue.push(cardEntry(NoticeError, "one"))
-	queue.push(cardEntry(NoticeWarning, "two"))
-	queue.push(cardEntry(NoticeSuccess, "saved"))
-	taken := queue.take()
-	if len(taken) != 2 || taken[0].Notice.Message != "one" || taken[1].Notice.Message != "two" {
-		t.Fatalf("take = %+v", taken)
-	}
-	if _, ok := queue.current(); ok {
-		t.Fatal("take left a result in the queue")
-	}
-}
-
 func TestCardQueueWithdrawsOnlySettingProblems(t *testing.T) {
 	var queue cardQueue
 	queue.push(CardEntry{Notice: Notice{Kind: NoticeError, Message: "conflict"}, Setting: true})

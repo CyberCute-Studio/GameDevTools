@@ -4,6 +4,7 @@ package ui
 
 import (
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -406,16 +407,27 @@ func TestResultCardWithdrawsSettingProblems(t *testing.T) {
 	}
 }
 
-func TestResultCardTakeHidesItAndHandsBackProblems(t *testing.T) {
+// TestResultCardDismissProblemIsTheKeyboardsWay covers the view's button: it
+// takes the newest problem, past a success shown over it, and says how many
+// are left.
+func TestResultCardDismissProblemIsTheKeyboardsWay(t *testing.T) {
 	card := newOffScreenCard(t, nil)
+	var told []int
+	card.SetProblemsChanged(func(problems int) { told = append(told, problems) })
 	card.Report(Notice{Kind: NoticeError, Message: "one"}, "")
-	card.Report(Notice{Kind: NoticeError, Message: "two"}, "")
-	entries := card.Take()
-	if len(entries) != 2 || entries[0].Notice.Message != "one" {
-		t.Fatalf("Take = %+v", entries)
+	card.Report(Notice{Kind: NoticeWarning, Message: "two"}, "")
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, "")
+
+	card.DismissProblem()
+	if got := card.message.Text(); !strings.Contains(got, "one") {
+		t.Fatalf("message after the first dismissal = %q", got)
 	}
+	card.DismissProblem()
 	if cardVisible(card.hwnd) {
-		t.Fatal("the card stayed on screen after Take")
+		t.Fatal("the card stayed after its last problem was dismissed")
+	}
+	if want := []int{1, 2, 2, 1, 0}; !slices.Equal(told, want) {
+		t.Fatalf("told = %v, want %v", told, want)
 	}
 }
 

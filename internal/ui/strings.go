@@ -229,15 +229,12 @@ const (
 
 	// The result card that reports a capture while the Screenshot view cannot
 	// be seen.
-	CardWindowTitle    = AppName + " capture result"
-	CardDismissAction  = "Dismiss"
-	CardEarlierResults = "%d earlier problem(s) not yet dismissed."
-	// CaptureProblemsWhileHidden joins the problems the card was holding when
-	// the Screenshot view can show them itself.
-	CaptureProblemsWhileHidden = "%d problem(s) while this view was not showing:\n%s"
-	// CaptureLatestResult follows those problems when a later result was
-	// showing, so that they do not replace it.
-	CaptureLatestResult = "Latest capture: %s"
+	CardWindowTitle   = AppName + " capture result"
+	CardDismissAction = "Dismiss"
+	// CardDismissProblemAction is the Screenshot view's keyboard-reachable
+	// counterpart to the card's Dismiss.
+	CardDismissProblemAction = "Dismiss Problem"
+	CardEarlierResults       = "%d earlier problem(s) not yet dismissed."
 	// CaptureShortcutRefused is on the card once a capture has ended, so it
 	// says what happened rather than asking the user to wait.
 	CaptureShortcutRefused = "The shortcut was pressed during a capture, so no second capture was taken."

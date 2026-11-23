@@ -166,6 +166,8 @@ type cardRect struct {
 type ResultCard struct {
 	place func() CardPlacement
 	open  func(path string)
+	// changed hears how many problems the card holds after each change.
+	changed func(problems int)
 
 	queue     cardQueue
 	suspended bool
@@ -206,6 +208,7 @@ func (c *ResultCard) Report(notice Notice, path string) {
 	c.queue.push(CardEntry{Notice: notice, Path: path})
 	c.arrived = true
 	c.present(true)
+	c.tellProblems()
 }
 
 // ReportSetting adds a problem with a setting, as Report does, for
@@ -217,6 +220,7 @@ func (c *ResultCard) ReportSetting(notice Notice) {
 	c.queue.push(CardEntry{Notice: notice, Setting: true})
 	c.arrived = true
 	c.present(true)
+	c.tellProblems()
 }
 
 // WithdrawSettings removes the problems with a setting, once the default
@@ -224,6 +228,7 @@ func (c *ResultCard) ReportSetting(notice Notice) {
 func (c *ResultCard) WithdrawSettings() {
 	if c.queue.withdrawSettings() {
 		c.present(false)
+		c.tellProblems()
 	}
 }
 
@@ -257,12 +262,25 @@ func (c *ResultCard) Reposition() {
 	}
 }
 
-// Take hides the card and returns the problems it was holding, oldest first,
-// for a view that can now show them itself.
-func (c *ResultCard) Take() []CardEntry {
-	entries := c.queue.take()
-	c.hide()
-	return entries
+// SetProblemsChanged names the function that hears how many problems the card
+// holds, so a view can offer a way to dismiss them from the keyboard.
+func (c *ResultCard) SetProblemsChanged(changed func(problems int)) {
+	c.changed = changed
+}
+
+func (c *ResultCard) tellProblems() {
+	if c.changed != nil && !c.destroyed {
+		c.changed(len(c.queue.problems))
+	}
+}
+
+// DismissProblem dismisses the newest problem, for a keyboard user, whom the
+// card's own button cannot reach. A success over it has been seen and goes too.
+func (c *ResultCard) DismissProblem() {
+	c.queue.expire()
+	c.queue.dismiss()
+	c.present(true)
+	c.tellProblems()
 }
 
 // Destroy removes the card and its window. Nothing can be shown afterwards.
@@ -494,6 +512,7 @@ func (c *ResultCard) measure(text string, width int32) int32 {
 func (c *ResultCard) dismissCurrent() {
 	c.queue.dismiss()
 	c.present(true)
+	c.tellProblems()
 }
 
 func subclassCardButton(button *Button, parent windows.Handle, id int32) error {

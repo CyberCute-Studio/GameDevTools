@@ -109,31 +109,47 @@ type fakeResultCard struct {
 	resumes   int
 	moves     int
 	destroyed bool
+	changed   func(int)
 }
 
 func (f *fakeResultCard) Report(notice ui.Notice, path string) {
 	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Path: path})
+	f.tell()
 }
 func (f *fakeResultCard) ReportSetting(notice ui.Notice) {
 	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Setting: true})
+	f.tell()
 }
 func (f *fakeResultCard) WithdrawSettings() {
 	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool { return entry.Setting })
+	f.tell()
 }
 func (f *fakeResultCard) Suspend() { f.suspended = true; f.suspends++ }
 func (f *fakeResultCard) Resume()  { f.suspended = false; f.resumes++ }
 func (f *fakeResultCard) Reposition() {
 	f.moves++
 }
-func (f *fakeResultCard) Take() []ui.CardEntry {
-	var problems []ui.CardEntry
+func (f *fakeResultCard) SetProblemsChanged(changed func(int)) { f.changed = changed }
+func (f *fakeResultCard) tell() {
+	if f.changed == nil {
+		return
+	}
+	problems := 0
 	for _, entry := range f.reports {
 		if entry.Notice.Kind >= ui.NoticeWarning {
-			problems = append(problems, entry)
+			problems++
 		}
 	}
-	f.reports = nil
-	return problems
+	f.changed(problems)
+}
+func (f *fakeResultCard) DismissProblem() {
+	for i := len(f.reports) - 1; i >= 0; i-- {
+		if f.reports[i].Notice.Kind >= ui.NoticeWarning {
+			f.reports = slices.Delete(f.reports, i, i+1)
+			break
+		}
+	}
+	f.tell()
 }
 func (f *fakeResultCard) Destroy() { f.destroyed = true }
 

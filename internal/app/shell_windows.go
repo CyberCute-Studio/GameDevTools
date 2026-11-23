@@ -65,9 +65,6 @@ type nativeShell struct {
 	headingFont windows.Handle
 	bodyFont    windows.Handle
 
-	// minimized is whether the last WM_SIZE minimized the window.
-	minimized bool
-
 	// acceptingDrops is whether the shell window and its children are
 	// registered for file drops, as updateDropAcceptance last applied it.
 	acceptingDrops bool
@@ -223,14 +220,6 @@ type nativeHotkeyHandler interface {
 // in the visible window, as announceModuleNotice describes.
 type nativeNoticeAnnouncer interface {
 	NativeAnnounceNotice()
-}
-
-// nativeActivationAware is implemented by module views that act when the user
-// may have just reached them: the main window activated, the module opened, or
-// the window scrolled. The Screenshot view then takes back the problems its
-// result card was holding, once its status area is in sight.
-type nativeActivationAware interface {
-	NativeActivated()
 }
 
 // nativeShutdown is implemented by module views with background work, such
@@ -672,24 +661,6 @@ func (s *nativeShell) announceNotices() {
 	}
 	s.announced = make(map[core.ModuleID]bool)
 	s.announceModuleNotice()
-}
-
-// shellForegroundWindow reads the foreground window; tests replace it, as
-// their windows never take the foreground.
-var shellForegroundWindow = func() windows.Handle {
-	foreground, _, _ := procGetForegroundWindow.Call()
-	return windows.Handle(foreground)
-}
-
-// tellViewActivated tells the current module the user may have just reached
-// it, once it is laid out, and reports whether it listens, so may have changed
-// what it shows.
-func (s *nativeShell) tellViewActivated() bool {
-	aware, ok := s.nativeViews[s.navigator.Current().ID()].(nativeActivationAware)
-	if ok {
-		aware.NativeActivated()
-	}
-	return ok
 }
 
 // announceModuleNotice asks the current module's view to announce its notice
@@ -1186,11 +1157,6 @@ func (s *nativeShell) setScrollPosition(position int32) {
 	actual, _, _ := procSetScrollInfo.Call(uintptr(s.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
 	s.scrollY = int32(actual)
 	s.layout()
-	// Scrolling can bring a view's status area into sight with no activation
-	// to follow, as Tab does on its way down the view.
-	if shellForegroundWindow() == s.hwnd && s.tellViewActivated() {
-		s.layout()
-	}
 }
 
 func (s *nativeShell) scrollBy(delta int32) {
@@ -1618,8 +1584,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			if id, exists := shell.navIDs[lowWord(wParam)]; exists {
 				if shell.navigator.Select(id) == nil {
 					_ = shell.saveSettings(false)
-					// Posted so that the newly shown view has been laid out.
-					_ = postShellMessage(uintptr(hwnd), wmAppActivated)
 				}
 				if lParam != 0 {
 					shell.ensureControlVisible(windows.Handle(lParam))
@@ -1652,9 +1616,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		// background does, and without scrolling the control into view
 		// (wmAppRestoreFocus).
 		if shell != nil {
-			if lowWord(wParam) != waInactive {
-				_ = postShellMessage(uintptr(hwnd), wmAppActivated)
-			}
 			switch lowWord(wParam) {
 			case waInactive:
 				if focused, _, _ := procGetFocus.Call(); focused != 0 {
@@ -1668,13 +1629,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				shell.clickActivating = false
 				return r
 			}
-		}
-	case wmAppActivated:
-		if shell != nil {
-			if shell.tellViewActivated() {
-				shell.layout()
-			}
-			return 0
 		}
 	case wmSetFocus:
 		if shell != nil {
@@ -1742,14 +1696,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 	case wmSize:
 		if shell != nil {
-			// A window activated while still minimized, before its restore,
-			// has no later activation, so the restore tells the view instead.
-			restored := shell.minimized && wParam != sizeMinimized
-			shell.minimized = wParam == sizeMinimized
 			shell.layout()
-			if restored && shellForegroundWindow() == hwnd && shell.tellViewActivated() {
-				shell.layout()
-			}
 			return 0
 		}
 	case wmDisplayChange:

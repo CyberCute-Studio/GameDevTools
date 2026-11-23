@@ -472,7 +472,7 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		ui.ResizeStateSkipped, ui.ResizeStateFailed, ui.ResizeStateCancelled,
 		ui.PresetLibraryLabel, ui.PresetCreateAction, ui.PresetRenameAction,
 		ui.PresetDuplicateAction, ui.PresetDeleteAction,
-		ui.RestoreDefaultsAction, ui.CardDismissAction, ui.ResizeModeSummaryLabel,
+		ui.RestoreDefaultsAction, ui.CardDismissAction, ui.CardDismissProblemAction, ui.ResizeModeSummaryLabel,
 		ui.ErrorWriteEncodeLabel, ui.ErrorShortcutRegistrationLabel,
 		// The troubleshooting section quotes these messages by how they begin.
 		strings.Split(ui.CaptureGraphicsFailed, ":")[0],
