@@ -26,7 +26,7 @@ var (
 	manualCheckRow  = regexp.MustCompile(`^\| (M\d+) \|`)
 	requirementID   = regexp.MustCompile(`(?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+`)
 	requirementSpan = regexp.MustCompile(`([A-Z]+(?:-[SRA])?-?)(\d+) through ([A-Z]+(?:-[SRA])?-?)(\d+)`)
-	recordedRun     = regexp.MustCompile(`^\| \d{4}-\d{2}-\d{2} \| (M\d+|QLT-04A) \| [^|]+ \| ([^|]+) \|$`)
+	recordedRun     = regexp.MustCompile(`^\| \d{4}-\d{2}-\d{2} \| (M\d+|QLT-04A) \| [0-9a-f]{7,40} \| ([^|]+) \|$`)
 )
 
 // hardwareGated are the requirements that wait on QLT-04A's hardware, which
@@ -50,13 +50,15 @@ var manualGated = map[string]string{
 	"AC-S03": "M9", "AC-S04": "M9",
 	"SCR-062": "M8",
 	"SCR-063": "M16", "SCR-069": "M16", "RSZ-001": "M16", "RSZ-002": "M16",
-	"RSZ-008": "M16", "RSZ-048": "M16",
-	"AC-A04": "M12",
+	"RSZ-008": "M16", "RSZ-020": "M16", "RSZ-048": "M16",
+	"AC-A04":  "M12",
+	"APP-005": "M17",
+	"SCR-060": "M18", "AC-S08": "M18", "AC-S09": "M18",
 }
 
 // gatingChecks are the manual checks that are the only real run of part of a
 // requirement.
-var gatingChecks = []string{"M8", "M9", "M10", "M12", "M15", "M16"}
+var gatingChecks = []string{"M8", "M9", "M10", "M12", "M15", "M16", "M17", "M18"}
 
 // confidenceOnly names the gating check a row may cite while it stays Pass,
 // because automated checks already cover that row: the job's thread and its

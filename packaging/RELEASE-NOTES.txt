@@ -67,11 +67,16 @@ These have not been run, so this version makes no claim about them:
 - The real Windows file and folder pickers, a real drop of files or a folder
   from File Explorer, and Open Folder and Open Output Folder opening Explorer.
 - Dragging the window with the mouse during a job.
+- A second launch bringing the open window to the foreground.
 - The vulnerability scan of this exact build, and the validation workflow on
   hosted x64 Windows runners.
 
 Known issues
 
+- A capture's result, including a failed save or clipboard copy, appears only in
+  the Screenshot view. While the window is minimized or shows another tool,
+  nothing tells you that a capture from the global shortcut failed, so check the
+  Screenshot view afterwards.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

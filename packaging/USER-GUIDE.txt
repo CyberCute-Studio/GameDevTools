@@ -55,10 +55,12 @@ application remembers the selected tool and the window's position.
 
 Results and errors appear inside the window, so they never interrupt your work.
 Each begins with a word that says what it is, such as Success, Warning, or
-Error, and errors name their kind, such as "Write/encode error" or "Clipboard
-error". The application asks in a dialog only before something that replaces or
-discards your work: deleting a preset, replacing files, restoring the default
-settings, or closing with a job running or settings not saved.
+Error. Many errors also name their kind, such as "Write/encode error" or
+"Shortcut registration error", and a capture's result says whether saving, the
+clipboard copy, or both failed. The application asks in a dialog only before
+something that replaces or discards your work: deleting a preset, replacing
+files, restoring the default settings, or closing with a job running or settings
+not saved.
 
 
 3. Screenshot
