@@ -85,7 +85,7 @@ func TestResultCardHidesForACaptureAndKeepsItsResults(t *testing.T) {
 	if !cardVisible(card.hwnd) || !strings.Contains(card.message.Text(), "second saved") {
 		t.Fatalf("after Resume: visible %v, message %q", cardVisible(card.hwnd), card.message.Text())
 	}
-	if !strings.Contains(card.count.Text(), "1 earlier") {
+	if !strings.Contains(card.count.Text(), "1 more") {
 		t.Fatalf("count = %q, want the failure waiting", card.count.Text())
 	}
 
@@ -447,6 +447,34 @@ func TestResultCardProblemBehindASuccessKeepsIt(t *testing.T) {
 	card.ReportSettingBehind(refused)
 	if got := card.message.Text(); !cardVisible(card.hwnd) || !strings.Contains(got, "press refused") {
 		t.Fatalf("message with no success = %q", got)
+	}
+}
+
+// TestResultCardWithdrawnProblemBehindASuccessIsNotHeard is a press refused
+// behind a success and then withdrawn: nothing new is waiting, so the problem
+// already heard under that success is not read out again.
+func TestResultCardWithdrawnProblemBehindASuccessIsNotHeard(t *testing.T) {
+	refused := Notice{Kind: NoticeWarning, Message: "press refused"}
+	for _, withdraw := range []func(*ResultCard){
+		func(card *ResultCard) { card.WithdrawSetting(refused) },
+		func(card *ResultCard) { card.WithdrawSettings() },
+	} {
+		card := newOffScreenCard(t, nil)
+		card.Report(Notice{Kind: NoticeError, Message: "already heard"}, "")
+		card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+		card.ReportSettingBehind(refused)
+		withdraw(card)
+		announcements, settle := watchCardAnnouncements(t, card)
+
+		card.Suspend()
+		card.Resume()
+		settle()
+		if got := card.message.Text(); !strings.Contains(got, "already heard") {
+			t.Fatalf("message = %q", got)
+		}
+		if *announcements != 0 {
+			t.Fatalf("the problem already heard was read out again: %d", *announcements)
+		}
 	}
 }
 

@@ -234,7 +234,7 @@ const (
 	// CardDismissProblemAction is the Screenshot view's keyboard-reachable
 	// counterpart to the card's Dismiss.
 	CardDismissProblemAction = "Dismiss Problem"
-	CardEarlierResults       = "%d earlier problem(s) not yet dismissed."
+	CardMoreProblems         = "%d more problem(s) not yet dismissed."
 	// CaptureShortcutRefused is on the card once a capture has ended, so it
 	// says what happened rather than asking the user to wait.
 	CaptureShortcutRefused = "The shortcut was pressed during a capture, so no second capture was taken."

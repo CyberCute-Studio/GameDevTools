@@ -143,6 +143,10 @@ type NativeView struct {
 	// the restore of the default settings clears while it is still shown, as
 	// the option it reports is replaced.
 	optionsNotice uint64
+	// outcomeNotice is the status area's revision once a capture's outcome was
+	// last shown there. It can be that outcome's only copy, so a refused
+	// shortcut press does not replace it.
+	outcomeNotice uint64
 	// card reports a global-shortcut capture's outcome while the status area
 	// cannot be seen (SCR-060, SCR-069).
 	card resultCard
@@ -430,12 +434,14 @@ func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
 // going on the card is written here quietly, as the card announces it and a
 // screen reader would otherwise read it twice in a row.
 func (n *NativeView) showOutcome(notice ui.Notice) bool {
-	if n.cardNeeded() {
+	onCard := n.cardNeeded()
+	if onCard {
 		n.status.Update(notice)
-		return true
+	} else {
+		_ = n.status.Show(notice, 0)
 	}
-	_ = n.status.Show(notice, 0)
-	return false
+	n.outcomeNotice = n.status.Revision()
+	return onCard
 }
 
 // problemsChanged keeps the Dismiss Problem button in step with what a press
@@ -889,12 +895,17 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 	// A capture already running keeps startCapture's refusal, as the main
 	// window is back, and a dialog can be open, while its file is written.
 	if !n.inProgress && n.dialogForbidsCapture() {
-		if n.statusInSight() && n.foregroundIsOwn() {
+		// A capture's outcome keeps the status area, and the refusal goes on
+		// the card instead.
+		keepOutcome := n.outcomeNotice != 0 && n.status.Revision() == n.outcomeNotice
+		if !keepOutcome && n.statusInSight() && n.foregroundIsOwn() {
 			_ = n.status.Show(shortcutDialogRefusal, 0)
-		} else {
-			n.status.Update(shortcutDialogRefusal)
-			n.card.ReportSettingBehind(shortcutDialogRefusal)
+			return true
 		}
+		if !keepOutcome {
+			n.status.Update(shortcutDialogRefusal)
+		}
+		n.card.ReportSettingBehind(shortcutDialogRefusal)
 		return true
 	}
 	n.startCapture(true)

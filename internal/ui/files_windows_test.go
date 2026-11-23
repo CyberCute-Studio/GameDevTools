@@ -59,11 +59,34 @@ func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
 		paths, picked, err := PickImageFiles(0, title)
 		done <- outcome{paths, picked, err}
 	}()
+	closePicker := func() bool {
+		dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
+		if dialog != 0 {
+			procPostMessageW.Call(dialog, wmCommand, idCancel, 0)
+		}
+		return dialog != 0
+	}
+	returned := false
+	// A picker left open would disturb the package's later tests.
+	t.Cleanup(func() {
+		for range 40 {
+			if returned {
+				return
+			}
+			closePicker()
+			select {
+			case <-done:
+				returned = true
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	})
 	opened := false
 	deadline := time.After(limit)
 	for {
 		select {
 		case result := <-done:
+			returned = true
 			if result.err != nil {
 				t.Fatalf("the picker could not be opened: %v", result.err)
 			}
@@ -78,11 +101,7 @@ func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
 			t.Fatalf("the picker was still open after %v (found: %v)", limit, opened)
 		case <-time.After(50 * time.Millisecond):
 		}
-		dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
-		if dialog != 0 {
-			opened = true
-			procPostMessageW.Call(dialog, wmCommand, idCancel, 0)
-		}
+		opened = closePicker() || opened
 	}
 }
 

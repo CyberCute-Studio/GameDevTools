@@ -705,6 +705,44 @@ func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
 	}
 }
 
+// TestShortcutRefusedBehindADialogKeepsACapturesOutcome is a capture's failure
+// whose only copy is in the status area when a press is refused behind a
+// dialog: the refusal goes on the card and the reason stays (SCR-069), whether
+// or not the status area is in sight.
+func TestShortcutRefusedBehindADialogKeepsACapturesOutcome(t *testing.T) {
+	view, card, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.capture = func(CaptureRequest) CaptureResult {
+		return CaptureResult{Save: errors.New("access denied")}
+	}
+	view.NativeAction()
+	dispatcher.runNext(t)
+	outcome := view.status.Text()
+	if !strings.Contains(outcome, "access denied") || len(card.reports) != 0 {
+		t.Fatalf("status = %q, card = %+v", outcome, card.reports)
+	}
+	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
+	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if got := view.status.Text(); got != outcome {
+		t.Fatalf("status with the view out of sight = %q, want %q", got, outcome)
+	}
+	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutDialogOpen {
+		t.Fatalf("card with the view out of sight = %+v", card.reports)
+	}
+
+	showViewOffScreen(t, view)
+	view.foregroundWindow = func() windows.Handle { return view.parent }
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if got := view.status.Text(); got != outcome {
+		t.Fatalf("status with the view in sight = %q, want %q", got, outcome)
+	}
+	if len(card.reports) != 2 {
+		t.Fatalf("card with the view in sight = %+v", card.reports)
+	}
+}
+
 // TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal is a press
 // while a running capture saves its file and the user has opened a dialog:
 // that capture is not denied, so the press gets the in-progress refusal.

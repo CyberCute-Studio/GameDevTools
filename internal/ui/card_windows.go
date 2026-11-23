@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -189,6 +190,9 @@ type ResultCard struct {
 	// not been read out, even one identical to a problem already waiting or
 	// one a success was then read out over.
 	unheard bool
+	// behind is the problems added behind a success and not yet read out. One
+	// withdrawn before then leaves nothing new to read.
+	behind []Notice
 }
 
 // NewResultCard returns a card that appears where place says, as of each
@@ -224,7 +228,7 @@ func (c *ResultCard) ReportSettingBehind(notice Notice) {
 		return
 	}
 	c.queue.pushBehind(CardEntry{Notice: notice, Setting: true})
-	c.unheard = true
+	c.behind = append(c.behind, notice)
 	c.present(false)
 	c.tellProblems()
 }
@@ -243,6 +247,7 @@ func (c *ResultCard) add(entry CardEntry) {
 // settings replaced what they report.
 func (c *ResultCard) WithdrawSettings() {
 	if c.queue.withdrawSettings() {
+		c.behind = nil
 		c.present(false)
 		c.tellProblems()
 	}
@@ -252,6 +257,7 @@ func (c *ResultCard) WithdrawSettings() {
 // longer has it, as a shortcut that has since registered.
 func (c *ResultCard) WithdrawSetting(notice Notice) {
 	if c.queue.withdrawSetting(notice) {
+		c.behind = slices.DeleteFunc(c.behind, func(waiting Notice) bool { return waiting == notice })
 		c.present(false)
 		c.tellProblems()
 	}
@@ -396,7 +402,7 @@ func (c *ResultCard) present(announce bool) {
 	text := entry.Notice.Text()
 	countText := ""
 	if waiting := c.queue.waiting(); waiting > 0 {
-		countText = fmt.Sprintf(CardEarlierResults, waiting)
+		countText = fmt.Sprintf(CardMoreProblems, waiting)
 	}
 	c.path = entry.Path
 	c.message.SetTextQuietly(text)
@@ -442,8 +448,8 @@ func (c *ResultCard) present(announce bool) {
 		procSetTimer.Call(uintptr(c.hwnd), cardTimerID, uintptr(cardSuccessDuration.Milliseconds()), 0)
 	}
 	if entry.lasting() {
-		announce = announce || c.unheard
-		c.unheard = false
+		announce = announce || c.unheard || len(c.behind) > 0
+		c.unheard, c.behind = false, nil
 	}
 	if announce {
 		c.message.Announce()

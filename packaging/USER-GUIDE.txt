@@ -155,7 +155,7 @@ The result card
 
   - A success disappears after a few seconds.
   - A warning or error stays until you press Dismiss, so a later capture cannot
-    hide it. The card says how many earlier problems are waiting.
+    hide it. The card says how many other problems are waiting.
   - Open Folder shows the saved file, when there is one.
   - To dismiss a problem with the keyboard, open the Screenshot view and press
     Dismiss Problem, beside Open Folder. The card then shows the next one.
