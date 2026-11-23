@@ -56,7 +56,7 @@ QLT-04A owns what needs hardware this project's environment does not have: x64 W
 
 ## Manual pre-release checks
 
-No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, and M10 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
+No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, M10, M15, and M16 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
 
 | Check | What to do | Passes when | Covers |
 |---|---|---|---|
@@ -70,10 +70,12 @@ No automated test can stand in for these. None has been done yet, and REL-03 own
 | M8 | Paste a capture into Paint and into an Office application | The image arrives at full size | SCR-062 |
 | M9 | Open a preset frame over a running application, click controls inside the frame, switch away and back, then drag the frame by its border with the mouse | The application reacts to the clicks, the frame stays in place at its size until dragged, and the drag moves it without changing its size | SCR-021, SCR-022, SCR-023, SCR-055, AC-S03, AC-S04 |
 | M10 | Press the global shortcut while another application has the focus. Then start a Preset Rectangle selection, click in the other application, and press the shortcut again | The selected capture mode starts, and the second press brings the toolbar forward with the keyboard focus and no second selection | SCR-002, SCR-005 |
-| M11 | Run a job and a capture against a drive that fills up | The error says the drive is full, and no partial file has a final name | RSZ-030, SET-004, AC-R14 |
+| M11 | Run a job and a capture against a drive that fills up. Then, with the drive that holds the settings folder full, change a setting | The job's and capture's errors say the drive is full, no partial file has a final name, and the settings save warns while the change stays in effect | RSZ-030, SET-004, AC-R14 |
 | M12 | Drag the window with the mouse during a 100-image job | The window follows smoothly | RSZ-041, AC-A04 |
 | M13 | Run the [vulnerability scan](privacy-verification.md#how-to-run-the-checks) on the release candidate | No finding that affects the application | NFR-033, TECH-007 |
 | M14 | Start the `Validation matrix` workflow on GitHub | It passes on the hosted x64 Windows Server runners, which are not supported platforms but do run the x64 build | — |
+| M15 | With the mouse, draw a Free Rectangle selection, drag inside it to move it, drag a handle to resize it, type a new size, and capture | The toolbar shows the size during the first drag, each drag does what it should and reaches no application beneath, and the image matches the final rectangle | SCR-010, SCR-011, SCR-012, AC-S05 |
+| M16 | Add several images through the Add Images picker. Drag several files, then a folder, from File Explorer onto the Image Resizer. Choose an output folder with Browse in each module. After a capture and a job, press Open Folder and Open Output Folder | Every chosen or dropped image is listed, each module saves to the chosen folder, and Explorer opens at the saved file and at the output folder | SCR-063, SCR-069, RSZ-001, RSZ-002, RSZ-008, RSZ-048 |
 
 ## Recorded runs
 
@@ -94,7 +96,7 @@ This is the script for M1. Follow `USER-GUIDE.txt` rather than this list, and re
 6. **Cancel.** Cancel a selection. No file appears, and the clipboard is unchanged.
 7. **Global shortcut.** Start a capture from another application, change the shortcut, and restart to confirm that it was kept.
 8. **Add images.** Add PNG and JPEG files by picker and by drop, a folder, a duplicate, a corrupt file, and an unsupported file. Each shows the status the guide lists.
-9. **Fitting modes.** Run Fit, Stretch, and Crop to Fill on a 1000 × 500 image with a 512 × 512 preset. The sizes match the guide's table.
+9. **Fitting modes.** Duplicate the 512 × 512 preset and save the copy with each mode in turn with Rename / Save. Run Fit, Stretch, and Crop to Fill on a 1000 × 500 image. The sizes match the guide's table.
 10. **Collisions.** Re-run a job under Rename, Skip, and Overwrite, and confirm that source images do not change.
 11. **Cancel a job.** Cancel a large job. Finished results stay, and the rest show Cancelled.
 12. **Presets.** Create, rename, duplicate, and delete a custom preset in each module, then restart. Each module keeps only its own.

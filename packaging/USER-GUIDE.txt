@@ -56,8 +56,9 @@ application remembers the selected tool and the window's position.
 Results and errors appear inside the window, so they never interrupt your work.
 Each begins with a word that says what it is, such as Success, Warning, or
 Error, and errors name their kind, such as "Write/encode error" or "Clipboard
-error". The application asks in a dialog only before something that cannot be
-undone, such as deleting a preset or replacing files.
+error". The application asks in a dialog only before something that replaces or
+discards your work: deleting a preset, replacing files, restoring the default
+settings, or closing with a job running or settings not saved.
 
 
 3. Screenshot
@@ -182,7 +183,10 @@ instead of starting a second selection.
 
    A file that cannot be used stays listed and never stops the others.
 
-3. Choose a preset and its Fitting mode. The view explains the selected mode.
+3. Choose a preset. A job uses the fitting mode saved in the preset, which the
+   view explains under Selected fitting mode. Every built-in preset is Fit. For
+   another mode, press Duplicate, choose the Fitting mode, and press Rename /
+   Save. Choosing a mode without saving it does not change the job.
    For a 1000 x 500 image and a 512 x 512 preset:
 
      Fit           512 x 256. The whole image, proportions kept, no padding.

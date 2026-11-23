@@ -39,17 +39,24 @@ var hardwareGated = []string{
 	"TECH-002", "TECH-003", "TECH-009", "AC-S02", "AC-S12",
 }
 
-// manualGated are the requirements whose defining condition only a manual
-// check exercises, in a real application, which no row may call complete
-// until docs/testing.md records that check passing it.
-var manualGated = []string{
-	"SCR-002", "SCR-005", "SCR-021", "SCR-022", "SCR-023", "SCR-055", "SCR-062",
-	"AC-S03", "AC-S04", "AC-A04",
+// manualGated maps each requirement whose defining condition only a manual
+// check exercises, in a real application, to that check. No row may call it
+// complete until docs/testing.md records that check passing it. It is written
+// out so that editing a check's Covers cell cannot remove the guard.
+var manualGated = map[string]string{
+	"SCR-002": "M10", "SCR-005": "M10",
+	"SCR-010": "M15", "SCR-011": "M15", "SCR-012": "M15", "AC-S05": "M15",
+	"SCR-021": "M9", "SCR-022": "M9", "SCR-023": "M9", "SCR-055": "M9",
+	"AC-S03": "M9", "AC-S04": "M9",
+	"SCR-062": "M8",
+	"SCR-063": "M16", "SCR-069": "M16", "RSZ-001": "M16", "RSZ-002": "M16",
+	"RSZ-008": "M16", "RSZ-048": "M16",
+	"AC-A04": "M12",
 }
 
 // gatingChecks are the manual checks that are the only real run of part of a
 // requirement.
-var gatingChecks = []string{"M8", "M9", "M10", "M12"}
+var gatingChecks = []string{"M8", "M9", "M10", "M12", "M15", "M16"}
 
 // confidenceOnly names the gating check a row may cite while it stays Pass,
 // because automated checks already cover that row: the job's thread and its
@@ -256,14 +263,9 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 			t.Errorf("%s must stay Partial until docs/testing.md records a QLT-04A run that passed it", id)
 		}
 	}
-	for _, id := range manualGated {
-		if seen[id].status == "**Partial**" {
-			continue
-		}
-		for _, check := range gatingChecks {
-			if slices.Contains(covers[check], id) && !recorded[id][check] {
-				t.Errorf("%s must stay Partial until docs/testing.md records a %s run that passed it", id, check)
-			}
+	for id, check := range manualGated {
+		if seen[id].status != "**Partial**" && !recorded[id][check] {
+			t.Errorf("%s must stay Partial until docs/testing.md records a %s run that passed it", id, check)
 		}
 	}
 	required := regexp.MustCompile(`\*\*QLT-04A — [^\n]*\n[^\n]*\n\s+- \*\*Requirements:\*\* ([^\n]*)`).FindStringSubmatch(plan)
@@ -277,7 +279,7 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 	}
 
 	checkBlockerLists(t, matrix, rows)
-	checkManualChecks(t, rows, covers)
+	checkManualChecks(t, rows, covers, recorded)
 }
 
 // checkBlockerLists holds the matrix's named lists of Partial requirements to
@@ -334,7 +336,9 @@ func manualCheckCoverage(t *testing.T) map[string][]string {
 }
 
 // recordedRuns reads the Recorded runs table in docs/testing.md into, for each
-// requirement, the runs that passed it. A run can pass only what it covers.
+// requirement, the runs that passed it. A run can pass only what it covers,
+// and its Passed cell holds requirement IDs and nothing else, so that a note
+// such as "SCR-021 failed" cannot read as a pass.
 func recordedRuns(t *testing.T, covers map[string][]string) map[string]map[string]bool {
 	t.Helper()
 	recorded := map[string]map[string]bool{}
@@ -344,7 +348,12 @@ func recordedRuns(t *testing.T, covers map[string][]string) map[string]map[strin
 			continue
 		}
 		run := match[1]
-		for _, id := range requirementID.FindAllString(expandSpans(match[2]), -1) {
+		for _, id := range strings.Split(expandSpans(match[2]), ",") {
+			id = strings.TrimSpace(id)
+			if id == "" || requirementID.FindString(id) != id {
+				t.Errorf("docs/testing.md records %s as passing %q, which is not a requirement ID", run, id)
+				continue
+			}
 			if run == "QLT-04A" && !slices.Contains(hardwareGated, id) || run != "QLT-04A" && !slices.Contains(covers[run], id) {
 				t.Errorf("docs/testing.md records %s as passing %s, which it does not cover", run, id)
 				continue
@@ -360,8 +369,9 @@ func recordedRuns(t *testing.T, covers map[string][]string) map[string]map[strin
 
 // checkManualChecks holds the matrix's Open column and the guide's table of
 // manual checks to each other, and keeps a row that names a gating check
-// under that check's guard.
-func checkManualChecks(t *testing.T, rows []traceRow, covers map[string][]string) {
+// under that check's guard. Open names a check only until a recorded run has
+// passed that row, as the matrix's legend says an entry there is not done.
+func checkManualChecks(t *testing.T, rows []traceRow, covers map[string][]string, recorded map[string]map[string]bool) {
 	t.Helper()
 	named := map[string][]string{}
 	for _, row := range rows {
@@ -370,16 +380,17 @@ func checkManualChecks(t *testing.T, rows []traceRow, covers map[string][]string
 				t.Errorf("%s names %s, which docs/testing.md does not define", row.id, check)
 			}
 			named[check] = append(named[check], row.id)
-			if slices.Contains(gatingChecks, check) && !slices.Contains(manualGated, row.id) && confidenceOnly[row.id] != check {
-				t.Errorf("%s names %s, which only a real run can satisfy, but is not in manualGated", row.id, check)
+			if slices.Contains(gatingChecks, check) && manualGated[row.id] != check && confidenceOnly[row.id] != check {
+				t.Errorf("%s names %s, which only a real run can satisfy, but is not in manualGated for it", row.id, check)
 			}
 		}
 	}
 	for check, ids := range covers {
+		open := slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return recorded[id][check] })
 		got := named[check]
 		slices.Sort(got)
-		if !slices.Equal(got, ids) {
-			t.Errorf("%s covers %v in docs/testing.md but %v in the matrix", check, ids, got)
+		if !slices.Equal(got, open) {
+			t.Errorf("%s has not passed %v according to docs/testing.md, but the matrix's Open column names it for %v", check, open, got)
 		}
 	}
 }

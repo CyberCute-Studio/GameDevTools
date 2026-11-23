@@ -63,6 +63,9 @@ These have not been run, so this version makes no claim about them:
 - The global shortcut pressed while another application has the focus, including
   to bring a selection's toolbar back, real clicks through a preset frame into a
   running application, and a real mouse drag of the frame's border.
+- Drawing, moving, and resizing a Free Rectangle selection with a real mouse.
+- The real Windows file and folder pickers, a real drop of files or a folder
+  from File Explorer, and Open Folder and Open Output Folder opening Explorer.
 - Dragging the window with the mouse during a job.
 - The vulnerability scan of this exact build, and the validation workflow on
   hosted x64 Windows runners.
@@ -90,7 +93,8 @@ Distribution
 - Portable ZIP with a SHA-256 checksum. There is no installer.
 - Not code-signed, so Windows SmartScreen may warn on first run.
 - No automatic updates. To update, replace this folder's files with those from
-  the new ZIP.
+  the new ZIP, extracting it where README.txt says so that it does not create a
+  second folder inside this one.
 - The project has not yet chosen a license of its own. One must be chosen before
   this version is distributed publicly. THIRD-PARTY-NOTICES.txt covers the
   components it includes.
