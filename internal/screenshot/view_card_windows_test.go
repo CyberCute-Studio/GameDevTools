@@ -16,6 +16,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
 )
 
 var (
@@ -88,6 +89,39 @@ func TestShortcutCaptureReportsEveryOutcomeOnTheCard(t *testing.T) {
 	dispatcher.runNext(t)
 	if len(card.reports) != 2 || card.reports[1].Notice.Kind != ui.NoticeSuccess || card.reports[1].Path != `C:\Shots\two.png` {
 		t.Fatalf("card after the success = %+v", card.reports)
+	}
+}
+
+// TestOutcomeOnTheCardIsAnnouncedByTheCardAlone is the view visible beside
+// another application: a result going on the card, which announces it, is
+// written to the status area quietly, and one that stays off the card is still
+// announced there.
+func TestOutcomeOnTheCardIsAnnouncedByTheCardAlone(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	showViewOffScreen(t, view)
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+	failure := CaptureResult{Save: errors.New("access denied")}
+
+	view.fromShortcut, view.watched = true, false
+	view.finishCapture(failure, displayCaptureMessages)
+	if len(card.reports) != 1 {
+		t.Fatalf("card = %+v", card.reports)
+	}
+	if !strings.Contains(view.status.Text(), "access denied") {
+		t.Fatalf("status = %q", view.status.Text())
+	}
+	if got := watch.Count(view.status.Handle()); got != 0 {
+		t.Fatalf("status announcements beside the card = %d, want 0", got)
+	}
+
+	view.fromShortcut, view.watched = true, true
+	view.finishCapture(failure, displayCaptureMessages)
+	if got := watch.Count(view.status.Handle()); got != 1 {
+		t.Fatalf("status announcements with the card not needed = %d, want 1", got)
 	}
 }
 

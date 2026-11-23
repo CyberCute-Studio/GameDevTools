@@ -145,8 +145,9 @@ type NativeView struct {
 	// cardConflict is that conflict once it is on the card, which withdraws it
 	// when the shortcut registers.
 	cardConflict ui.Notice
-	// cardProblems is how many problems the card holds, which the Dismiss
-	// Problem button offers while there are any.
+	// cardProblems is how many problems a press can dismiss on the card, none
+	// while it is hidden for a capture. The Dismiss Problem button is offered
+	// while there are any.
 	cardProblems int
 	// foregroundWindow and windowAtPoint read the desktop; tests replace them,
 	// as their windows are off every display, where nothing hits them, and
@@ -399,14 +400,26 @@ func (n *NativeView) cardNeeded() bool {
 // reportOutcome shows a capture's outcome in the status area and, where
 // cardNeeded says so, on the result card.
 func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
-	_ = n.status.Show(notice, 0)
+	n.showOutcome(notice)
 	if n.cardNeeded() {
 		n.card.Report(notice, path)
 	}
 }
 
-// problemsChanged keeps the Dismiss Problem button in step with the card. A
-// button about to disappear hands the focus on rather than strand the keyboard.
+// showOutcome puts an outcome in the status area, quietly when the result card
+// is about to announce the same notice, which a screen reader would otherwise
+// read twice in a row.
+func (n *NativeView) showOutcome(notice ui.Notice) {
+	if n.cardNeeded() {
+		n.status.Update(notice)
+		return
+	}
+	_ = n.status.Show(notice, 0)
+}
+
+// problemsChanged keeps the Dismiss Problem button in step with what a press
+// can dismiss on the card. A button about to disappear hands the focus on
+// rather than strand the keyboard.
 func (n *NativeView) problemsChanged(problems int) {
 	n.cardProblems = problems
 	if problems == 0 && n.dismissProblem.HasFocus() {
@@ -792,9 +805,11 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	// capture because the new value never reached the options.
 	if quality != options.JPEGQuality {
 		if err := n.options.SetJPEGQuality(quality); err != nil {
-			n.presentResult(err, "")
+			notice := optionNotice(err, "")
+			n.showOutcome(notice)
+			n.optionsNotice = n.status.Revision()
 			if n.cardNeeded() {
-				n.card.ReportSetting(optionNotice(err, ""))
+				n.card.ReportSetting(notice)
 			}
 			if !errors.Is(err, ErrPersistence) {
 				return
@@ -1322,7 +1337,7 @@ func optionNotice(err error, success string) ui.Notice {
 // default settings replaces what it refuses.
 func (n *NativeView) refuseOptions(err error) {
 	notice := ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}
-	_ = n.status.Show(notice, 0)
+	n.showOutcome(notice)
 	n.optionsNotice = n.status.Revision()
 	if n.cardNeeded() {
 		n.card.ReportSetting(notice)

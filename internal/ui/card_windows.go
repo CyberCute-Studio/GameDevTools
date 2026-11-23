@@ -166,7 +166,7 @@ type cardRect struct {
 type ResultCard struct {
 	place func() CardPlacement
 	open  func(path string)
-	// changed hears how many problems the card holds after each change.
+	// changed hears how many problems a press can dismiss after each change.
 	changed func(problems int)
 
 	queue     cardQueue
@@ -251,6 +251,7 @@ func (c *ResultCard) Suspend() {
 		c.queue.expire()
 	}
 	c.hide()
+	c.tellProblems()
 }
 
 // Resume shows the card again once a capture has ended, announcing it only
@@ -261,6 +262,7 @@ func (c *ResultCard) Resume() {
 	}
 	c.suspended = false
 	c.present(c.arrived)
+	c.tellProblems()
 }
 
 // Reposition moves a card on screen to where it now belongs, as after a
@@ -271,22 +273,34 @@ func (c *ResultCard) Reposition() {
 	}
 }
 
-// SetProblemsChanged names the function that hears how many problems the card
-// holds, so a view can offer a way to dismiss them from the keyboard.
+// SetProblemsChanged names the function that hears how many problems a press
+// can dismiss, so a view can offer a way to dismiss them from the keyboard.
 func (c *ResultCard) SetProblemsChanged(changed func(problems int)) {
 	c.changed = changed
 }
 
+// tellProblems reports the problems a press can dismiss: none while the card
+// is hidden for a capture, as the main window is back before the capture's
+// file is written and a press there would remove a problem nobody can see.
 func (c *ResultCard) tellProblems() {
-	if c.changed != nil && !c.destroyed {
-		c.changed(len(c.queue.problems))
+	if c.changed == nil || c.destroyed {
+		return
 	}
+	problems := len(c.queue.problems)
+	if c.suspended {
+		problems = 0
+	}
+	c.changed(problems)
 }
 
 // DismissProblem removes the result on the card, for its Dismiss button and for
 // a keyboard user, whom that button cannot reach. A success over the problems
-// goes first, so that a problem is on the card before a press can remove it.
+// goes first, so that a problem is on the card before a press can remove it,
+// and a card hidden for a capture keeps everything.
 func (c *ResultCard) DismissProblem() {
+	if c.suspended {
+		return
+	}
 	c.queue.dismiss()
 	c.present(true)
 	c.tellProblems()

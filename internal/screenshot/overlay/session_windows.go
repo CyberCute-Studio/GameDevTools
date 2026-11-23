@@ -140,6 +140,7 @@ var (
 	procSetForegroundWindow         = user32.NewProc("SetForegroundWindow")
 	procUpdateLayeredWindowIndirect = user32.NewProc("UpdateLayeredWindowIndirect")
 	procSetWindowPos                = user32.NewProc("SetWindowPos")
+	procGetWindowRect               = user32.NewProc("GetWindowRect")
 	procEnableWindow                = user32.NewProc("EnableWindow")
 	procIsChild                     = user32.NewProc("IsChild")
 	procIsWindowEnabled             = user32.NewProc("IsWindowEnabled")
@@ -890,7 +891,8 @@ func (s *windowsSession) restoreFocus() {
 // selection is reported through OnSelection, like every selection change. A
 // notification whose physical topology, cursor-display scaling, and anchor
 // work area all match the session's current measurements changes nothing the
-// surfaces show, so it is answered without re-rendering.
+// surfaces show, so it is answered without re-rendering, though a display
+// inside the desktop's rectangle may have gone with the toolbar on it.
 func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 	selection, ok := revalidatedSelection(s.selection, bounds)
 	if !ok {
@@ -908,6 +910,7 @@ func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 		}
 	}
 	if bounds == s.bounds && dpi == s.dpi && anchor == s.anchor {
+		s.recoverToolbar()
 		return true
 	}
 	// Pointer coordinates from a drag in progress belong to the old desktop;
@@ -1363,6 +1366,29 @@ func (s *windowsSession) toolbarPosition() (x, y int32) {
 		}
 	}
 	return reachableToolbarPlacement(workAreas, s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
+}
+
+// recoverToolbar places the toolbar again if no display shows any of it. One
+// that is still partly in view stays, as the user can drag it anywhere.
+func (s *windowsSession) recoverToolbar() {
+	if s.monitor == nil {
+		return
+	}
+	var bounds rectStruct
+	if r, _, _ := procGetWindowRect.Call(uintptr(s.toolbar), uintptr(unsafe.Pointer(&bounds))); r == 0 {
+		return
+	}
+	displays, err := s.monitor.Displays()
+	if err != nil {
+		return
+	}
+	for _, item := range displays {
+		area := item.WorkArea
+		if bounds.Left < area.Right && area.Left < bounds.Right && bounds.Top < area.Bottom && area.Top < bounds.Bottom {
+			return
+		}
+	}
+	s.placeToolbar()
 }
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's

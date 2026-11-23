@@ -461,6 +461,31 @@ func TestResultCardDismissProblemIsTheKeyboardsWay(t *testing.T) {
 	}
 }
 
+// TestResultCardKeepsItsProblemsWhileHiddenForACapture is the main window back
+// during a slow save, with the card still hidden: the view stops offering the
+// button, and a press that arrives anyway removes nothing nobody can see.
+func TestResultCardKeepsItsProblemsWhileHiddenForACapture(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	var told []int
+	card.SetProblemsChanged(func(problems int) { told = append(told, problems) })
+	card.Report(Notice{Kind: NoticeError, Message: "one"}, "")
+
+	card.Suspend()
+	card.Report(Notice{Kind: NoticeWarning, Message: "refused during the capture"}, "")
+	card.DismissProblem()
+	cardWindowProc(card.hwnd, cardWMClose, 0, 0)
+	if len(card.queue.problems) != 2 {
+		t.Fatalf("problems after a press on a hidden card = %+v", card.queue.problems)
+	}
+	card.Resume()
+	if !cardVisible(card.hwnd) || !strings.Contains(card.message.Text(), "refused") {
+		t.Fatalf("after Resume: visible %v, message %q", cardVisible(card.hwnd), card.message.Text())
+	}
+	if want := []int{1, 0, 0, 2}; !slices.Equal(told, want) {
+		t.Fatalf("told = %v, want %v", told, want)
+	}
+}
+
 // TestResultCardAnnouncesTheProblemsWaiting is a screen reader, which cannot
 // reach the card: it must hear that more problems stand behind the new one.
 func TestResultCardAnnouncesTheProblemsWaiting(t *testing.T) {
