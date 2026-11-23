@@ -68,7 +68,8 @@ not saved.
 -------------
 
 Choose a Capture mode, then press Start Capture. The main window hides so that
-it cannot appear in the image, and comes back when the capture ends.
+it cannot appear in the image. When the capture ends it returns as it was, so
+a window you minimized stays minimized.
 
   Free Rectangle    Draw any rectangle on the screen.
   Preset Rectangle  Float a frame of an exact size over your work.
@@ -86,8 +87,9 @@ Free Rectangle
 
   Without a mouse: the toolbar starts in W (px). Type the width, press Tab, type
   the height, and press Enter. A rectangle of that size appears, centered on the
-  display under the pointer, and the focus moves to Capture. The arrow keys move
-  it by one pixel, or ten with Shift. Enter captures.
+  display the pointer was on when the capture started, and the focus moves to
+  Capture. The arrow keys move it by one pixel, or ten with Shift. Enter
+  captures.
 
 Preset Rectangle
 
@@ -407,6 +409,8 @@ Capture
   until you open that view.
 - If Windows cannot remove a capture's temporary file, the result can say saving
   failed although the image was saved. See section 11 before deleting anything.
+- After a capture, the keyboard focus stays outside the application. Use
+  Alt+Tab to return to it.
 
 Image Resizer
 

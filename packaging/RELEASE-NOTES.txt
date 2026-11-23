@@ -77,7 +77,8 @@ These have not been run, so this version makes no claim about them:
 
 Known issues
 
-Sections 10 and 11 of USER-GUIDE.txt say what to do about each of these.
+Sections 10 and 11 of USER-GUIDE.txt describe each of these and any step to
+take.
 
 - A capture's result, including a failure, appears only in the Screenshot view,
   which keeps only the latest one. A capture from the global shortcut can fail

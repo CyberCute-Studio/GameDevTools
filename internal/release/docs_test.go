@@ -358,6 +358,11 @@ func recordedRuns(t *testing.T, covers map[string][]string) map[string]map[strin
 			continue
 		}
 		run := match[1]
+		// A check that covers no requirement leaves Passed empty, and a
+		// formatter may pad that cell with spaces.
+		if strings.TrimSpace(match[2]) == "" {
+			continue
+		}
 		for _, id := range strings.Split(expandSpans(match[2]), ",") {
 			id = strings.TrimSpace(id)
 			if id == "" || requirementID.FindString(id) != id {
