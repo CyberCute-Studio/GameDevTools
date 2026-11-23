@@ -1,8 +1,8 @@
 # CyberCute Dev Tools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.5\
-**Last updated:** 2026-11-22\
+**Version:** 1.6\
+**Last updated:** 2026-11-23\
 **Product name:** CyberCute Dev Tools\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
@@ -723,7 +723,8 @@ For clarity, the following choices have been made and should not be reopened wit
 - The product is named **CyberCute Dev Tools**, and its executable `cybercute-dev-tools.exe`. It was called GameDevTools until PRD 1.5. The first launch takes over the settings of a GameDevTools build, leaving its file in place, and output folders already selected stay selected.
 - The initial release ships as a portable ZIP for 64-bit Intel/AMD Windows, with no installer.
 - The initial release is not code-signed. Each ZIP has a published SHA-256 checksum, and the packaged README explains the Windows SmartScreen warning.
-- The application has no automatic update mechanism and does not check for updates. Users update by replacing the executable.
+- The application has no automatic update mechanism and does not check for updates. Users update by replacing the extracted folder's files with those from the new ZIP.
+- The ZIP carries the user documentation, as a user guide and release notes in plain text, so that it is available offline beside the executable. [docs/traceability.md](docs/traceability.md) records each requirement's implementation, evidence, and status.
 
 ## 21. Revision history
 
@@ -735,3 +736,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.3 | 2026-11-21 | QLT-03: confirmed that copied screenshots opt out of Windows clipboard sync and stay in the local clipboard history (NFR-031, section 20). |
 | 1.4 | 2026-11-22 | QLT-04: resolved the Windows 10 open decision — the initial release supports Windows 11 only (NFR-001, section 20). |
 | 1.5 | 2026-11-22 | REL-01: resolved the remaining open decisions — the name CyberCute Dev Tools, a portable ZIP, no code signing, and no automatic updates (sections 19 and 20). |
+| 1.6 | 2026-11-23 | REL-02: recorded that the ZIP carries the user guide and release notes, changed the confirmed update decision from replacing the executable to replacing the extracted folder's files so that an update also refreshes those documents, and pointed to the requirement traceability matrix (section 20). No numbered requirement changed. |

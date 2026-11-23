@@ -4,6 +4,10 @@ CyberCute Dev Tools
 A Windows 11 (64-bit) desktop toolbox for exact-size screenshots and batch
 image resizing. It works offline and needs no administrator rights.
 
+USER-GUIDE.txt explains how to use it, its limitations, and what to do when
+something goes wrong. RELEASE-NOTES.txt says what is in this version and what
+has not been verified yet.
+
 Run it
 ------
 Extract the whole ZIP to a folder you can write to, such as Documents. It
@@ -44,8 +48,14 @@ Images you already saved stay where they are.
 
 Update
 ------
-The app does not check for updates. To update, close it and replace
-cybercute-dev-tools.exe with the one from the new ZIP. Your settings are kept.
+The app does not check for updates. To update, close it and extract the new ZIP
+to the folder that holds your CyberCute Dev Tools folder, such as Documents, not
+into that folder itself. Windows' Extract All suggests a new folder named after
+the ZIP, so change the destination. Replace the existing files when asked, so
+that the guide and release notes match the new version. If you renamed your
+folder, extract the ZIP somewhere else and copy the files from its CyberCute Dev
+Tools folder into yours instead, so that a pinned shortcut runs the new version.
+Your settings are kept.
 
 Uninstall
 ---------

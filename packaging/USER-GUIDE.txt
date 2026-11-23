@@ -1,0 +1,537 @@
+CyberCute Dev Tools - User Guide
+================================
+
+CyberCute Dev Tools is a Windows 11 desktop toolbox with two tools: Screenshot,
+for exact-size captures, and Image Resizer, for resizing PNG and JPEG images in
+bulk. It works offline, needs no account, and never uploads anything.
+
+Contents
+
+  1.  Getting started
+  2.  The main window
+  3.  Screenshot
+  4.  The global shortcut
+  5.  Image Resizer
+  6.  Output names and collisions
+  7.  Presets
+  8.  Settings and your files
+  9.  Keyboard reference
+  10. Known limitations
+  11. Troubleshooting
+
+
+1. Getting started
+------------------
+
+You need a 64-bit Intel or AMD PC running Windows 11. You do not need
+administrator rights, an internet connection, or any other software.
+
+1. Extract the whole ZIP to a folder you can write to, such as Documents.
+2. Open the CyberCute Dev Tools folder it creates.
+3. Run cybercute-dev-tools.exe.
+
+This build is not code-signed, so Windows SmartScreen may say it does not
+recognize the app. README.txt explains how to check the download. After that,
+choose More info, then Run anyway.
+
+Nothing is installed. To keep a shortcut, pin the executable to Start or the
+taskbar. README.txt also covers updating and uninstalling.
+
+Only one copy runs at a time. Starting it again brings the open window forward,
+unless a capture is under way: see section 11.
+
+Closing the window exits the application, because it has no tray icon. The
+global shortcut works only while the application is running, so minimize the
+window instead of closing it if you want to keep using the shortcut. A capture
+reports its result only in the Screenshot view, so check there after each
+capture: see section 10.
+
+
+2. The main window
+------------------
+
+The navigation list switches between Screenshot, Image Resizer, and Settings.
+Each tool keeps what you were doing while you look at another one. The
+application remembers the selected tool and the window's position.
+
+Results and errors appear inside the window, so they never interrupt your work.
+Each begins with a word that says what it is, such as Success, Warning, or
+Error. Many errors also name their kind, such as "Write/encode error" or
+"Shortcut registration error", and a capture's result says whether saving, the
+clipboard copy, or both failed. The application asks in a dialog only before
+something that replaces or discards your work: deleting a preset, replacing
+files, restoring the default settings, or closing with a job running or settings
+not saved.
+
+
+3. Screenshot
+-------------
+
+Choose a Capture mode, then press Start Capture. The main window hides so that
+it cannot appear in the image. When the capture ends it returns, and a window
+you minimized stays minimized. A maximized window returns at its normal size:
+see section 10.
+
+  Free Rectangle    Draw any rectangle on the screen.
+  Preset Rectangle  Float a frame of an exact size over your work.
+  Full Display      Capture one whole display at once.
+
+Free Rectangle
+
+  The screen dims and a small toolbar appears.
+
+  - Drag to draw the rectangle. The toolbar shows its width and height.
+  - Drag inside the rectangle to move it.
+  - Drag one of its eight handles to resize it.
+  - Or type a size in W (px) and H (px) and press Enter.
+  - Press Capture to take the picture, or Cancel or Escape to stop.
+
+  Without a mouse: the toolbar starts in W (px). Type the width, press Tab, type
+  the height, and press Enter. A rectangle of that size appears, centered on the
+  display the pointer was on when the capture started, and the focus moves to
+  Capture. The arrow keys move it by one pixel, or ten with Shift. Enter
+  captures.
+
+Preset Rectangle
+
+  Select a preset in the Presets list, then press Start Capture. An exact-size
+  frame appears, centered on the display under the pointer, and stays on top of
+  other windows.
+
+  - Clicks inside the frame go to the application underneath, so you can keep
+    working in it, for example to set up a game camera, before you capture.
+  - Drag the frame's border to move it, including onto another display. It has
+    no resize handles, so a drag cannot change its size.
+  - With the toolbar focused, the arrow keys move the frame by one pixel, or ten
+    with Shift. The toolbar shows the frame's X and Y position, which can be
+    negative on a display to the left of or above the main display.
+  - Type in W (px) and H (px) to change the size for this capture. The saved
+    preset does not change.
+  - Press Capture, or Cancel or Escape to stop.
+
+  If you clicked in another application and need the toolbar again, click the
+  toolbar or press the global shortcut. Alt+Tab does not list the toolbar.
+
+  A preset larger than your whole desktop is refused before the frame opens. The
+  desktop is the rectangle around all your displays, so a frame can be larger
+  than one display. If your displays differ in size or are offset, part of that
+  rectangle is on no display, and that part of a capture comes out blank.
+
+Full Display
+
+  Choose a display in the Display list, which shows each display's number, name
+  where Windows provides one, size, scaling, and whether it is the primary one.
+  The display under the pointer is selected when the application starts. The
+  selection then stays until you change it or that display is disconnected, so
+  it does not follow the pointer: check it before capturing with the global
+  shortcut. A failure to list the displays can also change it: see section 10.
+  Start Capture takes the picture at once, at the display's full native
+  resolution.
+
+What a capture gives you
+
+  Every capture is copied to the clipboard and saved as a file. The two are
+  reported separately, so if one fails you still have the other.
+
+  - The clipboard always receives the original pixels, even when the file is
+    saved as JPEG. Copied screenshots stay in your local clipboard history
+    (Win+V) and are marked so that Windows clipboard sync does not upload them.
+    A third-party clipboard manager may ignore that mark.
+  - The file is saved in the Output folder, by default
+    Pictures\CyberCute Dev Tools\Screenshots, as the PNG or JPEG chosen under
+    Save format. PNG is the default. JPEG quality runs from 1 to 100 and
+    defaults to 90.
+  - Open Folder shows the saved file in File Explorer.
+  - The mouse pointer, frame, toolbar, and dimming are never in the image.
+  - Cancelling creates no file and leaves the clipboard as it was.
+
+  The main window returns without taking the keyboard focus, so that you stay in
+  the application you were using. Use Alt+Tab to go back to it.
+
+
+4. The global shortcut
+----------------------
+
+The global shortcut starts the selected capture mode while another application
+is in front. The default is Ctrl+Alt+S.
+
+To change it, click the Global shortcut field, type the combination out as
+text, such as Ctrl+Shift+F9, and press Tab to leave the field. Pressing the keys
+themselves does not enter them. The new shortcut takes effect at once and is
+remembered. A shortcut is at least one of Ctrl, Alt, Shift, or Win, plus a
+letter, a digit, or a function key from F1 to F24. The shortcut is paused while
+the field has the focus.
+
+If another application already owns the combination, the field says so and your
+previous shortcut keeps working until you choose another one. If it is taken
+when the application starts, no shortcut is active and only the Screenshot view
+says so: see section 10.
+
+Pressing the shortcut during a selection brings the selection's toolbar back
+instead of starting a second selection.
+
+
+5. Image Resizer
+----------------
+
+1. Add images. Press Add Images, or drop files or a folder anywhere on the view.
+   A dropped folder adds the files directly inside it that end in .png, .jpg, or
+   .jpeg, but not those in its subfolders. Adding the same file twice has no
+   effect.
+
+2. Review the Source images list. Each row shows the file's name, its upright
+   size once checked, and its status. Select a row to see its Full path and
+   details. Remove Selected and Clear List change the list, never the files.
+
+     Ready                  The image can be resized.
+     Checking               Its content is still being checked.
+     Unsupported format     Its name does not end in .png, .jpg, or .jpeg, or
+                            its content is not a PNG or JPEG that can be read.
+     Damaged or incomplete  Its data cannot be decoded.
+     Cannot be read         It could not be opened.
+     Too large              It would need more than 1 GiB of memory to decode.
+
+   A file that cannot be used stays listed and never stops the others.
+
+3. Choose a preset. A job uses the fitting mode saved in the preset, which the
+   view explains under Selected fitting mode. Every built-in preset is Fit. For
+   another mode, press Duplicate, choose the Fitting mode, and press Rename /
+   Save. Choosing a mode without saving it does not change the job.
+   For a 1000 x 500 image and a 512 x 512 preset:
+
+     Fit           512 x 256. The whole image, proportions kept, no padding.
+     Stretch       512 x 512. Exact size, but the image looks distorted.
+     Crop to Fill  512 x 512. Proportions kept, edges trimmed evenly.
+
+   Every mode enlarges an image smaller than the preset.
+
+4. Choose the output.
+
+     Output folder     By default Pictures\CyberCute Dev Tools\Resized. It is
+                       created if it does not exist.
+     Output format     Keep Source Format, PNG, or JPEG. Keep Source Format goes
+                       by the file's real content, so a JPEG named .png is saved
+                       as a .jpg.
+     JPEG quality      1 to 100, default 90.
+     JPEG transparency background
+                       The #RRGGBB color that transparent areas become in a JPEG,
+                       default #FFFFFF (white). PNG output keeps transparency.
+     When an output file already exists
+                       Rename, Skip, or Overwrite. See section 6.
+
+5. Press Start Resize. Under Overwrite you are asked to confirm first.
+
+6. Watch the progress. The job runs in the background, so you can move the
+   window and review the list. Each row shows Pending, Processing, Completed,
+   Skipped, Failed, or Cancelled, and selecting a row shows where its result went
+   or why it failed. The list cannot change while a job runs. Settings you change
+   apply to the next job.
+
+   Cancel Resize starts no further images and keeps every finished result.
+   Images in progress stop at their next safe point. If one has not stopped after
+   five seconds, as on a network drive that stopped responding, the job is let go
+   so that you can carry on.
+
+7. Review the result. The summary counts Completed, Skipped, Failed, and
+   Cancelled images. Open Output Folder opens the folder only when you press it.
+
+Your source images are opened read-only and are never changed.
+
+Closing the window during a job asks first, because closing cancels the job.
+Signing out of, restarting, or shutting down Windows cancels it without asking.
+
+
+6. Output names and collisions
+------------------------------
+
+Screenshots are named Screenshot_yyyyMMdd_HHmmssfff, for example
+Screenshot_20261123_142530123.png. If that name exists, _2, _3, and so on are
+added. A screenshot never replaces an existing file.
+
+Resized images keep their source's name, with .png or .jpg to match the format.
+When a file with that name already exists in the output folder, your choice
+under "When an output file already exists" decides what happens:
+
+  Rename (default)  The new file is saved as name_2, name_3, and so on. Nothing
+                    existing is touched.
+
+  Skip              The image is marked Skipped and the existing file is left
+                    alone.
+
+  Overwrite         The existing file is replaced, but only after you confirm
+                    for this job. A read-only file, or one another program has
+                    open for writing or without allowing deletion, is not
+                    replaced: the image ends Failed and the file stays as it
+                    was. A program that allows deletion, as some viewers do,
+                    does not prevent the replacement.
+
+A source image is never overwritten, under any setting. Under Overwrite, the
+result is saved under a numbered name instead when the existing item is a source
+image, another result of the same job, a folder or link, or a file that cannot
+be confirmed safe to replace.
+
+Two images with the same name from different folders never overwrite each other.
+Under Rename and Overwrite they become sprite.png and sprite_2.png. Under Skip
+only one is saved: the first, or the next if the first cannot be saved.
+
+Each run looks at the folder as it is now. Running a job again therefore makes
+numbered copies under Rename and skips the earlier results under Skip. Under
+Overwrite it replaces results that have their natural name, and adds a new
+numbered copy of any result that was renamed. Images that could not be used are
+checked again, so one you have repaired is picked up.
+
+
+7. Presets
+----------
+
+Screenshot and Image Resizer each have their own preset list. Changing one never
+affects the other.
+
+Built-in Screenshot presets:   HD 1280 x 720, Full HD 1920 x 1080,
+                               QHD 2560 x 1440, 4K UHD 3840 x 2160.
+Built-in Image Resizer presets, all Fit:
+                               16, 32, 64, 128, 256, 512, and 1024 square,
+                               and 1920 x 1080.
+
+Built-in presets cannot be edited or deleted, but Duplicate makes an editable
+copy.
+
+  Create Preset    Saves the Name, Width, and Height fields as a new preset,
+                   with a fitting mode in Image Resizer.
+  Rename / Save    Updates the selected custom preset.
+  Duplicate        Copies the selected preset.
+  Delete           Deletes the selected custom preset, after asking.
+
+Names must be unique within a tool, ignoring letter case and surrounding spaces.
+Width and height are whole numbers from 1 to 16,384 pixels. An Image Resizer
+preset can be at most 100 megapixels.
+
+
+8. Settings and your files
+--------------------------
+
+Restore Default Settings, in the Settings view, returns the global shortcut, the
+capture and resize options, and both output folders to their defaults. It asks
+first and backs up the settings file in the same folder. It keeps your custom
+presets, each tool's selected preset, the images in the resize list, and every
+saved image.
+
+  Settings   %APPDATA%\CyberCute Dev Tools\settings.json
+  Logs       %LOCALAPPDATA%\CyberCute Dev Tools\Logs
+
+Logs hold only fixed event codes. They contain no images, clipboard contents,
+file names, or folder paths, and they rotate by size.
+
+
+9. Keyboard reference
+---------------------
+
+Main window
+
+  Tab, Shift+Tab     Move between controls.
+  Up, Down           Move within the tool list or a group of options.
+  Alt+letter         Jump to the control with that underlined letter. Windows
+                     shows the underlines once you press Alt.
+  Enter, Space       Press the focused button.
+  Alt+Down           Open a drop-down list.
+
+Enter in a text field does not start a capture or a job. Start Capture and Start
+Resize come directly after the tool list in the Tab order.
+
+Capture toolbar
+
+  Tab                Move between W (px), H (px), Capture, and Cancel.
+  Enter              In a size field, apply the size. On a button, press it.
+                     After you draw a rectangle, capture, unless the focus
+                     was on Cancel.
+  Arrow keys         Move the selection by one pixel, outside the size fields.
+  Shift+Arrow keys   Move it by ten pixels.
+  Escape             Cancel.
+
+
+10. Known limitations
+---------------------
+
+Platform
+
+- Windows 11 on 64-bit Intel or AMD is the only supported platform. Windows 10,
+  Windows on Arm, and 32-bit Windows are not supported.
+- This version has been tested only with displays at 100% scaling. Scaling
+  above 100%, mixed scaling, displays left of or above the main display, and
+  unplugging a display during a selection are designed for and covered by
+  automated checks, but have not yet been run on real hardware. Rotated
+  displays are designed for, but no automated check or real hardware has
+  tested them.
+- The application stays light when Windows apps are set to dark. It does follow
+  the Windows contrast themes.
+- Under x64 emulation, the Free Rectangle overlay took slightly longer than its
+  300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
+  on x64 hardware is not yet known.
+
+Capture
+
+- The lock screen, the Windows secure desktop, and other protected surfaces
+  cannot be captured.
+- Content protected by DRM, and windows that opt out of capture, can appear black
+  in the image. Windows reports no error for this, so the capture is reported as
+  a success. Check the image when capturing protected video.
+- Full-screen exclusive games, remote sessions, and some graphics drivers can
+  restrict capture. Switching a game to windowed mode usually helps.
+- A capture across displays keeps each display's pixels as they are. Differences
+  in color or sharpness between displays are not corrected.
+- A rectangle can include areas that no display covers, when displays differ in
+  size or are offset. Those areas come out blank, usually black, and the capture
+  is still reported as a success.
+- On mixed scaling, the second line of the capture toolbar's message can be cut
+  off.
+- Where displays differ in size or are offset, the capture toolbar can land in
+  a part of the desktop that no display shows. If you cannot see it, press the
+  global shortcut and then Escape to cancel, and start again with the selection
+  in another place.
+- If Windows fails to list the displays, Full Display can forget the selected
+  display and capture the one under the pointer, reporting a success. The
+  message "The display list is unavailable" appears only in the Screenshot view.
+  With more than one display, check the Display list before capturing. If it is
+  empty, choose another Capture mode, then Full Display again, and select the
+  display you want.
+- A maximized main window returns at its normal size after a capture or a
+  cancelled selection, and closing the application then remembers that size.
+  Maximize it again.
+- If the window was minimized before a capture, do not start the application
+  again during that capture. The window can reappear and end up in the image.
+- Starting the application again during a selection can take the keyboard from
+  the capture toolbar, so Escape and the arrow keys stop working. Click the
+  toolbar or press the global shortcut to get it back.
+- A capture's result appears only in the Screenshot view. That includes the
+  saved path, a failed save or clipboard copy, a capture the global shortcut
+  could not start, such as with a preset larger than the desktop or an invalid
+  JPEG quality, and a selection that ended because a display changed. While the
+  window is minimized or shows another tool, nothing tells you about any of
+  these. The view keeps only the latest result, so a later capture hides an
+  earlier failure: check it after each shortcut capture, before taking the next.
+- A global shortcut another application already owns when this one starts is
+  reported only in the Screenshot view. If another tool was showing when you
+  last closed the application, nothing tells you the shortcut is not working
+  until you open that view.
+- If Windows cannot remove a capture's temporary file, the result can say saving
+  failed although the image was saved. See section 11 before deleting anything.
+- After a capture, the keyboard focus stays outside the application. Use
+  Alt+Tab to return to it.
+
+Image Resizer
+
+- Only PNG and JPEG are supported. An animated PNG is resized as a single still
+  image. Arithmetic-coded and 12-bit JPEGs are not supported.
+- Metadata is not kept. EXIF data, ICC color profiles, comments, and timestamps
+  are not written to results. EXIF orientation is applied to the pixels first, so
+  results are upright. An image that relies on a wide-gamut color profile can
+  look different once the profile is gone.
+- Resizing and JPEG encoding are not lossless. PNG output adds no further
+  compression loss, but it cannot undo what the source already lost.
+- A JPEG that was cut short but still has an end marker can decode as a partial
+  picture without an error.
+- There is no option to prevent enlarging, choose a crop position, add padding,
+  or process subfolders.
+
+Not included
+
+- Annotation, scrolling or delayed capture, video, cloud upload, an installer,
+  code signing, and automatic updates. The application never checks for updates.
+
+
+11. Troubleshooting
+-------------------
+
+Windows says it protected your PC.
+  The build is not code-signed. Check the download as README.txt describes, then
+  choose More info, then Run anyway.
+
+Nothing happens when I start the application again.
+  It is already running, and the existing window was brought forward. Look for it
+  on the taskbar. During a selection the window stays hidden and has no taskbar
+  button, unless it was minimized before the capture, when it can reappear: see
+  section 10. The toolbar can also lose the keyboard: click the capture toolbar
+  or press the global shortcut to bring it forward, then finish or cancel the
+  selection.
+
+The global shortcut does nothing.
+  The application must be running. The shortcut is paused while the Global
+  shortcut field has the focus, so leave the field first. Then open the
+  Screenshot view. If the field shows a "Shortcut registration error", another
+  application owns the combination, so choose a different one. Otherwise the
+  view says why a capture could not start, such as a preset larger than the
+  desktop or an invalid JPEG quality.
+
+A screenshot is black.
+  The content is probably protected, or a full-screen exclusive application is
+  running. Try windowed mode.
+
+"The graphics system could not read the screen."
+  Switch a full-screen exclusive application or game to windowed mode and try
+  again.
+
+"The display layout changed..."
+  A display was connected, disconnected, or rearranged. Start the capture again.
+
+The capture was copied but not saved, or saved but not copied.
+  The message says which part failed. To fix saving, choose another Output folder
+  or free space on its drive. To fix copying, close any application that may be
+  holding the clipboard and capture again.
+
+  If the message mentions a temporary file, the image may or may not have been
+  saved, and a .gamedevtools-*.tmp file may hold the only copy. Do not delete
+  one until you have followed the entry for those files below.
+
+"The output folder cannot be used."
+  Windows would read that path as a different place, for example because a name
+  ends in a space or period, or is a device name such as NUL. Or the path names
+  a server or device rather than a folder on it, such as \\server. Choose
+  another folder with Browse.
+
+An image shows Damaged or incomplete, Unsupported format, or Too large.
+  Select its row to see why. If a real PNG or JPEG has another extension, such
+  as .jfif, rename it to end in .png or .jpg. Otherwise re-export the image as a
+  standard PNG or JPEG, or at a smaller size. The other images are not affected.
+
+An image ended Failed.
+  Select its row. The details give the error's kind and what to do, such as
+  freeing drive space or choosing a folder you may write to. Under Overwrite,
+  the existing file may be read-only, or another program may have it open in a
+  way that blocks replacing it: clear its Read-only property or close the
+  program. Run the job again.
+
+My results have names like photo_2.png.
+  The name was taken, by an existing file or by one of the images being
+  resized. Selecting the row tells you why. For clean names, choose another
+  output folder. Do not empty the folder to get them: it can hold your source
+  images, and a .gamedevtools-* file in it can be an image's only copy.
+
+There are .gamedevtools-*.tmp files in my output folder.
+  The application was stopped while saving, or could not remove the file after
+  a save or a failed save. Such a file holds one result, which may be complete
+  or unfinished, and may be the only copy. If a .gamedevtools-replaced-* file is
+  beside it, follow the next entry first. Before deleting one, copy it, give the
+  copy a .png or .jpg extension, and open it to see which image it holds. Delete
+  the original only if you have that image elsewhere or do not need it.
+
+There is a .gamedevtools-replaced-* file in my output folder.
+  It is the existing file an Overwrite was replacing when it was interrupted or
+  could not finish deleting it. Do not delete it yet. If an image that should be
+  in this folder is missing, this may be its previous version: open it to check,
+  then rename it to the missing name, or run the job again. Once the image is
+  there, keep this file under another name if you want the old version, or
+  delete it.
+
+A warning says my settings were invalid.
+  The original file was backed up as settings.json.corrupt-<timestamp> in the
+  settings folder, and defaults are in use. Your images are not affected.
+
+A warning says saving is disabled.
+  The settings file could not be read or backed up, so the application will not
+  replace it. Follow the warning's advice, which is usually to reconnect a drive
+  or repair access to the file, and start the application again.
+
+A setting or preset was not saved.
+  The change stays in effect until you close the application. Check that the
+  settings folder is writable. If saving still fails, closing asks you to
+  confirm before the change is lost.

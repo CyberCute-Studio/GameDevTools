@@ -1,0 +1,130 @@
+CyberCute Dev Tools - Release Notes
+===================================
+
+Version 1.0.0 - release candidate
+---------------------------------
+
+This is the first version. It is a release candidate: the final validation is
+still open, and the checks listed under "Not yet verified" have not been run.
+
+What it does
+
+Screenshot
+- Free Rectangle, exact-size Preset Rectangle, and Full Display capture.
+- A preset frame stays on top while clicks inside it reach the application
+  underneath. Move it by its border or by exact pixels with the arrow keys.
+- Every capture goes to the clipboard and to a PNG or JPEG file, each reported
+  separately.
+- A configurable global shortcut, Ctrl+Alt+S by default.
+
+Image Resizer
+- Resize PNG and JPEG images in bulk, added by picker or drag and drop.
+- Stretch, Fit, and Crop to Fill, with reusable presets.
+- Keep Source Format, PNG, or JPEG output, with transparency kept in PNG and
+  flattened against a color you choose in JPEG.
+- Rename, Skip, or confirmed Overwrite when a file already exists. Source images
+  are never modified or overwritten.
+- Progress, cancellation, and a result for every file. One bad file never stops
+  the others.
+
+Across the application
+- Separate built-in and custom presets for each tool.
+- Settings kept per user, with backups before any recovery or reset.
+- Works offline, with no account, telemetry, or update check.
+- Full keyboard access in the main window, and support for the Windows contrast
+  themes.
+
+Requirements
+
+64-bit Intel or AMD PC with Windows 11. No administrator rights are needed.
+Windows 10, Windows on Arm, and 32-bit Windows are not supported.
+
+Upgrading from GameDevTools
+
+Builds named GameDevTools were development builds. The first launch copies their
+settings and leaves the old folder in place. README.txt has the details.
+
+Not yet verified
+
+These have not been run, so this version makes no claim about them:
+
+- x64 Windows 11 on real hardware, including the reference machine. Testing so
+  far ran on Windows 11 on Arm, natively and as the x64 build under emulation.
+- Any Windows 11 release other than build 26300, where the combined run took
+  place, and build 26200, where the Screenshot module's own run took place.
+- Display scaling above 100%, mixed scaling, displays with negative coordinates,
+  rotated displays, and unplugging a display during a selection. None of these
+  has run on real displays. Automated checks cover the calculations for all but
+  rotated displays, which have none.
+- A clean machine, a real screen reader, the contrast themes switched on, a real
+  sign-out during a job, and a run with network adapters off.
+- A person confirming that the keyboard focus is visible on every control. The
+  automated checks follow where the focus goes, not how it looks.
+- Saving to FAT32 or exFAT drives, network shares, OneDrive folders, or a drive
+  that fills up.
+- Real clipboard sync with a signed-in account, and pasting a capture into Paint
+  or an Office application.
+- The global shortcut pressed while another application has the focus, including
+  to bring a selection's toolbar back, real clicks through a preset frame into a
+  running application, and a real mouse drag of the frame's border.
+- Drawing, moving, and resizing a Free Rectangle selection with a real mouse.
+- A person checking that a real capture's image shows no frame, toolbar,
+  dimming, or pointer, and that a Full Display image shows only the selected
+  display.
+- The real Windows file and folder pickers, a real drop of files or a folder
+  from File Explorer, and Open Folder and Open Output Folder opening Explorer.
+- Dragging the window with the mouse during a job.
+- A second launch bringing the open window to the foreground.
+- The vulnerability scan of this exact build, and the validation workflow on
+  hosted x64 Windows runners.
+
+Known issues
+
+Sections 10 and 11 of USER-GUIDE.txt describe each of these and any step to
+take.
+
+- A capture's result, including a failure, appears only in the Screenshot view,
+  which keeps only the latest one. A capture from the global shortcut can fail
+  with no visible message while the window is minimized or shows another tool.
+- A global shortcut another application already owns when this one starts is
+  reported only in the Screenshot view.
+- Where displays differ in size or are offset, the capture toolbar can land in
+  a part of the desktop that no display shows.
+- If Windows fails to list the displays, Full Display can capture the display
+  under the pointer instead of the selected one, and report a success.
+- A maximized main window returns at its normal size after a capture or a
+  cancelled selection.
+- Starting the application again during a capture can bring a window minimized
+  before it into the image, or take the keyboard from the capture toolbar.
+- If Windows cannot remove a capture's temporary file, the result can say saving
+  failed although the image was saved. A .gamedevtools-*.tmp file may hold a
+  capture's only copy, so do not delete one before reading section 11.
+- Under x64 emulation, the Free Rectangle overlay took slightly longer than its
+  300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
+  on x64 hardware is not yet known.
+- On mixed scaling, the second line of the capture toolbar's message can be cut
+  off.
+- DRM-protected content can capture as black with no error, as Windows reports
+  none.
+- After a capture, the keyboard focus stays outside the application. Use Alt+Tab
+  to return to it.
+
+Deferred from the requirements
+
+- Following the Windows dark app mode (UX-008). The application uses the system
+  colors and stays light when apps are set to dark. A dark theme is a possible
+  future addition.
+
+Distribution
+
+- Portable ZIP with a SHA-256 checksum. There is no installer.
+- Not code-signed, so Windows SmartScreen may warn on first run.
+- No automatic updates. To update, replace this folder's files with those from
+  the new ZIP, extracting it where README.txt says so that it does not create a
+  second folder inside this one.
+- The project has not yet chosen a license of its own. One must be chosen before
+  this version is distributed publicly. THIRD-PARTY-NOTICES.txt covers the
+  components it includes.
+
+See USER-GUIDE.txt for how to use the application and for its full list of
+limitations.

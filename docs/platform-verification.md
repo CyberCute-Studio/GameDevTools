@@ -4,7 +4,7 @@ This document is the QLT-04 record for the supported Windows platforms, running 
 
 ## Result
 
-Every check that could run passed, and the combined run found no cross-module defect, so QLT-04 changes no production code. **One performance target was missed:** under x64 emulation, the slowest Free Rectangle overlay exceeded NFR-011's 300 ms in 2 of 6 batches of 30, at 312 and 317 ms ([details](#the-missed-overlay-target)). **These were not run, because this environment's hardware and display arrangement do not provide them, and they are QLT-04A's scope:** x64 Windows 11 on real hardware, including the PRD's reference machine; any other supported Windows 11 release; any display scaling other than 100%; negative virtual-desktop coordinates; a rotated display; and a live display disconnect. Until QLT-04A passes, NFR-001, NFR-003, NFR-011, SCR-042 on a rotated display, AC-S02, and AC-S12 are not fully verified, and the NFR-010, NFR-012, and NFR-013 figures below are indicative rather than results on the reference machine.
+Every check that could run passed, and the combined run found no cross-module defect, so QLT-04 changes no production code. **One performance target was missed:** under x64 emulation, the slowest Free Rectangle overlay exceeded NFR-011's 300 ms in 2 of 6 batches of 30, at 312 and 317 ms ([details](#the-missed-overlay-target)). **These were not run, because this environment's hardware and display arrangement do not provide them, and they are QLT-04A's scope:** x64 Windows 11 on real hardware, including the PRD's reference machine; any other supported Windows 11 release; any display scaling other than 100%; negative virtual-desktop coordinates; a rotated display; and a live display disconnect. Until QLT-04A passes, SCR-020, SCR-026, SCR-028, SCR-042 on a rotated display, SCR-043, SCR-054, NFR-001, NFR-003, NFR-011, TECH-002, TECH-003, TECH-009, AC-S02, and AC-S12 are not fully verified, and the NFR-010, NFR-012, and NFR-013 figures below are indicative rather than results on the reference machine.
 
 ## Support policy
 
@@ -111,11 +111,18 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 | NFR-014 — Bounded batch memory | Pass | Peak heap 220 MiB, about 7% of the 3,094 MiB that decoding every source at once would take |
 | AC-A01 — Persistence | Pass | [Reliability record](reliability-verification.md) and the release executable test |
 | AC-A02 — Offline use | Pass | `app.TestCoreWorkflowsRunOffline`, [privacy record](privacy-verification.md) |
-| AC-A03 — Keyboard access | Pass | [Accessibility record](accessibility-verification.md) |
-| AC-A04 — Responsive batch UI | Pass | [Image Resizer record](image-resizer-verification.md) |
+| AC-A03 — Keyboard access | **Partial** | [Accessibility record](accessibility-verification.md); that the focus is visible is manual check [M2](testing.md#manual-pre-release-checks) |
+| AC-A04 — Responsive batch UI | **Partial** | [Image Resizer record](image-resizer-verification.md); a real drag during a job is manual check [M12](testing.md#manual-pre-release-checks) |
 | AC-A05 — Clean exit | Pass | The exit matrix in the [reliability record](reliability-verification.md) and the release executable test |
-| AC-S01, AC-S03 to AC-S11 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
-| AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios) |
+| AC-S07, AC-S10 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
+| AC-S01 — Exact preset at standard scaling | **Partial** | [Screenshot record](screenshot-verification.md); checking a real preset capture's image for the frame and toolbar is manual check [M9](testing.md#manual-pre-release-checks) |
+| AC-S06 — Full secondary display | **Partial** | [Screenshot record](screenshot-verification.md); that the image holds only the selected display's contents is manual check [M19](testing.md#manual-pre-release-checks) |
+| AC-S11 — Shortcut conflict | **Partial** | [Screenshot record](screenshot-verification.md); REL-02A must show a conflict found at startup while the Screenshot view is hidden |
+| AC-S08, AC-S09 — Independent output failures | **Partial** | [Screenshot record](screenshot-verification.md); telling a user whose window is minimized or on another tool needs the fix in REL-02A, then manual check [M18](testing.md#manual-pre-release-checks) |
+| AC-S03 — Click-through interaction | **Partial** | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks) |
+| AC-S04 — Precision placement | **Partial** | [Screenshot record](screenshot-verification.md); a real drag of the production frame's border is manual check [M9](testing.md#manual-pre-release-checks) |
+| AC-S05 — Free rectangle adjustment | **Partial** | [Screenshot record](screenshot-verification.md); drawing a selection with a real pointer is manual check [M15](testing.md#manual-pre-release-checks) |
+| AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios); AC-S12 also waits on REL-02A to show a session's end while the Screenshot view is hidden |
 | AC-R01 to AC-R15 | Pass | [Image Resizer record](image-resizer-verification.md), in this run's suite |
 
 ## What these results do not cover

@@ -1809,9 +1809,9 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 		}
 	case wmActivate:
 		// Windows focuses the toolbar itself, not the control in it that had
-		// the focus, whenever the toolbar is activated again — on Alt+Tab, or
-		// as the global shortcut brings it back (Attention) — which leaves a
-		// keyboard user typing a size into nothing, so the control that had
+		// the focus, whenever the toolbar is activated again — as the global
+		// shortcut brings it back (Attention) — which leaves a keyboard user
+		// typing a size into nothing, so the control that had
 		// the focus as the toolbar was deactivated gets it back (UX-006,
 		// SCR-015). A click activates the toolbar before the click reaches
 		// the control under the pointer, which then takes the focus itself,
