@@ -92,13 +92,10 @@ Known issues
   was minimized can bring the window back into the image. Starting it again
   during any selection can take the keyboard from the capture toolbar: click
   the toolbar or press the global shortcut to get it back.
-- If Windows cannot remove a capture's temporary file after saving the image,
-  the result says saving failed although the image was saved. Open Folder can
-  then be pressed and shows it, and the leftover file the message names can be
-  deleted. Keep any other .gamedevtools-*.tmp file, which may be an earlier
-  capture's only copy. If Open Folder cannot be pressed, the image was not saved
-  and the file the message names may be its only copy, so keep it: see section
-  11 of USER-GUIDE.txt.
+- If Windows cannot remove a capture's temporary file, the result can say
+  saving failed although the image was saved. A .gamedevtools-*.tmp file may
+  hold a capture's only copy, so follow section 11 of USER-GUIDE.txt before
+  deleting one.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

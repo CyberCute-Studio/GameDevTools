@@ -397,8 +397,8 @@ Capture
   reported only in the Screenshot view. If another tool was showing when you
   last closed the application, nothing tells you the shortcut is not working
   until you open that view.
-- If Windows cannot remove a capture's temporary file after saving the image,
-  the result says saving failed although the image was saved: see section 11.
+- If Windows cannot remove a capture's temporary file, the result can say saving
+  failed although the image was saved. See section 11 before deleting anything.
 
 Image Resizer
 
@@ -460,13 +460,9 @@ The capture was copied but not saved, or saved but not copied.
   or free space on its drive. To fix copying, close any application that may be
   holding the clipboard and capture again.
 
-  If the message says "remove temporary file" or "left behind", it names a
-  leftover .gamedevtools-*.tmp file. Check Open Folder before you capture again
-  or delete anything. If it can be pressed, the image was saved: press it to
-  find the image, then delete only the file the message names. Any other such
-  file may be an earlier capture's only copy. If Open Folder cannot be pressed,
-  the image was not saved and the named file may be its only copy, so keep it
-  and follow the entry for .gamedevtools-*.tmp files below.
+  If the message mentions a temporary file, the image may or may not have been
+  saved, and a .gamedevtools-*.tmp file may hold the only copy. Do not delete
+  one until you have followed the entry for those files below.
 
 "The output folder cannot be used."
   Windows would read that path as a different place, for example because a name
