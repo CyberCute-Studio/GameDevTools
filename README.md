@@ -105,7 +105,7 @@ The ZIP and its `.sha256` file are written to `bin/release`, and the same commit
 ./scripts/verify-package.ps1 -Package bin/release/cybercute-dev-tools-1.0.0-windows-x64.zip
 ```
 
-The version is in `internal/release/release.go` and the icon in `assets/icon.ico`. After changing either, regenerate the linked Windows resources:
+The version and the date stamped on the ZIP's files are in `internal/release/release.go`, and the icon is in `assets/icon.ico`. Change the date whenever the version changes. After changing the version or the icon, regenerate the linked Windows resources:
 
 ```powershell
 go generate ./cmd/gamedevtools
