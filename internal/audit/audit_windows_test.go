@@ -101,7 +101,7 @@ var reviewedProcedures = []string{
 	"DestroyWindow", "DispatchMessageW", "DragAcceptFiles", "DragFinish", "DragQueryFileW", "DrawTextW",
 	"DwmFlush", "EmptyClipboard", "EnableWindow", "EnumChildWindows", "EnumDisplayDevicesW",
 	"EnumDisplayMonitors", "FindWindowW", "GetAncestor", "GetClientRect", "GetCursorPos", "GetDC",
-	"GetDpiForMonitor", "GetDpiForWindow", "GetFocus", "GetKeyState", "GetMessageW", "GetModuleHandleW",
+	"GetDpiForMonitor", "GetDpiForWindow", "GetFocus", "GetForegroundWindow", "GetKeyState", "GetMessageW", "GetModuleHandleW",
 	"GetMonitorInfoW", "GetNextDlgTabItem", "GetOpenFileNameW", "GetScrollInfo", "GetSysColor",
 	"GetSysColorBrush", "GetSystemMetrics", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW",
 	"GlobalAlloc", "GlobalFree", "GlobalLock", "GlobalUnlock", "InvalidateRect", "IsChild",
@@ -112,7 +112,8 @@ var reviewedProcedures = []string{
 	"SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkMode", "SetCapture", "SetClipboardData",
 	"SetCursor", "SetFocus", "SetForegroundWindow", "SetProcessDpiAwarenessContext", "SetScrollInfo",
 	"SetTextColor", "SetTimer", "SetWindowLongPtrW", "SetWindowPos", "SetWindowTextW", "ShellExecuteExW",
-	"ShowWindow", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
+	"ShowWindow", "TrackMouseEvent", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
+	"WindowFromPoint",
 }
 
 // reviewedSystemFunctions is every function of syscall and

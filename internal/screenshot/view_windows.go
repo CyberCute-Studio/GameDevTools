@@ -35,11 +35,39 @@ const (
 	browseCommand
 	displayCommand
 	openFolderCommand
+	dismissProblemCommand
 )
 
 // globalShortcutHotkeyID is the RegisterHotKey identifier the shell window
 // uses for the global capture shortcut; WM_HOTKEY carries it in wParam.
 const globalShortcutHotkeyID = 1
+
+var (
+	viewUser32                  = windows.NewLazySystemDLL("user32.dll")
+	procViewIsWindowVisible     = viewUser32.NewProc("IsWindowVisible")
+	procViewIsIconic            = viewUser32.NewProc("IsIconic")
+	procViewGetForegroundWindow = viewUser32.NewProc("GetForegroundWindow")
+	procViewGetWindowRect       = viewUser32.NewProc("GetWindowRect")
+	procViewWindowFromPoint     = viewUser32.NewProc("WindowFromPoint")
+	procViewGetAncestor         = viewUser32.NewProc("GetAncestor")
+	procViewGetClientRect       = viewUser32.NewProc("GetClientRect")
+	procViewMapWindowPoints     = viewUser32.NewProc("MapWindowPoints")
+)
+
+// viewGARoot is GetAncestor's GA_ROOT.
+const viewGARoot = 2
+
+// controlCoverStep is the most pixels controlCovered leaves between two points
+// it checks along a control, less than any window that could hide a message.
+const controlCoverStep = 48
+
+// viewBNDoubleClicked is the notification a BS_NOTIFY button sends for a second
+// quick click, as dismissing several problems in a row makes.
+const viewBNDoubleClicked = 5
+
+type viewRect struct {
+	Left, Top, Right, Bottom int32
+}
 
 // hotkeyRegistrar registers, suspends, and releases one global hotkey
 // combination. The production implementation is Hotkey; tests substitute a
@@ -50,6 +78,22 @@ type hotkeyRegistrar interface {
 	Release()
 }
 
+// resultCard reports results while the view cannot be seen. The production
+// implementation is ui.ResultCard; tests substitute a fake, as a real card
+// is a topmost window that a capture test running beside them would see.
+type resultCard interface {
+	Report(notice ui.Notice, path string)
+	ReportSetting(notice ui.Notice)
+	WithdrawSettings()
+	WithdrawSetting(notice ui.Notice)
+	Suspend()
+	Resume()
+	Reposition()
+	DismissProblem()
+	SetProblemsChanged(changed func(problems int))
+	Destroy()
+}
+
 type NativeView struct {
 	options  *OptionsManager
 	presets  *preset.NativeManager
@@ -57,7 +101,10 @@ type NativeView struct {
 	browse   func(windows.Handle, string) (string, bool, error)
 	sessions *overlay.Controller
 
-	displays         *display.Monitor
+	displays *display.Monitor
+	// listDisplays enumerates the displays; tests replace it to make
+	// enumeration fail.
+	listDisplays     func() ([]display.Display, error)
 	capture          CaptureFunc
 	captureRectangle RectangleCaptureFunc
 	dispatcher       core.Dispatcher
@@ -89,6 +136,28 @@ type NativeView struct {
 	// the restore of the default settings clears while it is still shown, as
 	// the option it reports is replaced.
 	optionsNotice uint64
+	// card reports a global-shortcut capture's outcome while the status area
+	// cannot be seen (SCR-060, SCR-069).
+	card resultCard
+	// fromShortcut is whether the global shortcut started the latest capture,
+	// and watched whether the status area was in front of the user as it did.
+	fromShortcut bool
+	watched      bool
+	// startupConflict is a shortcut conflict found while the view was created,
+	// reported on the card once the window shows whether the view is visible.
+	startupConflict ui.Notice
+	// cardConflict is that conflict once it is on the card, which withdraws it
+	// when the shortcut registers.
+	cardConflict ui.Notice
+	// cardProblems is how many problems a press can dismiss on the card, none
+	// while it is hidden for a capture. The Dismiss Problem button is offered
+	// while there are any.
+	cardProblems int
+	// foregroundWindow and windowAtPoint read the desktop; tests replace them,
+	// as their windows are off every display, where nothing hits them, and
+	// never in front.
+	foregroundWindow func() windows.Handle
+	windowAtPoint    func(x, y int32) uintptr
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -107,10 +176,13 @@ type NativeView struct {
 	pattern      *ui.Label
 	status       *ui.StatusArea
 	openFolder   *ui.Button
+	// dismissProblem is the keyboard's way to dismiss a problem on the result
+	// card, which never takes the focus.
+	dismissProblem *ui.Button
 }
 
 func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *display.Monitor, capture CaptureFunc, captureRectangle RectangleCaptureFunc, sessions *overlay.Controller) *NativeView {
-	return &NativeView{
+	view := &NativeView{
 		options:          options,
 		presets:          preset.NewNativeManager(manager),
 		browse:           ui.BrowseForFolder,
@@ -122,6 +194,36 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 			return newHotkey(window, id)
 		},
 		sessions: sessions,
+	}
+	if displays != nil {
+		view.listDisplays = displays.Displays
+	}
+	view.card = ui.NewResultCard(view.cardPlacement, view.revealFromCard)
+	view.foregroundWindow = func() windows.Handle {
+		foreground, _, _ := procViewGetForegroundWindow.Call()
+		return windows.Handle(foreground)
+	}
+	view.windowAtPoint = func(x, y int32) uintptr {
+		hit, _, _ := procViewWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
+		return hit
+	}
+	return view
+}
+
+// cardPlacement puts the result card on the display under the pointer, where
+// the user is working.
+func (n *NativeView) cardPlacement() ui.CardPlacement {
+	if n.displays == nil {
+		return ui.CardPlacement{}
+	}
+	item, err := n.displays.CursorDisplay()
+	if err != nil {
+		return ui.CardPlacement{}
+	}
+	return ui.CardPlacement{
+		Left: item.WorkArea.Left, Top: item.WorkArea.Top,
+		Right: item.WorkArea.Right, Bottom: item.WorkArea.Bottom,
+		DPI: item.DPIX,
 	}
 }
 
@@ -183,6 +285,11 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.status, err = ui.NewStatusArea(parent); err != nil {
 		return err
 	}
+	if n.dismissProblem, err = ui.NewButton(parent, ui.CardDismissProblemAction, ui.ButtonOptions{ID: base + dismissProblemCommand, Group: true, Disabled: true}); err != nil {
+		return err
+	}
+	n.dismissProblem.Show(false)
+	n.card.SetProblemsChanged(n.problemsChanged)
 	if n.openFolder, err = ui.NewButton(parent, ui.OpenFolderAction, ui.ButtonOptions{ID: base + openFolderCommand, Group: true, Disabled: true}); err != nil {
 		return err
 	}
@@ -190,7 +297,10 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 		return err
 	}
 	if n.displays != nil {
-		n.displays.Subscribe(n.refreshDisplays)
+		n.displays.Subscribe(func() {
+			n.refreshDisplays()
+			n.card.Reposition()
+		})
 	}
 	// refresh clears the status area, so it runs before refreshDisplays:
 	// a display-enumeration failure at startup must stay visible.
@@ -204,6 +314,7 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	n.hotkeys = n.hotkeyFactory(uintptr(parent), globalShortcutHotkeyID)
 	if err := n.hotkeys.Apply(n.options.Options().Shortcut); err != nil {
 		n.presentShortcutFailure(err)
+		n.startupConflict = ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorShortcutRegistration, err)}
 	}
 	n.refreshDisplays()
 	return nil
@@ -211,9 +322,119 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 
 // NativeDispatcher receives the shell's GUI-thread dispatcher. Capture
 // completions are posted through it so result presentation always runs on
-// the GUI thread.
+// the GUI thread. A shortcut conflict found at startup is reported through
+// it too: the post runs once the message loop does, after the window has
+// appeared with its remembered module, and the card shows the conflict unless
+// the message beside the shortcut field can be seen (SCR-003, AC-S11).
 func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 	n.dispatcher = dispatcher
+	if n.startupConflict.Message == "" || dispatcher == nil {
+		return
+	}
+	notice := n.startupConflict
+	n.startupConflict = ui.Notice{}
+	_ = dispatcher.Post(func() {
+		if !n.statusVisible() || n.controlCovered(n.shortcut.Error.Handle()) {
+			n.cardConflict = notice
+			n.card.ReportSetting(notice)
+		}
+	})
+}
+
+// statusVisible reports whether the status area is on a window that is shown
+// and not minimized, with this view selected.
+func (n *NativeView) statusVisible() bool {
+	if !n.shown {
+		return false
+	}
+	visible, _, _ := procViewIsWindowVisible.Call(uintptr(n.parent))
+	iconic, _, _ := procViewIsIconic.Call(uintptr(n.parent))
+	return visible != 0 && iconic == 0
+}
+
+// statusInSight reports whether the user can see the status area now: it is
+// showing and no other window is over it. The foreground window cannot say,
+// as a capture returns the main window without activating it.
+func (n *NativeView) statusInSight() bool {
+	return n.statusVisible() && !n.controlCovered(n.status.Handle())
+}
+
+// controlCovered reports whether part of a control is out of sight: scrolled
+// outside the main window's client area, where the window there can still be
+// the main window's own title bar, or under another top-level window. Points
+// along its top, middle, and bottom are checked, corners included, as a window
+// over any part of a message can hide what it is about.
+func (n *NativeView) controlCovered(control windows.Handle) bool {
+	var bounds, client viewRect
+	if r, _, _ := procViewGetWindowRect.Call(uintptr(control), uintptr(unsafe.Pointer(&bounds))); r == 0 {
+		return true
+	}
+	if r, _, _ := procViewGetClientRect.Call(uintptr(n.parent), uintptr(unsafe.Pointer(&client))); r == 0 {
+		return true
+	}
+	procViewMapWindowPoints.Call(uintptr(n.parent), 0, uintptr(unsafe.Pointer(&client)), 2)
+	right, bottom := bounds.Right-1, bounds.Bottom-1
+	for _, y := range [...]int32{bounds.Top, bounds.Top + (bounds.Bottom-bounds.Top)/2, bottom} {
+		for x := bounds.Left; ; x = min(x+controlCoverStep, right) {
+			if x < client.Left || x >= client.Right || y < client.Top || y >= client.Bottom {
+				return true
+			}
+			hit := n.windowAtPoint(x, y)
+			if hit == 0 {
+				return true
+			}
+			if root, _, _ := procViewGetAncestor.Call(hit, viewGARoot); windows.Handle(root) != n.parent {
+				return true
+			}
+			if x >= right {
+				break
+			}
+		}
+	}
+	return false
+}
+
+// cardNeeded reports whether a capture's outcome also goes on the result
+// card: the global shortcut started it, and the user was not looking at this
+// view then or no longer can, so the result would otherwise be written where
+// nobody sees it (SCR-060, SCR-069).
+func (n *NativeView) cardNeeded() bool {
+	return n.fromShortcut && !(n.watched && n.statusInSight())
+}
+
+// reportOutcome shows a capture's outcome in the status area and, where
+// cardNeeded says so, on the result card.
+func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
+	if n.showOutcome(notice) {
+		n.card.Report(notice, path)
+	}
+}
+
+// showOutcome puts an outcome in the status area and reports whether it also
+// goes on the result card. The desktop is asked once per outcome, as a window
+// moving between two looks would leave the result announced nowhere. A result
+// going on the card is written here quietly, as the card announces it and a
+// screen reader would otherwise read it twice in a row.
+func (n *NativeView) showOutcome(notice ui.Notice) bool {
+	if n.cardNeeded() {
+		n.status.Update(notice)
+		return true
+	}
+	_ = n.status.Show(notice, 0)
+	return false
+}
+
+// problemsChanged keeps the Dismiss Problem button in step with what a press
+// can dismiss on the card. A button about to disappear hands the focus to the
+// read-only Output Folder field, where a Space pressed once too often does
+// nothing, as it would open the folder picker on Browse.
+func (n *NativeView) problemsChanged(problems int) {
+	n.cardProblems = problems
+	if problems == 0 && n.dismissProblem.HasFocus() {
+		n.folder.Focus()
+	}
+	n.dismissProblem.Enable(problems > 0)
+	n.dismissProblem.Show(n.shown && problems > 0)
 }
 
 // NativeAnnounceNotice asks a screen reader to read the status area's
@@ -233,7 +454,7 @@ func (n *NativeView) NativeAnnounceNotice() {
 func (n *NativeView) NativeFont(font windows.Handle) {
 	n.font = font
 	n.modeLabel.SetFont(font)
-	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton, n.openFolder} {
+	for _, button := range []*ui.Button{n.modeFree, n.modePreset, n.modeFull, n.browseButton, n.openFolder, n.dismissProblem} {
 		button.SetFont(font)
 	}
 	n.displayLabel.SetFont(font)
@@ -272,6 +493,7 @@ func (n *NativeView) NativeShow(visible bool) {
 	n.patternLabel.Show(visible)
 	n.pattern.Show(visible)
 	n.status.Label.Show(visible)
+	n.dismissProblem.Show(visible && n.cardProblems > 0)
 	n.presets.NativeShow(visible)
 }
 
@@ -323,10 +545,13 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 	n.patternLabel.Move(x, y, width, scale(20))
 	n.pattern.Move(x, y+scale(24), width, scale(20))
 	y += scale(24) + scale(20) + scale(12)
-	folderWidth := scale(120)
-	n.status.Move(x, y, max(int32(1), width-folderWidth-gap), statusHeight)
-	n.openFolder.Move(x+width-folderWidth, y+(statusHeight-scale(28))/2, folderWidth, scale(28))
-	y += statusHeight + scale(16)
+	n.status.Move(x, y, width, statusHeight)
+	buttonY := y + statusHeight + gap
+	folderWidth := min(scale(120), max(int32(1), (width-gap)/2))
+	dismissWidth := min(scale(statusDismissWidth), max(int32(1), width-folderWidth-gap))
+	n.dismissProblem.Move(x+width-folderWidth-gap-dismissWidth, buttonY, dismissWidth, scale(28))
+	n.openFolder.Move(x+width-folderWidth, buttonY, folderWidth, scale(28))
+	y += statusRowHeight(statusHeight, scale) + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 }
 
@@ -350,8 +575,20 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 	height += shortcut.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
-	statusHeight := n.status.Height(width-scale(120)-scale(8), scale, measure)
-	return height + statusHeight + scale(16), quality, shortcut, statusHeight
+	statusHeight := n.status.Height(width, scale, measure)
+	return height + statusRowHeight(statusHeight, scale) + scale(16), quality, shortcut, statusHeight
+}
+
+// statusDismissWidth is the width at 96 DPI of the Dismiss Problem button.
+const statusDismissWidth = 140
+
+// statusRowHeight is the height of the status text and the row of buttons
+// below it. The text has the content's whole width at every window size, as
+// it can hold a saved path with no spaces, which a static control cuts off
+// rather than wraps, and the row keeps room for Dismiss Problem, as a problem
+// can reach the card with no layout to follow.
+func statusRowHeight(textHeight int32, scale func(int32) int32) int32 {
+	return textHeight + scale(8) + scale(28)
 }
 
 func stackedOptionsLayout(width int32, scale func(int32) int32) bool {
@@ -426,6 +663,10 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 			return true
 		}
 		n.revealSaved()
+	case dismissProblemCommand:
+		if notification == 0 || notification == viewBNDoubleClicked {
+			n.card.DismissProblem()
+		}
 	default:
 		return n.presets.NativeCommand(id, notification)
 	}
@@ -443,7 +684,27 @@ func (n *NativeView) NativeCommand(id int32, notification uint16) bool {
 // started since, so that it cannot replace a newer capture's result, or the
 // reason one ended without a result, as a cancelled or lost selection does.
 func (n *NativeView) revealSaved() {
-	path, reveal, attempt := n.savedPath, n.reveal, n.captureAttempts
+	path, attempt := n.savedPath, n.captureAttempts
+	n.revealFile(path, func(err error) {
+		if n.savedPath == path && n.captureAttempts == attempt {
+			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
+		}
+	})
+}
+
+// revealFromCard is the result card's Open Folder. The card may show an
+// earlier capture's file, and a failure goes back on the card, where the user
+// asked.
+func (n *NativeView) revealFromCard(path string) {
+	n.revealFile(path, func(err error) {
+		n.card.Report(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, "")
+	})
+}
+
+// revealFile reveals the file off the GUI thread, as revealSaved describes,
+// and hands a failure to failed on the GUI thread.
+func (n *NativeView) revealFile(path string, failed func(error)) {
+	reveal := n.reveal
 	if n.dispatcher == nil || !n.startReveal(path) {
 		return
 	}
@@ -451,11 +712,7 @@ func (n *NativeView) revealSaved() {
 		err := reveal(path)
 		n.endReveal(path)
 		if err != nil {
-			n.post(func() {
-				if n.savedPath == path && n.captureAttempts == attempt {
-					_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, 0)
-				}
-			})
+			n.post(func() { failed(err) })
 		}
 	}()
 }
@@ -487,6 +744,7 @@ func (n *NativeView) NativeDestroy() {
 	if n.sessions != nil {
 		n.sessions.Shutdown()
 	}
+	n.card.Destroy()
 	n.status.Destroy()
 	n.presets.NativeDestroy()
 }
@@ -496,10 +754,31 @@ func (n *NativeView) NativeDestroy() {
 // the rectangle modes open the selection overlay session (SCR-050), whose
 // Capture command captures the drawn rectangle end to end.
 func (n *NativeView) NativeAction() {
+	n.startCapture(false)
+}
+
+// startCapture starts a capture of the selected mode, recording whether the
+// global shortcut started it, as reportOutcome needs.
+func (n *NativeView) startCapture(fromShortcut bool) {
 	n.captureAttempts++
 	if n.inProgress {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureInProgress}, 0)
+		// The card is hidden until this capture ends, so it says what became
+		// of the press rather than to wait. The running capture's own
+		// reporting is not changed.
+		if fromShortcut && !n.statusInSight() {
+			n.card.Report(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutRefused}, "")
+		}
 		return
+	}
+	// A start refused because a selection is on screen must not change how
+	// that selection's outcome is reported.
+	if n.sessions == nil || !n.sessions.Active() {
+		n.fromShortcut = fromShortcut
+		n.watched = false
+		if fromShortcut && n.statusVisible() {
+			n.watched = n.foregroundWindow() == n.parent
+		}
 	}
 	// The quality field otherwise commits only when it loses focus, and
 	// keyboard activation of Start Capture never moves focus; the capture
@@ -520,9 +799,20 @@ func (n *NativeView) NativeAction() {
 	// capture because the new value never reached the options.
 	if quality != options.JPEGQuality {
 		if err := n.options.SetJPEGQuality(quality); err != nil {
-			n.presentResult(err, "")
+			notice := optionNotice(err, "")
+			onCard := n.showOutcome(notice)
+			n.optionsNotice = n.status.Revision()
 			if !errors.Is(err, ErrPersistence) {
+				if onCard {
+					n.card.ReportSetting(notice)
+				}
 				return
+			}
+			// The capture goes on and hides the card, which would cut off this
+			// warning's announcement, so it joins the card after that, and a
+			// selection cancelled with no result of its own still announces it.
+			if onCard {
+				defer n.card.ReportSetting(notice)
 			}
 		}
 	}
@@ -537,19 +827,22 @@ func (n *NativeView) NativeAction() {
 	}
 	// A stale enumeration failure must not wedge capture: retry it here,
 	// the same way selectMode retries on mode selection, so a recovered
-	// display service works without the user toggling the capture mode.
-	n.refreshDisplays()
+	// display service works without the user toggling the capture mode. Its
+	// failure is reported once, by reportOutcome.
+	_ = n.reloadDisplays()
 	if n.displayErr != nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}, 0)
+		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}, "")
 		return
 	}
 	deviceName := n.selectedDeviceName()
 	if deviceName == "" {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.DisplayRequired}, 0)
+		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: ui.DisplayRequired}, "")
 		return
 	}
 	n.inProgress = true
 	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options}
+	// The card is hidden first so that it cannot appear in the image.
+	n.card.Suspend()
 	n.pending.Add(1)
 	go func() {
 		defer n.pending.Done()
@@ -571,7 +864,7 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 		n.sessions.Attention()
 		return true
 	}
-	n.NativeAction()
+	n.startCapture(true)
 	return true
 }
 
@@ -599,7 +892,7 @@ func (n *NativeView) NativeShutdown() {
 // rectangle and the main-window restore to startRectangleCapture.
 func (n *NativeView) beginOverlay() {
 	if n.sessions == nil {
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New(ui.OverlayServiceUnavailable))}, 0)
+		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New(ui.OverlayServiceUnavailable))}, "")
 		return
 	}
 	mode := overlay.ModeFreeRectangle
@@ -608,28 +901,37 @@ func (n *NativeView) beginOverlay() {
 		mode = overlay.ModePresetRectangle
 		selected, exists := n.presets.SelectedPreset()
 		if !exists {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, errors.New(ui.PresetSelectionRequired))}, 0)
+			n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, errors.New(ui.PresetSelectionRequired))}, "")
 			return
 		}
 		size = display.Point{X: int32(selected.Width), Y: int32(selected.Height)}
 	}
+	// The card stays hidden for the whole session, so that it cannot appear
+	// in the image, and returns when the session or its capture has ended.
+	n.card.Suspend()
 	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), mode, size, overlay.Events{
 		OnCapture: n.startRectangleCapture,
 		OnCancel: func() {
 			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
+			n.card.Resume()
 		},
 		OnSessionLost: func(reason string) {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: reason}, 0)
+			n.reportOutcome(ui.Notice{Kind: ui.NoticeWarning, Message: reason}, "")
+			n.card.Resume()
 		},
 	})
 	switch {
 	case err == nil:
 	case errors.Is(err, overlay.ErrPresetTooLarge):
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, "")
 	case errors.Is(err, overlay.ErrSessionActive):
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureSessionActive}, 0)
 	default:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, err)}, 0)
+		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, err)}, "")
+	}
+	// A session already on screen keeps the card hidden.
+	if err != nil && !errors.Is(err, overlay.ErrSessionActive) {
+		n.card.Resume()
 	}
 }
 
@@ -642,7 +944,8 @@ func (n *NativeView) beginOverlay() {
 func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) {
 	if n.captureRectangle == nil {
 		restore()
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New(ui.CaptureServiceUnavailable))}, 0)
+		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New(ui.CaptureServiceUnavailable))}, "")
+		n.card.Resume()
 		return
 	}
 	options := n.options.Options()
@@ -700,17 +1003,34 @@ func (n *NativeView) finishCapture(result CaptureResult, messages captureMessage
 	n.inProgress = false
 	n.savedPath = result.Path
 	n.openFolder.Enable(result.Path != "")
+	n.reportOutcome(captureNotice(result, messages), result.Path)
+	n.card.Resume()
+}
+
+// captureNotice words one capture's outcome. A save error with a saved path
+// means the image was saved and only its temporary name could not be removed,
+// so the capture is reported as saved, with that name as a warning.
+func captureNotice(result CaptureResult, messages captureMessages) ui.Notice {
+	saveErr, leftBehind := result.Save, ""
+	if result.Path != "" && saveErr != nil {
+		leftBehind = fmt.Sprintf(ui.CaptureTemporaryLeftBehind, saveErr)
+		saveErr = nil
+	}
 	switch {
 	case result.Err != nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: captureFailureMessage(messages.failed, result.Err)}, 0)
-	case result.Clipboard == nil && result.Save == nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: fmt.Sprintf(messages.succeeded, result.Path)}, 0)
-	case result.Save != nil && result.Clipboard == nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(messages.saveFailed, result.Save)}, 0)
-	case result.Clipboard != nil && result.Save == nil:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(messages.clipboardFailed, result.Path, result.Clipboard)}, 0)
+		return ui.Notice{Kind: ui.NoticeError, Message: captureFailureMessage(messages.failed, result.Err)}
+	case result.Clipboard == nil && saveErr == nil:
+		kind := ui.NoticeSuccess
+		if leftBehind != "" {
+			kind = ui.NoticeWarning
+		}
+		return ui.Notice{Kind: kind, Message: fmt.Sprintf(messages.succeeded, result.Path) + leftBehind}
+	case saveErr != nil && result.Clipboard == nil:
+		return ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(messages.saveFailed, saveErr)}
+	case result.Clipboard != nil && saveErr == nil:
+		return ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(messages.clipboardFailed, result.Path, result.Clipboard) + leftBehind}
 	default:
-		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(messages.outputsFailed, result.Save, result.Clipboard)}, 0)
+		return ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(messages.outputsFailed, saveErr, result.Clipboard)}
 	}
 }
 
@@ -744,31 +1064,37 @@ func (n *NativeView) selectMode(notification uint16, mode CaptureMode) {
 
 // refreshDisplays repopulates the display picker from the current topology
 // (SCR-041, SCR-043). A previous selection is kept while its display stays
-// connected; otherwise the cursor display becomes the default. It runs on
-// the GUI thread, including from the display-change subscription.
+// connected; otherwise the cursor display becomes the default. A failed
+// enumeration says nothing about which displays are connected, so it keeps
+// the list and the selection for the next enumeration to check, and displayErr
+// refuses a capture until one succeeds (SCR-040). It runs on the GUI thread,
+// including from the display-change subscription.
 func (n *NativeView) refreshDisplays() {
+	// The picker is hidden outside Full Display mode, so a failure notice
+	// only makes sense there; NativeAction and selectMode surface displayErr
+	// when the mode is selected.
+	if err := n.reloadDisplays(); err != nil && n.options.Options().Mode == ModeFullDisplay {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
+	}
+}
+
+// reloadDisplays is refreshDisplays without its notice, returning a failed
+// enumeration for the caller to report.
+func (n *NativeView) reloadDisplays() error {
 	if n.displayCombo == nil {
-		return
+		return nil
 	}
 	previous := n.selectedDeviceName()
 	if n.displays == nil {
 		n.displayErr = errors.New(ui.DisplayServiceUnavailable)
 		n.displayList = nil
 		n.displayCombo.Reset()
-		return
+		return nil
 	}
-	displays, err := n.displays.Displays()
+	displays, err := n.listDisplays()
 	if err != nil {
 		n.displayErr = err
-		n.displayList = nil
-		n.displayCombo.Reset()
-		// The picker is hidden outside Full Display mode, so a failure
-		// notice only makes sense there; NativeAction and selectMode
-		// surface displayErr when the mode is selected.
-		if n.options.Options().Mode == ModeFullDisplay {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
-		}
-		return
+		return err
 	}
 	n.displayErr = nil
 	n.displayList = displays
@@ -797,6 +1123,7 @@ func (n *NativeView) refreshDisplays() {
 		selected = 0
 	}
 	n.displayCombo.Select(selected)
+	return nil
 }
 
 func (n *NativeView) selectedDeviceName() string {
@@ -859,6 +1186,7 @@ func (n *NativeView) commitShortcut() {
 		}
 		return
 	}
+	n.card.WithdrawSetting(n.cardConflict)
 	n.shortcut.Error.SetText("")
 	n.shortcut.Edit.SetText(shortcut.String())
 	err = n.options.SetShortcut(shortcut)
@@ -873,7 +1201,11 @@ func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 	if n.hotkeys == nil {
 		return nil
 	}
-	return n.hotkeys.Apply(shortcut)
+	err := n.hotkeys.Apply(shortcut)
+	if err == nil {
+		n.card.WithdrawSetting(n.cardConflict)
+	}
+	return err
 }
 
 // presentShortcutFailure reports a registration problem beside the shortcut
@@ -957,6 +1289,7 @@ func (n *NativeView) NativeRestoreDefaults() string {
 	options := n.options.Options()
 	n.shortcut.Edit.SetText(options.Shortcut.String())
 	n.shortcut.Error.SetText("")
+	n.card.WithdrawSettings()
 	n.status.ClearShown(n.shortcutNotice, n.optionsNotice)
 	if n.hotkeys != nil {
 		if err := n.hotkeys.Apply(options.Shortcut); err != nil {
@@ -990,15 +1323,19 @@ func (n *NativeView) refreshFormat() {
 // presentResult shows an option change's outcome in the status area and
 // records it as the option notice (optionsNotice).
 func (n *NativeView) presentResult(err error, success string) {
-	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: success}
+	_ = n.status.Show(optionNotice(err, success), 0)
+	n.optionsNotice = n.status.Revision()
+}
+
+// optionNotice words an option change's outcome.
+func optionNotice(err error, success string) ui.Notice {
 	switch {
 	case errors.Is(err, ErrPersistence):
-		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.OptionsSaveFailed, err)}
+		return ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.OptionsSaveFailed, err)}
 	case err != nil:
-		notice = ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}
+		return ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}
 	}
-	_ = n.status.Show(notice, 0)
-	n.optionsNotice = n.status.Revision()
+	return ui.Notice{Kind: ui.NoticeSuccess, Message: success}
 }
 
 // refuseOptions shows Start Capture's refusal of the capture options, or of
@@ -1006,8 +1343,12 @@ func (n *NativeView) presentResult(err error, success string) {
 // records it as the option notice (optionsNotice), as the restore of the
 // default settings replaces what it refuses.
 func (n *NativeView) refuseOptions(err error) {
-	_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, 0)
+	notice := ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}
+	onCard := n.showOutcome(notice)
 	n.optionsNotice = n.status.Revision()
+	if onCard {
+		n.card.ReportSetting(notice)
+	}
 }
 
 func captureModeLabel(mode CaptureMode) string {

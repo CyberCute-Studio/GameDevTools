@@ -221,9 +221,6 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 				t.Errorf("%s waits on QLT-04A but is not in hardwareGated", row.id)
 			}
 		}
-		if strings.Contains(row.open, "REL-02A") && row.status != "**Partial**" {
-			t.Errorf("%s waits on the fix in REL-02A but is not Partial", row.id)
-		}
 		if row.status == "**Partial**" && row.open == "" {
 			t.Errorf("%s is Partial but its Open cell does not say what remains", row.id)
 		}
@@ -475,7 +472,7 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		ui.ResizeStateSkipped, ui.ResizeStateFailed, ui.ResizeStateCancelled,
 		ui.PresetLibraryLabel, ui.PresetCreateAction, ui.PresetRenameAction,
 		ui.PresetDuplicateAction, ui.PresetDeleteAction,
-		ui.RestoreDefaultsAction, ui.ResizeModeSummaryLabel,
+		ui.RestoreDefaultsAction, ui.CardDismissAction, ui.CardDismissProblemAction, ui.ResizeModeSummaryLabel,
 		ui.ErrorWriteEncodeLabel, ui.ErrorShortcutRegistrationLabel,
 		// The troubleshooting section quotes these messages by how they begin.
 		strings.Split(ui.CaptureGraphicsFailed, ":")[0],

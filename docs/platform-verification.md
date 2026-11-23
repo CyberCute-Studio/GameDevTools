@@ -117,12 +117,12 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 | AC-S07, AC-S10 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
 | AC-S01 — Exact preset at standard scaling | **Partial** | [Screenshot record](screenshot-verification.md); checking a real preset capture's image for the frame and toolbar is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S06 — Full secondary display | **Partial** | [Screenshot record](screenshot-verification.md); that the image holds only the selected display's contents is manual check [M19](testing.md#manual-pre-release-checks) |
-| AC-S11 — Shortcut conflict | **Partial** | [Screenshot record](screenshot-verification.md); REL-02A must show a conflict found at startup while the Screenshot view is hidden |
-| AC-S08, AC-S09 — Independent output failures | **Partial** | [Screenshot record](screenshot-verification.md); telling a user whose window is minimized or on another tool needs the fix in REL-02A, then manual check [M18](testing.md#manual-pre-release-checks) |
+| AC-S11 — Shortcut conflict | Pass | [Screenshot record](screenshot-verification.md) |
+| AC-S08, AC-S09 — Independent output failures | **Partial** | [Screenshot record](screenshot-verification.md); the result card on the release candidate is manual check [M18](testing.md#manual-pre-release-checks) |
 | AC-S03 — Click-through interaction | **Partial** | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S04 — Precision placement | **Partial** | [Screenshot record](screenshot-verification.md); a real drag of the production frame's border is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S05 — Free rectangle adjustment | **Partial** | [Screenshot record](screenshot-verification.md); drawing a selection with a real pointer is manual check [M15](testing.md#manual-pre-release-checks) |
-| AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios); AC-S12 also waits on REL-02A to show a session's end while the Screenshot view is hidden |
+| AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios) |
 | AC-R01 to AC-R15 | Pass | [Image Resizer record](image-resizer-verification.md), in this run's suite |
 
 ## What these results do not cover

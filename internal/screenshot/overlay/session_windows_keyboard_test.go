@@ -380,6 +380,60 @@ func TestFreeRectangleDisplayChangeKeepsTypedSize(t *testing.T) {
 	}
 }
 
+// TestUnchangedDesktopRecoversAToolbarNoDisplayShows is a display going from
+// inside the desktop's rectangle, which changes neither the rectangle nor the
+// cursor display: a toolbar left where nothing shows it comes back (SCR-025),
+// and one the user dragged elsewhere on a display stays.
+func TestUnchangedDesktopRecoversAToolbarNoDisplayShows(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	moveToolbar := func(x, y int32) {
+		procSetWindowPos.Call(uintptr(native.toolbar), 0, uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,
+			swpNoSize|swpNoZOrder|swpNoActivate)
+	}
+
+	placed := windowRect(t, native.toolbar)
+	moveToolbar(placed.Left+5, placed.Top+5)
+	if !native.DisplayChanged(native.bounds) {
+		t.Fatal("the session did not survive an unchanged desktop")
+	}
+	if got := windowRect(t, native.toolbar); got.Left != placed.Left+5 || got.Top != placed.Top+5 {
+		t.Fatalf("a toolbar on a display moved to %v", got)
+	}
+
+	moveToolbar(-20000, -20000)
+	if !native.DisplayChanged(native.bounds) {
+		t.Fatal("the session did not survive an unchanged desktop")
+	}
+	wantX, wantY := native.toolbarPosition()
+	if got := windowRect(t, native.toolbar); got.Left != wantX || got.Top != wantY {
+		t.Fatalf("toolbar at (%d, %d), want it back at (%d, %d)", got.Left, got.Top, wantX, wantY)
+	}
+
+	// Two pixels left on the rightmost display cannot be reached either.
+	displays, err := native.monitor.Displays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightmost := displays[0].WorkArea
+	for _, item := range displays {
+		if item.WorkArea.Right > rightmost.Right {
+			rightmost = item.WorkArea
+		}
+	}
+	moveToolbar(rightmost.Right-2, rightmost.Top)
+	if !native.DisplayChanged(native.bounds) {
+		t.Fatal("the session did not survive an unchanged desktop")
+	}
+	if got := windowRect(t, native.toolbar); got.Left != wantX || got.Top != wantY {
+		t.Fatalf("toolbar with a sliver in view at (%d, %d), want it back at (%d, %d)", got.Left, got.Top, wantX, wantY)
+	}
+}
+
 // TestCancelCommitsNoTypedSize pins that ending a session commits nothing
 // typed: the field holding the focus loses it as Close destroys the
 // toolbar, and that focus loss is no request to create a selection, nor a

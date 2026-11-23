@@ -140,6 +140,7 @@ var (
 	procSetForegroundWindow         = user32.NewProc("SetForegroundWindow")
 	procUpdateLayeredWindowIndirect = user32.NewProc("UpdateLayeredWindowIndirect")
 	procSetWindowPos                = user32.NewProc("SetWindowPos")
+	procGetWindowRect               = user32.NewProc("GetWindowRect")
 	procEnableWindow                = user32.NewProc("EnableWindow")
 	procIsChild                     = user32.NewProc("IsChild")
 	procIsWindowEnabled             = user32.NewProc("IsWindowEnabled")
@@ -623,7 +624,7 @@ func createDIB(memory uintptr, width, height int32) (uintptr, unsafe.Pointer, er
 
 func (s *windowsSession) createToolbar(request CreateRequest) error {
 	width, height := s.toolbarSize.Width, s.toolbarSize.Height
-	x, y := toolbarPlacement(request.Bounds, s.anchor, s.selection, width, height, s.margin)
+	x, y := s.toolbarPosition()
 	toolbar, _, err := procCreateWindowExW.Call(
 		wsExTopmost|wsExToolWindow,
 		uintptr(unsafe.Pointer(utf16(toolbarClassName))),
@@ -890,7 +891,8 @@ func (s *windowsSession) restoreFocus() {
 // selection is reported through OnSelection, like every selection change. A
 // notification whose physical topology, cursor-display scaling, and anchor
 // work area all match the session's current measurements changes nothing the
-// surfaces show, so it is answered without re-rendering.
+// surfaces show, so it is answered without re-rendering, though a display
+// inside the desktop's rectangle may have gone with part of the toolbar on it.
 func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 	selection, ok := revalidatedSelection(s.selection, bounds)
 	if !ok {
@@ -908,6 +910,7 @@ func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 		}
 	}
 	if bounds == s.bounds && dpi == s.dpi && anchor == s.anchor {
+		s.recoverToolbar()
 		return true
 	}
 	// Pointer coordinates from a drag in progress belong to the old desktop;
@@ -1345,10 +1348,47 @@ func (s *windowsSession) placeToolbar() {
 		// session, after the toolbar is already gone.
 		return
 	}
-	x, y := toolbarPlacement(s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
+	x, y := s.toolbarPosition()
 	procSetWindowPos.Call(uintptr(s.toolbar), 0,
 		uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,
 		swpNoSize|swpNoZOrder|swpNoActivate)
+}
+
+// toolbarPosition places the toolbar on the displays as they are now. If they
+// cannot be read, the position is kept inside the virtual desktop.
+func (s *windowsSession) toolbarPosition() (x, y int32) {
+	var workAreas []display.Rect
+	if s.monitor != nil {
+		if displays, err := s.monitor.Displays(); err == nil {
+			for _, item := range displays {
+				workAreas = append(workAreas, item.WorkArea)
+			}
+		}
+	}
+	return reachableToolbarPlacement(workAreas, s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
+}
+
+// recoverToolbar places the toolbar again unless the displays show all of it,
+// as a sliver left on a neighboring display cannot be reached with the pointer.
+func (s *windowsSession) recoverToolbar() {
+	if s.monitor == nil {
+		return
+	}
+	var bounds rectStruct
+	if r, _, _ := procGetWindowRect.Call(uintptr(s.toolbar), uintptr(unsafe.Pointer(&bounds))); r == 0 {
+		return
+	}
+	displays, err := s.monitor.Displays()
+	if err != nil {
+		return
+	}
+	workAreas := make([]display.Rect, 0, len(displays))
+	for _, item := range displays {
+		workAreas = append(workAreas, item.WorkArea)
+	}
+	if !toolbarOnDisplays(workAreas, bounds.Left, bounds.Top, bounds.Right-bounds.Left, bounds.Bottom-bounds.Top) {
+		s.placeToolbar()
+	}
 }
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's

@@ -39,7 +39,6 @@ const (
 
 var (
 	procGetWindowLongW = user32.NewProc("GetWindowLongW")
-	procGetWindowRect  = user32.NewProc("GetWindowRect")
 	procIsWindow       = user32.NewProc("IsWindow")
 	procGetDlgItem     = user32.NewProc("GetDlgItem")
 	procSendMessageW   = user32.NewProc("SendMessageW")

@@ -100,7 +100,103 @@ func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 		t.Fatal("activation reported a window that does not exist")
 	}
 
-	className := fmt.Sprintf("GameDevToolsInstanceTest%d", time.Now().UnixNano())
+	className, hwnd := newInstanceTestWindow(t)
+	procShowWindow.Call(hwnd, swMinimizeInstanceTest)
+	if iconic, _, _ := procIsIconic.Call(hwnd); iconic == 0 {
+		t.Fatal("test window did not minimize")
+	}
+	if !activateExistingInstance(className, time.Second) {
+		t.Fatal("activation did not find the existing window")
+	}
+	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
+		t.Fatal("activation left the existing window minimized")
+	}
+}
+
+// TestActivateExistingInstanceLeavesACaptureHiddenWindow covers a launch
+// during a capture started while the window was minimized: hiding keeps the
+// window iconic, and restoring it would put it under the overlay and in the
+// image (SCR-044).
+func TestActivateExistingInstanceLeavesACaptureHiddenWindow(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	className, hwnd := newInstanceTestWindow(t)
+	procShowWindow.Call(hwnd, swMinimizeInstanceTest)
+	procShowWindow.Call(hwnd, swHide)
+	if iconic, _, _ := procIsIconic.Call(hwnd); iconic == 0 {
+		t.Fatal("hiding the test window ended its minimized state")
+	}
+	if !activateExistingInstance(className, time.Second) {
+		t.Fatal("activation did not find the existing window")
+	}
+	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible != 0 {
+		t.Fatal("activation showed a window the capture had hidden")
+	}
+	if iconic, _, _ := procIsIconic.Call(hwnd); iconic == 0 {
+		t.Fatal("activation changed the hidden window's minimized state")
+	}
+}
+
+// TestActivateExistingInstanceWaitsForAWindowStillStarting is a launch while
+// the first one's window exists but has not been shown: it is brought forward
+// once it appears, where leaving it would let it open behind other windows.
+func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	className, hwnd := newInstanceTestWindow(t)
+	const swShowNAInstanceTest = 8
+	offScreen := int32(-22000)
+	procSetWindowPos.Call(hwnd, 0, uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 50, 50, swpNoZOrder|swpNoActivate)
+	// The window's own thread shows it, as it does not pump messages for a
+	// ShowWindow from another; the second launch runs beside it.
+	started := time.Now()
+	done := make(chan time.Duration, 1)
+	go func() {
+		activateExistingInstance(className, 0)
+		done <- time.Since(started)
+	}()
+	// Longer than a quick start, as antivirus scanning can make a first launch.
+	time.Sleep(1500 * time.Millisecond)
+	procShowWindow.Call(hwnd, swShowNAInstanceTest)
+	select {
+	case elapsed := <-done:
+		if elapsed >= instanceShowWait {
+			t.Fatalf("activation took %v, so it did not see the window appear", elapsed)
+		}
+	case <-time.After(instanceShowWait + 5*time.Second):
+		t.Fatal("activation did not return")
+	}
+}
+
+// TestActivateExistingInstanceSeesAWindowDestroyed is a launch that found the
+// window of an instance now closing: it must report no window, so that
+// claimInstance takes the mutex once that instance exits, rather than exit
+// with nothing left running.
+func TestActivateExistingInstanceSeesAWindowDestroyed(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	className, hwnd := newInstanceTestWindow(t)
+	done := make(chan bool, 1)
+	go func() { done <- activateExistingInstance(className, 0) }()
+	time.Sleep(200 * time.Millisecond)
+	procDestroyWindow.Call(hwnd)
+	select {
+	case activated := <-done:
+		if activated {
+			t.Fatal("activation reported a window that was destroyed")
+		}
+	case <-time.After(instanceShowWait - time.Second):
+		t.Fatal("activation kept waiting for a destroyed window")
+	}
+}
+
+const swMinimizeInstanceTest = 6
+
+// newInstanceTestWindow creates a hidden top-level window of a unique class on
+// the calling thread, which must stay locked to it and need not pump messages.
+func newInstanceTestWindow(t *testing.T) (className string, hwnd uintptr) {
+	t.Helper()
+	className = fmt.Sprintf("GameDevToolsInstanceTest%d", time.Now().UnixNano())
 	instance, _, err := procGetModuleHandleW.Call(0)
 	if instance == 0 {
 		t.Fatalf("GetModuleHandleW: %v", err)
@@ -114,7 +210,7 @@ func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 	if atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class))); atom == 0 {
 		t.Fatalf("RegisterClassExW: %v", err)
 	}
-	hwnd, _, err := procCreateWindowExW.Call(
+	hwnd, _, err = procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(utf16(className))),
 		uintptr(unsafe.Pointer(utf16("instance activation test"))),
@@ -126,18 +222,7 @@ func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 		t.Fatalf("CreateWindowExW: %v", err)
 	}
 	t.Cleanup(func() { procDestroyWindow.Call(hwnd) })
-
-	const swMinimize = 6
-	procShowWindow.Call(hwnd, swMinimize)
-	if iconic, _, _ := procIsIconic.Call(hwnd); iconic == 0 {
-		t.Fatal("test window did not minimize")
-	}
-	if !activateExistingInstance(className, time.Second) {
-		t.Fatal("activation did not find the existing window")
-	}
-	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
-		t.Fatal("activation left the existing window minimized")
-	}
+	return className, hwnd
 }
 
 // TestActivateExistingInstanceWaitsForStartupWindow covers the launch race:

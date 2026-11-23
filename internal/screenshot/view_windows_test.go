@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -91,12 +92,76 @@ func newNativeViewForTest(t *testing.T, store *settings.Store, value *settings.S
 	view.hotkeyFactory = func(uintptr, int32) hotkeyRegistrar {
 		return &fakeHotkeyRegistrar{}
 	}
+	view.card = &fakeResultCard{}
 	if err := view.NativeCreate(parent); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(view.NativeDestroy)
 	return view
 }
+
+// fakeResultCard records what the view reports on the result card without
+// putting a topmost window on the desktop.
+type fakeResultCard struct {
+	reports   []ui.CardEntry
+	suspended bool
+	suspends  int
+	resumes   int
+	moves     int
+	destroyed bool
+	changed   func(int)
+	// settingSuspended is whether the last ReportSetting found the card
+	// suspended.
+	settingSuspended bool
+}
+
+func (f *fakeResultCard) Report(notice ui.Notice, path string) {
+	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Path: path})
+	f.tell()
+}
+func (f *fakeResultCard) ReportSetting(notice ui.Notice) {
+	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Setting: true})
+	f.settingSuspended = f.suspended
+	f.tell()
+}
+func (f *fakeResultCard) WithdrawSettings() {
+	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool { return entry.Setting })
+	f.tell()
+}
+func (f *fakeResultCard) WithdrawSetting(notice ui.Notice) {
+	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool {
+		return entry.Setting && entry.Notice == notice
+	})
+	f.tell()
+}
+func (f *fakeResultCard) Suspend() { f.suspended = true; f.suspends++ }
+func (f *fakeResultCard) Resume()  { f.suspended = false; f.resumes++ }
+func (f *fakeResultCard) Reposition() {
+	f.moves++
+}
+func (f *fakeResultCard) SetProblemsChanged(changed func(int)) { f.changed = changed }
+func (f *fakeResultCard) tell() {
+	if f.changed == nil {
+		return
+	}
+	problems := 0
+	for _, entry := range f.reports {
+		if entry.Notice.Kind >= ui.NoticeWarning {
+			problems++
+		}
+	}
+	f.changed(problems)
+}
+func (f *fakeResultCard) DismissProblem() {
+	for i := len(f.reports) - 1; i >= 0; i-- {
+		if f.reports[i].Notice.Kind >= ui.NoticeWarning {
+			f.reports = slices.Delete(f.reports, i, i+1)
+			break
+		}
+	}
+	f.tell()
+}
+func (f *fakeResultCard) Destroy() { f.destroyed = true }
 
 // fakeHotkeyRegistrar records the view's hotkey calls without touching the
 // machine-global RegisterHotKey state. applyFunc can fail specific
@@ -338,8 +403,10 @@ func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
 
 	narrow := view.NativeHeight(400, scale, measure)
 	wide := view.NativeHeight(600, scale, measure)
+	// Two more radio rows; the status row's buttons are below its text at
+	// every width.
 	if narrow != wide+52 {
-		t.Fatalf("stacked radio rows should add two rows: narrow = %d, wide = %d", narrow, wide)
+		t.Fatalf("a narrow width should add two radio rows: narrow = %d, wide = %d", narrow, wide)
 	}
 
 	baseline := view.NativeHeight(600, scale, measure)
