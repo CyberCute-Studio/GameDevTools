@@ -441,11 +441,13 @@ Nothing happens when I start the application again.
 
 The global shortcut does nothing.
   The application must be running. The shortcut is paused while the Global
-  shortcut field has the focus, so leave the field first. Then open the
-  Screenshot view. If the field shows a "Shortcut registration error", another
-  application owns the combination, so choose a different one. Otherwise the
-  result card or the view says why a capture could not start, such as a preset
-  larger than the desktop or an invalid JPEG quality.
+  shortcut field has the focus, so leave the field first. While one of the
+  application's dialogs is open, even behind another window, the shortcut only
+  flashes that dialog and beeps, so close the dialog. Then open the Screenshot
+  view. If the field shows a "Shortcut registration error", another application
+  owns the combination, so choose a different one. Otherwise the result card or
+  the view says why a capture could not start, such as a preset larger than the
+  desktop or an invalid JPEG quality.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

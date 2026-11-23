@@ -1231,9 +1231,9 @@ func (s *windowsSession) renderFrame() error {
 // the union of the old and new visual bounds is re-dimmed, the new
 // selection interior is cleared to the visually transparent
 // selectionPixel, and its border and handles are drawn on top. The border
-// ring sits outside the selection rectangle, so even an incompletely
-// flushed frame could never put selection visuals inside the captured
-// pixels (SCR-068).
+// ring sits outside the selection rectangle, and the interior's alpha 1 is
+// kept out of the image by destroying the session's windows and flushing
+// the compositor before the pixels are read (SCR-068).
 func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 	dirty := rectUnion(oldVisual, s.visualBounds())
 	if dirty.Empty() {
