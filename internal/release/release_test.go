@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,6 +149,23 @@ func TestNoticesCarryTheLinkedLicenses(t *testing.T) {
 		if !strings.Contains(notices, name) {
 			t.Errorf("THIRD-PARTY-NOTICES.txt does not name %s", name)
 		}
+	}
+}
+
+// TestLicenseShipsInThePackage holds the repository's MIT license and the copy
+// in the ZIP to one text, under the copyright line the executable carries.
+func TestLicenseShipsInThePackage(t *testing.T) {
+	license := repositoryFile(t, "LICENSE")
+	if !bytes.Equal(license, repositoryFile(t, "packaging", "LICENSE.txt")) {
+		t.Error("LICENSE and packaging/LICENSE.txt differ")
+	}
+	for _, want := range []string{"MIT License", Copyright, "Permission is hereby granted, free of charge"} {
+		if !bytes.Contains(license, []byte(want)) {
+			t.Errorf("LICENSE does not state %q", want)
+		}
+	}
+	if !slices.Contains(PackagedDocuments, "LICENSE.txt") {
+		t.Error("the package does not carry LICENSE.txt")
 	}
 }
 

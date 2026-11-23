@@ -19,6 +19,7 @@ PRD section 19 left four decisions open until public distribution: the final nam
 | Package | Portable ZIP for 64-bit Intel/AMD Windows; no installer |
 | Code signing | None. Each ZIP has a published SHA-256 checksum |
 | Updates | Manual. The application makes no network access to look for one |
+| License | MIT, chosen by the project owner in REL-03 (PRD 1.7), in `LICENSE` and as `LICENSE.txt` in the ZIP |
 
 ### The rename
 
@@ -52,4 +53,4 @@ The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, an
 - SmartScreen may warn on first run. The packaged README explains how to check the download and continue.
 - Users update by replacing the extracted folder's files with those from the new ZIP, and learn of new versions outside the application.
 - The repository and Go module keep the name `GameDevTools`. Renaming them is a separate decision.
-- The project has no license of its own, so the package carries third-party notices only. One must be chosen before any public distribution.
+- The application is released under the MIT License, so the package carries that license beside the third-party notices. A test holds `LICENSE` and the packaged copy to one text, under the copyright line in the executable's version resource.

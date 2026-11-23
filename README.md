@@ -93,7 +93,7 @@ Windows CI runs the same formatting, static-analysis, and test checks, builds an
 
 ## Release package
 
-CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsigned and with a SHA-256 checksum file. It has no installer and no update check. Beside the executable, the ZIP carries a short README, the [user guide](packaging/USER-GUIDE.txt), the [release notes](packaging/RELEASE-NOTES.txt), and the third-party notices. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
+CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsigned and with a SHA-256 checksum file. It has no installer and no update check. It is released under the [MIT License](LICENSE). Beside the executable, the ZIP carries the license, a short README, the [user guide](packaging/USER-GUIDE.txt), the [release notes](packaging/RELEASE-NOTES.txt), and the third-party notices. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
 
 ```powershell
 ./scripts/package.ps1

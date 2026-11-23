@@ -6,7 +6,9 @@ image resizing. It works offline and needs no administrator rights.
 
 USER-GUIDE.txt explains how to use it, its limitations, and what to do when
 something goes wrong. RELEASE-NOTES.txt says what is in this version and what
-has not been verified yet.
+has not been verified yet. CyberCute Dev Tools is released under the MIT
+License, in LICENSE.txt; THIRD-PARTY-NOTICES.txt covers the components it
+includes.
 
 Run it
 ------

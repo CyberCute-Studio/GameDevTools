@@ -169,7 +169,7 @@ try {
     } finally {
         $zip.Dispose()
     }
-    $wanted = @("README.txt", "RELEASE-NOTES.txt", "THIRD-PARTY-NOTICES.txt", "USER-GUIDE.txt", $executableName) | ForEach-Object { "$productName/$_" } | Sort-Object
+    $wanted = @("LICENSE.txt", "README.txt", "RELEASE-NOTES.txt", "THIRD-PARTY-NOTICES.txt", "USER-GUIDE.txt", $executableName) | ForEach-Object { "$productName/$_" } | Sort-Object
     if (($found -join "|") -cne ($wanted -join "|")) { throw "The ZIP holds: $($found -join ', ')." }
     Write-Check "contents"
 
