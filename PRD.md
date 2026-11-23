@@ -736,4 +736,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.3 | 2026-11-21 | QLT-03: confirmed that copied screenshots opt out of Windows clipboard sync and stay in the local clipboard history (NFR-031, section 20). |
 | 1.4 | 2026-11-22 | QLT-04: resolved the Windows 10 open decision — the initial release supports Windows 11 only (NFR-001, section 20). |
 | 1.5 | 2026-11-22 | REL-01: resolved the remaining open decisions — the name CyberCute Dev Tools, a portable ZIP, no code signing, and no automatic updates (sections 19 and 20). |
-| 1.6 | 2026-11-23 | REL-02: recorded that the ZIP carries the user guide and release notes and that an update replaces the extracted folder's files, and pointed to the requirement traceability matrix (section 20). No requirement changed. |
+| 1.6 | 2026-11-23 | REL-02: recorded that the ZIP carries the user guide and release notes, changed the confirmed update decision from replacing the executable to replacing the extracted folder's files so that an update also refreshes those documents, and pointed to the requirement traceability matrix (section 20). No numbered requirement changed. |

@@ -50,7 +50,8 @@ These have not been run, so this version makes no claim about them:
 
 - x64 Windows 11 on real hardware, including the reference machine. Testing so
   far ran on Windows 11 on Arm, natively and as the x64 build under emulation.
-- Any Windows 11 release other than build 26300.
+- Any Windows 11 release other than build 26300, where the combined run took
+  place, and build 26200, where the Screenshot module's own run took place.
 - Display scaling above 100%, mixed scaling, displays with negative coordinates,
   rotated displays, and unplugging a display during a selection. Automated checks
   cover the calculations, but none of these has run on real displays.
@@ -89,8 +90,10 @@ Known issues
   during any selection can take the keyboard from the capture toolbar: click
   the toolbar or press the global shortcut to get it back.
 - If Windows cannot remove a capture's temporary file after saving the image,
-  the result says saving failed although the image was saved. Open Folder shows
-  it, and the leftover .gamedevtools-*.tmp file can be deleted.
+  the result says saving failed although the image was saved. Open Folder can
+  then be pressed and shows it, and the leftover .gamedevtools-*.tmp file can be
+  deleted. If Open Folder cannot be pressed, the image was not saved and that
+  file may be its only copy, so keep it: see section 11 of USER-GUIDE.txt.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

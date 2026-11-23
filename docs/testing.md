@@ -81,7 +81,7 @@ No automated test can stand in for these. None has been done yet, and REL-03 own
 
 ## Recorded runs
 
-Add a row here when a QLT-04A run or a manual check passes, giving the commit of the build it ran on and exactly the requirements it passed. A check that covers no requirement, such as M14, leaves Passed empty. A run counts only for that build, so when the release candidate changes, repeat the run and replace its row. The documentation test checks only that the Build cell is a commit, so REL-03 confirms that each row names the candidate's. It keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
+Add a row here when a QLT-04A run or a manual check passes, giving the commit of the build it ran on and exactly the requirements it passed. A check that covers no requirement, such as M14, leaves Passed empty. A run counts only for that build, so when the release candidate changes, repeat the run and replace its row. The documentation test counts a row only when its Build cell is a commit, ignores one that is not without reporting it, and does not compare the commit with the candidate, so REL-03 confirms that each row is counted and names the candidate's. It keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
 
 | Date | Run | Build | Passed |
 |---|---|---|---|

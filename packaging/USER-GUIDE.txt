@@ -428,8 +428,9 @@ Windows says it protected your PC.
 Nothing happens when I start the application again.
   It is already running, and the existing window was brought forward. Look for it
   on the taskbar. During a selection the window stays hidden and has no taskbar
-  button, and the toolbar can lose the keyboard: click the capture toolbar or
-  press the global shortcut to bring it forward, then finish or cancel the
+  button, unless it was minimized before the capture, when it can reappear: see
+  section 10. The toolbar can also lose the keyboard: click the capture toolbar
+  or press the global shortcut to bring it forward, then finish or cancel the
   selection.
 
 The global shortcut does nothing.
@@ -454,9 +455,12 @@ A screenshot is black.
 The capture was copied but not saved, or saved but not copied.
   The message says which part failed. To fix saving, choose another Output folder
   or free space on its drive. To fix copying, close any application that may be
-  holding the clipboard and capture again. If the message mentions removing a
-  temporary file, the image was saved: press Open Folder to find it, and delete
-  the leftover .gamedevtools-*.tmp file.
+  holding the clipboard and capture again. If the message mentions a temporary
+  file, check Open Folder before you capture again or delete anything. If it can
+  be pressed, the image was saved: press it to find the image, then delete the
+  leftover .gamedevtools-*.tmp file. If it cannot be pressed, the image was not
+  saved and that file may be its only copy, so keep it and follow the entry for
+  .gamedevtools-*.tmp files below.
 
 "The output folder cannot be used."
   Windows would read that path as a different place, for example because a name
@@ -482,11 +486,11 @@ My results have names like photo_2.png.
 
 There are .gamedevtools-*.tmp files in my output folder.
   The application was stopped while saving, or could not remove the file after
-  saving. Such a file holds one result, which may be complete or unfinished. If
-  a .gamedevtools-replaced-* file is beside it, follow the next entry first. If
-  the image is missing and you cannot make it again, copy this file, give the
-  copy a .png or .jpg extension, and open it to check it. Otherwise it is safe
-  to delete.
+  a save or a failed save. Such a file holds one result, which may be complete
+  or unfinished. If a .gamedevtools-replaced-* file is beside it, follow the
+  next entry first. If the image is missing and you cannot make it again, copy
+  this file, give the copy a .png or .jpg extension, and open it to check it.
+  Otherwise it is safe to delete.
 
 There is a .gamedevtools-replaced-* file in my output folder.
   It is the existing file an Overwrite was replacing when it was interrupted or
