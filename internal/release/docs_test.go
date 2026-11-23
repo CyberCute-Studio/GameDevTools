@@ -37,8 +37,9 @@ var hardwareGated = []string{
 }
 
 // manualGated are the requirements whose defining condition only a manual
-// check exercises, in a real application: M8, M9, and M10, which REL-03 owns.
-var manualGated = []string{"SCR-002", "SCR-021", "SCR-022", "SCR-055", "SCR-062", "AC-S03"}
+// check exercises, in a real application: M8, M9, M10, and M12, which REL-03
+// owns.
+var manualGated = []string{"SCR-002", "SCR-021", "SCR-022", "SCR-055", "SCR-062", "AC-S03", "AC-A04"}
 
 type traceRow struct {
 	id, priority, items, evidence, status, open string

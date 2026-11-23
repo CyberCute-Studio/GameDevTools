@@ -111,8 +111,11 @@ Full Display
 
   Choose a display in the Display list, which shows each display's number, name
   where Windows provides one, size, scaling, and whether it is the primary one.
-  The display under the pointer is selected by default. Start Capture takes the
-  picture at once, at the display's full native resolution.
+  The display under the pointer is selected when the application starts. The
+  selection then stays until you change it or that display is disconnected, so
+  it does not follow the pointer: check it before capturing with the global
+  shortcut. Start Capture takes the picture at once, at the display's full
+  native resolution.
 
 What a capture gives you
 
@@ -141,11 +144,12 @@ What a capture gives you
 The global shortcut starts the selected capture mode while another application
 is in front. The default is Ctrl+Alt+S.
 
-To change it, click the Global shortcut field, type a new combination, and press
-Tab to leave the field. It takes effect at once and is remembered. A shortcut is
-at least one of Ctrl, Alt, Shift, or Win, plus a letter, a digit, or a function
-key from F1 to F24, such as Ctrl+Shift+F9. The shortcut is paused while the
-field has the focus.
+To change it, click the Global shortcut field, type the combination out as
+text, such as Ctrl+Shift+F9, and press Tab to leave the field. Pressing the keys
+themselves does not enter them. The new shortcut takes effect at once and is
+remembered. A shortcut is at least one of Ctrl, Alt, Shift, or Win, plus a
+letter, a digit, or a function key from F1 to F24. The shortcut is paused while
+the field has the focus.
 
 If another application already owns the combination, the field says so and your
 previous shortcut keeps working until you choose another one.
@@ -239,9 +243,11 @@ under "When an output file already exists" decides what happens:
                     alone.
 
   Overwrite         The existing file is replaced, but only after you confirm
-                    for this job. A read-only file, or one another program is
-                    holding open, is not replaced: the image ends Failed and
-                    the file stays as it was.
+                    for this job. A read-only file, or one another program has
+                    open for writing or without allowing deletion, is not
+                    replaced: the image ends Failed and the file stays as it
+                    was. A program that allows deletion, as some viewers do,
+                    does not prevent the replacement.
 
 A source image is never overwritten, under any setting. Under Overwrite, the
 result is saved under a numbered name instead when the existing item is a source
@@ -413,8 +419,9 @@ The capture was copied but not saved, or saved but not copied.
 
 "The output folder cannot be used."
   Windows would read that path as a different place, for example because a name
-  ends in a space or period, or is a device name such as NUL. Choose another
-  folder with Browse.
+  ends in a space or period, or is a device name such as NUL. Or the path names
+  a server or device rather than a folder on it, such as \\server. Choose
+  another folder with Browse.
 
 An image shows Damaged or incomplete, Unsupported format, or Too large.
   Select its row to see why. If a real PNG or JPEG has another extension, such
@@ -424,8 +431,9 @@ An image shows Damaged or incomplete, Unsupported format, or Too large.
 An image ended Failed.
   Select its row. The details give the error's kind and what to do, such as
   freeing drive space or choosing a folder you may write to. Under Overwrite,
-  the existing file may be read-only or open in another program: clear its
-  Read-only property or close the program. Run the job again.
+  the existing file may be read-only, or another program may have it open in a
+  way that blocks replacing it: clear its Read-only property or close the
+  program. Run the job again.
 
 My results have names like photo_2.png.
   A file with that name already existed. Selecting the row tells you why. Empty

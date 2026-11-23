@@ -246,7 +246,7 @@ func TestFreeRectangleTabFromFilledPairReachesCapture(t *testing.T) {
 
 // TestToolbarRestoresFocusOnActivation pins that the toolbar gives the
 // keyboard focus back to the control that had it when it is activated again
-// (UX-006, SCR-015) — on Alt+Tab, or as the global shortcut brings it back —
+// (UX-006, SCR-015) — as the global shortcut brings it back —
 // rather than keeping it on the toolbar itself, where typed digits go
 // nowhere. A click activation leaves the focus to the click, and gives it
 // back once the click is handled only if the click left it on the toolbar.

@@ -39,13 +39,13 @@ Both displays run at 100% scaling. Mixed-scaling, negative-coordinate, and rotat
 
 ## Acceptance matrix
 
-Every scenario passes on the environment of record, verified by three consecutive clean `go test -count=1 ./...` runs. "Hardware-gated" marks scenarios whose live validation needs display equipment this environment does not have; their mechanism-level coverage is listed, and the gap is tracked under the FND-01 blocker in [ADR-0001](adr/0001-native-windows-stack.md).
+Every scenario's automated coverage passes on the environment of record, verified by three consecutive clean `go test -count=1 ./...` runs. AC-S03 stays **Partial** until a real click goes through the production frame, which is manual check [M9](testing.md#manual-pre-release-checks). "Hardware-gated" marks scenarios whose live validation needs display equipment this environment does not have; their mechanism-level coverage is listed, and the gap is tracked under the FND-01 blocker in [ADR-0001](adr/0001-native-windows-stack.md).
 
 | Scenario | Automated coverage | Result |
 |---|---|---|
 | AC-S01 — Exact preset at standard scaling | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameCaptureDeliversExactRect`, `capture.TestCaptureRectDimensionsAndContent` (real composited pixel content at 100% scaling) | Pass |
 | AC-S02 — Exact preset at mixed DPI | `display.TestLogicalPhysicalConversion`, `display.TestRectConversion`, `overlay.TestDisplayChangeResolvesScalingOnUnchangedTopology`; live mixed-DPI capture is hardware-gated | Pass at mechanism level; live validation gated |
-| AC-S03 — Click-through interaction | `overlay.TestPresetFrameExactSizeAndSurface` (alpha-zero click-through interior, opaque drag border), `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged`; live click-through into another application was validated in the FND-01 spike | Pass |
+| AC-S03 — Click-through interaction | `overlay.TestPresetFrameExactSizeAndSurface` (alpha-zero click-through interior, opaque drag border), `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged`; the FND-01 spike clicked through a color-keyed window, which is not how the production frame is built, so a real click through that frame remains manual check [M9](testing.md#manual-pre-release-checks) | **Partial** |
 | AC-S04 — Precision placement | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameKeyboardNudges` (one-pixel and ten-pixel nudges, exact dimensions preserved) | Pass |
 | AC-S05 — Free rectangle adjustment | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestOverlayMoveAndResizeAdjustSelection`, `overlay.TestSizedSelectionAppliesTypedDimensions` | Pass |
 | AC-S06 — Full secondary display | `capture.TestCaptureDisplay` (captures every connected display at its native physical dimensions, including the 1920 × 1200 secondary), `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | Pass |

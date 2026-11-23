@@ -88,7 +88,8 @@ Distribution
 
 - Portable ZIP with a SHA-256 checksum. There is no installer.
 - Not code-signed, so Windows SmartScreen may warn on first run.
-- No automatic updates. To update, replace the executable.
+- No automatic updates. To update, replace this folder's files with those from
+  the new ZIP.
 - The project has not yet chosen a license of its own. One must be chosen before
   this version is distributed publicly. THIRD-PARTY-NOTICES.txt covers the
   components it includes.

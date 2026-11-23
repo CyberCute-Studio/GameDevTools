@@ -7,7 +7,7 @@ The evidence column names representative checks, not all of them, as `package.Te
 ## Status
 
 - **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as using a real screen reader, and has not been done.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, or M10 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, and a hotkey message delivered directly. The FND-01 spike clicked through a color-keyed window, which is not how the production frame is built.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, M10, or M12 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, a hotkey message delivered directly, and a window move made by a direct call with no message loop running. The FND-01 spike clicked through a color-keyed window, which is not how the production frame is built.
 
 `M1` to `M14` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns.
 
@@ -17,12 +17,12 @@ The evidence column names representative checks, not all of them, as `package.Te
 |---|---:|---:|---:|
 | P0 requirements | 124 | 110 | 14 |
 | P1 requirements | 20 | 13 | 7 |
-| Acceptance scenarios | 32 | 29 | 3 |
-| **All** | **176** | **152** | **24** |
+| Acceptance scenarios | 32 | 28 | 4 |
+| **All** | **176** | **151** | **25** |
 
 Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes or it receives an approved resolution, as PRD section 16 requires:
 
-SCR-002, SCR-020, SCR-021, SCR-022, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S12.
+SCR-002, SCR-020, SCR-021, SCR-022, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S12, AC-A04.
 
 The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
@@ -254,5 +254,5 @@ The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-
 | AC-A01 | — | Persistence | QLT-02, QLT-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | AC-A02 | — | Offline use | QLT-03, QLT-04 | `app.TestCoreWorkflowsRunOffline` | Pass | M6 |
 | AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | Pass | M2 |
-| AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | Pass | M12 |
+| AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: the window has not been dragged during a job |
 | AC-A05 | — | Clean exit | QLT-02, QLT-04 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass | M4 |

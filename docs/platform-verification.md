@@ -112,9 +112,10 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 | AC-A01 — Persistence | Pass | [Reliability record](reliability-verification.md) and the release executable test |
 | AC-A02 — Offline use | Pass | `app.TestCoreWorkflowsRunOffline`, [privacy record](privacy-verification.md) |
 | AC-A03 — Keyboard access | Pass | [Accessibility record](accessibility-verification.md) |
-| AC-A04 — Responsive batch UI | Pass | [Image Resizer record](image-resizer-verification.md) |
+| AC-A04 — Responsive batch UI | **Partial** | [Image Resizer record](image-resizer-verification.md); a real drag during a job is manual check [M12](testing.md#manual-pre-release-checks) |
 | AC-A05 — Clean exit | Pass | The exit matrix in the [reliability record](reliability-verification.md) and the release executable test |
-| AC-S01, AC-S03 to AC-S11 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
+| AC-S01, AC-S04 to AC-S11 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
+| AC-S03 — Click-through interaction | **Partial** | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios) |
 | AC-R01 to AC-R15 | Pass | [Image Resizer record](image-resizer-verification.md), in this run's suite |
 

@@ -56,7 +56,7 @@ QLT-04A owns what needs hardware this project's environment does not have: x64 W
 
 ## Manual pre-release checks
 
-No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, and M10 are the only runs of part of what their requirements say, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks add confidence to requirements the automated checks already cover.
+No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, and M10 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks add confidence to requirements the automated checks already cover.
 
 | Check | What to do | Passes when | Covers |
 |---|---|---|---|

@@ -48,8 +48,9 @@ Images you already saved stay where they are.
 
 Update
 ------
-The app does not check for updates. To update, close it and replace
-cybercute-dev-tools.exe with the one from the new ZIP. Your settings are kept.
+The app does not check for updates. To update, close it and extract the new ZIP
+to the same place, replacing the files in the CyberCute Dev Tools folder, so
+that the guide and release notes match the new version. Your settings are kept.
 
 Uninstall
 ---------
