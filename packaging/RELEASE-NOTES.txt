@@ -1,0 +1,89 @@
+CyberCute Dev Tools - Release Notes
+===================================
+
+Version 1.0.0 - release candidate
+---------------------------------
+
+This is the first version. It is a release candidate: the final validation is
+still open, and the checks listed under "Not yet verified" have not been run.
+
+What it does
+
+Screenshot
+- Free Rectangle, exact-size Preset Rectangle, and Full Display capture.
+- A preset frame stays on top while clicks inside it reach the application
+  underneath. Move it by its border or by exact pixels with the arrow keys.
+- Every capture goes to the clipboard and to a PNG or JPEG file, each reported
+  separately.
+- A configurable global shortcut, Ctrl+Alt+S by default.
+
+Image Resizer
+- Resize PNG and JPEG images in bulk, added by picker or drag and drop.
+- Stretch, Fit, and Crop to Fill, with reusable presets.
+- Keep Source Format, PNG, or JPEG output, with transparency kept in PNG and
+  flattened against a color you choose in JPEG.
+- Rename, Skip, or confirmed Overwrite when a file already exists. Source images
+  are never modified or overwritten.
+- Progress, cancellation, and a result for every file. One bad file never stops
+  the others.
+
+Across the application
+- Separate built-in and custom presets for each tool.
+- Settings kept per user, with backups before any recovery or reset.
+- Works offline, with no account, telemetry, or update check.
+- Full keyboard access in the main window, and support for the Windows contrast
+  themes.
+
+Requirements
+
+64-bit Intel or AMD PC with Windows 11. No administrator rights are needed.
+Windows 10, Windows on Arm, and 32-bit Windows are not supported.
+
+Upgrading from GameDevTools
+
+Builds named GameDevTools were development builds. The first launch copies their
+settings and leaves the old folder in place. README.txt has the details.
+
+Not yet verified
+
+These have not been run, so this version makes no claim about them:
+
+- x64 Windows 11 on real hardware, including the reference machine. Testing so
+  far ran on Windows 11 on Arm, natively and as the x64 build under emulation.
+- Any Windows 11 release other than build 26300.
+- Display scaling above 100%, mixed scaling, displays with negative coordinates,
+  rotated displays, and unplugging a display during a selection. Automated checks
+  cover the calculations, but none of these has run on real displays.
+- A clean machine, a real screen reader, the contrast themes switched on, a real
+  sign-out during a job, FAT32 or exFAT drives, and a run with network adapters
+  off.
+
+Known issues
+
+- Under x64 emulation, the Free Rectangle overlay took slightly longer than its
+  300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
+  on x64 hardware is not yet known.
+- On mixed scaling, the second line of the capture toolbar's message can be cut
+  off.
+- DRM-protected content can capture as black with no error, as Windows reports
+  none.
+- After a capture, the keyboard focus stays outside the application. Use Alt+Tab
+  to return to it.
+
+Deferred from the requirements
+
+- Following the Windows dark app mode (UX-008). The application uses the system
+  colors and stays light when apps are set to dark. A dark theme is a possible
+  future addition.
+
+Distribution
+
+- Portable ZIP with a SHA-256 checksum. There is no installer.
+- Not code-signed, so Windows SmartScreen may warn on first run.
+- No automatic updates. To update, replace the executable.
+- The project has not yet chosen a license of its own. One must be chosen before
+  this version is distributed publicly. THIRD-PARTY-NOTICES.txt covers the
+  components it includes.
+
+See USER-GUIDE.txt for how to use the application and for its full list of
+limitations.

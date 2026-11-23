@@ -93,7 +93,7 @@ Windows CI runs the same formatting, static-analysis, and test checks, builds an
 
 ## Release package
 
-CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsigned and with a SHA-256 checksum file. It has no installer and no update check. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
+CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsigned and with a SHA-256 checksum file. It has no installer and no update check. Beside the executable, the ZIP carries a short README, the [user guide](packaging/USER-GUIDE.txt), the [release notes](packaging/RELEASE-NOTES.txt), and the third-party notices. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
 
 ```powershell
 ./scripts/package.ps1
@@ -110,6 +110,8 @@ The version and the date stamped on the ZIP's files are in `internal/release/rel
 ```powershell
 go generate ./cmd/gamedevtools
 ```
+
+To use the application, read the [user guide](packaging/USER-GUIDE.txt). To check it, start with the [test and verification guide](docs/testing.md), which lists the commands, the records below, and the manual checks still open. [Requirement traceability](docs/traceability.md) maps every PRD requirement to its implementation, evidence, and status, including those not yet complete.
 
 The Screenshot module's acceptance and performance verification is recorded in [Screenshot verification and acceptance results](docs/screenshot-verification.md): the repeatable test matrix for every Screenshot acceptance scenario, the NFR-011 overlay-appearance and NFR-012 capture-to-clipboard benchmarks, the environment of record the results were measured on, and the scenarios still gated on mixed-DPI hardware.
 

@@ -1,0 +1,305 @@
+package release
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+)
+
+var (
+	prdRequirement  = regexp.MustCompile(`\*\*((?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+) \((P\d)\)`)
+	prdScenario     = regexp.MustCompile(`(?m)^\*\*(AC-[SRA]\d+) `)
+	traceabilityRow = regexp.MustCompile(`^\| ((?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+) \|`)
+	planItem        = regexp.MustCompile(`(?m)^\d+\. \*\*([A-Z]+-\d+[A-Z]?) — `)
+	evidenceTest    = regexp.MustCompile("`([a-z]+)\\.((?:Test|Benchmark)\\w+)`")
+	testFunction    = regexp.MustCompile(`(?m)^func ((?:Test|Benchmark)\w+)\(`)
+	manualCheck     = regexp.MustCompile(`\bM\d+\b`)
+	manualCheckRow  = regexp.MustCompile(`^\| (M\d+) \|`)
+	requirementID   = regexp.MustCompile(`(?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+`)
+)
+
+// hardwareGated are the requirements the platform record says QLT-04A must
+// finish, which no row may call complete before that item is Done.
+var hardwareGated = []string{"NFR-001", "NFR-003", "NFR-011", "SCR-042", "AC-S02", "AC-S12"}
+
+type traceRow struct {
+	id, priority, items, evidence, status, open string
+}
+
+func readTraceability(t *testing.T) []traceRow {
+	t.Helper()
+	var rows []traceRow
+	for _, line := range strings.Split(string(repositoryFile(t, "docs", "traceability.md")), "\n") {
+		if !traceabilityRow.MatchString(line) {
+			continue
+		}
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		if len(cells) != 7 {
+			t.Fatalf("row has %d cells, want 7: %s", len(cells), line)
+		}
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		rows = append(rows, traceRow{cells[0], cells[1], cells[3], cells[4], cells[5], cells[6]})
+	}
+	return rows
+}
+
+// repositoryTests returns every test and benchmark as package.Name, the form
+// the verification records use, where the package is its folder's name.
+func repositoryTests(t *testing.T) map[string]bool {
+	t.Helper()
+	found := map[string]bool{}
+	for _, top := range []string{"internal", "cmd"} {
+		root := filepath.Join("..", "..", top)
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			folder := filepath.Base(filepath.Dir(path))
+			for _, match := range testFunction.FindAllSubmatch(data, -1) {
+				found[folder+"."+string(match[1])] = true
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return found
+}
+
+// TestTraceabilityCoversEveryRequirement holds docs/traceability.md to the
+// PRD, the plan, and the tests, and keeps a requirement that still waits on a
+// hardware run from being presented as complete.
+func TestTraceabilityCoversEveryRequirement(t *testing.T) {
+	prd := string(repositoryFile(t, "PRD.md"))
+	want := map[string]string{}
+	for _, match := range prdRequirement.FindAllStringSubmatch(prd, -1) {
+		want[match[1]] = match[2]
+	}
+	for _, match := range prdScenario.FindAllStringSubmatch(prd, -1) {
+		want[match[1]] = "—"
+	}
+	if len(want) == 0 {
+		t.Fatal("found no requirements in the PRD")
+	}
+
+	plan := string(repositoryFile(t, "IMPLEMENTATION_PLAN.md"))
+	items := map[string]bool{}
+	for _, match := range planItem.FindAllStringSubmatch(plan, -1) {
+		items[match[1]] = true
+	}
+	tests := repositoryTests(t)
+
+	rows := readTraceability(t)
+	seen := map[string]traceRow{}
+	counts := map[string][2]int{}
+	for _, row := range rows {
+		if _, again := seen[row.id]; again {
+			t.Errorf("%s is listed twice", row.id)
+		}
+		seen[row.id] = row
+		priority, known := want[row.id]
+		if !known {
+			t.Errorf("%s is not in the PRD", row.id)
+			continue
+		}
+		if row.priority != priority {
+			t.Errorf("%s has priority %q, the PRD says %q", row.id, row.priority, priority)
+		}
+		kind := priority
+		if kind == "—" {
+			kind = "AC"
+		}
+		tally := counts[kind]
+		switch row.status {
+		case "Pass":
+			tally[0]++
+		case "**Partial**":
+			tally[1]++
+		default:
+			t.Errorf("%s has status %q", row.id, row.status)
+		}
+		counts[kind] = tally
+		if strings.Contains(row.open, "QLT-04A") && row.status != "**Partial**" {
+			t.Errorf("%s waits on QLT-04A but is not Partial", row.id)
+		}
+		if row.items == "" {
+			t.Errorf("%s names no plan item", row.id)
+		}
+		for _, item := range strings.Split(row.items, ", ") {
+			if !items[item] {
+				t.Errorf("%s names plan item %q, which does not exist", row.id, item)
+			}
+		}
+		if row.evidence == "" {
+			t.Errorf("%s has no evidence", row.id)
+		}
+		for _, match := range evidenceTest.FindAllStringSubmatch(row.evidence, -1) {
+			if name := match[1] + "." + match[2]; !tests[name] {
+				t.Errorf("%s names %s, which does not exist", row.id, name)
+			}
+		}
+	}
+	for id := range want {
+		if _, ok := seen[id]; !ok {
+			t.Errorf("%s is missing from the matrix", id)
+		}
+	}
+
+	matrix := string(repositoryFile(t, "docs", "traceability.md"))
+	total := [2]int{}
+	for _, summary := range []struct{ kind, label string }{{"P0", "P0 requirements"}, {"P1", "P1 requirements"}, {"AC", "Acceptance scenarios"}} {
+		tally := counts[summary.kind]
+		total[0] += tally[0]
+		total[1] += tally[1]
+		line := fmt.Sprintf("| %s | %d | %d | %d |", summary.label, tally[0]+tally[1], tally[0], tally[1])
+		if !strings.Contains(matrix, line) {
+			t.Errorf("the summary has no line %q", line)
+		}
+	}
+	if line := fmt.Sprintf("| **All** | **%d** | **%d** | **%d** |", total[0]+total[1], total[0], total[1]); !strings.Contains(matrix, line) {
+		t.Errorf("the summary has no line %q", line)
+	}
+
+	if !planItemDone(t, plan, "QLT-04A") {
+		for _, id := range hardwareGated {
+			if seen[id].status != "**Partial**" {
+				t.Errorf("%s must stay Partial until QLT-04A is Done", id)
+			}
+		}
+	}
+
+	checkManualChecks(t, rows)
+}
+
+// planItemDone reads an item's status from the plan.
+func planItemDone(t *testing.T, plan, id string) bool {
+	t.Helper()
+	status := regexp.MustCompile(`\*\*` + regexp.QuoteMeta(id) + ` — [^\n]*\n\s+- \*\*Status:\*\* (\w+(?: \w+)?)`).FindStringSubmatch(plan)
+	if status == nil {
+		t.Fatalf("the plan has no status for %s", id)
+	}
+	return status[1] == "Done"
+}
+
+// checkManualChecks holds the matrix's Open column and the guide's table of
+// manual checks to each other.
+func checkManualChecks(t *testing.T, rows []traceRow) {
+	t.Helper()
+	covers := map[string][]string{}
+	for _, line := range strings.Split(string(repositoryFile(t, "docs", "testing.md")), "\n") {
+		match := manualCheckRow.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+		if len(cells) != 4 {
+			t.Fatalf("%s has %d cells, want 4", match[1], len(cells))
+		}
+		ids := requirementID.FindAllString(cells[3], -1)
+		slices.Sort(ids)
+		covers[match[1]] = ids
+	}
+	if len(covers) == 0 {
+		t.Fatal("found no manual checks in docs/testing.md")
+	}
+	named := map[string][]string{}
+	for _, row := range rows {
+		for _, check := range manualCheck.FindAllString(row.open, -1) {
+			if _, ok := covers[check]; !ok {
+				t.Errorf("%s names %s, which docs/testing.md does not define", row.id, check)
+			}
+			named[check] = append(named[check], row.id)
+		}
+	}
+	for check, ids := range covers {
+		got := named[check]
+		slices.Sort(got)
+		if !slices.Equal(got, ids) {
+			t.Errorf("%s covers %v in docs/testing.md but %v in the matrix", check, ids, got)
+		}
+	}
+}
+
+// label reduces a control's text to the words a document names it by: no
+// access-key marker, ellipsis, or parenthetical hint, but its pixel unit.
+func label(text string) string {
+	text = strings.NewReplacer("&", "", "…", "").Replace(text)
+	if at := strings.Index(text, " ("); at >= 0 && !strings.HasSuffix(text, "(px)") {
+		text = text[:at]
+	}
+	return text
+}
+
+// TestUserGuideNamesTheApplicationsControls fails when a control or status is
+// renamed and the packaged guide still calls it by its old name.
+func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
+	guide := strings.Join(strings.Fields(string(repositoryFile(t, "packaging", "USER-GUIDE.txt"))), " ")
+	for _, text := range []string{
+		ui.ScreenshotNavigation, ui.ImageResizerNavigation, ui.SettingsNavigation,
+		ui.StartCaptureAction, ui.CaptureAction, ui.CancelAction, ui.OpenFolderAction,
+		ui.CaptureModeFreeRectangle, ui.CaptureModePresetRectangle, ui.CaptureModeFullDisplay,
+		ui.DisplayLabel, ui.GlobalShortcutLabel, ui.OutputFolderLabel, ui.JPEGQualityLabel,
+		ui.SelectionWidthLabel, ui.SelectionHeightLabel,
+		ui.AddImagesAction, ui.RemoveSelectedAction, ui.ClearListAction,
+		ui.StartResizeAction, ui.CancelResizeAction, ui.OpenOutputFolderAction,
+		ui.SourceStatusReady, ui.SourceStatusChecking, ui.SourceStatusUnsupported,
+		ui.SourceStatusCorrupt, ui.SourceStatusInaccessible, ui.SourceStatusTooLarge,
+		ui.ResizeModeFit, ui.ResizeModeStretch, ui.ResizeModeCropToFill,
+		ui.ResizeFormatLabel, ui.ResizeFormatKeepSource, ui.ResizeBackgroundLabel,
+		ui.ResizeCollisionLabel, ui.ResizeCollisionRename, ui.ResizeCollisionSkip, ui.ResizeCollisionOverwrite,
+		ui.ResizeStatePending, ui.ResizeStateProcessing, ui.ResizeStateCompleted,
+		ui.ResizeStateSkipped, ui.ResizeStateFailed, ui.ResizeStateCancelled,
+		ui.PresetLibraryLabel, ui.PresetCreateAction, ui.PresetRenameAction,
+		ui.PresetDuplicateAction, ui.PresetDeleteAction,
+		ui.RestoreDefaultsAction,
+		screenshot.DefaultShortcut().String(),
+	} {
+		if name := label(text); !strings.Contains(guide, name) {
+			t.Errorf("USER-GUIDE.txt does not mention %q", name)
+		}
+	}
+}
+
+// TestPackagedDocumentsAgree holds what ships beside the executable together:
+// the package check expects each document, the README points to the guide and
+// the notes, the notes name this version, and the text reads in any viewer.
+func TestPackagedDocumentsAgree(t *testing.T) {
+	verify := string(repositoryFile(t, "scripts", "verify-package.ps1"))
+	for _, name := range PackagedDocuments {
+		data := repositoryFile(t, "packaging", name)
+		if !strings.Contains(verify, `"`+name+`"`) {
+			t.Errorf("verify-package.ps1 does not expect %s", name)
+		}
+		for offset, b := range data {
+			if b >= 0x80 {
+				t.Errorf("%s has a non-ASCII byte at offset %d", name, offset)
+				break
+			}
+		}
+	}
+	readme := string(repositoryFile(t, "packaging", "README.txt"))
+	for _, name := range []string{"USER-GUIDE.txt", "RELEASE-NOTES.txt"} {
+		if !strings.Contains(readme, name) {
+			t.Errorf("README.txt does not mention %s", name)
+		}
+	}
+	notes := string(repositoryFile(t, "packaging", "RELEASE-NOTES.txt"))
+	if !strings.Contains(notes, "Version "+Version) {
+		t.Errorf("RELEASE-NOTES.txt does not name version %s", Version)
+	}
+}

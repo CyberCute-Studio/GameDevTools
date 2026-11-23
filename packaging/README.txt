@@ -4,6 +4,10 @@ CyberCute Dev Tools
 A Windows 11 (64-bit) desktop toolbox for exact-size screenshots and batch
 image resizing. It works offline and needs no administrator rights.
 
+USER-GUIDE.txt explains how to use it, its limitations, and what to do when
+something goes wrong. RELEASE-NOTES.txt says what is in this version and what
+has not been verified yet.
+
 Run it
 ------
 Extract the whole ZIP to a folder you can write to, such as Documents. It

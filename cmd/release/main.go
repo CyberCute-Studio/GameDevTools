@@ -77,9 +77,10 @@ func archive(args []string) error {
 	}
 	files := map[string][]byte{}
 	sources := map[string]string{
-		release.ExecutableName():  *executable,
-		"README.txt":              filepath.Join(*packaging, "README.txt"),
-		"THIRD-PARTY-NOTICES.txt": filepath.Join(*packaging, "THIRD-PARTY-NOTICES.txt"),
+		release.ExecutableName(): *executable,
+	}
+	for _, name := range release.PackagedDocuments {
+		sources[name] = filepath.Join(*packaging, name)
 	}
 	for name, source := range sources {
 		data, err := os.ReadFile(source)

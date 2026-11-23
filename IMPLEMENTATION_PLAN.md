@@ -1,8 +1,8 @@
 # CyberCute Dev Tools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.5\
-**Last updated:** 2026-11-22\
+**Version:** 1.6\
+**Last updated:** 2026-11-23\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
 
@@ -328,11 +328,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Notes:** Started by explicit request while QLT-04A remains Pending, so this item cannot be Done until it is. Decisions (PRD 1.5, [ADR-0002](docs/adr/0002-product-identity-and-distribution.md)): the product is CyberCute Dev Tools, shipped as an unsigned portable x64 ZIP with a SHA-256 checksum and no update check. The first launch takes over a GameDevTools settings file and leaves it in place. `scripts/verify-package.ps1` checks the exact ZIP with no Go on `PATH` and its per-user folders in a temporary workspace, as a first run and an upgrade, and runs in CI. No clean machine was available, as this one has no Hyper-V or Windows Sandbox, so the clean-machine run stays with REL-03. The project has no license of its own, which must be settled before public distribution.
 
 38. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** REL-01
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** REL-01
     - **Requirements:** PRD Sections 9.8, 10.6, 18, and 19; TECH-009.
     - **Deliver:** Setup and usage documentation for both modules, hotkey/configuration help, output/collision behavior, protected-content and metadata limitations, troubleshooting, test/verification guide, release notes, and PRD-to-implementation traceability update.
     - **Verify:** Follow the documentation on a clean machine to perform every core workflow. Confirm documented behavior and limitations match the packaged application and no deferred P0 requirement is presented as complete.
-    - **Notes:** Update the PRD and this plan if approved behavior changed during implementation.
+    - **Notes:** Started by explicit request while REL-01 is In Progress and QLT-04A is Pending, so this item cannot be Done until they are. `packaging/USER-GUIDE.txt` and `packaging/RELEASE-NOTES.txt` now ship in the ZIP, as a user of the package has no other copy, and `scripts/verify-package.ps1` expects them. [docs/testing.md](docs/testing.md) is the test and verification guide, with the fourteen manual pre-release checks gathered from the verification records and the walkthrough that follows the guide. [docs/traceability.md](docs/traceability.md) maps all 176 PRD requirements and acceptance scenarios to their plan items, evidence, and status: 158 Pass and 18 Partial, 12 of those P0 requirements or acceptance scenarios waiting on QLT-04A. `release.TestTraceabilityCoversEveryRequirement` fails on a missing requirement, a test that does not exist, or a hardware-gated row marked Pass, and the other documentation tests hold the guide to the application's control names and the notes to its version. No approved behavior changed; PRD 1.6 records only that the ZIP carries these documents. **The clean-machine walkthrough was not run**, as no clean machine is available; it is manual check M1, owned by REL-03. The project's own license remains unchosen and must be settled before public distribution.
 
 39. **REL-03 — Validate the release candidate and close the implementation baseline**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02
@@ -345,7 +345,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 
 ## 9. Requirement coverage map
 
-This map is a planning aid, not a replacement for requirement references on individual items. Update it whenever items are split or requirements change.
+This map is a planning aid, not a replacement for requirement references on individual items. Update it whenever items are split or requirements change. [docs/traceability.md](docs/traceability.md) has the per-requirement record of evidence and status.
 
 | PRD area | Primary implementing items | Final validation |
 |---|---|---|
@@ -374,3 +374,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.3 | 2026-11-22 | Inserted QLT-03D for the settings reset QLT-03C found already on `main`; QLT-04 now depends on QLT-03D, and later items are renumbered. |
 | 1.4 | 2026-11-22 | QLT-04: Windows 10 removed from the supported platforms (PRD 1.4). Inserted QLT-04A for the x64 Windows 11, reference-machine, and mixed-DPI runs the available hardware cannot perform; REL-01 now depends on QLT-04A, and later items are renumbered. |
 | 1.5 | 2026-11-22 | REL-01: recorded the product name CyberCute Dev Tools, the portable ZIP, and the signing and update decisions (PRD 1.5, ADR-0002), and that the item started by explicit request while QLT-04A is Pending. |
+| 1.6 | 2026-11-23 | REL-02: added the packaged user guide and release notes, the test and verification guide, and the requirement traceability matrix (PRD 1.6), and recorded that the item started by explicit request while its dependencies are not Done. |
