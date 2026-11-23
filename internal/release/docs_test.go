@@ -343,8 +343,9 @@ func manualCheckCoverage(t *testing.T) map[string][]string {
 	return covers
 }
 
-// recordedRuns reads the Recorded runs table in docs/testing.md into, for each
-// requirement, the runs that passed it. A run can pass only what it covers,
+// recordedRuns reads every line of docs/testing.md that has the form of a
+// Recorded runs row, wherever it is, into, for each requirement, the runs that
+// passed it. A run can pass only what it covers,
 // and its Passed cell holds requirement IDs and nothing else, so that a note
 // such as "SCR-021 failed" cannot read as a pass.
 func recordedRuns(t *testing.T, covers map[string][]string) map[string]map[string]bool {

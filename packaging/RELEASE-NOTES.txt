@@ -84,10 +84,17 @@ Known issues
   reported only in the Screenshot view, so it can go unnoticed while another
   tool is showing.
 - Where displays differ in size or are offset, the capture toolbar can land in
-  a part of the desktop that no display shows. Unless you pressed Tab, Enter
-  still captures and Escape cancels; after clicking in another application,
-  press the global shortcut first. Moving the selection also brings the toolbar
-  back, but moving it back hides the toolbar again.
+  a part of the desktop that no display shows. Escape still cancels. Enter
+  still captures unless the focus is in a size field, where it only applies the
+  size, or on Cancel, so after typing a size press Tab to reach Capture first.
+  After clicking in another application, press the global shortcut first.
+  Moving the selection also brings the toolbar back, but moving it back hides
+  the toolbar again.
+- If Windows fails to list the displays, Full Display can forget the selected
+  display although it is still connected, then capture the one under the
+  pointer and report a success. After the message "The display list is
+  unavailable", choose another Capture mode, then Full Display again, and select
+  your display before capturing.
 - Starting the application again during a capture that began while its window
   was minimized can bring the window back into the image. Starting it again
   during any selection can take the keyboard from the capture toolbar: click

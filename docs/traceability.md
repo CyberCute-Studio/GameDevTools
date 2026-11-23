@@ -1,6 +1,6 @@
 # Requirement traceability
 
-This matrix is the REL-02 record of how every requirement and acceptance scenario in the [PRD](../PRD.md) is implemented and verified. It lists each one with the [implementation plan](../IMPLEMENTATION_PLAN.md) items that name it, the automated checks or records that are its evidence, its status, and what is still open. `release.TestTraceabilityCoversEveryRequirement` fails if a requirement is missing, a named test does not exist, a row that waits on an open hardware run or manual check claims to pass, or the lists of blockers below disagree with the rows.
+This matrix is the REL-02 record of how every requirement and acceptance scenario in the [PRD](../PRD.md) is implemented and verified. It lists each one with the [implementation plan](../IMPLEMENTATION_PLAN.md) items that name it, the automated checks or records that are its evidence, its status, and what is still open. `release.TestTraceabilityCoversEveryRequirement` fails if a requirement is missing, a test named in backticks does not exist, a row that waits on an open hardware run or manual check claims to pass, or the lists of blockers below disagree with the rows.
 
 The evidence column names representative checks, not all of them, as `package.Test`. The two `output` packages are told apart as `screenshot/output` and `imageresizer/output`. The verification records hold the full matrices: [Screenshot](screenshot-verification.md), [Image Resizer](image-resizer-verification.md), [accessibility](accessibility-verification.md), [settings and shutdown](reliability-verification.md), [privacy and dependencies](privacy-verification.md), and [platform and performance](platform-verification.md). The [test and verification guide](testing.md) says how to run them.
 
@@ -15,14 +15,14 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 96 | 28 |
+| P0 requirements | 124 | 95 | 29 |
 | P1 requirements | 20 | 8 | 12 |
 | Acceptance scenarios | 32 | 23 | 9 |
-| **All** | **176** | **127** | **49** |
+| **All** | **176** | **126** | **50** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run or manual check it names passes and the defect it names is fixed:
 
-SCR-002, SCR-003, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S11, AC-S12, AC-A04.
+SCR-002, SCR-003, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-040, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S11, AC-S12, AC-A04.
 
 The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
@@ -77,7 +77,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-029 | P0 | Ad hoc size edit leaves the saved preset alone | SCR-08 | `overlay.TestPresetFrameDimensionEditResizesExactly`, `screenshot.TestNativeViewPresetAdHocEditKeepsSavedPreset` | Pass |  |
 | SCR-030 | P0 | No resize handles in Preset Rectangle | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass |  |
 | SCR-031 | P0 | Rectangle larger than the desktop is blocked | SCR-08, SCR-11, REL-02A | `overlay.TestBeginPresetValidatesFrameSize`, `screenshot.TestNativeViewPresetRectangleTooLargeBlocked` | **Partial** | REL-02A, then M18: a refusal from the global shortcut is not shown while the Screenshot view is hidden |
-| SCR-040 | P0 | Full Display captures one selected display | SCR-05 | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | Pass |  |
+| SCR-040 | P0 | Full Display captures one selected display | SCR-05, REL-02A | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | **Partial** | REL-02A: a failed display enumeration forgets the selected display, so the next capture can use the one under the pointer |
 | SCR-041 | P0 | Picker shows number, name, resolution, primary | SCR-02, SCR-05 | `screenshot.TestDisplayListItemDescribesDisplay`, `display.TestNumberDisplays` | Pass |  |
 | SCR-042 | P0 | Native pixel dimensions and orientation | SCR-03, SCR-05 | `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a rotated display |
 | SCR-043 | P0 | Any display, including other DPI scaling | SCR-02, SCR-05 | `screenshot.TestNativeViewDisplayPickerTracksMode`, `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a secondary display at other scaling |

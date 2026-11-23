@@ -120,8 +120,9 @@ Full Display
   The display under the pointer is selected when the application starts. The
   selection then stays until you change it or that display is disconnected, so
   it does not follow the pointer: check it before capturing with the global
-  shortcut. Start Capture takes the picture at once, at the display's full
-  native resolution.
+  shortcut. A failure to list the displays can also change it: see section 10.
+  Start Capture takes the picture at once, at the display's full native
+  resolution.
 
 What a capture gives you
 
@@ -378,9 +379,18 @@ Capture
   off.
 - Where displays differ in size or are offset, the capture toolbar can land in
   a part of the desktop that no display shows. It still takes the keyboard:
-  unless you pressed Tab, Enter captures and Escape cancels. If you clicked in
-  another application, press the global shortcut first. Moving the selection
-  also brings the toolbar back, but moving it back hides the toolbar again.
+  Escape cancels, and Enter captures unless the focus is in W (px) or H (px),
+  where it only applies the size, or on Cancel. After typing a size, press Tab
+  to reach Capture first: once from H (px), twice from W (px). If you clicked
+  in another application, press the global shortcut first. Moving the
+  selection also brings the toolbar back, but moving it back hides the toolbar
+  again.
+- If Windows fails to list the displays, Full Display can forget the selected
+  display although it is still connected, and select the one under the pointer.
+  A capture then saves that other display and reports a success. After the
+  message "The display list is unavailable", choose another Capture mode, then
+  Full Display again, and select your display in the Display list before
+  capturing.
 - If the window was minimized before a capture, do not start the application
   again during that capture. The window can reappear and end up in the image.
 - Starting the application again during a selection can take the keyboard from
