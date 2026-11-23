@@ -185,10 +185,10 @@ type ResultCard struct {
 	// press on a button ends when another takes its place and a success's
 	// time on screen starts only once.
 	showing CardEntry
-	// arrived is whether a result came in since the card was suspended, even
-	// one identical to a problem already waiting, so that Resume announces
-	// that capture's result and nothing else.
-	arrived bool
+	// unheard is whether a problem came in while the card was hidden and has
+	// not been read out, even one identical to a problem already waiting or
+	// one a success was then read out over.
+	unheard bool
 }
 
 // NewResultCard returns a card that appears where place says, as of each
@@ -202,23 +202,21 @@ func NewResultCard(place func() CardPlacement, open func(path string)) *ResultCa
 // waits for Resume. A success leaves by itself; a warning or error stays
 // until it is dismissed.
 func (c *ResultCard) Report(notice Notice, path string) {
-	if c.destroyed {
-		return
-	}
-	c.queue.push(CardEntry{Notice: notice, Path: path})
-	c.arrived = true
-	c.present(true)
-	c.tellProblems()
+	c.add(CardEntry{Notice: notice, Path: path})
 }
 
 // ReportSetting adds a problem with a setting, as Report does, for
 // WithdrawSettings to remove.
 func (c *ResultCard) ReportSetting(notice Notice) {
+	c.add(CardEntry{Notice: notice, Setting: true})
+}
+
+func (c *ResultCard) add(entry CardEntry) {
 	if c.destroyed {
 		return
 	}
-	c.queue.push(CardEntry{Notice: notice, Setting: true})
-	c.arrived = true
+	c.queue.push(entry)
+	c.unheard = c.unheard || c.suspended && entry.lasting()
 	c.present(true)
 	c.tellProblems()
 }
@@ -247,7 +245,6 @@ func (c *ResultCard) WithdrawSetting(notice Notice) {
 func (c *ResultCard) Suspend() {
 	if !c.suspended {
 		c.suspended = true
-		c.arrived = false
 		c.queue.expire()
 	}
 	c.hide()
@@ -255,13 +252,14 @@ func (c *ResultCard) Suspend() {
 }
 
 // Resume shows the card again once a capture has ended, announcing it only
-// if a result came in meanwhile.
+// if a result came in meanwhile: Suspend ended any earlier success, so a
+// success here is that capture's, and present reads out an unheard problem.
 func (c *ResultCard) Resume() {
 	if !c.suspended {
 		return
 	}
 	c.suspended = false
-	c.present(c.arrived)
+	c.present(c.queue.passing != nil)
 	c.tellProblems()
 }
 
@@ -424,6 +422,10 @@ func (c *ResultCard) present(announce bool) {
 		procKillTimer.Call(uintptr(c.hwnd), cardTimerID)
 	} else if changed || announce {
 		procSetTimer.Call(uintptr(c.hwnd), cardTimerID, uintptr(cardSuccessDuration.Milliseconds()), 0)
+	}
+	if entry.lasting() {
+		announce = announce || c.unheard
+		c.unheard = false
 	}
 	if announce {
 		c.message.Announce()
@@ -659,7 +661,8 @@ func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 	case cardWMTimer:
 		if card != nil && wParam == cardTimerID {
 			procKillTimer.Call(uintptr(hwnd), cardTimerID)
-			// What the success leaves showing was announced when it came.
+			// A problem the success leaves showing was announced when it came,
+			// unless it came during a capture, which present sees to.
 			if card.queue.expire() {
 				card.present(false)
 			}

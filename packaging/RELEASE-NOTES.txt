@@ -86,6 +86,9 @@ Known issues
 Sections 10 and 11 of USER-GUIDE.txt describe each of these and any step to
 take.
 
+- If a save fails and its temporary file cannot be removed, a
+  .gamedevtools-*.tmp file may hold the capture's only copy. Do not delete one
+  before reading section 11.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

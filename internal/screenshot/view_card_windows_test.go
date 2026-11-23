@@ -547,21 +547,20 @@ func TestShortcutCaptureGoesOnTheCardOnceTheViewIsCovered(t *testing.T) {
 	}
 }
 
-// TestControlCoveredAsksAboutCornersAndCenter pins which points are asked about
-// and how the answers are read: the view's own controls do not cover the
-// status area, and another top-level window or no window over any one of its
-// corners or its center does.
-func TestControlCoveredAsksAboutCornersAndCenter(t *testing.T) {
+// TestControlCoveredChecksAlongTheControl pins which points are asked about and
+// how the answers are read: the view's own controls do not cover the status
+// area, and another top-level window or no window over any point asked about
+// does, including a narrow window between the corners and the center.
+func TestControlCoveredChecksAlongTheControl(t *testing.T) {
 	view, _, _ := newCardTestView(t)
 	offScreen := int32(-20000)
 	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
 	view.status.Move(10, 20, 200, 60)
 	var bounds viewRect
 	procViewGetWindowRect.Call(uintptr(view.status.Handle()), uintptr(unsafe.Pointer(&bounds)))
-	points := [][2]int32{
+	corners := [][2]int32{
 		{bounds.Left, bounds.Top}, {bounds.Right - 1, bounds.Top},
 		{bounds.Left, bounds.Bottom - 1}, {bounds.Right - 1, bounds.Bottom - 1},
-		{bounds.Left + 100, bounds.Top + 30},
 	}
 
 	var asked [][2]int32
@@ -573,9 +572,12 @@ func TestControlCoveredAsksAboutCornersAndCenter(t *testing.T) {
 	if view.controlCovered(view.status.Handle()) {
 		t.Fatal("the status area counts as covering itself")
 	}
-	if !slices.Equal(asked, points) {
-		t.Fatalf("asked about %v, want %v", asked, points)
+	for _, corner := range corners {
+		if !slices.Contains(asked, corner) {
+			t.Fatalf("asked about %v, without the corner %v", asked, corner)
+		}
 	}
+	points := slices.Clone(asked)
 	own = uintptr(view.parent)
 	if view.controlCovered(view.status.Handle()) {
 		t.Fatal("the view's own window counts as covering it")
@@ -593,6 +595,20 @@ func TestControlCoveredAsksAboutCornersAndCenter(t *testing.T) {
 			if !view.controlCovered(view.status.Handle()) {
 				t.Fatalf("answer %#x at %v was not seen", answer, covered)
 			}
+		}
+	}
+
+	// A window as wide as the step, anywhere along the control and over only
+	// its middle, is seen.
+	for left := bounds.Left; left+controlCoverStep <= bounds.Right; left++ {
+		view.windowAtPoint = func(x, y int32) uintptr {
+			if x >= left && x < left+controlCoverStep && y > bounds.Top && y < bounds.Bottom-1 {
+				return other
+			}
+			return uintptr(view.parent)
+		}
+		if !view.controlCovered(view.status.Handle()) {
+			t.Fatalf("a window over x %d to %d was not seen", left, left+controlCoverStep)
 		}
 	}
 }

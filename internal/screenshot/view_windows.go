@@ -57,6 +57,10 @@ var (
 // viewGARoot is GetAncestor's GA_ROOT.
 const viewGARoot = 2
 
+// controlCoverStep is the most pixels controlCovered leaves between two points
+// it checks along a control, less than any window that could hide a message.
+const controlCoverStep = 48
+
 // viewBNDoubleClicked is the notification a BS_NOTIFY button sends for a second
 // quick click, as dismissing several problems in a row makes.
 const viewBNDoubleClicked = 5
@@ -357,9 +361,9 @@ func (n *NativeView) statusInSight() bool {
 
 // controlCovered reports whether part of a control is out of sight: scrolled
 // outside the main window's client area, where the window there can still be
-// the main window's own title bar, or under another top-level window. Its
-// corners and center are checked, as a window over the start of a message
-// hides what the message is about.
+// the main window's own title bar, or under another top-level window. Points
+// along its top, middle, and bottom are checked, corners included, as a window
+// over any part of a message can hide what it is about.
 func (n *NativeView) controlCovered(control windows.Handle) bool {
 	var bounds, client viewRect
 	if r, _, _ := procViewGetWindowRect.Call(uintptr(control), uintptr(unsafe.Pointer(&bounds))); r == 0 {
@@ -370,20 +374,21 @@ func (n *NativeView) controlCovered(control windows.Handle) bool {
 	}
 	procViewMapWindowPoints.Call(uintptr(n.parent), 0, uintptr(unsafe.Pointer(&client)), 2)
 	right, bottom := bounds.Right-1, bounds.Bottom-1
-	for _, point := range [...][2]int32{
-		{bounds.Left, bounds.Top}, {right, bounds.Top}, {bounds.Left, bottom}, {right, bottom},
-		{bounds.Left + (bounds.Right-bounds.Left)/2, bounds.Top + (bounds.Bottom-bounds.Top)/2},
-	} {
-		x, y := point[0], point[1]
-		if x < client.Left || x >= client.Right || y < client.Top || y >= client.Bottom {
-			return true
-		}
-		hit := n.windowAtPoint(x, y)
-		if hit == 0 {
-			return true
-		}
-		if root, _, _ := procViewGetAncestor.Call(hit, viewGARoot); windows.Handle(root) != n.parent {
-			return true
+	for _, y := range [...]int32{bounds.Top, bounds.Top + (bounds.Bottom-bounds.Top)/2, bottom} {
+		for x := bounds.Left; ; x = min(x+controlCoverStep, right) {
+			if x < client.Left || x >= client.Right || y < client.Top || y >= client.Bottom {
+				return true
+			}
+			hit := n.windowAtPoint(x, y)
+			if hit == 0 {
+				return true
+			}
+			if root, _, _ := procViewGetAncestor.Call(hit, viewGARoot); windows.Handle(root) != n.parent {
+				return true
+			}
+			if x >= right {
+				break
+			}
 		}
 	}
 	return false

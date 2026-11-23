@@ -368,6 +368,52 @@ func TestResultCardExpiryLeavesAWaitingProblemUnannounced(t *testing.T) {
 	}
 }
 
+// TestResultCardExpiryAnnouncesAProblemFromTheCapture is a problem that came
+// during a capture that then succeeded. The success is read out over it, so a
+// screen reader, which cannot reach the card, hears it as the success leaves,
+// and once.
+func TestResultCardExpiryAnnouncesAProblemFromTheCapture(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Suspend()
+	card.ReportSetting(Notice{Kind: NoticeWarning, Message: "setting not saved"})
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	card.Resume()
+	announcements, settle := watchCardAnnouncements(t, card)
+
+	cardWindowProc(card.hwnd, cardWMTimer, cardTimerID, 0)
+	settle()
+	if !strings.Contains(card.message.Text(), "setting not saved") {
+		t.Fatalf("message = %q", card.message.Text())
+	}
+	if *announcements != 1 {
+		t.Fatalf("the problem was announced %d time(s), want 1", *announcements)
+	}
+	card.Reposition()
+	settle()
+	if *announcements != 1 {
+		t.Fatalf("moving the card announced it again: %d", *announcements)
+	}
+}
+
+// TestResultCardAnnouncesAProblemAfterItsSuccessEndedForACapture is the next
+// capture ending that success early and then being cancelled: the problem has
+// still not been heard.
+func TestResultCardAnnouncesAProblemAfterItsSuccessEndedForACapture(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Suspend()
+	card.ReportSetting(Notice{Kind: NoticeWarning, Message: "setting not saved"})
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	card.Resume()
+	announcements, settle := watchCardAnnouncements(t, card)
+
+	card.Suspend()
+	card.Resume()
+	settle()
+	if *announcements != 1 {
+		t.Fatalf("the problem was announced %d time(s), want 1", *announcements)
+	}
+}
+
 // watchCardAnnouncements counts the live-region events of the card's message.
 // settle lets those already raised arrive.
 func watchCardAnnouncements(t *testing.T, card *ResultCard) (announcements *int, settle func()) {
