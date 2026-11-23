@@ -329,8 +329,9 @@ func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 	})
 }
 
-// NativeActivated runs when the main window is activated: with this view on
-// display, the problems the card was holding move to its status area.
+// NativeActivated runs when the user may have just reached the status area,
+// as the main window was activated, this view opened, or the window scrolled:
+// with it in sight, the problems the card was holding move there.
 func (n *NativeView) NativeActivated() {
 	n.reclaimProblems()
 }
@@ -415,12 +416,14 @@ func (n *NativeView) resumeCard() {
 
 // reclaimProblems moves the problems the card holds to the status area once
 // the user can see it, so the keyboard reaches them: the card itself never
-// takes the focus. It waits while a capture runs, whose result would replace
-// them in the status area. A later result the status area shows stays beside
-// them, as does a display failure, which has no other home, and Open Folder
-// keeps a saved file when the latest capture has none.
+// takes the focus. Until then they stay on the card, as a status area below
+// the fold, where the default window size leaves it, would hide them. It waits
+// while a capture runs, whose result would replace them in the status area. A
+// later result the status area shows stays beside them, as does any other
+// problem it holds, and Open Folder keeps a saved file when the latest capture
+// has none.
 func (n *NativeView) reclaimProblems() {
-	if n.inProgress || (n.sessions != nil && n.sessions.Active()) || !n.statusVisible() {
+	if n.inProgress || (n.sessions != nil && n.sessions.Active()) || !n.statusInSight() {
 		return
 	}
 	entries := n.card.Take()
@@ -445,11 +448,10 @@ func (n *NativeView) reclaimProblems() {
 		if !holds(n.latestOutcome) {
 			latest, latestSetting = n.latestOutcome, n.latestNotice == n.optionsNotice
 		}
-	} else if n.displayErr != nil && n.options.Options().Mode == ModeFullDisplay {
-		failure := ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}
-		if !holds(failure) {
-			entries = append([]ui.CardEntry{{Notice: failure}}, entries...)
-		}
+	} else if shown := n.status.Notice(); shown.Kind >= ui.NoticeWarning && !holds(shown) {
+		// A restore of the defaults still clears a problem with a setting.
+		setting := n.status.Revision() == n.shortcutNotice || n.status.Revision() == n.optionsNotice
+		entries = append([]ui.CardEntry{{Notice: shown, Setting: setting}}, entries...)
 	}
 	n.showReclaimed(entries, latest, latestSetting)
 	if slices.ContainsFunc(entries, func(entry ui.CardEntry) bool {
@@ -498,10 +500,8 @@ func (n *NativeView) withdrawReclaimedSettings() {
 	}
 	switch {
 	case len(kept) == len(n.reclaimed) && latest == n.reclaimedLatest:
-	case len(kept) > 0:
+	case len(kept) > 0 || latest.Message != "":
 		n.showReclaimed(kept, latest, false)
-	case latest.Message != "":
-		n.showOutcome(latest)
 	default:
 		n.status.Clear()
 	}
@@ -510,6 +510,9 @@ func (n *NativeView) withdrawReclaimedSettings() {
 // problemsNotice is one notice for the card's problems, oldest first, and the
 // later result if there is one, as serious as the worst of them.
 func problemsNotice(entries []ui.CardEntry, latest ui.Notice) ui.Notice {
+	if len(entries) == 0 {
+		return latest
+	}
 	if len(entries) == 1 && latest.Message == "" {
 		return entries[0].Notice
 	}
@@ -590,9 +593,6 @@ func (n *NativeView) NativeShow(visible bool) {
 	n.pattern.Show(visible)
 	n.status.Label.Show(visible)
 	n.presets.NativeShow(visible)
-	if visible {
-		n.reclaimProblems()
-	}
 }
 
 func (n *NativeView) showDisplayPicker(visible bool) {
@@ -773,12 +773,12 @@ func (n *NativeView) revealSaved() {
 
 // revealFromCard is the result card's Open Folder. The card may show an
 // earlier capture's file, and a failure goes back on the card, where the user
-// asked, unless the user has since returned to a status area in sight: no
-// activation is left to come and move it to where the keyboard reaches it.
+// asked, unless the user has since returned to the view: no activation is left
+// to come and move it to a status area in sight, where the keyboard reaches it.
 func (n *NativeView) revealFromCard(path string) {
 	n.revealFile(path, func(err error) {
 		n.card.Report(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, "")
-		if n.foregroundWindow() == n.parent && n.statusInSight() {
+		if n.foregroundWindow() == n.parent {
 			n.reclaimProblems()
 		}
 	})

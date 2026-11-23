@@ -579,6 +579,8 @@ type StatusArea struct {
 	timer  uintptr
 	// revision counts the notices shown and cleared.
 	revision uint64
+	// notice is the notice on display.
+	notice Notice
 }
 
 // Revision identifies the notice on display: it changes whenever Show,
@@ -588,6 +590,11 @@ type StatusArea struct {
 // still the one shown.
 func (s *StatusArea) Revision() uint64 {
 	return s.revision
+}
+
+// Notice returns the notice on display.
+func (s *StatusArea) Notice() Notice {
+	return s.notice
 }
 
 // NewStatusArea creates the status area on a live label (NewLiveLabel), so
@@ -647,6 +654,7 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 func (s *StatusArea) Update(notice Notice) {
 	s.stopTimer()
 	s.revision++
+	s.notice = notice
 	s.SetTextQuietly(notice.Text())
 }
 

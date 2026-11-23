@@ -156,8 +156,10 @@ The result card
   - A warning or error stays until you press Dismiss, so a later capture cannot
     hide it. The card says how many earlier problems are waiting.
   - Open Folder shows the saved file, when there is one.
-  - Opening the Screenshot view moves any waiting problems there and closes the
-    card. That is also how to reach them with the keyboard.
+  - Once the Screenshot view's status area is in sight, any waiting problems
+    move there and the card closes, and the next result replaces them. To reach
+    them with the keyboard, open the view and press Tab until the area scrolls
+    into sight.
 
 
 4. The global shortcut

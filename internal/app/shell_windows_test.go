@@ -317,10 +317,14 @@ func TestShellWindowProcRoutesHotkeys(t *testing.T) {
 
 type activationRecordingView struct {
 	recordingNativeView
-	activations int
+	activations         int
+	layoutsAtActivation int
 }
 
-func (v *activationRecordingView) NativeActivated() { v.activations++ }
+func (v *activationRecordingView) NativeActivated() {
+	v.activations++
+	v.layoutsAtActivation = v.layouts
+}
 
 // TestShellTellsTheCurrentViewItWasActivated is how the Screenshot view takes
 // back the problems its result card holds once the user returns to it.
@@ -353,9 +357,14 @@ func TestShellTellsTheViewWhenRestoredInFront(t *testing.T) {
 		t.Fatalf("a resize counted as a restore: %d", native.activations)
 	}
 	shellWindowProc(shell.hwnd, wmSize, sizeMinimized, 0)
+	before := native.layouts
 	shellWindowProc(shell.hwnd, wmSize, 0, 0)
 	if native.activations != 1 {
 		t.Fatalf("activations after the restore = %d, want 1", native.activations)
+	}
+	// Whether its status area is in sight depends on the restored layout.
+	if native.layoutsAtActivation <= before {
+		t.Fatal("the view was told of the restore before it was laid out")
 	}
 
 	foreground = 0
@@ -364,6 +373,64 @@ func TestShellTellsTheViewWhenRestoredInFront(t *testing.T) {
 	if native.activations != 1 {
 		t.Fatalf("a restore behind another window told the view: %d", native.activations)
 	}
+}
+
+// TestShellTellsTheViewWhenScrolledInFront is a status area brought into sight
+// by scrolling, with no activation to follow.
+func TestShellTellsTheViewWhenScrolledInFront(t *testing.T) {
+	native := &activationRecordingView{}
+	shell := newCommandTestShell(t, native)
+	foreground := shell.hwnd
+	previous := shellForegroundWindow
+	shellForegroundWindow = func() windows.Handle { return foreground }
+	t.Cleanup(func() { shellForegroundWindow = previous })
+
+	before := native.layouts
+	shell.setScrollPosition(0)
+	if native.activations != 1 {
+		t.Fatalf("activations after a scroll = %d, want 1", native.activations)
+	}
+	if native.layoutsAtActivation <= before {
+		t.Fatal("the view was told of the scroll before it was laid out")
+	}
+	foreground = 0
+	shell.setScrollPosition(0)
+	if native.activations != 1 {
+		t.Fatalf("a scroll behind another window told the view: %d", native.activations)
+	}
+}
+
+type activationCountingView struct {
+	nativeView
+	activations int
+}
+
+func (v *activationCountingView) NativeActivated() { v.activations++ }
+
+// TestShellTellsAViewItOpenedOnceItIsLaidOut is how opening the Screenshot
+// view moves the card's problems: the view asks whether its status area is in
+// sight, which it can answer only from the layout that follows the selection.
+func TestShellTellsAViewItOpenedOnceItIsLaidOut(t *testing.T) {
+	shell := newAuditShell(t)
+	var id core.ModuleID
+	for _, module := range shell.navigator.Modules() {
+		if module.ID() != shell.navigator.Current().ID() {
+			if _, native := shell.nativeViews[module.ID()]; native {
+				id = module.ID()
+				break
+			}
+		}
+	}
+	if id == "" {
+		t.Fatal("no other module has a native view")
+	}
+	counting := &activationCountingView{nativeView: shell.nativeViews[id]}
+	shell.nativeViews[id] = counting
+	shell.selectModule(t, id)
+	if counting.activations != 0 {
+		t.Fatal("the view was told before the selection's layout had finished")
+	}
+	shell.pump(t, 5*time.Second, func() bool { return counting.activations > 0 })
 }
 
 // TestShellWindowProcForwardsEditSetFocusToView pins the regression where

@@ -155,14 +155,15 @@ func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
 		activateExistingInstance(className, 0)
 		done <- time.Since(started)
 	}()
-	time.Sleep(150 * time.Millisecond)
+	// Longer than a quick start, as antivirus scanning can make a first launch.
+	time.Sleep(1500 * time.Millisecond)
 	procShowWindow.Call(hwnd, swShowNAInstanceTest)
 	select {
 	case elapsed := <-done:
 		if elapsed >= instanceShowWait {
 			t.Fatalf("activation took %v, so it did not see the window appear", elapsed)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(instanceShowWait + 5*time.Second):
 		t.Fatal("activation did not return")
 	}
 }

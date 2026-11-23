@@ -32,8 +32,9 @@ const instanceMutexName = `Local\GameDevTools.SingleInstance`
 const instanceWait = imageresizer.JobShutdownWait + 5*time.Second
 
 // instanceShowWait bounds how long a second launch waits for a hidden window
-// to appear, as one that is starting does.
-const instanceShowWait = time.Second
+// to appear, as one that is starting does, however slowly. A window hidden for
+// a capture simply outlasts it, and the launch then exits.
+const instanceShowWait = 5 * time.Second
 
 // enforceSingleInstance guarantees one running instance per user session
 // (APP-005). When another instance already holds the mutex, its window is

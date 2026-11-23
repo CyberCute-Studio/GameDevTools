@@ -183,9 +183,10 @@ type ResultCard struct {
 	// press on a button ends when another takes its place and a success's
 	// time on screen starts only once.
 	showing CardEntry
-	// heard is the problem on top as the card was suspended, already
-	// announced, so that Resume does not read it out as this capture's.
-	heard CardEntry
+	// arrived is whether a result came in since the card was suspended, even
+	// one identical to a problem already waiting, so that Resume announces
+	// that capture's result and nothing else.
+	arrived bool
 }
 
 // NewResultCard returns a card that appears where place says, as of each
@@ -203,6 +204,7 @@ func (c *ResultCard) Report(notice Notice, path string) {
 		return
 	}
 	c.queue.push(CardEntry{Notice: notice, Path: path})
+	c.arrived = true
 	c.present(true)
 }
 
@@ -213,6 +215,7 @@ func (c *ResultCard) ReportSetting(notice Notice) {
 		return
 	}
 	c.queue.push(CardEntry{Notice: notice, Setting: true})
+	c.arrived = true
 	c.present(true)
 }
 
@@ -230,21 +233,20 @@ func (c *ResultCard) WithdrawSettings() {
 func (c *ResultCard) Suspend() {
 	if !c.suspended {
 		c.suspended = true
+		c.arrived = false
 		c.queue.expire()
-		c.heard, _ = c.queue.current()
 	}
 	c.hide()
 }
 
 // Resume shows the card again once a capture has ended, announcing it only
-// if the capture changed what it shows.
+// if a result came in meanwhile.
 func (c *ResultCard) Resume() {
 	if !c.suspended {
 		return
 	}
 	c.suspended = false
-	entry, ok := c.queue.current()
-	c.present(ok && entry != c.heard)
+	c.present(c.arrived)
 }
 
 // Reposition moves a card on screen to where it now belongs, as after a
@@ -613,8 +615,9 @@ func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 	case cardWMTimer:
 		if card != nil && wParam == cardTimerID {
 			procKillTimer.Call(uintptr(hwnd), cardTimerID)
+			// What the success leaves showing was announced when it came.
 			if card.queue.expire() {
-				card.present(true)
+				card.present(false)
 			}
 			return 0
 		}

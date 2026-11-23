@@ -225,9 +225,10 @@ type nativeNoticeAnnouncer interface {
 	NativeAnnounceNotice()
 }
 
-// nativeActivationAware is implemented by module views that act when the
-// main window is activated while they are the current module, as the
-// Screenshot view takes back the problems its result card was holding.
+// nativeActivationAware is implemented by module views that act when the user
+// may have just reached them: the main window activated, the module opened, or
+// the window scrolled. The Screenshot view then takes back the problems its
+// result card was holding, once its status area is in sight.
 type nativeActivationAware interface {
 	NativeActivated()
 }
@@ -680,8 +681,9 @@ var shellForegroundWindow = func() windows.Handle {
 	return windows.Handle(foreground)
 }
 
-// tellViewActivated tells the current module the user is back at the window,
-// and reports whether it listens, so may have changed what it shows.
+// tellViewActivated tells the current module the user may have just reached
+// it, once it is laid out, and reports whether it listens, so may have changed
+// what it shows.
 func (s *nativeShell) tellViewActivated() bool {
 	aware, ok := s.nativeViews[s.navigator.Current().ID()].(nativeActivationAware)
 	if ok {
@@ -1184,6 +1186,11 @@ func (s *nativeShell) setScrollPosition(position int32) {
 	actual, _, _ := procSetScrollInfo.Call(uintptr(s.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
 	s.scrollY = int32(actual)
 	s.layout()
+	// Scrolling can bring a view's status area into sight with no activation
+	// to follow, as Tab does on its way down the view.
+	if shellForegroundWindow() == s.hwnd && s.tellViewActivated() {
+		s.layout()
+	}
 }
 
 func (s *nativeShell) scrollBy(delta int32) {
@@ -1611,6 +1618,8 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			if id, exists := shell.navIDs[lowWord(wParam)]; exists {
 				if shell.navigator.Select(id) == nil {
 					_ = shell.saveSettings(false)
+					// Posted so that the newly shown view has been laid out.
+					_ = postShellMessage(uintptr(hwnd), wmAppActivated)
 				}
 				if lParam != 0 {
 					shell.ensureControlVisible(windows.Handle(lParam))
@@ -1737,10 +1746,10 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			// has no later activation, so the restore tells the view instead.
 			restored := shell.minimized && wParam != sizeMinimized
 			shell.minimized = wParam == sizeMinimized
-			if restored && shellForegroundWindow() == hwnd {
-				shell.tellViewActivated()
-			}
 			shell.layout()
+			if restored && shellForegroundWindow() == hwnd && shell.tellViewActivated() {
+				shell.layout()
+			}
 			return 0
 		}
 	case wmDisplayChange:

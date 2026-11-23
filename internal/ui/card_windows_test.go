@@ -303,11 +303,78 @@ func TestResultCardMoveLeavesASuccessTimeRunning(t *testing.T) {
 func TestResultCardResumeAnnouncesOnlyAChange(t *testing.T) {
 	card := newOffScreenCard(t, nil)
 	card.Report(Notice{Kind: NoticeError, Message: "waiting problem"}, "")
+	announcements, settle := watchCardAnnouncements(t, card)
 
-	announcements := 0
+	card.Suspend()
+	card.Resume()
+	settle()
+	if !cardVisible(card.hwnd) {
+		t.Fatal("the problem did not come back")
+	}
+	if *announcements != 0 {
+		t.Fatalf("an unchanged problem was announced %d time(s)", *announcements)
+	}
+
+	card.Suspend()
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	card.Resume()
+	settle()
+	if *announcements != 1 {
+		t.Fatalf("a new result was announced %d time(s), want 1", *announcements)
+	}
+	if running, _, _ := procKillTimer.Call(uintptr(card.hwnd), cardTimerID); running == 0 {
+		t.Fatal("a success shown by Resume started no timer")
+	}
+}
+
+// TestResultCardResumeAnnouncesARepeatedFailure is a second capture failing
+// exactly as the first did: the card lists it once, and a screen reader still
+// hears that this capture failed.
+func TestResultCardResumeAnnouncesARepeatedFailure(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	failure := Notice{Kind: NoticeError, Message: "saving failed"}
+	card.Report(failure, "")
+	announcements, settle := watchCardAnnouncements(t, card)
+
+	card.Suspend()
+	card.Report(failure, "")
+	card.Resume()
+	settle()
+	if *announcements != 1 {
+		t.Fatalf("a repeated failure was announced %d time(s), want 1", *announcements)
+	}
+	if len(card.queue.problems) != 1 {
+		t.Fatalf("problems = %+v, want it listed once", card.queue.problems)
+	}
+}
+
+// TestResultCardExpiryLeavesAWaitingProblemUnannounced is a success leaving
+// the card to an earlier failure, which must not be read out as if the
+// capture that just succeeded had failed.
+func TestResultCardExpiryLeavesAWaitingProblemUnannounced(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Report(Notice{Kind: NoticeError, Message: "earlier failure"}, "")
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	announcements, settle := watchCardAnnouncements(t, card)
+
+	cardWindowProc(card.hwnd, cardWMTimer, cardTimerID, 0)
+	settle()
+	if !strings.Contains(card.message.Text(), "earlier failure") {
+		t.Fatalf("message = %q", card.message.Text())
+	}
+	if *announcements != 0 {
+		t.Fatalf("the earlier failure was announced %d time(s)", *announcements)
+	}
+}
+
+// watchCardAnnouncements counts the live-region events of the card's message.
+// settle lets those already raised arrive.
+func watchCardAnnouncements(t *testing.T, card *ResultCard) (announcements *int, settle func()) {
+	t.Helper()
+	announcements = new(int)
 	callback := windows.NewCallback(func(_, _, hwnd, _, _, _, _ uintptr) uintptr {
 		if windows.Handle(hwnd) == card.message.hwnd {
-			announcements++
+			*announcements++
 		}
 		return 0
 	})
@@ -318,33 +385,12 @@ func TestResultCardResumeAnnouncesOnlyAChange(t *testing.T) {
 	}
 	t.Cleanup(func() { procCardTestUnhookWinEvent.Call(hook) })
 	// An out-of-context event arrives as this thread retrieves messages.
-	settle := func() {
+	return announcements, func() {
 		var message [64]byte
 		for deadline := time.Now().Add(150 * time.Millisecond); time.Now().Before(deadline); {
 			procCardTestPeekMessageW.Call(uintptr(unsafe.Pointer(&message)), 0, 0, 0, 1)
 			time.Sleep(5 * time.Millisecond)
 		}
-	}
-
-	card.Suspend()
-	card.Resume()
-	settle()
-	if !cardVisible(card.hwnd) {
-		t.Fatal("the problem did not come back")
-	}
-	if announcements != 0 {
-		t.Fatalf("an unchanged problem was announced %d time(s)", announcements)
-	}
-
-	card.Suspend()
-	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
-	card.Resume()
-	settle()
-	if announcements != 1 {
-		t.Fatalf("a new result was announced %d time(s), want 1", announcements)
-	}
-	if running, _, _ := procKillTimer.Call(uintptr(card.hwnd), cardTimerID); running == 0 {
-		t.Fatal("a success shown by Resume started no timer")
 	}
 }
 

@@ -34,8 +34,9 @@ func newCardTestView(t *testing.T) (*NativeView, *fakeResultCard, *queuedDispatc
 	return view, view.card.(*fakeResultCard), dispatcher
 }
 
-// showViewOffScreen makes the status area count as visible without putting a
-// window where a capture test running beside this one would see it.
+// showViewOffScreen makes the status area count as in sight without putting a
+// window where a capture test running beside this one would see it, and tells
+// the view, as the shell does once it has laid out a view it opened.
 func showViewOffScreen(t *testing.T, view *NativeView) {
 	t.Helper()
 	const swShowNoActivate = 4
@@ -47,6 +48,7 @@ func showViewOffScreen(t *testing.T, view *NativeView) {
 	if !view.statusVisible() {
 		t.Fatal("the test view is not visible")
 	}
+	view.NativeActivated()
 }
 
 // TestShortcutCaptureReportsEveryOutcomeOnTheCard is the failed shortcut
@@ -436,6 +438,92 @@ func TestReclaimedProblemsKeepADisplayFailure(t *testing.T) {
 	showViewOffScreen(t, view)
 	if text := view.status.Text(); !strings.Contains(text, "enumeration failed") || !strings.Contains(text, "bad shortcut") {
 		t.Fatalf("status = %q, want both problems", text)
+	}
+}
+
+// TestProblemsStayOnTheCardUntilTheStatusAreaIsInSight is the shortcut with
+// the view in front and its status area below the fold, where the default
+// window size leaves it: a refused start must stay on the card, and move only
+// once the user can read it in the status area.
+func TestProblemsStayOnTheCardUntilTheStatusAreaIsInSight(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	showViewOffScreen(t, view)
+	view.foregroundWindow = func() windows.Handle { return view.parent }
+	_, _, createErr := fakeOverlaySession(view)
+	*createErr = errors.New("no overlay")
+	view.status.Move(10, 5000, 200, 60)
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if card.suspended {
+		t.Fatal("a failed start left the card hidden")
+	}
+	view.NativeActivated()
+	if len(card.reports) != 1 {
+		t.Fatalf("the problem left the card for a status area out of sight: %+v", card.reports)
+	}
+
+	view.status.Move(10, 20, 200, 60)
+	view.NativeActivated()
+	if len(card.reports) != 0 {
+		t.Fatalf("the card kept the problem with the status area in sight: %+v", card.reports)
+	}
+	if text := view.status.Text(); !strings.Contains(text, "no overlay") {
+		t.Fatalf("status = %q", text)
+	}
+}
+
+// TestReclaimedProblemsKeepOtherProblemsTheStatusHolds is a failure that exists
+// only in the status area when the card's problems move there. A problem with
+// a setting stays one, so that the restore of the defaults still clears it.
+func TestReclaimedProblemsKeepOtherProblemsTheStatusHolds(t *testing.T) {
+	failure := ui.Notice{Kind: ui.NoticeWarning, Message: "save failed"}
+
+	t.Run("a failed Open Folder", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		_ = view.status.Show(ui.Notice{Kind: ui.NoticeError, Message: "share offline"}, 0)
+		card.Report(failure, "")
+		showViewOffScreen(t, view)
+		if text := view.status.Text(); !strings.Contains(text, "share offline") || !strings.Contains(text, "save failed") {
+			t.Fatalf("status = %q, want both problems", text)
+		}
+	})
+	t.Run("a notice that is no problem", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		_ = view.status.Show(ui.Notice{Kind: ui.NoticeSuccess, Message: "mode selected"}, 0)
+		card.Report(failure, "")
+		showViewOffScreen(t, view)
+		if text := view.status.Text(); strings.Contains(text, "mode selected") || !strings.Contains(text, "save failed") {
+			t.Fatalf("status = %q, want the problem alone", text)
+		}
+	})
+	t.Run("a shortcut failure the restore resolves", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		view.presentShortcutFailure(errors.New("held by another application"))
+		card.Report(failure, "")
+		showViewOffScreen(t, view)
+		if text := view.status.Text(); !strings.Contains(text, "held by another application") {
+			t.Fatalf("status before the restore = %q", text)
+		}
+		view.NativeRestoreDefaults()
+		if text := view.status.Text(); strings.Contains(text, "held by another application") || !strings.Contains(text, "save failed") {
+			t.Fatalf("status = %q, want the failure alone", text)
+		}
+	})
+}
+
+// TestRestoreDefaultsKeepsTheLatestResultBesideANewConflict is a default
+// shortcut still taken after the restore withdrew everything else the notice
+// from the card held: the capture's failure stays beside the new conflict.
+func TestRestoreDefaultsKeepsTheLatestResultBesideANewConflict(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.showOutcome(ui.Notice{Kind: ui.NoticeError, Message: "capture failed"})
+	card.ReportSetting(ui.Notice{Kind: ui.NoticeError, Message: "bad shortcut"})
+	showViewOffScreen(t, view)
+	view.hotkeys.(*fakeHotkeyRegistrar).applyFunc = func(Shortcut) error { return errors.New("held by another application") }
+	view.NativeRestoreDefaults()
+	text := view.status.Text()
+	if !strings.Contains(text, "capture failed") || !strings.Contains(text, "held by another application") || strings.Contains(text, "bad shortcut") {
+		t.Fatalf("status = %q, want the capture failure and the new conflict", text)
 	}
 }
 

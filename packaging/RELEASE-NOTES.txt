@@ -17,7 +17,8 @@ Screenshot
   separately.
 - A configurable global shortcut, Ctrl+Alt+S by default. While you work in
   another application, a small card reports each result without taking the
-  focus, and a problem stays until you dismiss it.
+  focus, and a problem stays until you dismiss it or it moves to the Screenshot
+  view.
 
 Image Resizer
 - Resize PNG and JPEG images in bulk, added by picker or drag and drop.
