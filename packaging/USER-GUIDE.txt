@@ -43,8 +43,8 @@ unless a capture is under way: see section 11.
 Closing the window exits the application, because it has no tray icon. The
 global shortcut works only while the application is running, so minimize the
 window instead of closing it if you want to keep using the shortcut. A capture
-reports its result only in the Screenshot view, so check there afterwards: see
-section 10.
+reports its result only in the Screenshot view, so check there after each
+capture: see section 10.
 
 
 2. The main window
@@ -377,8 +377,10 @@ Capture
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
 - Where displays differ in size or are offset, the capture toolbar can land in
-  a part of the desktop that no display shows. Move the selection to bring the
-  toolbar back, or press Escape to cancel.
+  a part of the desktop that no display shows. It still takes the keyboard:
+  unless you pressed Tab, Enter captures and Escape cancels. If you clicked in
+  another application, press the global shortcut first. Moving the selection
+  also brings the toolbar back, but moving it back hides the toolbar again.
 - If the window was minimized before a capture, do not start the application
   again during that capture. The window can reappear and end up in the image.
 - Starting the application again during a selection can take the keyboard from
@@ -389,7 +391,8 @@ Capture
   could not start, such as with a preset larger than the desktop or an invalid
   JPEG quality, and a selection that ended because a display changed. While the
   window is minimized or shows another tool, nothing tells you about any of
-  these, so check the Screenshot view after using the shortcut.
+  these. The view keeps only the latest result, so a later capture hides an
+  earlier failure: check it after each shortcut capture, before taking the next.
 - A global shortcut another application already owns when this one starts is
   reported only in the Screenshot view. If another tool was showing when you
   last closed the application, nothing tells you the shortcut is not working
@@ -455,12 +458,15 @@ A screenshot is black.
 The capture was copied but not saved, or saved but not copied.
   The message says which part failed. To fix saving, choose another Output folder
   or free space on its drive. To fix copying, close any application that may be
-  holding the clipboard and capture again. If the message mentions a temporary
-  file, check Open Folder before you capture again or delete anything. If it can
-  be pressed, the image was saved: press it to find the image, then delete the
-  leftover .gamedevtools-*.tmp file. If it cannot be pressed, the image was not
-  saved and that file may be its only copy, so keep it and follow the entry for
-  .gamedevtools-*.tmp files below.
+  holding the clipboard and capture again.
+
+  If the message says "remove temporary file" or "left behind", it names a
+  leftover .gamedevtools-*.tmp file. Check Open Folder before you capture again
+  or delete anything. If it can be pressed, the image was saved: press it to
+  find the image, then delete only the file the message names. Any other such
+  file may be an earlier capture's only copy. If Open Folder cannot be pressed,
+  the image was not saved and the named file may be its only copy, so keep it
+  and follow the entry for .gamedevtools-*.tmp files below.
 
 "The output folder cannot be used."
   Windows would read that path as a different place, for example because a name
@@ -487,10 +493,10 @@ My results have names like photo_2.png.
 There are .gamedevtools-*.tmp files in my output folder.
   The application was stopped while saving, or could not remove the file after
   a save or a failed save. Such a file holds one result, which may be complete
-  or unfinished. If a .gamedevtools-replaced-* file is beside it, follow the
-  next entry first. If the image is missing and you cannot make it again, copy
-  this file, give the copy a .png or .jpg extension, and open it to check it.
-  Otherwise it is safe to delete.
+  or unfinished, and may be the only copy. If a .gamedevtools-replaced-* file is
+  beside it, follow the next entry first. Before deleting one, copy it, give the
+  copy a .png or .jpg extension, and open it to see which image it holds. Delete
+  the original only if you have that image elsewhere or do not need it.
 
 There is a .gamedevtools-replaced-* file in my output folder.
   It is the existing file an Overwrite was replacing when it was interrupted or

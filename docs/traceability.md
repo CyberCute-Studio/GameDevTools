@@ -20,11 +20,11 @@ The evidence column names representative checks, not all of them, as `package.Te
 | Acceptance scenarios | 32 | 23 | 9 |
 | **All** | **176** | **127** | **49** |
 
-Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes, the defect it names is fixed, or it receives an approved resolution, as PRD section 16 requires:
+PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run or manual check it names passes and the defect it names is fixed:
 
 SCR-002, SCR-003, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S11, AC-S12, AC-A04.
 
-The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
+The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
 ## Application shell
 
@@ -89,7 +89,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-054 | P0 | Display change revalidates the selection | SCR-10, REL-02A | `overlay.TestDisplayChangeKeepsFittingSession`, `overlay.TestDisplayChangeEndsSessionThatCannotFit` | **Partial** | QLT-04A: a live disconnect and reconnect. REL-02A: why a session ended is not shown while the Screenshot view is hidden |
 | SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | **Partial** | M9: activation simulated, no real click in another application |
 | SCR-056 | P0 | Exit removes overlays and restores input | SCR-06, SCR-10 | `overlay.TestShutdownRemovesSessionSilently`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
-| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | **Partial** | REL-02A, then M18: a shortcut capture's failure is not shown while the Screenshot view is hidden. REL-02A: an image saved with its temporary name left behind is reported as a failed save |
+| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | **Partial** | REL-02A, then M18: a shortcut capture's failure is not shown while the Screenshot view is hidden, and a later capture's result replaces it. REL-02A: an image saved with its temporary name left behind is reported as a failed save |
 | SCR-061 | P0 | PNG or JPEG, PNG by default | SCR-01, SCR-04 | `screenshot.TestDefaultOptions`, `screenshot.TestNativeViewFormatQualityAndPattern` | Pass |  |
 | SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `screenshot/output.TestDeliverJPEGDoesNotDegradeClipboard`, `screenshot/output.TestSetClipboardImageRoundTrip` | **Partial** | M8: no real application has pasted the image |
 | SCR-063 | P0 | Default Pictures folder; another can be chosen | SCR-01, SCR-04, QLT-03B, QLT-03C | `screenshot.TestDefaultFolderIsOneACaptureCanUse`, `screenshot.TestNativeViewBrowseForOutputFolder` | **Partial** | M16: the real folder picker has not been opened |

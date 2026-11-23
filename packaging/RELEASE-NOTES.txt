@@ -77,23 +77,28 @@ Known issues
 - A capture's result appears only in the Screenshot view, including a failed
   save or clipboard copy, a capture the global shortcut could not start, and a
   selection ended by a display change. While the window is minimized or shows
-  another tool, nothing tells you about any of these, so check the Screenshot
-  view after using the shortcut.
+  another tool, nothing tells you about any of these. The view keeps only the
+  latest result, so a later capture hides an earlier failure: check it after
+  each shortcut capture, before taking the next.
 - A global shortcut another application already owns when this one starts is
   reported only in the Screenshot view, so it can go unnoticed while another
   tool is showing.
 - Where displays differ in size or are offset, the capture toolbar can land in
-  a part of the desktop that no display shows. Move the selection to bring it
-  back, or press Escape to cancel.
+  a part of the desktop that no display shows. Unless you pressed Tab, Enter
+  still captures and Escape cancels; after clicking in another application,
+  press the global shortcut first. Moving the selection also brings the toolbar
+  back, but moving it back hides the toolbar again.
 - Starting the application again during a capture that began while its window
   was minimized can bring the window back into the image. Starting it again
   during any selection can take the keyboard from the capture toolbar: click
   the toolbar or press the global shortcut to get it back.
 - If Windows cannot remove a capture's temporary file after saving the image,
   the result says saving failed although the image was saved. Open Folder can
-  then be pressed and shows it, and the leftover .gamedevtools-*.tmp file can be
-  deleted. If Open Folder cannot be pressed, the image was not saved and that
-  file may be its only copy, so keep it: see section 11 of USER-GUIDE.txt.
+  then be pressed and shows it, and the leftover file the message names can be
+  deleted. Keep any other .gamedevtools-*.tmp file, which may be an earlier
+  capture's only copy. If Open Folder cannot be pressed, the image was not saved
+  and the file the message names may be its only copy, so keep it: see section
+  11 of USER-GUIDE.txt.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

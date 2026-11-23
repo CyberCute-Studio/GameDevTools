@@ -52,7 +52,10 @@ The app does not check for updates. To update, close it and extract the new ZIP
 to the folder that holds your CyberCute Dev Tools folder, such as Documents, not
 into that folder itself. Windows' Extract All suggests a new folder named after
 the ZIP, so change the destination. Replace the existing files when asked, so
-that the guide and release notes match the new version. Your settings are kept.
+that the guide and release notes match the new version. If you renamed your
+folder, extract the ZIP somewhere else and copy the files from its CyberCute Dev
+Tools folder into yours instead, so that a pinned shortcut runs the new version.
+Your settings are kept.
 
 Uninstall
 ---------
