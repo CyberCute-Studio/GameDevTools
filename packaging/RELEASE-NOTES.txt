@@ -68,6 +68,9 @@ These have not been run, so this version makes no claim about them:
   to bring a selection's toolbar back, real clicks through a preset frame into a
   running application, and a real mouse drag of the frame's border.
 - Drawing, moving, and resizing a Free Rectangle selection with a real mouse.
+- A person checking that a real capture's image shows no frame, toolbar,
+  dimming, or pointer, and that a Full Display image shows only the selected
+  display.
 - The real Windows file and folder pickers, a real drop of files or a folder
   from File Explorer, and Open Folder and Open Output Folder opening Explorer.
 - Dragging the window with the mouse during a job.
@@ -89,6 +92,8 @@ take.
   a part of the desktop that no display shows.
 - If Windows fails to list the displays, Full Display can capture the display
   under the pointer instead of the selected one, and report a success.
+- A maximized main window returns at its normal size after a capture or a
+  cancelled selection.
 - Starting the application again during a capture can bring a window minimized
   before it into the image, or take the keyboard from the capture toolbar.
 - If Windows cannot remove a capture's temporary file, the result can say saving

@@ -68,8 +68,9 @@ not saved.
 -------------
 
 Choose a Capture mode, then press Start Capture. The main window hides so that
-it cannot appear in the image. When the capture ends it returns as it was, so
-a window you minimized stays minimized.
+it cannot appear in the image. When the capture ends it returns, and a window
+you minimized stays minimized. A maximized window returns at its normal size:
+see section 10.
 
   Free Rectangle    Draw any rectangle on the screen.
   Preset Rectangle  Float a frame of an exact size over your work.
@@ -93,8 +94,9 @@ Free Rectangle
 
 Preset Rectangle
 
-  Select a preset in the Presets list first. An exact-size frame then appears,
-  centered on the display under the pointer, and stays on top of other windows.
+  Select a preset in the Presets list, then press Start Capture. An exact-size
+  frame appears, centered on the display under the pointer, and stays on top of
+  other windows.
 
   - Clicks inside the frame go to the application underneath, so you can keep
     working in it, for example to set up a game camera, before you capture.
@@ -390,7 +392,11 @@ Capture
   display and capture the one under the pointer, reporting a success. The
   message "The display list is unavailable" appears only in the Screenshot view.
   With more than one display, check the Display list before capturing. If it is
-  empty, choose another Capture mode, then Full Display again.
+  empty, choose another Capture mode, then Full Display again, and select the
+  display you want.
+- A maximized main window returns at its normal size after a capture or a
+  cancelled selection, and closing the application then remembers that size.
+  Maximize it again.
 - If the window was minimized before a capture, do not start the application
   again during that capture. The window can reappear and end up in the image.
 - Starting the application again during a selection can take the keyboard from

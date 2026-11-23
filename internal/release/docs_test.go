@@ -56,11 +56,13 @@ var manualGated = map[string][]string{
 	"APP-005": {"M17"},
 	"SCR-031": {"M18"}, "SCR-060": {"M18"}, "AC-S08": {"M18"}, "AC-S09": {"M18"},
 	"UX-006": {"M2"}, "AC-A03": {"M2"},
+	"SCR-014": {"M15"}, "SCR-044": {"M9", "M15"}, "SCR-068": {"M9", "M15"}, "AC-S01": {"M9"},
+	"SCR-040": {"M19"}, "AC-S06": {"M19"},
 }
 
 // gatingChecks are the manual checks that are the only real run of part of a
 // requirement.
-var gatingChecks = []string{"M2", "M8", "M9", "M10", "M12", "M15", "M16", "M17", "M18"}
+var gatingChecks = []string{"M2", "M8", "M9", "M10", "M12", "M15", "M16", "M17", "M18", "M19"}
 
 // confidenceOnly names the gating check a row may cite while it stays Pass,
 // because automated checks already cover that row: the job's thread and its
