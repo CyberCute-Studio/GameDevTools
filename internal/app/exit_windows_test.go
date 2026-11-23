@@ -24,7 +24,6 @@ import (
 )
 
 var (
-	procIsWindow           = user32.NewProc("IsWindow")
 	procEnumThreadWindows  = user32.NewProc("EnumThreadWindows")
 	procRegisterHotKey     = user32.NewProc("RegisterHotKey")
 	procUnregisterHotKey   = user32.NewProc("UnregisterHotKey")

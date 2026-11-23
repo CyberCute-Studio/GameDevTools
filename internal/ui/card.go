@@ -107,3 +107,13 @@ func (q *cardQueue) withdrawSettings() bool {
 	q.problems = slices.DeleteFunc(q.problems, func(entry CardEntry) bool { return entry.Setting })
 	return len(q.problems) != before
 }
+
+// withdrawSetting removes one setting's problem and reports whether it was
+// there.
+func (q *cardQueue) withdrawSetting(notice Notice) bool {
+	before := len(q.problems)
+	q.problems = slices.DeleteFunc(q.problems, func(entry CardEntry) bool {
+		return entry.Setting && entry.Notice == notice
+	})
+	return len(q.problems) != before
+}

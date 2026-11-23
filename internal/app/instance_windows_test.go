@@ -168,6 +168,28 @@ func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
 	}
 }
 
+// TestActivateExistingInstanceSeesAWindowDestroyed is a launch that found the
+// window of an instance now closing: it must report no window, so that
+// claimInstance takes the mutex once that instance exits, rather than exit
+// with nothing left running.
+func TestActivateExistingInstanceSeesAWindowDestroyed(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	className, hwnd := newInstanceTestWindow(t)
+	done := make(chan bool, 1)
+	go func() { done <- activateExistingInstance(className, 0) }()
+	time.Sleep(200 * time.Millisecond)
+	procDestroyWindow.Call(hwnd)
+	select {
+	case activated := <-done:
+		if activated {
+			t.Fatal("activation reported a window that was destroyed")
+		}
+	case <-time.After(instanceShowWait - time.Second):
+		t.Fatal("activation kept waiting for a destroyed window")
+	}
+}
+
 const swMinimizeInstanceTest = 6
 
 // newInstanceTestWindow creates a hidden top-level window of a unique class on

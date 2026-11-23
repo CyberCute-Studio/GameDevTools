@@ -158,6 +158,7 @@ var (
 	procSetFocus                      = user32.NewProc("SetFocus")
 	procGetFocus                      = user32.NewProc("GetFocus")
 	procIsChild                       = user32.NewProc("IsChild")
+	procIsWindow                      = user32.NewProc("IsWindow")
 	procIsWindowVisible               = user32.NewProc("IsWindowVisible")
 	procIsWindowEnabled               = user32.NewProc("IsWindowEnabled")
 	procGetNextDlgTabItem             = user32.NewProc("GetNextDlgTabItem")

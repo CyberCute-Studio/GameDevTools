@@ -104,7 +104,9 @@ func acquireInstance(name string) (handle uintptr, already bool, err error) {
 // hidden: a window minimized before the capture is still iconic, so restoring
 // it would show it under the overlay and put it in the image (SCR-044). A
 // window still starting is hidden too, for a moment, so a hidden window gets
-// instanceShowWait to appear before it is taken for a capture's.
+// instanceShowWait to appear before it is taken for a capture's. A window
+// destroyed meanwhile belongs to an instance that is closing, so it counts as
+// not found, and claimInstance goes on to take the mutex once that one exits.
 func activateExistingInstance(className string, wait time.Duration) bool {
 	hwnd := findInstanceWindow(className)
 	for deadline := time.Now().Add(wait); hwnd == 0 && time.Now().Before(deadline); {
@@ -115,6 +117,9 @@ func activateExistingInstance(className string, wait time.Duration) bool {
 		return false
 	}
 	for deadline := time.Now().Add(instanceShowWait); ; {
+		if alive, _, _ := procIsWindow.Call(hwnd); alive == 0 {
+			return false
+		}
 		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible != 0 {
 			break
 		}

@@ -372,9 +372,15 @@ func TestResultCardExpiryLeavesAWaitingProblemUnannounced(t *testing.T) {
 // settle lets those already raised arrive.
 func watchCardAnnouncements(t *testing.T, card *ResultCard) (announcements *int, settle func()) {
 	t.Helper()
+	return watchLabelAnnouncements(t, card.message.hwnd)
+}
+
+// watchLabelAnnouncements counts the live-region events of one label.
+func watchLabelAnnouncements(t *testing.T, label windows.Handle) (announcements *int, settle func()) {
+	t.Helper()
 	announcements = new(int)
 	callback := windows.NewCallback(func(_, _, hwnd, _, _, _, _ uintptr) uintptr {
-		if windows.Handle(hwnd) == card.message.hwnd {
+		if windows.Handle(hwnd) == label {
 			*announcements++
 		}
 		return 0
@@ -407,9 +413,29 @@ func TestResultCardWithdrawsSettingProblems(t *testing.T) {
 	}
 }
 
-// TestResultCardDismissProblemIsTheKeyboardsWay covers the view's button: it
-// takes the newest problem, past a success shown over it, and says how many
-// are left.
+// TestResultCardWithdrawsOneSettingProblem is a shortcut conflict resolved
+// beside another setting's refusal and a capture's failure, which still stand.
+func TestResultCardWithdrawsOneSettingProblem(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	var told []int
+	card.SetProblemsChanged(func(problems int) { told = append(told, problems) })
+	conflict := Notice{Kind: NoticeError, Message: "conflict"}
+	card.ReportSetting(Notice{Kind: NoticeError, Message: "quality refused"})
+	card.Report(conflict, "")
+	card.ReportSetting(conflict)
+	card.WithdrawSetting(conflict)
+	if len(card.queue.problems) != 2 || card.queue.problems[0].Notice.Message != "quality refused" ||
+		card.queue.problems[1].Setting {
+		t.Fatalf("problems = %+v", card.queue.problems)
+	}
+	if want := []int{1, 2, 3, 2}; !slices.Equal(told, want) {
+		t.Fatalf("told = %v, want %v", told, want)
+	}
+}
+
+// TestResultCardDismissProblemIsTheKeyboardsWay covers the view's button: a
+// success shown over the problems goes first, so that a press never removes a
+// problem the card has not shown, and it says how many are left.
 func TestResultCardDismissProblemIsTheKeyboardsWay(t *testing.T) {
 	card := newOffScreenCard(t, nil)
 	var told []int
@@ -419,6 +445,10 @@ func TestResultCardDismissProblemIsTheKeyboardsWay(t *testing.T) {
 	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, "")
 
 	card.DismissProblem()
+	if got := card.message.Text(); !strings.Contains(got, "two") || len(card.queue.problems) != 2 {
+		t.Fatalf("after the press over the success: message %q, problems %+v", got, card.queue.problems)
+	}
+	card.DismissProblem()
 	if got := card.message.Text(); !strings.Contains(got, "one") {
 		t.Fatalf("message after the first dismissal = %q", got)
 	}
@@ -426,8 +456,26 @@ func TestResultCardDismissProblemIsTheKeyboardsWay(t *testing.T) {
 	if cardVisible(card.hwnd) {
 		t.Fatal("the card stayed after its last problem was dismissed")
 	}
-	if want := []int{1, 2, 2, 1, 0}; !slices.Equal(told, want) {
+	if want := []int{1, 2, 2, 2, 1, 0}; !slices.Equal(told, want) {
 		t.Fatalf("told = %v, want %v", told, want)
+	}
+}
+
+// TestResultCardAnnouncesTheProblemsWaiting is a screen reader, which cannot
+// reach the card: it must hear that more problems stand behind the new one.
+func TestResultCardAnnouncesTheProblemsWaiting(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Report(Notice{Kind: NoticeError, Message: "one"}, "")
+	announcements, settle := watchLabelAnnouncements(t, card.count.hwnd)
+	card.Report(Notice{Kind: NoticeError, Message: "two"}, "")
+	settle()
+	if *announcements != 1 {
+		t.Fatalf("the waiting count was announced %d time(s), want 1", *announcements)
+	}
+	cardWindowProc(card.hwnd, cardWMCommand, cardDismissCommand, 0)
+	settle()
+	if *announcements != 1 {
+		t.Fatalf("an empty count was announced: %d", *announcements)
 	}
 }
 

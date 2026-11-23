@@ -232,6 +232,15 @@ func (c *ResultCard) WithdrawSettings() {
 	}
 }
 
+// WithdrawSetting removes one problem with a setting, once that setting no
+// longer has it, as a shortcut that has since registered.
+func (c *ResultCard) WithdrawSetting(notice Notice) {
+	if c.queue.withdrawSetting(notice) {
+		c.present(false)
+		c.tellProblems()
+	}
+}
+
 // Suspend hides the card before a capture, keeping its problems. A success on
 // it has been seen and ends here, or a capture that ends with no result of its
 // own, as a cancelled selection does, would bring it back as if it were new.
@@ -274,10 +283,10 @@ func (c *ResultCard) tellProblems() {
 	}
 }
 
-// DismissProblem dismisses the newest problem, for a keyboard user, whom the
-// card's own button cannot reach. A success over it has been seen and goes too.
+// DismissProblem removes the result on the card, for its Dismiss button and for
+// a keyboard user, whom that button cannot reach. A success over the problems
+// goes first, so that a problem is on the card before a press can remove it.
 func (c *ResultCard) DismissProblem() {
-	c.queue.expire()
 	c.queue.dismiss()
 	c.present(true)
 	c.tellProblems()
@@ -289,6 +298,7 @@ func (c *ResultCard) Destroy() {
 	if c.hwnd != 0 {
 		procKillTimer.Call(uintptr(c.hwnd), cardTimerID)
 		c.message.ClearLive()
+		c.count.ClearLive()
 		procDestroyWindow.Call(uintptr(c.hwnd))
 		c.hwnd = 0
 	}
@@ -403,6 +413,7 @@ func (c *ResultCard) present(announce bool) {
 	}
 	if announce {
 		c.message.Announce()
+		c.count.Announce()
 	}
 }
 
@@ -426,8 +437,11 @@ func (c *ResultCard) create() error {
 		if c.message != nil {
 			c.message.ClearLive()
 		}
+		if c.count != nil {
+			c.count.ClearLive()
+		}
 		procDestroyWindow.Call(hwnd)
-		c.message = nil
+		c.message, c.count = nil, nil
 		return err
 	}
 	// The message may hold a long path with no spaces, which only an
@@ -441,6 +455,9 @@ func (c *ResultCard) create() error {
 	if c.count, err = newLabel(card, "", ssNoPrefix); err != nil {
 		return fail(err)
 	}
+	// The card never has the focus, so a screen reader hears of the problems
+	// waiting behind this one only if the count is announced too.
+	c.count.live = markLive(c.count.hwnd) == nil
 	if c.openBtn, err = NewButton(card, OpenFolderAction, ButtonOptions{ID: cardOpenCommand}); err != nil {
 		return fail(err)
 	}
@@ -507,12 +524,6 @@ func (c *ResultCard) measure(text string, width int32) int32 {
 		uintptr(unsafe.Pointer(&bounds)),
 		cardDTCalcRect|cardDTWordBreak|cardDTNoPrefix|cardDTEditControl)
 	return int32(height)
-}
-
-func (c *ResultCard) dismissCurrent() {
-	c.queue.dismiss()
-	c.present(true)
-	c.tellProblems()
 }
 
 func subclassCardButton(button *Button, parent windows.Handle, id int32) error {
@@ -626,7 +637,7 @@ func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 				// Dismissing several problems quickly clicks the same spot,
 				// which a BS_NOTIFY button reports as a double click.
 				if notification == cardBNClicked || notification == cardBNDoubleClicked {
-					card.dismissCurrent()
+					card.DismissProblem()
 				}
 				return 0
 			}
@@ -642,7 +653,7 @@ func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 		}
 	case cardWMClose:
 		if card != nil {
-			card.dismissCurrent()
+			card.DismissProblem()
 		}
 		return 0
 	case cardWMCtlColorStatic:

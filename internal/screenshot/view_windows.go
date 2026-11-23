@@ -81,6 +81,7 @@ type resultCard interface {
 	Report(notice ui.Notice, path string)
 	ReportSetting(notice ui.Notice)
 	WithdrawSettings()
+	WithdrawSetting(notice ui.Notice)
 	Suspend()
 	Resume()
 	Reposition()
@@ -141,6 +142,9 @@ type NativeView struct {
 	// startupConflict is a shortcut conflict found while the view was created,
 	// reported on the card once the window shows whether the view is visible.
 	startupConflict ui.Notice
+	// cardConflict is that conflict once it is on the card, which withdraws it
+	// when the shortcut registers.
+	cardConflict ui.Notice
 	// cardProblems is how many problems the card holds, which the Dismiss
 	// Problem button offers while there are any.
 	cardProblems int
@@ -315,8 +319,8 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 // completions are posted through it so result presentation always runs on
 // the GUI thread. A shortcut conflict found at startup is reported through
 // it too: the post runs once the message loop does, after the window has
-// appeared with its remembered module, and the card shows the conflict when
-// that module is not this one (SCR-003, AC-S11).
+// appeared with its remembered module, and the card shows the conflict unless
+// the message beside the shortcut field can be seen (SCR-003, AC-S11).
 func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 	n.dispatcher = dispatcher
 	if n.startupConflict.Message == "" || dispatcher == nil {
@@ -325,7 +329,8 @@ func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 	notice := n.startupConflict
 	n.startupConflict = ui.Notice{}
 	_ = dispatcher.Post(func() {
-		if !n.statusVisible() {
+		if !n.statusVisible() || n.controlCovered(n.shortcut.Error.Handle()) {
+			n.cardConflict = notice
 			n.card.ReportSetting(notice)
 		}
 	})
@@ -346,32 +351,41 @@ func (n *NativeView) statusVisible() bool {
 // showing and no other window is over it. The foreground window cannot say,
 // as a capture returns the main window without activating it.
 func (n *NativeView) statusInSight() bool {
-	return n.statusVisible() && !n.statusCenterCovered()
+	return n.statusVisible() && !n.controlCovered(n.status.Handle())
 }
 
-// statusCenterCovered reports whether the center of the status area is out of
-// sight: scrolled outside the main window's client area, where the window
-// there can still be the main window's own title bar, or under another
-// top-level window.
-func (n *NativeView) statusCenterCovered() bool {
+// controlCovered reports whether part of a control is out of sight: scrolled
+// outside the main window's client area, where the window there can still be
+// the main window's own title bar, or under another top-level window. Its
+// corners and center are checked, as a window over the start of a message
+// hides what the message is about.
+func (n *NativeView) controlCovered(control windows.Handle) bool {
 	var bounds, client viewRect
-	if r, _, _ := procViewGetWindowRect.Call(uintptr(n.status.Handle()), uintptr(unsafe.Pointer(&bounds))); r == 0 {
+	if r, _, _ := procViewGetWindowRect.Call(uintptr(control), uintptr(unsafe.Pointer(&bounds))); r == 0 {
 		return true
 	}
 	if r, _, _ := procViewGetClientRect.Call(uintptr(n.parent), uintptr(unsafe.Pointer(&client))); r == 0 {
 		return true
 	}
 	procViewMapWindowPoints.Call(uintptr(n.parent), 0, uintptr(unsafe.Pointer(&client)), 2)
-	x, y := bounds.Left+(bounds.Right-bounds.Left)/2, bounds.Top+(bounds.Bottom-bounds.Top)/2
-	if x < client.Left || x >= client.Right || y < client.Top || y >= client.Bottom {
-		return true
+	right, bottom := bounds.Right-1, bounds.Bottom-1
+	for _, point := range [...][2]int32{
+		{bounds.Left, bounds.Top}, {right, bounds.Top}, {bounds.Left, bottom}, {right, bottom},
+		{bounds.Left + (bounds.Right-bounds.Left)/2, bounds.Top + (bounds.Bottom-bounds.Top)/2},
+	} {
+		x, y := point[0], point[1]
+		if x < client.Left || x >= client.Right || y < client.Top || y >= client.Bottom {
+			return true
+		}
+		hit := n.windowAtPoint(x, y)
+		if hit == 0 {
+			return true
+		}
+		if root, _, _ := procViewGetAncestor.Call(hit, viewGARoot); windows.Handle(root) != n.parent {
+			return true
+		}
 	}
-	hit := n.windowAtPoint(x, y)
-	if hit == 0 {
-		return true
-	}
-	root, _, _ := procViewGetAncestor.Call(hit, viewGARoot)
-	return windows.Handle(root) != n.parent
+	return false
 }
 
 // cardNeeded reports whether a capture's outcome also goes on the result
@@ -511,11 +525,16 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 	n.pattern.Move(x, y+scale(24), width, scale(20))
 	y += scale(24) + scale(20) + scale(12)
 	folderWidth, dismissWidth := scale(120), scale(statusDismissWidth)
-	n.status.Move(x, y, max(int32(1), width-folderWidth-dismissWidth-2*gap), statusHeight)
+	n.status.Move(x, y, statusTextWidth(width, scale), statusHeight)
 	buttonY := y + (statusHeight-scale(28))/2
+	if stackedOptionsLayout(width, scale) {
+		buttonY = y + statusHeight + gap
+		folderWidth = min(folderWidth, max(int32(1), (width-gap)/2))
+		dismissWidth = min(dismissWidth, max(int32(1), width-folderWidth-gap))
+	}
 	n.dismissProblem.Move(x+width-folderWidth-gap-dismissWidth, buttonY, dismissWidth, scale(28))
 	n.openFolder.Move(x+width-folderWidth, buttonY, folderWidth, scale(28))
-	y += statusHeight + scale(16)
+	y += statusRowHeight(width, statusHeight, scale) + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 }
 
@@ -539,14 +558,31 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 	height += shortcut.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
-	statusHeight := n.status.Height(width-scale(120)-scale(statusDismissWidth)-2*scale(8), scale, measure)
-	return height + statusHeight + scale(16), quality, shortcut, statusHeight
+	statusHeight := n.status.Height(statusTextWidth(width, scale), scale, measure)
+	return height + statusRowHeight(width, statusHeight, scale) + scale(16), quality, shortcut, statusHeight
 }
 
 // statusDismissWidth is the width at 96 DPI of the Dismiss Problem button. The
 // status row always keeps room for it, as a problem can reach the card with no
 // layout to follow.
 const statusDismissWidth = 140
+
+// statusTextWidth is the width of the status text: beside its two buttons or,
+// in a width too narrow for that, the whole row, with the buttons below it.
+func statusTextWidth(width int32, scale func(int32) int32) int32 {
+	if stackedOptionsLayout(width, scale) {
+		return max(int32(1), width)
+	}
+	return width - scale(120) - scale(statusDismissWidth) - 2*scale(8)
+}
+
+// statusRowHeight is the height of the status text and its buttons.
+func statusRowHeight(width, textHeight int32, scale func(int32) int32) int32 {
+	if stackedOptionsLayout(width, scale) {
+		return textHeight + scale(8) + scale(28)
+	}
+	return textHeight
+}
 
 func stackedOptionsLayout(width int32, scale func(int32) int32) bool {
 	return width < scale(460)
@@ -1128,6 +1164,7 @@ func (n *NativeView) commitShortcut() {
 		}
 		return
 	}
+	n.card.WithdrawSetting(n.cardConflict)
 	n.shortcut.Error.SetText("")
 	n.shortcut.Edit.SetText(shortcut.String())
 	err = n.options.SetShortcut(shortcut)
@@ -1142,7 +1179,11 @@ func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 	if n.hotkeys == nil {
 		return nil
 	}
-	return n.hotkeys.Apply(shortcut)
+	err := n.hotkeys.Apply(shortcut)
+	if err == nil {
+		n.card.WithdrawSetting(n.cardConflict)
+	}
+	return err
 }
 
 // presentShortcutFailure reports a registration problem beside the shortcut

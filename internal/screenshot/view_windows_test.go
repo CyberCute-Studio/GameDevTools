@@ -124,6 +124,12 @@ func (f *fakeResultCard) WithdrawSettings() {
 	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool { return entry.Setting })
 	f.tell()
 }
+func (f *fakeResultCard) WithdrawSetting(notice ui.Notice) {
+	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool {
+		return entry.Setting && entry.Notice == notice
+	})
+	f.tell()
+}
 func (f *fakeResultCard) Suspend() { f.suspended = true; f.suspends++ }
 func (f *fakeResultCard) Resume()  { f.suspended = false; f.resumes++ }
 func (f *fakeResultCard) Reposition() {
@@ -393,8 +399,9 @@ func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
 
 	narrow := view.NativeHeight(400, scale, measure)
 	wide := view.NativeHeight(600, scale, measure)
-	if narrow != wide+52 {
-		t.Fatalf("stacked radio rows should add two rows: narrow = %d, wide = %d", narrow, wide)
+	// Two more radio rows, and the status row's buttons below its text.
+	if narrow != wide+52+36 {
+		t.Fatalf("a narrow width should add two radio rows and a button row: narrow = %d, wide = %d", narrow, wide)
 	}
 
 	baseline := view.NativeHeight(600, scale, measure)

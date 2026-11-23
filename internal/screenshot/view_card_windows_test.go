@@ -5,6 +5,7 @@ package screenshot
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -42,6 +43,8 @@ func showViewOffScreen(t *testing.T, view *NativeView) {
 	offScreen := int32(-20000)
 	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
 	procViewTestShowWindow.Call(uintptr(view.parent), swShowNoActivate)
+	view.status.Move(10, 20, 200, 60)
+	view.shortcut.Error.Move(10, 90, 200, 40)
 	view.windowAtPoint = func(int32, int32) uintptr { return uintptr(view.status.Handle()) }
 	view.NativeShow(true)
 	if !view.statusVisible() {
@@ -236,6 +239,100 @@ func TestStartupShortcutConflictStaysOffTheCardWhenTheViewShows(t *testing.T) {
 	}
 }
 
+// TestStartupShortcutConflictReachesTheCardBehindAnotherWindow is the
+// application started behind another, with this view the remembered one: the
+// message beside the field is there, and nobody can see it.
+func TestStartupShortcutConflictReachesTheCardBehindAnotherWindow(t *testing.T) {
+	view := newConflictedHotkeyView(t)
+	card := view.card.(*fakeResultCard)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+	view.NativeDispatcher(dispatcher)
+	showViewOffScreen(t, view)
+	other := newViewTestParent(t)
+	view.windowAtPoint = func(int32, int32) uintptr { return uintptr(other) }
+	dispatcher.runNext(t)
+	if len(card.reports) != 1 || !card.reports[0].Setting {
+		t.Fatalf("card = %+v", card.reports)
+	}
+}
+
+// TestRegisteredShortcutWithdrawsTheStartupConflict is the user choosing a free
+// combination for the conflict the card reported: the card must stop saying
+// the shortcut failed, and keeps what else it holds.
+func TestRegisteredShortcutWithdrawsTheStartupConflict(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+	}{
+		{"a new combination", "Ctrl+Alt+F9"},
+		{"the same combination, now free", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view := newConflictedHotkeyView(t)
+			card := view.card.(*fakeResultCard)
+			dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
+			view.NativeDispatcher(dispatcher)
+			dispatcher.runNext(t)
+			failure := ui.Notice{Kind: ui.NoticeWarning, Message: "save failed"}
+			card.Report(failure, "")
+
+			// A combination still taken leaves the conflict on the card.
+			view.NativeCommand(optionsCommandBase+shortcutCommand, ui.NotificationEditKillFocus)
+			if len(card.reports) != 2 {
+				t.Fatalf("card with the shortcut still taken = %+v", card.reports)
+			}
+
+			view.hotkeys.(*fakeHotkeyRegistrar).applyFunc = nil
+			if test.text != "" {
+				view.shortcut.Edit.SetText(test.text)
+			}
+			view.NativeCommand(optionsCommandBase+shortcutCommand, ui.NotificationEditKillFocus)
+			if len(card.reports) != 1 || card.reports[0].Notice != failure {
+				t.Fatalf("card = %+v", card.reports)
+			}
+		})
+	}
+}
+
+// TestStatusRowKeepsItsTextAndButtonsInANarrowWidth covers the widths where
+// the two buttons leave the text no room: at 96 DPI a window 524 to 590 pixels
+// wide, or a half-screen window at higher scaling.
+func TestStatusRowKeepsItsTextAndButtonsInANarrowWidth(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	scale := func(value int32) int32 { return value }
+	measure := func(string, int32) int32 { return 20 }
+	bounds := func(control windows.Handle) viewRect {
+		var r viewRect
+		procViewGetWindowRect.Call(uintptr(control), uintptr(unsafe.Pointer(&r)))
+		procViewMapWindowPoints.Call(0, uintptr(view.parent), uintptr(unsafe.Pointer(&r)), 2)
+		return r
+	}
+	const x = 8
+	for _, width := range []int32{210, 272, 459} {
+		view.NativeLayout(x, 0, width, scale, measure)
+		status, dismiss, folder := bounds(view.status.Handle()), bounds(view.dismissProblem.Handle()), bounds(view.openFolder.Handle())
+		if status.Right-status.Left != width {
+			t.Errorf("width %d: status text is %d wide", width, status.Right-status.Left)
+		}
+		if dismiss.Top < status.Bottom || folder.Top < status.Bottom {
+			t.Errorf("width %d: a button overlaps the status text: %+v %+v %+v", width, status, dismiss, folder)
+		}
+		if dismiss.Left < x || folder.Right > x+width || dismiss.Right > folder.Left {
+			t.Errorf("width %d: buttons leave the content: %+v %+v", width, dismiss, folder)
+		}
+		height, _, _, _ := view.optionsSectionHeight(width, scale, measure)
+		if folder.Bottom > height {
+			t.Errorf("width %d: the section is %d tall and its buttons end at %d", width, height, folder.Bottom)
+		}
+	}
+
+	view.NativeLayout(x, 0, 460, scale, measure)
+	status, folder := bounds(view.status.Handle()), bounds(view.openFolder.Handle())
+	if status.Right > bounds(view.dismissProblem.Handle()).Left || folder.Top >= status.Bottom {
+		t.Fatalf("a width that holds the row stacked it: status %+v, folder %+v", status, folder)
+	}
+}
+
 func TestCaptureNoticeReportsASavedImageWithALeftoverNameAsSaved(t *testing.T) {
 	leftover := errors.New(`remove C:\Shots\.gamedevtools-1.tmp: access denied`)
 	notice := captureNotice(CaptureResult{Path: `C:\Shots\one.png`, Save: leftover}, displayCaptureMessages)
@@ -323,8 +420,12 @@ func TestStatusScrolledOutOfTheClientAreaIsNotInSight(t *testing.T) {
 	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
 	view.status.Move(10, -100, 200, 60)
 	view.windowAtPoint = func(int32, int32) uintptr { return uintptr(view.parent) }
-	if !view.statusCenterCovered() {
+	if !view.controlCovered(view.status.Handle()) {
 		t.Fatal("a status area above the client area counts as in sight")
+	}
+	view.status.Move(10, -30, 200, 60)
+	if !view.controlCovered(view.status.Handle()) {
+		t.Fatal("a status area partly above the client area counts as in sight")
 	}
 }
 
@@ -342,41 +443,53 @@ func TestShortcutCaptureGoesOnTheCardOnceTheViewIsCovered(t *testing.T) {
 	}
 }
 
-// TestStatusCenterCoveredAsksAboutTheStatusAreasCenter pins which point is
-// asked about and how the answer is read: the view's own controls do not
-// cover it, and another top-level window or no window at all does.
-func TestStatusCenterCoveredAsksAboutTheStatusAreasCenter(t *testing.T) {
+// TestControlCoveredAsksAboutCornersAndCenter pins which points are asked about
+// and how the answers are read: the view's own controls do not cover the
+// status area, and another top-level window or no window over any one of its
+// corners or its center does.
+func TestControlCoveredAsksAboutCornersAndCenter(t *testing.T) {
 	view, _, _ := newCardTestView(t)
 	offScreen := int32(-20000)
 	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
 	view.status.Move(10, 20, 200, 60)
 	var bounds viewRect
 	procViewGetWindowRect.Call(uintptr(view.status.Handle()), uintptr(unsafe.Pointer(&bounds)))
-
-	var askedX, askedY int32
-	var answer uintptr
-	view.windowAtPoint = func(x, y int32) uintptr {
-		askedX, askedY = x, y
-		return answer
+	points := [][2]int32{
+		{bounds.Left, bounds.Top}, {bounds.Right - 1, bounds.Top},
+		{bounds.Left, bounds.Bottom - 1}, {bounds.Right - 1, bounds.Bottom - 1},
+		{bounds.Left + 100, bounds.Top + 30},
 	}
-	answer = uintptr(view.status.Handle())
-	if view.statusCenterCovered() {
+
+	var asked [][2]int32
+	own := uintptr(view.status.Handle())
+	view.windowAtPoint = func(x, y int32) uintptr {
+		asked = append(asked, [2]int32{x, y})
+		return own
+	}
+	if view.controlCovered(view.status.Handle()) {
 		t.Fatal("the status area counts as covering itself")
 	}
-	if askedX != bounds.Left+100 || askedY != bounds.Top+30 {
-		t.Fatalf("asked about (%d, %d), want the center of %+v", askedX, askedY, bounds)
+	if !slices.Equal(asked, points) {
+		t.Fatalf("asked about %v, want %v", asked, points)
 	}
-	answer = uintptr(view.parent)
-	if view.statusCenterCovered() {
+	own = uintptr(view.parent)
+	if view.controlCovered(view.status.Handle()) {
 		t.Fatal("the view's own window counts as covering it")
 	}
-	answer = uintptr(newViewTestParent(t))
-	if !view.statusCenterCovered() {
-		t.Fatal("another window over the status area was not seen")
-	}
-	answer = 0
-	if !view.statusCenterCovered() {
-		t.Fatal("a point with no window counts as in sight")
+
+	other := uintptr(newViewTestParent(t))
+	for _, answer := range []uintptr{other, 0} {
+		for _, covered := range points {
+			view.windowAtPoint = func(x, y int32) uintptr {
+				if x == covered[0] && y == covered[1] {
+					return answer
+				}
+				return uintptr(view.parent)
+			}
+			if !view.controlCovered(view.status.Handle()) {
+				t.Fatalf("answer %#x at %v was not seen", answer, covered)
+			}
+		}
 	}
 }
 
