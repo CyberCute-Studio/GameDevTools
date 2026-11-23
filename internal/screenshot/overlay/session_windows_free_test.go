@@ -81,13 +81,18 @@ func windowUnderOverlayPoint(native *windowsSession, x, y int32) uintptr {
 // reach through the overlay: a top-level window after it in the z-order, or the
 // desktop. Start and the on-screen keyboard are in a higher band, which that
 // order does not list, and stay in front however often the overlay is raised,
-// so a hit on one of them says nothing about the overlay's pixel.
+// so a hit on one of them says nothing about the overlay's pixel. Neither does
+// no window at all, which a secure desktop such as a UAC prompt can leave. The
+// desktop is compared before GetAncestor, which returns zero for it.
 func windowIsBehindOverlay(native *windowsSession, hit uintptr) bool {
 	const gaRoot, gwHwndNext = 2, 2
-	root, _, _ := procTestGetAncestor.Call(hit, gaRoot)
 	desktop, _, _ := procTestGetDesktopWindow.Call()
-	if root == 0 || root == desktop {
+	if hit == desktop {
 		return true
+	}
+	root, _, _ := procTestGetAncestor.Call(hit, gaRoot)
+	if root == 0 {
+		return false
 	}
 	behind, _, _ := procTestGetWindow.Call(uintptr(native.overlay), gwHwndNext)
 	// The bound ends the walk if the z-order changes under it.
@@ -193,7 +198,7 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 		if windowIsBehindOverlay(native, hit) {
 			t.Fatalf("a real click inside the selection would reach window %#x, not the overlay %#x (SCR-012, SCR-052)", hit, native.overlay)
 		}
-		t.Logf("window %#x stays in front of the overlay there, so the real hit test cannot tell", hit)
+		t.Logf("the hit test found window %#x, which is not behind the overlay, so it cannot tell", hit)
 	}
 
 	// The toolbar moved near the selection without covering it (SCR-025).
