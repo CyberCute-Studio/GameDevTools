@@ -50,6 +50,6 @@ The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, an
 ## Consequences
 
 - SmartScreen may warn on first run. The packaged README explains how to check the download and continue.
-- Users update by replacing the executable, and learn of new versions outside the application.
+- Users update by replacing the extracted folder's files with those from the new ZIP, and learn of new versions outside the application.
 - The repository and Go module keep the name `GameDevTools`. Renaming them is a separate decision.
 - The project has no license of its own, so the package carries third-party notices only. One must be chosen before any public distribution.

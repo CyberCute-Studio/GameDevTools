@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,12 +25,14 @@ var (
 	manualCheck     = regexp.MustCompile(`\bM\d+\b`)
 	manualCheckRow  = regexp.MustCompile(`^\| (M\d+) \|`)
 	requirementID   = regexp.MustCompile(`(?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+`)
+	requirementSpan = regexp.MustCompile(`([A-Z]+(?:-[SRA])?-?)(\d+) through ([A-Z]+(?:-[SRA])?-?)(\d+)`)
+	recordedRun     = regexp.MustCompile(`^\| \d{4}-\d{2}-\d{2} \| (M\d+|QLT-04A) \| [^|]+ \| ([^|]+) \|$`)
 )
 
 // hardwareGated are the requirements that wait on QLT-04A's hardware, which
-// no row may call complete before that item is Done. It is written out rather
-// than read from the Open column, so that clearing a row's Open cell cannot
-// remove its guard.
+// no row may call complete until docs/testing.md records a run that passed
+// it. It is written out rather than read from the Open column, so that
+// clearing a row's Open cell cannot remove its guard.
 var hardwareGated = []string{
 	"SCR-020", "SCR-026", "SCR-028", "SCR-042", "SCR-043", "SCR-054",
 	"NFR-001", "NFR-003", "NFR-010", "NFR-011", "NFR-012", "NFR-013",
@@ -37,9 +40,22 @@ var hardwareGated = []string{
 }
 
 // manualGated are the requirements whose defining condition only a manual
-// check exercises, in a real application: M8, M9, M10, and M12, which REL-03
-// owns.
-var manualGated = []string{"SCR-002", "SCR-021", "SCR-022", "SCR-055", "SCR-062", "AC-S03", "AC-A04"}
+// check exercises, in a real application, which no row may call complete
+// until docs/testing.md records that check passing it.
+var manualGated = []string{
+	"SCR-002", "SCR-005", "SCR-021", "SCR-022", "SCR-023", "SCR-055", "SCR-062",
+	"AC-S03", "AC-S04", "AC-A04",
+}
+
+// gatingChecks are the manual checks that are the only real run of part of a
+// requirement.
+var gatingChecks = []string{"M8", "M9", "M10", "M12"}
+
+// confidenceOnly names the gating check a row may cite while it stays Pass,
+// because automated checks already cover that row: the job's thread and its
+// coalesced progress are what keep the GUI responsive (RSZ-041), and M12's
+// drag belongs to AC-A04.
+var confidenceOnly = map[string]string{"RSZ-041": "M12"}
 
 type traceRow struct {
 	id, priority, items, evidence, status, open string
@@ -64,11 +80,14 @@ func readTraceability(t *testing.T) []traceRow {
 	return rows
 }
 
-// repositoryTests returns every test and benchmark as package.Name, where the
-// package is its folder's name, or parent/folder for the packages that share a
-// folder name, so that a row cannot cite one package's test for another.
+// repositoryTests returns every test and benchmark as package.Name, where an
+// internal package is its folder's name, or parent/folder for the internal
+// packages that share a folder name, and a command is cmd/folder, so that a
+// row cannot cite one package's test for another and a command's tests cannot
+// rename an internal package's.
 func repositoryTests(t *testing.T) map[string]bool {
 	t.Helper()
+	found := map[string]bool{}
 	byFolder := map[string][]string{}
 	for _, top := range []string{"internal", "cmd"} {
 		root := filepath.Join("..", "..", top)
@@ -82,7 +101,11 @@ func repositoryTests(t *testing.T) map[string]bool {
 			}
 			folder := filepath.Dir(path)
 			for _, match := range testFunction.FindAllSubmatch(data, -1) {
-				byFolder[folder] = append(byFolder[folder], string(match[1]))
+				if top == "cmd" {
+					found["cmd/"+filepath.Base(folder)+"."+string(match[1])] = true
+				} else {
+					byFolder[folder] = append(byFolder[folder], string(match[1]))
+				}
 			}
 			return nil
 		})
@@ -94,7 +117,6 @@ func repositoryTests(t *testing.T) map[string]bool {
 	for folder := range byFolder {
 		uses[filepath.Base(folder)]++
 	}
-	found := map[string]bool{}
 	for folder, names := range byFolder {
 		name := filepath.Base(folder)
 		if uses[name] > 1 {
@@ -105,6 +127,24 @@ func repositoryTests(t *testing.T) map[string]bool {
 		}
 	}
 	return found
+}
+
+// expandSpans writes out each "X-1 through X-3" in text as its requirements,
+// so that a range hides none of the IDs inside it.
+func expandSpans(text string) string {
+	return requirementSpan.ReplaceAllStringFunc(text, func(span string) string {
+		match := requirementSpan.FindStringSubmatch(span)
+		first, errFirst := strconv.Atoi(match[2])
+		last, errLast := strconv.Atoi(match[4])
+		if match[1] != match[3] || errFirst != nil || errLast != nil || last < first {
+			return span
+		}
+		ids := make([]string, 0, last-first+1)
+		for number := first; number <= last; number++ {
+			ids = append(ids, fmt.Sprintf("%s%0*d", match[1], len(match[2]), number))
+		}
+		return strings.Join(ids, ", ")
+	})
 }
 
 // TestTraceabilityCoversEveryRequirement holds docs/traceability.md to the
@@ -209,16 +249,20 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 		t.Errorf("the summary has no line %q", line)
 	}
 
-	for _, gate := range []struct {
-		item string
-		ids  []string
-	}{{"QLT-04A", hardwareGated}, {"REL-03", manualGated}} {
-		if planItemDone(t, plan, gate.item) {
+	covers := manualCheckCoverage(t)
+	recorded := recordedRuns(t, covers)
+	for _, id := range hardwareGated {
+		if seen[id].status != "**Partial**" && !recorded[id]["QLT-04A"] {
+			t.Errorf("%s must stay Partial until docs/testing.md records a QLT-04A run that passed it", id)
+		}
+	}
+	for _, id := range manualGated {
+		if seen[id].status == "**Partial**" {
 			continue
 		}
-		for _, id := range gate.ids {
-			if seen[id].status != "**Partial**" {
-				t.Errorf("%s must stay Partial until %s is Done", id, gate.item)
+		for _, check := range gatingChecks {
+			if slices.Contains(covers[check], id) && !recorded[id][check] {
+				t.Errorf("%s must stay Partial until docs/testing.md records a %s run that passed it", id, check)
 			}
 		}
 	}
@@ -226,18 +270,19 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 	if required == nil {
 		t.Fatal("the plan lists no requirements for QLT-04A")
 	}
-	for _, id := range requirementID.FindAllString(required[1], -1) {
+	for _, id := range requirementID.FindAllString(expandSpans(required[1]), -1) {
 		if !slices.Contains(hardwareGated, id) {
 			t.Errorf("QLT-04A requires %s, which is not in hardwareGated", id)
 		}
 	}
 
 	checkBlockerLists(t, matrix, rows)
-	checkManualChecks(t, rows)
+	checkManualChecks(t, rows, covers)
 }
 
 // checkBlockerLists holds the matrix's named lists of Partial requirements to
-// its rows, in row order.
+// its rows, in row order. An empty list is written as None, as it is once the
+// last blocker has passed.
 func checkBlockerLists(t *testing.T, matrix string, rows []traceRow) {
 	t.Helper()
 	var blockers, deferrable []string
@@ -250,27 +295,23 @@ func checkBlockerLists(t *testing.T, matrix string, rows []traceRow) {
 			blockers = append(blockers, row.id)
 		}
 	}
-	if line := "\n" + strings.Join(blockers, ", ") + ".\n"; !strings.Contains(matrix, line) {
+	listed := func(ids []string, none string) string {
+		if len(ids) == 0 {
+			return none
+		}
+		return strings.Join(ids, ", ")
+	}
+	if line := "\n" + listed(blockers, "None") + ".\n"; !strings.Contains(matrix, line) {
 		t.Errorf("the list of release blockers is not %q", strings.TrimSpace(line))
 	}
-	if line := "The Partial P1 requirements are " + strings.Join(deferrable, ", ") + "."; !strings.Contains(matrix, line) {
+	if line := "The Partial P1 requirements are " + listed(deferrable, "none") + "."; !strings.Contains(matrix, line) {
 		t.Errorf("the summary has no line %q", line)
 	}
 }
 
-// planItemDone reads an item's status from the plan.
-func planItemDone(t *testing.T, plan, id string) bool {
-	t.Helper()
-	status := regexp.MustCompile(`\*\*` + regexp.QuoteMeta(id) + ` — [^\n]*\n\s+- \*\*Status:\*\* (\w+(?: \w+)?)`).FindStringSubmatch(plan)
-	if status == nil {
-		t.Fatalf("the plan has no status for %s", id)
-	}
-	return status[1] == "Done"
-}
-
-// checkManualChecks holds the matrix's Open column and the guide's table of
-// manual checks to each other.
-func checkManualChecks(t *testing.T, rows []traceRow) {
+// manualCheckCoverage reads which requirements each manual check in
+// docs/testing.md covers.
+func manualCheckCoverage(t *testing.T) map[string][]string {
 	t.Helper()
 	covers := map[string][]string{}
 	for _, line := range strings.Split(string(repositoryFile(t, "docs", "testing.md")), "\n") {
@@ -289,6 +330,39 @@ func checkManualChecks(t *testing.T, rows []traceRow) {
 	if len(covers) == 0 {
 		t.Fatal("found no manual checks in docs/testing.md")
 	}
+	return covers
+}
+
+// recordedRuns reads the Recorded runs table in docs/testing.md into, for each
+// requirement, the runs that passed it. A run can pass only what it covers.
+func recordedRuns(t *testing.T, covers map[string][]string) map[string]map[string]bool {
+	t.Helper()
+	recorded := map[string]map[string]bool{}
+	for _, line := range strings.Split(string(repositoryFile(t, "docs", "testing.md")), "\n") {
+		match := recordedRun.FindStringSubmatch(strings.TrimSpace(line))
+		if match == nil {
+			continue
+		}
+		run := match[1]
+		for _, id := range requirementID.FindAllString(expandSpans(match[2]), -1) {
+			if run == "QLT-04A" && !slices.Contains(hardwareGated, id) || run != "QLT-04A" && !slices.Contains(covers[run], id) {
+				t.Errorf("docs/testing.md records %s as passing %s, which it does not cover", run, id)
+				continue
+			}
+			if recorded[id] == nil {
+				recorded[id] = map[string]bool{}
+			}
+			recorded[id][run] = true
+		}
+	}
+	return recorded
+}
+
+// checkManualChecks holds the matrix's Open column and the guide's table of
+// manual checks to each other, and keeps a row that names a gating check
+// under that check's guard.
+func checkManualChecks(t *testing.T, rows []traceRow, covers map[string][]string) {
+	t.Helper()
 	named := map[string][]string{}
 	for _, row := range rows {
 		for _, check := range manualCheck.FindAllString(row.open, -1) {
@@ -296,6 +370,9 @@ func checkManualChecks(t *testing.T, rows []traceRow) {
 				t.Errorf("%s names %s, which docs/testing.md does not define", row.id, check)
 			}
 			named[check] = append(named[check], row.id)
+			if slices.Contains(gatingChecks, check) && !slices.Contains(manualGated, row.id) && confidenceOnly[row.id] != check {
+				t.Errorf("%s names %s, which only a real run can satisfy, but is not in manualGated", row.id, check)
+			}
 		}
 	}
 	for check, ids := range covers {

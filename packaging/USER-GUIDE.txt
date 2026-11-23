@@ -104,8 +104,10 @@ Preset Rectangle
   If you clicked in another application and need the toolbar again, click the
   toolbar or press the global shortcut. Alt+Tab does not list the toolbar.
 
-  A preset larger than your whole desktop is refused before the frame opens. A
-  frame larger than one display is fine as long as it fits the whole desktop.
+  A preset larger than your whole desktop is refused before the frame opens. The
+  desktop is the rectangle around all your displays, so a frame can be larger
+  than one display. If your displays differ in size or are offset, part of that
+  rectangle is on no display, and that part of a capture comes out blank.
 
 Full Display
 
@@ -357,6 +359,9 @@ Capture
   restrict capture. Switching a game to windowed mode usually helps.
 - A capture across displays keeps each display's pixels as they are. Differences
   in color or sharpness between displays are not corrected.
+- A rectangle can include areas that no display covers, when displays differ in
+  size or are offset. Those areas come out blank, usually black, and the capture
+  is still reported as a success.
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
 - A capture's result, including a failed save, appears only in the Screenshot

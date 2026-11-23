@@ -7,24 +7,24 @@ The evidence column names representative checks, not all of them, as `package.Te
 ## Status
 
 - **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as using a real screen reader, and has not been done.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, M10, or M12 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, a hotkey message delivered directly, and a window move made by a direct call with no message loop running. The FND-01 spike clicked through a color-keyed window, which is not how the production frame is built.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, M10, or M12 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the frame, a hotkey message delivered directly, a foreground request whose result nothing checks, and a window move made by a direct call with no message loop running. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
 
-`M1` to `M14` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns.
+`M1` to `M14` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's.
 
 ## Summary
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 110 | 14 |
-| P1 requirements | 20 | 13 | 7 |
-| Acceptance scenarios | 32 | 28 | 4 |
-| **All** | **176** | **151** | **25** |
+| P0 requirements | 124 | 109 | 15 |
+| P1 requirements | 20 | 12 | 8 |
+| Acceptance scenarios | 32 | 27 | 5 |
+| **All** | **176** | **148** | **28** |
 
 Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes or it receives an approved resolution, as PRD section 16 requires:
 
-SCR-002, SCR-020, SCR-021, SCR-022, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S12, AC-A04.
+SCR-002, SCR-020, SCR-021, SCR-022, SCR-023, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S12, AC-A04.
 
-The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
+The Partial P1 requirements are SCR-005, SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
 ## Application shell
 
@@ -57,7 +57,7 @@ The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-
 | SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys` | **Partial** | M10: never pressed with another application focused |
 | SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09 | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | Pass |  |
 | SCR-004 | P0 | Shortcut changes persist without reinstalling | SCR-09 | `screenshot.TestNativeViewShortcutCommitAppliesAndPersists` | Pass |  |
-| SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | Pass |  |
+| SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | **Partial** | M10: the toolbar has not been seen coming back from another application |
 | SCR-006 | P0 | Shortcut released on exit | SCR-09 | `screenshot.TestNativeViewDestroyReleasesHotkey`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
 | SCR-010 | P0 | Drag a rectangle of at least 1 x 1 | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestDrawRectNormalizesDragCorners` | Pass |  |
 | SCR-011 | P0 | Live width and height while dragging | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestOverlayFocusedFieldTracksHandleResize` | Pass |  |
@@ -68,7 +68,7 @@ The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-
 | SCR-020 | P0 | Preset is exact at any monitor scaling | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameCaptureDeliversExactRect` | **Partial** | QLT-04A: any scaling but 100% |
 | SCR-021 | P0 | Frame stays on top of other windows | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface` | **Partial** | M9: not run while another application is in use |
 | SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
-| SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | Pass |  |
+| SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | M9: no real pointer has dragged the production frame |
 | SCR-024 | P0 | Toolbar has Capture, Cancel, and dimensions | SCR-07, SCR-08 | `overlay.TestToolbarCaptureCommandDeliversSelection`, `overlay.TestToolbarCancelCommandCancelsSession`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
 | SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08 | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay` | Pass |  |
 | SCR-026 | P0 | Moves across displays without a size change | SCR-08 | `capture.TestCaptureSpanningDisplayBoundary`, `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | QLT-04A: across a mixed-scaling boundary |
@@ -217,7 +217,7 @@ The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-
 | AC-S01 | — | Exact preset at standard scaling | SCR-11 | `overlay.TestPresetFrameCaptureDeliversExactRect`, `capture.TestCaptureRectDimensionsAndContent` | Pass |  |
 | AC-S02 | — | Exact preset at mixed DPI | SCR-11, QLT-04A | `capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries`, `display.TestLogicalPhysicalConversion` | **Partial** | QLT-04A: mixed scaling, live |
 | AC-S03 | — | Click-through interaction | SCR-11 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
-| AC-S04 | — | Precision placement | SCR-11 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameKeyboardNudges` | Pass |  |
+| AC-S04 | — | Precision placement | SCR-11 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameKeyboardNudges` | **Partial** | M9: no real pointer has dragged the production frame |
 | AC-S05 | — | Free rectangle adjustment | SCR-11 | `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestOverlayMoveAndResizeAdjustSelection` | Pass |  |
 | AC-S06 | — | Full secondary display | SCR-11 | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | Pass |  |
 | AC-S07 | — | Cancellation | SCR-11 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |

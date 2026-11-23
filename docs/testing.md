@@ -56,7 +56,7 @@ QLT-04A owns what needs hardware this project's environment does not have: x64 W
 
 ## Manual pre-release checks
 
-No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, and M10 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks add confidence to requirements the automated checks already cover.
+No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, and M10 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
 
 | Check | What to do | Passes when | Covers |
 |---|---|---|---|
@@ -68,12 +68,19 @@ No automated test can stand in for these. None has been done yet, and REL-03 own
 | M6 | Turn on airplane mode, then run a capture and a resize job | Both complete | NFR-030, AC-A02 |
 | M7 | With clipboard sync on and a signed-in account, capture a screenshot | It stays in Win+V and does not reach another device | NFR-031 |
 | M8 | Paste a capture into Paint and into an Office application | The image arrives at full size | SCR-062 |
-| M9 | Open a preset frame over a running application, click controls inside the frame, then switch away and back | The application reacts, and the frame stays in place at its size | SCR-021, SCR-022, SCR-055, AC-S03 |
-| M10 | Press the global shortcut while another application has the focus | The selected capture mode starts | SCR-002 |
+| M9 | Open a preset frame over a running application, click controls inside the frame, switch away and back, then drag the frame by its border with the mouse | The application reacts to the clicks, the frame stays in place at its size until dragged, and the drag moves it without changing its size | SCR-021, SCR-022, SCR-023, SCR-055, AC-S03, AC-S04 |
+| M10 | Press the global shortcut while another application has the focus. Then start a Preset Rectangle selection, click in the other application, and press the shortcut again | The selected capture mode starts, and the second press brings the toolbar forward with the keyboard focus and no second selection | SCR-002, SCR-005 |
 | M11 | Run a job and a capture against a drive that fills up | The error says the drive is full, and no partial file has a final name | RSZ-030, SET-004, AC-R14 |
 | M12 | Drag the window with the mouse during a 100-image job | The window follows smoothly | RSZ-041, AC-A04 |
 | M13 | Run the [vulnerability scan](privacy-verification.md#how-to-run-the-checks) on the release candidate | No finding that affects the application | NFR-033, TECH-007 |
 | M14 | Start the `Validation matrix` workflow on GitHub | It passes on the hosted x64 Windows Server runners, which are not supported platforms but do run the x64 build | — |
+
+## Recorded runs
+
+Add a row here when a QLT-04A run or a manual check passes, naming the build it ran on and exactly the requirements it passed. The documentation test keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
+
+| Date | Run | Build | Passed |
+|---|---|---|---|
 
 ## User guide walkthrough
 
@@ -82,7 +89,7 @@ This is the script for M1. Follow `USER-GUIDE.txt` rather than this list, and re
 1. **Download.** Check the ZIP's SHA-256 as `README.txt` describes, extract it, and start the application past SmartScreen.
 2. **Single instance.** Start it again. The existing window comes forward.
 3. **Free Rectangle.** Draw, move, resize, and type a size, then capture. Paste the image and open the saved file. Repeat without the mouse.
-4. **Preset Rectangle.** Capture the HD preset over another application, clicking through the frame and nudging it with the arrow keys first. The file is exactly 1280 × 720.
+4. **Preset Rectangle.** Capture the HD preset over another application, clicking through the frame, dragging it by its border, and nudging it with the arrow keys first. The file is exactly 1280 × 720.
 5. **Full Display.** Capture each display. Each file has that display's native resolution.
 6. **Cancel.** Cancel a selection. No file appears, and the clipboard is unchanged.
 7. **Global shortcut.** Start a capture from another application, change the shortcut, and restart to confirm that it was kept.
@@ -100,5 +107,5 @@ This is the script for M1. Follow `USER-GUIDE.txt` rather than this list, and re
 When behavior changes, the same pull request updates what describes it:
 
 - `packaging/USER-GUIDE.txt` for anything a user sees, and `packaging/RELEASE-NOTES.txt` for what a version contains or leaves open.
-- [The traceability matrix](traceability.md) when a requirement's evidence or status changes. A row becomes **Pass** only once its run has been recorded.
+- [The traceability matrix](traceability.md) when a requirement's evidence or status changes. A row that waits on a run becomes **Pass** only once [Recorded runs](#recorded-runs) names it.
 - The verification record that owns the result, and the [PRD](../PRD.md) and [implementation plan](../IMPLEMENTATION_PLAN.md) if approved behavior changed.

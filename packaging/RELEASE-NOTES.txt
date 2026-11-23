@@ -60,8 +60,9 @@ These have not been run, so this version makes no claim about them:
   that fills up.
 - Real clipboard sync with a signed-in account, and pasting a capture into Paint
   or an Office application.
-- The global shortcut pressed while another application has the focus, and real
-  clicks through a preset frame into a running application.
+- The global shortcut pressed while another application has the focus, including
+  to bring a selection's toolbar back, real clicks through a preset frame into a
+  running application, and a real mouse drag of the frame's border.
 - Dragging the window with the mouse during a job.
 - The vulnerability scan of this exact build, and the validation workflow on
   hosted x64 Windows runners.
