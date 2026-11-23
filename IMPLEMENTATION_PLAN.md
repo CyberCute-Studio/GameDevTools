@@ -344,7 +344,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 40. **REL-03 — Validate the release candidate and close the implementation baseline**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02A
     - **Requirements:** All P0 requirements and all acceptance criteria in PRD Section 15.
-    - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, the settings file the candidate writes added as a migration fixture, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
+    - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
     - **Verify:** Test the exact artifact produced by REL-01, not a development build. Complete all P0 acceptance scenarios or record an explicit release blocker. Confirm CI, package integrity, documentation, offline operation, and clean exit.
     - **Notes:** Completion of this item establishes the initial implemented baseline; subsequent features are added as new plan items under new milestones.
 
