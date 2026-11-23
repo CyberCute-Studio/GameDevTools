@@ -54,7 +54,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
 | SCR-001 | P0 | Start the selected mode from the main window | SCR-05, SCR-09 | `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestNativeViewRectangleModesStartOverlaySession` | Pass |  |
-| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys` | **Partial** | M10: never pressed with another application focused |
+| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys`, `screenshot.TestShortcutCapturesNothingWhileADialogIsOpen` | **Partial** | M10: never pressed with another application focused |
 | SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09, REL-02A, REL-02B | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut`, `screenshot.TestStartupShortcutConflictReachesTheCardWhileTheViewIsHidden`, `screenshot.TestShortcutFailureLeavesTheStatusAreaOnceItRegisters` | Pass |  |
 | SCR-004 | P0 | Shortcut changes persist without reinstalling | SCR-09 | `screenshot.TestNativeViewShortcutCommitAppliesAndPersists` | Pass |  |
 | SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | **Partial** | M10: the toolbar has not been seen coming back from another application |

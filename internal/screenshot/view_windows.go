@@ -781,6 +781,9 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 		}
 		return
 	}
+	// This start supersedes a press refused behind a dialog, which would
+	// otherwise return to the card under this capture's result.
+	n.card.WithdrawSetting(shortcutDialogRefusal)
 	// A start refused because a selection is on screen must not change how
 	// that selection's outcome is reported.
 	if n.sessions == nil || !n.sessions.Active() {
@@ -879,19 +882,24 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 		n.sessions.Attention()
 		return true
 	}
-	if n.dialogForbidsCapture() {
-		notice := ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutDialogOpen}
+	// A capture already running keeps startCapture's refusal, as the main
+	// window is back, and a dialog can be open, while its file is written.
+	if !n.inProgress && n.dialogForbidsCapture() {
 		if n.statusInSight() {
-			_ = n.status.Show(notice, 0)
+			_ = n.status.Show(shortcutDialogRefusal, 0)
 		} else {
-			n.status.Update(notice)
-			n.card.Report(notice, "")
+			n.status.Update(shortcutDialogRefusal)
+			n.card.ReportSetting(shortcutDialogRefusal)
 		}
 		return true
 	}
 	n.startCapture(true)
 	return true
 }
+
+// shortcutDialogRefusal answers the shortcut while a dialog is open. On the
+// card it is a withdrawable entry, which the next capture to start removes.
+var shortcutDialogRefusal = ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutDialogOpen}
 
 // dialogForbidsCapture reports whether a modal dialog of the application is
 // open, which disables the main window it belongs to. The dialog's own message

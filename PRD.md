@@ -714,7 +714,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - Screenshot and Image Resizer use separate preset libraries.
 - Resizing writes new files and preserves originals by default.
 - Initial image format support is PNG and JPEG only.
-- Screenshots can be started from the main window or a configurable global shortcut.
+- Screenshots can be started from the main window or a configurable global shortcut. While one of the application's own modal dialogs is open, the shortcut (SCR-002) captures nothing and says so, as the dialog would be in the image (SCR-044) and Escape could not cancel a selection (SCR-052).
 - The initial release draws every window in the Windows system colors, so it follows the Windows contrast (high-contrast) themes, and does not follow the Windows dark app mode, which the standard Win32 controls it uses have no documented way to render; the application stays light and legible when Windows apps are set to dark (UX-008).
 - Restoring the default settings (SET-005) backs the settings file up first and keeps each module's custom presets and its selected preset, the window placement, and the current module; every other setting — the global shortcut, the capture and resize options, and both output folders — returns to its default.
 - Closing the application while a resize job runs asks first, as closing cancels the job. Signing out of, restarting, or shutting down Windows asks nothing: the application saves its settings and stops all work.
@@ -738,4 +738,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.4 | 2026-11-22 | QLT-04: resolved the Windows 10 open decision — the initial release supports Windows 11 only (NFR-001, section 20). |
 | 1.5 | 2026-11-22 | REL-01: resolved the remaining open decisions — the name CyberCute Dev Tools, a portable ZIP, no code signing, and no automatic updates (sections 19 and 20). |
 | 1.6 | 2026-11-23 | REL-02: recorded that the ZIP carries the user guide and release notes, changed the confirmed update decision from replacing the executable to replacing the extracted folder's files so that an update also refreshes those documents, and pointed to the requirement traceability matrix (section 20). No numbered requirement changed. |
-| 1.7 | 2026-11-23 | REL-03: recorded the project owner's choice of the MIT License, carried in the repository and the ZIP (section 20). No numbered requirement changed. |
+| 1.7 | 2026-11-23 | REL-03: recorded the project owner's choice of the MIT License, carried in the repository and the ZIP, and that the global shortcut captures nothing while one of the application's own dialogs is open (section 20). No numbered requirement's text changed. |

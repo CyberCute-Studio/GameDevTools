@@ -674,6 +674,30 @@ func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
 	if captures != 1 {
 		t.Fatalf("captures once the dialog closed = %d, want 1", captures)
 	}
+	for _, report := range card.reports {
+		if report.Notice.Message == ui.CaptureShortcutDialogOpen {
+			t.Fatalf("the refusal outlived the capture that followed it: %+v", card.reports)
+		}
+	}
+}
+
+// TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal is a press
+// while a running capture saves its file and the user has opened a dialog:
+// that capture is not denied, so the press gets the in-progress refusal.
+func TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.inProgress = true
+	view.card.Suspend()
+	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
+	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutRefused {
+		t.Fatalf("card = %+v", card.reports)
+	}
+	if got := view.status.Text(); strings.Contains(got, ui.CaptureShortcutDialogOpen) {
+		t.Fatalf("status denies the running capture: %q", got)
+	}
 }
 
 func TestShortcutQualityThatCannotApplyReachesTheCard(t *testing.T) {
