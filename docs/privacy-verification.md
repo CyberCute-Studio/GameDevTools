@@ -86,7 +86,7 @@ Windows can sync the clipboard to a user's other devices through their Microsoft
 
 | Location | What is written | Code |
 |---|---|---|
-| `%APPDATA%\CyberCute Dev Tools` | `settings.json`, its `.settings-*.tmp` while saving, and `settings.json.corrupt-*`, `.migration-*`, and `.reset-*` backups. When the user has made `settings.json` a symbolic link, the file it leads to and a `.settings-*.tmp` beside that file while saving | `internal/settings/store.go`, `internal/settings/rename_windows.go` |
+| `%APPDATA%\CyberCute Dev Tools` | `settings.json`, its `.settings-*.tmp` while saving, and `settings.json.corrupt-*`, `.migration-*`, and `.reset-*` backups. | `internal/settings/store.go`, `internal/settings/rename_windows.go` |
 | `%LOCALAPPDATA%\CyberCute Dev Tools\Logs` | `cybercute-dev-tools.log` and up to three rotated copies | `internal/diagnostics/logger.go` |
 | The Screenshot output folder the user chose, by default `Pictures\CyberCute Dev Tools\Screenshots` (SCR-063) | Captures, through a `.gamedevtools-*.tmp` file in the same folder, given their final name by a hard link or, on a volume without hard links, a rename that never replaces a file | `internal/screenshot/output/output.go`, `internal/screenshot/output/finalize_windows.go` |
 | The Image Resizer output folder the user chose, by default `Pictures\CyberCute Dev Tools\Resized` (RSZ-021) | Results, through a `.gamedevtools-*.tmp` file in the same folder; a confirmed Overwrite briefly renames the file it replaces to `.gamedevtools-replaced-*` | `internal/imageresizer/output` |

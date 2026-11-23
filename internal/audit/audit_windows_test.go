@@ -188,7 +188,7 @@ var reviewedFileSites = map[string]string{
 	"internal/settings/store.go Store.place os.CreateTemp":                   settingsFolder,
 	"internal/settings/store.go Store.place os.MkdirAll":                     settingsFolder,
 	"internal/settings/store.go Store.place os.Remove":                       settingsFolder,
-	"internal/settings/store.go Store.removeStaleTemporariesIn os.Remove":    settingsFolder,
+	"internal/settings/store.go Store.removeStaleTemporaries os.Remove":      settingsFolder,
 	"internal/settings/store.go Store.write os.Rename":                       settingsFolder,
 
 	"internal/screenshot/output/output.go saveWithEncoder os.CreateTemp":              screenshotFolder,
