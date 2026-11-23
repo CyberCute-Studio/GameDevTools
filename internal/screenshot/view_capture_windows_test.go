@@ -608,6 +608,7 @@ func TestNativeViewCaptureCommitsUnsavedQuality(t *testing.T) {
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
 	// Keyboard activation of Start Capture never moves focus out of the
 	// quality field, so the capture must commit the field itself.
+	selectJPEG(view)
 	view.quality.Edit.SetText("80")
 
 	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}
@@ -720,6 +721,7 @@ func TestNativeViewCaptureQualityCommitStaysQuiet(t *testing.T) {
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, folder, parent)
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	selectJPEG(view)
 	view.quality.Edit.SetText("80")
 
 	dispatcher := &queuedDispatcher{tasks: make(chan func(), 1)}

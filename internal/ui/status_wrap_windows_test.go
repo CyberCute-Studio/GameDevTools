@@ -21,3 +21,24 @@ func TestStatusAreaBreaksATokenWiderThanItself(t *testing.T) {
 		t.Fatalf("status style = %#x, want SS_NOPREFIX kept", style)
 	}
 }
+
+// TestFieldMessagesBreakATokenWiderThanThemselves pins that a field's message,
+// which a layout sizes by the same measure as the status area, wraps a long
+// token rather than leaving the measured height blank.
+func TestFieldMessagesBreakATokenWiderThanThemselves(t *testing.T) {
+	parent := newTestParent(t)
+	text, err := NewTextInput(parent, "Name", 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dimension, err := NewDimensionInput(parent, "Width", 91)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, label := range []*Label{text.Error, dimension.Error} {
+		style, _, _ := procGetWindowLongPtrW.Call(uintptr(label.Handle()), ^uintptr(15))
+		if style&ssEditControl == 0 {
+			t.Fatalf("message style = %#x, want SS_EDITCONTROL", style)
+		}
+	}
+}

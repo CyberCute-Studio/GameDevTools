@@ -21,6 +21,10 @@ func captureFailureMessage(fallback string, err error) string {
 	if !errors.As(err, &captureErr) {
 		return fmt.Sprintf(fallback, err)
 	}
+	// A selection in a gap between displays is not a layout that changed.
+	if errors.Is(captureErr, capture.ErrNotOnDisplay) {
+		return ui.CaptureNotOnDisplay
+	}
 	switch captureErr.Kind {
 	case capture.KindDisplay:
 		return fmt.Sprintf(ui.CaptureDisplayChanged, captureErr)

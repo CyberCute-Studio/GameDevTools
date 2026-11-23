@@ -91,9 +91,13 @@ func kindError(kind Kind, op string, err error) *Error {
 	return &Error{Kind: kind, Op: op, Err: err}
 }
 
+// ErrNotOnDisplay marks a rectangle no connected display covers, which needs
+// a different area rather than a look at the connected displays.
+var ErrNotOnDisplay = errors.New("the rectangle is not on any connected display")
+
 // CaptureRect captures an arbitrary rectangle in physical virtual-desktop
 // coordinates. The rectangle may span monitors but must fit within the
-// current virtual desktop bounds and touch at least one connected display.
+// current virtual desktop bounds and share a pixel with a connected display.
 // The returned image has exactly the rectangle's physical-pixel dimensions.
 func CaptureRect(monitor *display.Monitor, region display.Rect) (*image.RGBA, error) {
 	displays, err := monitor.Displays()
@@ -121,7 +125,7 @@ func validateOnDisplays(displays []display.Display, region display.Rect) error {
 		}
 	}
 	return kindError(KindDisplay, "validate region",
-		fmt.Errorf("capture rectangle %v is not on any connected display", region))
+		fmt.Errorf("capture rectangle %v: %w", region, ErrNotOnDisplay))
 }
 
 // CaptureDisplay captures one connected display, identified by its adapter

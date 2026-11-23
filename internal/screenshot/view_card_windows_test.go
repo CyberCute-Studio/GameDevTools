@@ -426,6 +426,7 @@ func TestUnsavedQualityWarningJoinsTheCardAfterItIsHidden(t *testing.T) {
 	card := view.card.(*fakeResultCard)
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
 	view.capture = func(CaptureRequest) CaptureResult { return CaptureResult{Path: `C:\Shots\one.png`} }
+	selectJPEG(view)
 	view.quality.Edit.SetText("55")
 
 	view.NativeHotkey(globalShortcutHotkeyID)
@@ -633,6 +634,7 @@ func TestShortcutRefusedDuringACaptureReachesTheCardAfterIt(t *testing.T) {
 
 func TestShortcutQualityThatCannotApplyReachesTheCard(t *testing.T) {
 	view, card, _ := newCardTestView(t)
+	selectJPEG(view)
 	view.options.options.Mode = CaptureMode("not a mode")
 	view.quality.Edit.SetText("55")
 	view.NativeHotkey(globalShortcutHotkeyID)

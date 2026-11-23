@@ -593,9 +593,9 @@ const statusDismissWidth = 140
 
 // statusRowHeight is the height of the status text and the row of buttons
 // below it. The text has the content's whole width at every window size, as
-// it can hold a saved path with no spaces, which a static control cuts off
-// rather than wraps, and the row keeps room for Dismiss Problem, as a problem
-// can reach the card with no layout to follow.
+// it can hold a saved path with no spaces, which takes more lines the narrower
+// it is, and the row keeps room for Dismiss Problem, as a problem can reach
+// the card with no layout to follow.
 func statusRowHeight(textHeight int32, scale func(int32) int32) int32 {
 	return textHeight + scale(8) + scale(28)
 }
@@ -795,38 +795,40 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	// beside the field quietly, as the status area announces the same
 	// message, which would otherwise be read twice in a row when the field's
 	// message was not already shown. A PNG capture does not use the field,
-	// which is disabled, so its text cannot refuse one and is left uncommitted.
-	options := n.options.Options()
-	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
-	if err != nil && options.Format == FormatJPEG {
-		n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
-		n.refuseOptions(err)
-		return
-	}
-	// The commit bypasses commitQuality's success notice: the capture
-	// result replaces it moments later, so the notice would only flash.
-	// Failures still surface, and a non-persistence failure aborts the
-	// capture because the new value never reached the options.
-	if err == nil && quality != options.JPEGQuality {
-		if err := n.options.SetJPEGQuality(quality); err != nil {
-			notice := optionNotice(err, "")
-			onCard := n.showOutcome(notice)
-			n.optionsNotice = n.status.Revision()
-			if !errors.Is(err, ErrPersistence) {
-				if onCard {
-					n.card.ReportSetting(notice)
+	// which is disabled, so it neither reads nor commits the field's text.
+	if current := n.options.Options(); current.Format == FormatJPEG {
+		quality, err := ParseJPEGQuality(n.quality.Edit.Text())
+		if err != nil {
+			n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
+			n.refuseOptions(err)
+			return
+		}
+		// The commit bypasses commitQuality's success notice: the capture
+		// result replaces it moments later, so the notice would only flash.
+		// Failures still surface, and a non-persistence failure aborts the
+		// capture because the new value never reached the options.
+		if quality != current.JPEGQuality {
+			if err := n.options.SetJPEGQuality(quality); err != nil {
+				notice := optionNotice(err, "")
+				onCard := n.showOutcome(notice)
+				n.optionsNotice = n.status.Revision()
+				if !errors.Is(err, ErrPersistence) {
+					if onCard {
+						n.card.ReportSetting(notice)
+					}
+					return
 				}
-				return
-			}
-			// The capture goes on and hides the card, which would cut off this
-			// warning's announcement, so it joins the card after that, and a
-			// selection cancelled with no result of its own still announces it.
-			if onCard {
-				defer n.card.ReportSetting(notice)
+				// The capture goes on and hides the card, which would cut off
+				// this warning's announcement, so it joins the card after that,
+				// and a selection cancelled with no result of its own still
+				// announces it.
+				if onCard {
+					defer n.card.ReportSetting(notice)
+				}
 			}
 		}
 	}
-	options = n.options.Options()
+	options := n.options.Options()
 	if err := options.Validate(); err != nil {
 		n.refuseOptions(err)
 		return
@@ -1351,6 +1353,11 @@ func (n *NativeView) refreshFormat() {
 	}
 	n.format.Select(formatIndex)
 	n.quality.Enable(options.Format == FormatJPEG)
+	// PNG does not use the field, so a refusal of its text no longer applies.
+	// Choosing JPEG again checks the text at the next commit or capture.
+	if options.Format != FormatJPEG {
+		n.quality.Error.SetText("")
+	}
 	n.pattern.SetText(options.FilenameExample())
 }
 

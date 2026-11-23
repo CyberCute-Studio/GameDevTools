@@ -450,8 +450,11 @@ A screenshot is black.
   again.
 
 "The display layout changed..."
-  A display was connected, disconnected, or rearranged, or the selection is on
-  no display. Start the capture again.
+  A display was connected, disconnected, or rearranged. Start the capture again.
+
+"The selected area is not on any connected display..."
+  The area is in a part of the desktop no display covers. Select an area on a
+  display and start the capture again.
 
 "The display list is unavailable"
   Windows could not list the displays, so nothing was captured. Start the

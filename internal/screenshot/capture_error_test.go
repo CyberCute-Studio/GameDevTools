@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
 func TestCaptureFailureMessage(t *testing.T) {
@@ -26,6 +27,13 @@ func TestCaptureFailureMessage(t *testing.T) {
 	got := captureFailureMessage(fallback, displayErr)
 	if !strings.Contains(got, "no longer connected") || !strings.Contains(got, "Check the connected displays") {
 		t.Fatalf("display-kind message = %q", got)
+	}
+
+	// A rectangle on no display did not come from a layout change, so it asks
+	// for another area instead of a check of the displays.
+	offDisplay := &capture.Error{Kind: capture.KindDisplay, Op: "validate region", Err: fmt.Errorf("capture rectangle: %w", capture.ErrNotOnDisplay)}
+	if got := captureFailureMessage(fallback, offDisplay); got != ui.CaptureNotOnDisplay {
+		t.Fatalf("off-display message = %q", got)
 	}
 
 	// A native graphics failure names the operation and suggests windowed

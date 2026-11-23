@@ -68,6 +68,13 @@ func newNativeSessionController(t *testing.T) (*Controller, *[]string) {
 		*log = append(*log, "hide")
 		return func() { *log = append(*log, "restore") }, nil
 	}
+	// These tests place selections from the desktop rectangle, which on an
+	// offset layout includes corners no real display covers, so the desktop
+	// a test sets is treated as fully covered.
+	controller.DisplayAreas = func() ([]display.Rect, error) {
+		bounds, err := controller.DesktopBounds()
+		return []display.Rect{bounds}, err
+	}
 	t.Cleanup(controller.Shutdown)
 	return controller, log
 }

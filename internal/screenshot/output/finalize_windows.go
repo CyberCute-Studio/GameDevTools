@@ -20,9 +20,9 @@ const (
 )
 
 // heldWait is the one bounded wait a save has for such a program. The rename
-// and a failed save's cleanup draw on the same wait, so the cleanup never
-// waits out a hold the rename gave up on: that wait could only end by deleting
-// a finished image the rename would then have saved.
+// and every removal of the temporary name draw on the same wait, so a failed
+// save's cleanup never waits out a hold the rename gave up on: that wait could
+// only end by deleting a finished image the rename would then have saved.
 type heldWait struct {
 	retries int
 }

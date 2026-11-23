@@ -76,6 +76,43 @@ func TestPNGCaptureIgnoresInvalidTextInTheDisabledQualityField(t *testing.T) {
 	}
 }
 
+// TestPNGCaptureLeavesValidQualityTextUncommitted pins that a PNG capture does
+// not save text from the disabled field, which it does not use.
+func TestPNGCaptureLeavesValidQualityTextUncommitted(t *testing.T) {
+	view, _, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.quality.Edit.SetText("50")
+	view.capture = func(CaptureRequest) CaptureResult {
+		return CaptureResult{Path: `C:\Shots\one.png`}
+	}
+
+	view.NativeAction()
+	dispatcher.runNext(t)
+
+	if got := view.options.Options().JPEGQuality; got != 90 {
+		t.Fatalf("stored JPEG quality = %d, want 90", got)
+	}
+}
+
+// TestChoosingPNGClearsTheQualityFieldsMessage pins that a refusal does not
+// stay beside a field PNG disables.
+func TestChoosingPNGClearsTheQualityFieldsMessage(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	selectJPEG(view)
+	view.quality.Edit.SetText("500")
+	view.NativeCommand(optionsCommandBase+qualityCommand, ui.NotificationEditKillFocus)
+	if view.quality.Error.Text() == "" {
+		t.Fatal("invalid quality text showed no message")
+	}
+
+	view.format.Select(0)
+	view.NativeCommand(optionsCommandBase+formatCommand, 1)
+
+	if got := view.quality.Error.Text(); got != "" {
+		t.Fatalf("message after choosing PNG = %q", got)
+	}
+}
+
 // flakyDispatcher fails its first posts, as a full message queue does.
 type flakyDispatcher struct {
 	failures atomic.Int32

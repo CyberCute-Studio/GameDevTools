@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
@@ -37,6 +38,9 @@ func TestValidateOnDisplaysRefusesARegionOnNoDisplay(t *testing.T) {
 				return
 			}
 			assertKind(t, err, KindDisplay)
+			if !errors.Is(err, ErrNotOnDisplay) {
+				t.Fatalf("validateOnDisplays(%v) = %v, want ErrNotOnDisplay", test.region, err)
+			}
 		})
 	}
 }
