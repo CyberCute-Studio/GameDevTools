@@ -321,7 +321,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
 37. **REL-01 — Finalize product identity, packaging, and distribution**
-    - **Status:** In Progress | **PR:** TBD | **Depends on:** QLT-04A
+    - **Status:** In Progress | **PR:** [#36](https://github.com/CyberCute-Studio/GameDevTools/pull/36) | **Depends on:** QLT-04A
     - **Requirements:** TECH-010 and PRD Section 19 open decisions.
     - **Deliver:** Final product/executable name, version metadata and application icon, installer and/or portable ZIP decision, code-signing decision, update-strategy decision, reproducible release build, and selected packaging implementation.
     - **Verify:** Install/run or extract/run the packaged app in a clean non-admin Windows environment without Go installed. Confirm settings paths, shortcuts, file associations if any, uninstall behavior if applicable, and artifact integrity/signing according to the chosen strategy.
