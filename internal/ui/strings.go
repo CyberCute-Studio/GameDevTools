@@ -234,7 +234,13 @@ const (
 	CardEarlierResults = "%d earlier problem(s) not yet dismissed."
 	// CaptureProblemsWhileHidden joins the problems the card was holding when
 	// the Screenshot view can show them itself.
-	CaptureProblemsWhileHidden = "%d capture problems while this view was not showing:\n%s"
+	CaptureProblemsWhileHidden = "%d problem(s) while this view was not showing:\n%s"
+	// CaptureLatestResult follows those problems when a later result was
+	// showing, so that they do not replace it.
+	CaptureLatestResult = "Latest capture: %s"
+	// CaptureShortcutRefused is on the card once a capture has ended, so it
+	// says what happened rather than asking the user to wait.
+	CaptureShortcutRefused = "The shortcut was pressed during a capture, so no second capture was taken."
 	// CaptureTemporaryLeftBehind follows the result of a capture that was
 	// saved but whose temporary name could not be removed. The temporary name
 	// is a hard link to the saved image, so removing it loses nothing.

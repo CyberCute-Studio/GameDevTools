@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"unsafe"
@@ -112,6 +113,12 @@ type fakeResultCard struct {
 
 func (f *fakeResultCard) Report(notice ui.Notice, path string) {
 	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Path: path})
+}
+func (f *fakeResultCard) ReportSetting(notice ui.Notice) {
+	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Setting: true})
+}
+func (f *fakeResultCard) WithdrawSettings() {
+	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool { return entry.Setting })
 }
 func (f *fakeResultCard) Suspend() { f.suspended = true; f.suspends++ }
 func (f *fakeResultCard) Resume()  { f.suspended = false; f.resumes++ }

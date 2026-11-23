@@ -6,11 +6,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 var (
+	procCardTestSetActiveWindow     = user32.NewProc("SetActiveWindow")
+	procCardTestGetActiveWindow     = user32.NewProc("GetActiveWindow")
 	procCardTestIsWindowVisible     = user32.NewProc("IsWindowVisible")
 	procCardTestGetForegroundWindow = user32.NewProc("GetForegroundWindow")
 	procCardTestGetWindowLongW      = user32.NewProc("GetWindowLongW")
@@ -36,13 +39,14 @@ func newOffScreenCard(t *testing.T, open func(string)) *ResultCard {
 
 func TestResultCardAppearsWithoutTakingTheForeground(t *testing.T) {
 	card := newOffScreenCard(t, nil)
-	before, _, _ := procCardTestGetForegroundWindow.Call()
 	card.Report(Notice{Kind: NoticeError, Message: "saving failed"}, "")
 	if card.hwnd == 0 || !cardVisible(card.hwnd) {
 		t.Fatal("the card did not appear")
 	}
-	if after, _, _ := procCardTestGetForegroundWindow.Call(); after != before {
-		t.Fatalf("the foreground window changed from %#x to %#x", before, after)
+	// Only the card is checked: other packages' tests run beside this one
+	// and move the foreground between their own windows.
+	if after, _, _ := procCardTestGetForegroundWindow.Call(); windows.Handle(after) == card.hwnd {
+		t.Fatal("the card took the foreground")
 	}
 	const gwlExStyle = ^uintptr(19) // -20 as a uintptr
 	style, _, _ := procCardTestGetWindowLongW.Call(uintptr(card.hwnd), gwlExStyle)
@@ -114,6 +118,80 @@ func TestResultCardButtons(t *testing.T) {
 	cardWindowProc(card.hwnd, cardWMCommand, cardDismissCommand|cardBNDoubleClicked<<16, 0)
 	if cardVisible(card.hwnd) {
 		t.Fatal("the card stayed after its last result was dismissed")
+	}
+}
+
+// TestResultCardPressLeavesActivationAndFocusAlone presses the real buttons
+// with another window of this thread active, as the main window is when the
+// card shows over another tool: a standard button would take the focus, and
+// with it the activation.
+func TestResultCardPressLeavesActivationAndFocusAlone(t *testing.T) {
+	var opened []string
+	card := newOffScreenCard(t, func(path string) { opened = append(opened, path) })
+	card.Report(Notice{Kind: NoticeWarning, Message: "saved, clipboard failed"}, `C:\Shots\one.png`)
+	card.Report(Notice{Kind: NoticeError, Message: "second problem"}, `C:\Shots\two.png`)
+
+	other, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(utf16("STATIC"))), 0, cardWSPopup,
+		uintptr(uint32(0xffffa880)), uintptr(uint32(0xffffa880)), 50, 50, 0, 0, 0, 0)
+	if other == 0 {
+		t.Fatalf("CreateWindowExW: %v", err)
+	}
+	t.Cleanup(func() { procDestroyWindow.Call(other) })
+	procCardTestSetActiveWindow.Call(other)
+	active, _, _ := procCardTestGetActiveWindow.Call()
+	focus, _, _ := procGetFocus.Call()
+
+	press := func(button *Button, up uintptr) {
+		procSendMessageW.Call(uintptr(button.hwnd), cardWMLButtonDown, 1, 0x00050005)
+		procSendMessageW.Call(uintptr(button.hwnd), cardWMLButtonUp, 0, up)
+	}
+	checkFocus := func(step string) {
+		t.Helper()
+		if now, _, _ := procCardTestGetActiveWindow.Call(); now != active {
+			t.Fatalf("%s: the active window changed from %#x to %#x", step, active, now)
+		}
+		if now, _, _ := procGetFocus.Call(); now != focus {
+			t.Fatalf("%s: the focus changed from %#x to %#x", step, focus, now)
+		}
+	}
+
+	// A release off the button is no click.
+	press(card.dismiss, 0x7fff7fff)
+	checkFocus("release off Dismiss")
+	if card.queue.waiting() != 1 {
+		t.Fatal("a release off Dismiss dismissed the problem")
+	}
+
+	press(card.openBtn, 0x00050005)
+	checkFocus("Open Folder")
+	if len(opened) != 1 || opened[0] != `C:\Shots\two.png` {
+		t.Fatalf("opened = %v", opened)
+	}
+
+	press(card.dismiss, 0x00050005)
+	checkFocus("Dismiss")
+	if card.queue.waiting() != 0 {
+		t.Fatal("Dismiss did not dismiss the problem")
+	}
+
+	// The second click of a quick pair arrives as a double click.
+	procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonDblClk, 1, 0x00050005)
+	procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonUp, 0, 0x00050005)
+	checkFocus("double click")
+	if cardVisible(card.hwnd) {
+		t.Fatal("a quick second Dismiss was lost")
+	}
+}
+
+func TestResultCardWithdrawsSettingProblems(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.ReportSetting(Notice{Kind: NoticeError, Message: "conflict"})
+	if !cardVisible(card.hwnd) {
+		t.Fatal("the setting problem did not appear")
+	}
+	card.WithdrawSettings()
+	if cardVisible(card.hwnd) {
+		t.Fatal("the card stayed after its only problem was withdrawn")
 	}
 }
 

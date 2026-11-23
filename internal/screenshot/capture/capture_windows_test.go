@@ -224,7 +224,7 @@ func showSolidWindow(t *testing.T, region display.Rect, fill color.RGBA) windows
 			createErr = callErr
 			return
 		}
-		// SW_SHOWNOACTIVATE keeps the test window from taking activation
+		// SW_SHOWNA keeps the test window from taking activation
 		// away from the user's foreground window on interactive runs; the
 		// topmost popup composites either way.
 		procShowWindow.Call(hwnd, swShowNA)

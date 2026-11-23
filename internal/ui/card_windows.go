@@ -32,9 +32,17 @@ const (
 	cardWMTimer          = 0x0113
 	cardWMCtlColorStatic = 0x0138
 	cardWMMouseActivate  = 0x0021
+	cardWMNCDestroy      = 0x0082
+	cardWMMouseMove      = 0x0200
+	cardWMLButtonDown    = 0x0201
+	cardWMLButtonUp      = 0x0202
+	cardWMLButtonDblClk  = 0x0203
+	cardWMCaptureChanged = 0x0215
+	cardBMSetState       = 0x00f3
 	cardMANoActivate     = 3
 	cardBNClicked        = 0
 	cardBNDoubleClicked  = 5
+	cardGWLPWndProc      = ^uintptr(3) // -4 as a uintptr
 
 	cardWSPopup          = 0x80000000
 	cardWSBorder         = 0x00800000
@@ -71,6 +79,11 @@ var (
 	procCardGetDC               = user32.NewProc("GetDC")
 	procCardReleaseDC           = user32.NewProc("ReleaseDC")
 	procCardDrawTextW           = user32.NewProc("DrawTextW")
+	procCardSetWindowLongPtrW   = user32.NewProc("SetWindowLongPtrW")
+	procCardCallWindowProcW     = user32.NewProc("CallWindowProcW")
+	procCardGetClientRect       = user32.NewProc("GetClientRect")
+	procCardSetCapture          = user32.NewProc("SetCapture")
+	procCardReleaseCapture      = user32.NewProc("ReleaseCapture")
 	procCardGetModuleHandleW    = cardKernel32.NewProc("GetModuleHandleW")
 	procCardCreateFontIndirectW = cardGDI32.NewProc("CreateFontIndirectW")
 	procCardSelectObject        = cardGDI32.NewProc("SelectObject")
@@ -82,7 +95,22 @@ var (
 	registerCardErr  error
 	// cardStates finds a card from its window on the GUI thread.
 	cardStates = map[windows.Handle]*ResultCard{}
+	// cardButtons finds a card button's press state on the GUI thread.
+	cardButtons        = map[windows.Handle]*cardButton{}
+	cardButtonCallback = sync.OnceValue(func() uintptr { return windows.NewCallback(cardButtonProc) })
 )
+
+// cardButton is a card button's press. A standard button takes the keyboard
+// focus when pressed, and with it the activation of its window, whatever
+// WM_MOUSEACTIVATE answered, so the card handles the mouse on its buttons
+// itself.
+type cardButton struct {
+	parent   windows.Handle
+	id       int32
+	previous uintptr
+	pressed  bool
+	double   bool
+}
 
 type cardWindowClass struct {
 	CbSize        uint32
@@ -162,6 +190,24 @@ func (c *ResultCard) Report(notice Notice, path string) {
 	}
 	c.queue.push(CardEntry{Notice: notice, Path: path})
 	c.present(true)
+}
+
+// ReportSetting adds a problem with a setting, as Report does, for
+// WithdrawSettings to remove.
+func (c *ResultCard) ReportSetting(notice Notice) {
+	if c.destroyed {
+		return
+	}
+	c.queue.push(CardEntry{Notice: notice, Setting: true})
+	c.present(true)
+}
+
+// WithdrawSettings removes the problems with a setting, once the default
+// settings replaced what they report.
+func (c *ResultCard) WithdrawSettings() {
+	if c.queue.withdrawSettings() {
+		c.present(false)
+	}
 }
 
 // Suspend hides the card, keeping its results, before a capture.
@@ -334,6 +380,12 @@ func (c *ResultCard) create() error {
 	if c.dismiss, err = NewButton(card, CardDismissAction, ButtonOptions{ID: cardDismissCommand}); err != nil {
 		return fail(err)
 	}
+	if err := subclassCardButton(c.openBtn, card, cardOpenCommand); err != nil {
+		return fail(err)
+	}
+	if err := subclassCardButton(c.dismiss, card, cardDismissCommand); err != nil {
+		return fail(err)
+	}
 	c.hwnd = card
 	cardStates[card] = c
 	return nil
@@ -393,6 +445,83 @@ func (c *ResultCard) measure(text string, width int32) int32 {
 func (c *ResultCard) dismissCurrent() {
 	c.queue.dismiss()
 	c.present(true)
+}
+
+func subclassCardButton(button *Button, parent windows.Handle, id int32) error {
+	state := &cardButton{parent: parent, id: id}
+	cardButtons[button.hwnd] = state
+	previous, _, err := procCardSetWindowLongPtrW.Call(uintptr(button.hwnd), cardGWLPWndProc, cardButtonCallback())
+	if previous == 0 {
+		delete(cardButtons, button.hwnd)
+		return callError("SetWindowLongPtrW(result card button)", err)
+	}
+	state.previous = previous
+	return nil
+}
+
+// cardButtonProc presses and releases a card button without the focus. A
+// second quick click arrives as a double click and is reported as one, so
+// Open Folder does not open twice and Dismiss still takes it.
+func cardButtonProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	button := cardButtons[hwnd]
+	if button == nil || button.previous == 0 {
+		r, _, _ := procCardDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
+		return r
+	}
+	setPressed := func(pressed bool) {
+		state := uintptr(0)
+		if pressed {
+			state = 1
+		}
+		procSendMessageW.Call(uintptr(hwnd), cardBMSetState, state, 0)
+	}
+	switch message {
+	case cardWMLButtonDown, cardWMLButtonDblClk:
+		button.pressed, button.double = true, message == cardWMLButtonDblClk
+		procCardSetCapture.Call(uintptr(hwnd))
+		setPressed(true)
+		return 0
+	case cardWMMouseMove:
+		if button.pressed {
+			setPressed(cardPointOnWindow(hwnd, lParam))
+			return 0
+		}
+	case cardWMLButtonUp:
+		if button.pressed {
+			clicked := cardPointOnWindow(hwnd, lParam)
+			notification := uintptr(cardBNClicked)
+			if button.double {
+				notification = cardBNDoubleClicked
+			}
+			button.pressed = false
+			procCardReleaseCapture.Call()
+			setPressed(false)
+			if clicked {
+				procSendMessageW.Call(uintptr(button.parent), cardWMCommand, uintptr(button.id)|notification<<16, uintptr(hwnd))
+			}
+			return 0
+		}
+	case cardWMCaptureChanged:
+		if button.pressed {
+			button.pressed = false
+			setPressed(false)
+		}
+	case cardWMNCDestroy:
+		delete(cardButtons, hwnd)
+	}
+	r, _, _ := procCardCallWindowProcW.Call(button.previous, uintptr(hwnd), uintptr(message), wParam, lParam)
+	return r
+}
+
+// cardPointOnWindow reports whether a mouse message's position is on the
+// window, whose client area it is relative to.
+func cardPointOnWindow(hwnd windows.Handle, lParam uintptr) bool {
+	var client cardRect
+	if r, _, _ := procCardGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client))); r == 0 {
+		return false
+	}
+	x, y := int32(int16(lParam)), int32(int16(lParam>>16))
+	return x >= client.Left && x < client.Right && y >= client.Top && y < client.Bottom
 }
 
 func registerCardClass() error {

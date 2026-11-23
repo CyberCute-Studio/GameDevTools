@@ -1,16 +1,21 @@
 package ui
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // cardSuccessDuration is how long the result card shows a result that needs
 // nothing from the user. A warning or error stays until it is dismissed.
 const cardSuccessDuration = 6 * time.Second
 
 // CardEntry is one result on the result card: its notice, and the saved file
-// Open Folder shows, if there is one.
+// Open Folder shows, if there is one. Setting marks a problem with a setting,
+// which no longer applies once the default settings are restored.
 type CardEntry struct {
-	Notice Notice
-	Path   string
+	Notice  Notice
+	Path    string
+	Setting bool
 }
 
 // lasting reports whether the entry stays until the user dismisses it, as a
@@ -93,6 +98,14 @@ func (q *cardQueue) expire() bool {
 	expired := q.passing != nil
 	q.passing = nil
 	return expired
+}
+
+// withdrawSettings removes the problems with a setting and reports whether
+// there were any.
+func (q *cardQueue) withdrawSettings() bool {
+	before := len(q.problems)
+	q.problems = slices.DeleteFunc(q.problems, func(entry CardEntry) bool { return entry.Setting })
+	return len(q.problems) != before
 }
 
 // take empties the queue and returns its problems, oldest first.

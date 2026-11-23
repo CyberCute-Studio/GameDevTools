@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
@@ -39,6 +42,7 @@ func showViewOffScreen(t *testing.T, view *NativeView) {
 	offScreen := int32(-20000)
 	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
 	procViewTestShowWindow.Call(uintptr(view.parent), swShowNoActivate)
+	view.windowAtPoint = func(int32, int32) uintptr { return uintptr(view.status.Handle()) }
 	view.NativeShow(true)
 	if !view.statusVisible() {
 		t.Fatal("the test view is not visible")
@@ -267,6 +271,183 @@ func TestFailedDisplayEnumerationKeepsTheSelectedDisplay(t *testing.T) {
 	dispatcher.runNext(t)
 	if len(captured) != 1 || captured[0] != `\\.\DISPLAY2` {
 		t.Fatalf("captured after recovery = %v, want the selected display", captured)
+	}
+}
+
+// TestReclaimedProblemsKeepTheLatestResult is a failed capture followed by a
+// successful one: opening the view shows the failure without replacing the
+// result Open Folder belongs to.
+func TestReclaimedProblemsKeepTheLatestResult(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.fromShortcut = true
+	view.finishCapture(CaptureResult{Save: errors.New("access denied")}, displayCaptureMessages)
+	view.finishCapture(CaptureResult{Path: `C:\Shots\two.png`}, displayCaptureMessages)
+	showViewOffScreen(t, view)
+	if len(card.reports) != 0 {
+		t.Fatalf("the card kept its problems: %+v", card.reports)
+	}
+	text := view.status.Text()
+	failed, saved := strings.Index(text, "access denied"), strings.Index(text, `C:\Shots\two.png`)
+	if failed < 0 || saved < failed || !strings.Contains(text, "Latest capture") {
+		t.Fatalf("status = %q, want the failure and then the latest result", text)
+	}
+	if view.savedPath != `C:\Shots\two.png` {
+		t.Fatalf("Open Folder targets %q", view.savedPath)
+	}
+}
+
+// TestReclaimedProblemKeepsItsSavedFile is a saved image whose clipboard copy
+// failed, followed by a capture with no file: Open Folder still reaches it.
+func TestReclaimedProblemKeepsItsSavedFile(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	view.fromShortcut = true
+	view.finishCapture(CaptureResult{Path: `C:\Shots\one.png`, Clipboard: errors.New("clipboard busy")}, displayCaptureMessages)
+	view.finishCapture(CaptureResult{Err: errors.New("no capture")}, displayCaptureMessages)
+	if view.savedPath != "" {
+		t.Fatalf("savedPath before the view opened = %q", view.savedPath)
+	}
+	showViewOffScreen(t, view)
+	if view.savedPath != `C:\Shots\one.png` {
+		t.Fatalf("Open Folder targets %q, want the saved file", view.savedPath)
+	}
+}
+
+// TestRestoreDefaultsWithdrawsSettingProblems covers a problem with a setting
+// on the card and one already moved to the status area: neither survives the
+// restore that resolved it, and a capture's failure beside it does.
+func TestRestoreDefaultsWithdrawsSettingProblems(t *testing.T) {
+	setting := ui.Notice{Kind: ui.NoticeError, Message: "bad shortcut"}
+	failure := ui.Notice{Kind: ui.NoticeWarning, Message: "save failed"}
+
+	t.Run("on the card", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		card.ReportSetting(setting)
+		card.Report(failure, "")
+		view.NativeRestoreDefaults()
+		if len(card.reports) != 1 || card.reports[0].Notice != failure {
+			t.Fatalf("card = %+v", card.reports)
+		}
+	})
+	t.Run("in the status area", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		card.ReportSetting(setting)
+		card.Report(failure, "")
+		showViewOffScreen(t, view)
+		view.NativeRestoreDefaults()
+		if text := view.status.Text(); strings.Contains(text, "bad shortcut") || !strings.Contains(text, "save failed") {
+			t.Fatalf("status = %q", text)
+		}
+	})
+	t.Run("alone in the status area", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		card.ReportSetting(setting)
+		showViewOffScreen(t, view)
+		view.NativeRestoreDefaults()
+		if text := view.status.Text(); text != "" {
+			t.Fatalf("status = %q, want the resolved problem gone", text)
+		}
+	})
+}
+
+// TestProblemsMoveOnceACaptureEndsWithTheUserBack is the user returning to
+// the view during a slow save: the activation came too early to move the
+// problems, and no other is coming.
+func TestProblemsMoveOnceACaptureEndsWithTheUserBack(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	card.Report(ui.Notice{Kind: ui.NoticeError, Message: "earlier failure"}, "")
+	view.inProgress = true
+	showViewOffScreen(t, view)
+	view.NativeActivated()
+	if len(card.reports) != 1 {
+		t.Fatal("the card gave up its problems during the capture")
+	}
+
+	view.foregroundWindow = func() windows.Handle { return view.parent }
+	view.finishCapture(CaptureResult{Path: `C:\Shots\one.png`}, displayCaptureMessages)
+	if len(card.reports) != 0 {
+		t.Fatalf("the card kept its problems: %+v", card.reports)
+	}
+	if text := view.status.Text(); !strings.Contains(text, "earlier failure") || !strings.Contains(text, `C:\Shots\one.png`) {
+		t.Fatalf("status = %q", text)
+	}
+}
+
+// TestShortcutCaptureGoesOnTheCardOnceTheViewIsCovered is the user leaving
+// for a maximized application during the capture.
+func TestShortcutCaptureGoesOnTheCardOnceTheViewIsCovered(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	showViewOffScreen(t, view)
+	view.fromShortcut, view.watched = true, true
+	other := newViewTestParent(t)
+	view.windowAtPoint = func(int32, int32) uintptr { return uintptr(other) }
+	view.finishCapture(CaptureResult{Save: errors.New("access denied")}, displayCaptureMessages)
+	if len(card.reports) != 1 {
+		t.Fatalf("a result behind another window did not reach the card: %+v", card.reports)
+	}
+}
+
+// TestStatusCenterCoveredAsksAboutTheStatusAreasCenter pins which point is
+// asked about and how the answer is read: the view's own controls do not
+// cover it, and another top-level window or no window at all does.
+func TestStatusCenterCoveredAsksAboutTheStatusAreasCenter(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	offScreen := int32(-20000)
+	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
+	view.status.Move(10, 20, 200, 60)
+	var bounds viewRect
+	procViewGetWindowRect.Call(uintptr(view.status.Handle()), uintptr(unsafe.Pointer(&bounds)))
+
+	var askedX, askedY int32
+	var answer uintptr
+	view.windowAtPoint = func(x, y int32) uintptr {
+		askedX, askedY = x, y
+		return answer
+	}
+	answer = uintptr(view.status.Handle())
+	if view.statusCenterCovered() {
+		t.Fatal("the status area counts as covering itself")
+	}
+	if askedX != bounds.Left+100 || askedY != bounds.Top+30 {
+		t.Fatalf("asked about (%d, %d), want the center of %+v", askedX, askedY, bounds)
+	}
+	answer = uintptr(view.parent)
+	if view.statusCenterCovered() {
+		t.Fatal("the view's own window counts as covering it")
+	}
+	answer = uintptr(newViewTestParent(t))
+	if !view.statusCenterCovered() {
+		t.Fatal("another window over the status area was not seen")
+	}
+	answer = 0
+	if !view.statusCenterCovered() {
+		t.Fatal("a point with no window counts as in sight")
+	}
+}
+
+func TestShortcutRefusedDuringACaptureReachesTheCardAfterIt(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.fromShortcut, view.watched = false, false
+	view.inProgress = true
+	view.card.Suspend()
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if view.fromShortcut {
+		t.Fatal("the refused start changed how the running capture is reported")
+	}
+	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutRefused {
+		t.Fatalf("card = %+v", card.reports)
+	}
+	if !card.suspended {
+		t.Fatal("the refused start showed the card during the capture")
+	}
+}
+
+func TestShortcutQualityThatCannotApplyReachesTheCard(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.options.options.Mode = CaptureMode("not a mode")
+	view.quality.Edit.SetText("55")
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 1 || !card.reports[0].Setting || card.reports[0].Notice.Kind != ui.NoticeError {
+		t.Fatalf("card = %+v", card.reports)
 	}
 }
 

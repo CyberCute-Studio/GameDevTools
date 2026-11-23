@@ -1,10 +1,6 @@
 package overlay
 
-import (
-	"slices"
-
-	"github.com/CyberCute-Studio/GameDevTools/internal/display"
-)
+import "github.com/CyberCute-Studio/GameDevTools/internal/display"
 
 // zone identifies which part of an active selection a pointer position
 // belongs to: one of the eight resize handles, the movable interior, or the
@@ -261,21 +257,42 @@ func reachableToolbarPlacement(workAreas []display.Rect, desktop, anchor, select
 	return max(min(x, area.Right-width), area.Left), max(min(y, area.Bottom-height), area.Top)
 }
 
-// toolbarOnDisplays reports whether all four corners of the toolbar lie on a
-// work area. They may lie on different ones, as a toolbar across the boundary
-// of two side-by-side displays is fully visible.
+// toolbarOnDisplays reports whether the work areas together cover the whole
+// toolbar. It may span several, as a toolbar across the boundary of two
+// side-by-side displays is fully visible, but its corners alone say nothing
+// about a shorter display between them.
 func toolbarOnDisplays(workAreas []display.Rect, x, y, width, height int32) bool {
-	for _, corner := range []display.Point{
-		{X: x, Y: y},
-		{X: x + width - 1, Y: y},
-		{X: x, Y: y + height - 1},
-		{X: x + width - 1, Y: y + height - 1},
-	} {
-		if !slices.ContainsFunc(workAreas, func(area display.Rect) bool { return area.Contains(corner) }) {
-			return false
+	uncovered := []display.Rect{{Left: x, Top: y, Right: x + width, Bottom: y + height}}
+	for _, area := range workAreas {
+		var rest []display.Rect
+		for _, piece := range uncovered {
+			rest = appendOutside(rest, piece, area)
 		}
+		uncovered = rest
 	}
-	return true
+	return len(uncovered) == 0
+}
+
+// appendOutside appends the parts of piece that area does not cover.
+func appendOutside(rest []display.Rect, piece, area display.Rect) []display.Rect {
+	left, top := max(piece.Left, area.Left), max(piece.Top, area.Top)
+	right, bottom := min(piece.Right, area.Right), min(piece.Bottom, area.Bottom)
+	if left >= right || top >= bottom {
+		return append(rest, piece)
+	}
+	if piece.Top < top {
+		rest = append(rest, display.Rect{Left: piece.Left, Top: piece.Top, Right: piece.Right, Bottom: top})
+	}
+	if bottom < piece.Bottom {
+		rest = append(rest, display.Rect{Left: piece.Left, Top: bottom, Right: piece.Right, Bottom: piece.Bottom})
+	}
+	if piece.Left < left {
+		rest = append(rest, display.Rect{Left: piece.Left, Top: top, Right: left, Bottom: bottom})
+	}
+	if right < piece.Right {
+		rest = append(rest, display.Rect{Left: right, Top: top, Right: piece.Right, Bottom: bottom})
+	}
+	return rest
 }
 
 // nearestWorkArea returns the work area sharing the most pixels with r, or,

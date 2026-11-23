@@ -239,6 +239,29 @@ func TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay(t *testing.T) {
 	}
 }
 
+// TestReachableToolbarPlacementLeavesAGapBetweenDisplays is a wide toolbar
+// whose corners lie on two tall displays while its middle is below a shorter
+// display between them, where nothing shows it.
+func TestReachableToolbarPlacementLeavesAGapBetweenDisplays(t *testing.T) {
+	workAreas := []display.Rect{
+		{Left: 0, Top: 0, Right: 2560, Bottom: 1440},
+		{Left: 2560, Top: 0, Right: 3584, Bottom: 768},
+		{Left: 3584, Top: 0, Right: 6144, Bottom: 1440},
+	}
+	desktop := display.Rect{Left: 0, Top: 0, Right: 6144, Bottom: 1440}
+	selection := display.Rect{Left: 2900, Top: 800, Right: 3284, Bottom: 900}
+	if toolbarOnDisplays(workAreas, 2500, 916, 1184, 100) {
+		t.Fatal("a toolbar over the gap counts as on the displays")
+	}
+	if !toolbarOnDisplays(workAreas, 2000, 100, 1184, 100) {
+		t.Fatal("a toolbar across a display boundary counts as off the displays")
+	}
+	x, y := reachableToolbarPlacement(workAreas, desktop, workAreas[0], selection, 1184, 100, 16)
+	if x != 3584 || y != 916 {
+		t.Fatalf("reachableToolbarPlacement() = (%d, %d), want (3584, 916)", x, y)
+	}
+}
+
 // TestReachableToolbarPlacementStaysOnADisplay covers displays of different
 // sizes, where the virtual desktop includes areas no display shows.
 func TestReachableToolbarPlacementStaysOnADisplay(t *testing.T) {

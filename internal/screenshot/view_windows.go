@@ -5,6 +5,7 @@ package screenshot
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,7 +47,17 @@ var (
 	procViewIsWindowVisible     = viewUser32.NewProc("IsWindowVisible")
 	procViewIsIconic            = viewUser32.NewProc("IsIconic")
 	procViewGetForegroundWindow = viewUser32.NewProc("GetForegroundWindow")
+	procViewGetWindowRect       = viewUser32.NewProc("GetWindowRect")
+	procViewWindowFromPoint     = viewUser32.NewProc("WindowFromPoint")
+	procViewGetAncestor         = viewUser32.NewProc("GetAncestor")
 )
+
+// viewGARoot is GetAncestor's GA_ROOT.
+const viewGARoot = 2
+
+type viewRect struct {
+	Left, Top, Right, Bottom int32
+}
 
 // hotkeyRegistrar registers, suspends, and releases one global hotkey
 // combination. The production implementation is Hotkey; tests substitute a
@@ -62,6 +73,8 @@ type hotkeyRegistrar interface {
 // is a topmost window that a capture test running beside them would see.
 type resultCard interface {
 	Report(notice ui.Notice, path string)
+	ReportSetting(notice ui.Notice)
+	WithdrawSettings()
 	Suspend()
 	Resume()
 	Reposition()
@@ -121,6 +134,22 @@ type NativeView struct {
 	// startupConflict is a shortcut conflict found while the view was created,
 	// reported on the card once the window shows whether the view is visible.
 	startupConflict ui.Notice
+	// latestOutcome is the latest capture's outcome, and latestNotice the
+	// status area's revision once it was shown, so that problems moved from
+	// the card do not replace a newer result.
+	latestOutcome ui.Notice
+	latestNotice  uint64
+	// reclaimed is what the status area shows from the card, with the later
+	// result shown beside it, and reclaimedNotice its revision, so that the
+	// restore of the default settings can take out the problems it resolves.
+	reclaimed       []ui.CardEntry
+	reclaimedLatest ui.Notice
+	reclaimedNotice uint64
+	// foregroundWindow and windowAtPoint read the desktop; tests replace them,
+	// as their windows are off every display, where nothing hits them, and
+	// never in front.
+	foregroundWindow func() windows.Handle
+	windowAtPoint    func(x, y int32) uintptr
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -159,6 +188,14 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		view.listDisplays = displays.Displays
 	}
 	view.card = ui.NewResultCard(view.cardPlacement, view.revealFromCard)
+	view.foregroundWindow = func() windows.Handle {
+		foreground, _, _ := procViewGetForegroundWindow.Call()
+		return windows.Handle(foreground)
+	}
+	view.windowAtPoint = func(x, y int32) uintptr {
+		hit, _, _ := procViewWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
+		return hit
+	}
 	return view
 }
 
@@ -282,7 +319,7 @@ func (n *NativeView) NativeDispatcher(dispatcher core.Dispatcher) {
 	n.startupConflict = ui.Notice{}
 	_ = dispatcher.Post(func() {
 		if !n.statusVisible() {
-			n.card.Report(notice, "")
+			n.card.ReportSetting(notice)
 		}
 	})
 }
@@ -304,21 +341,69 @@ func (n *NativeView) statusVisible() bool {
 	return visible != 0 && iconic == 0
 }
 
-// reportOutcome shows a capture's outcome in the status area. For a capture
-// the global shortcut started, it also goes on the result card unless the
-// user was looking at this view then and still can: otherwise the result
-// would be written where nobody sees it (SCR-060, SCR-069).
-func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
+// statusInSight reports whether the user can see the status area now: it is
+// showing and no other window is over it. The foreground window cannot say,
+// as a capture returns the main window without activating it.
+func (n *NativeView) statusInSight() bool {
+	return n.statusVisible() && !n.statusCenterCovered()
+}
+
+// statusCenterCovered reports whether the window at the center of the status
+// area belongs to another top-level window.
+func (n *NativeView) statusCenterCovered() bool {
+	var bounds viewRect
+	if r, _, _ := procViewGetWindowRect.Call(uintptr(n.status.Handle()), uintptr(unsafe.Pointer(&bounds))); r == 0 {
+		return true
+	}
+	x, y := bounds.Left+(bounds.Right-bounds.Left)/2, bounds.Top+(bounds.Bottom-bounds.Top)/2
+	hit := n.windowAtPoint(x, y)
+	if hit == 0 {
+		return true
+	}
+	root, _, _ := procViewGetAncestor.Call(hit, viewGARoot)
+	return windows.Handle(root) != n.parent
+}
+
+// cardNeeded reports whether a capture's outcome also goes on the result
+// card: the global shortcut started it, and the user was not looking at this
+// view then or no longer can, so the result would otherwise be written where
+// nobody sees it (SCR-060, SCR-069).
+func (n *NativeView) cardNeeded() bool {
+	return n.fromShortcut && !(n.watched && n.statusInSight())
+}
+
+// showOutcome shows a capture's outcome in the status area and records it as
+// the latest.
+func (n *NativeView) showOutcome(notice ui.Notice) {
 	_ = n.status.Show(notice, 0)
-	if n.fromShortcut && !(n.watched && n.statusVisible()) {
+	n.latestOutcome, n.latestNotice = notice, n.status.Revision()
+}
+
+// reportOutcome shows a capture's outcome in the status area and, where
+// cardNeeded says so, on the result card.
+func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
+	n.showOutcome(notice)
+	if n.cardNeeded() {
 		n.card.Report(notice, path)
 	}
+}
+
+// resumeCard brings the card back once a capture has ended. If the user has
+// returned to this view meanwhile, no activation is left to come, so its
+// problems move to the status area now rather than wait on a card the
+// keyboard cannot reach.
+func (n *NativeView) resumeCard() {
+	if n.foregroundWindow() == n.parent {
+		n.reclaimProblems()
+	}
+	n.card.Resume()
 }
 
 // reclaimProblems moves the problems the card holds to the status area once
 // the user can see it, so the keyboard reaches them: the card itself never
 // takes the focus. It waits while a capture runs, whose result would replace
-// them in the status area.
+// them in the status area. A later result the status area shows stays beside
+// them, and Open Folder keeps a saved file when the latest capture has none.
 func (n *NativeView) reclaimProblems() {
 	if n.inProgress || (n.sessions != nil && n.sessions.Active()) || !n.statusVisible() {
 		return
@@ -327,22 +412,73 @@ func (n *NativeView) reclaimProblems() {
 	if len(entries) == 0 {
 		return
 	}
-	_ = n.status.Show(problemsNotice(entries), 0)
+	latest := ui.Notice{}
+	if n.status.Revision() == n.latestNotice && !slices.ContainsFunc(entries, func(entry ui.CardEntry) bool {
+		return entry.Notice == n.latestOutcome
+	}) {
+		latest = n.latestOutcome
+	}
+	n.showReclaimed(entries, latest)
+	if len(entries) == 1 && entries[0].Setting && entries[0].Notice.Message == n.shortcut.Error.Text() {
+		// The field shows the same failure, which NativeAnnounceNotice would
+		// otherwise read a second time.
+		n.shortcutNotice = n.status.Revision()
+	}
+	if n.savedPath == "" {
+		for _, entry := range slices.Backward(entries) {
+			if entry.Path != "" {
+				n.savedPath = entry.Path
+				n.openFolder.Enable(true)
+				break
+			}
+		}
+	}
 }
 
-// problemsNotice is one notice for the card's problems, oldest first, as
-// serious as the worst of them.
-func problemsNotice(entries []ui.CardEntry) ui.Notice {
-	if len(entries) == 1 {
+// showReclaimed shows problems from the card, and records them so the restore
+// of the default settings can take out those it resolves.
+func (n *NativeView) showReclaimed(entries []ui.CardEntry, latest ui.Notice) {
+	_ = n.status.Show(problemsNotice(entries, latest), 0)
+	n.reclaimed, n.reclaimedLatest, n.reclaimedNotice = entries, latest, n.status.Revision()
+}
+
+// withdrawReclaimedSettings takes the problems with a setting out of a status
+// notice that came from the card, keeping the rest of it.
+func (n *NativeView) withdrawReclaimedSettings() {
+	if n.reclaimedNotice == 0 || n.status.Revision() != n.reclaimedNotice {
+		return
+	}
+	kept := slices.DeleteFunc(slices.Clone(n.reclaimed), func(entry ui.CardEntry) bool { return entry.Setting })
+	switch {
+	case len(kept) == len(n.reclaimed):
+	case len(kept) > 0:
+		n.showReclaimed(kept, n.reclaimedLatest)
+	case n.reclaimedLatest.Message != "":
+		n.showOutcome(n.reclaimedLatest)
+	default:
+		n.status.Clear()
+	}
+}
+
+// problemsNotice is one notice for the card's problems, oldest first, and the
+// later result if there is one, as serious as the worst of them.
+func problemsNotice(entries []ui.CardEntry, latest ui.Notice) ui.Notice {
+	if len(entries) == 1 && latest.Message == "" {
 		return entries[0].Notice
 	}
 	kind := ui.NoticeWarning
-	lines := make([]string, 0, len(entries))
+	lines := make([]string, 0, len(entries)+1)
 	for _, entry := range entries {
 		if entry.Notice.Kind == ui.NoticeError {
 			kind = ui.NoticeError
 		}
 		lines = append(lines, entry.Notice.Text())
+	}
+	if latest.Message != "" {
+		if latest.Kind == ui.NoticeError {
+			kind = ui.NoticeError
+		}
+		lines = append(lines, fmt.Sprintf(ui.CaptureLatestResult, latest.Text()))
 	}
 	return ui.Notice{Kind: kind, Message: fmt.Sprintf(ui.CaptureProblemsWhileHidden, len(entries), strings.Join(lines, "\n"))}
 }
@@ -656,6 +792,12 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	n.captureAttempts++
 	if n.inProgress {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureInProgress}, 0)
+		// The card is hidden until this capture ends, so it says what became
+		// of the press rather than to wait. The running capture's own
+		// reporting is not changed.
+		if fromShortcut && !n.statusInSight() {
+			n.card.Report(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutRefused}, "")
+		}
 		return
 	}
 	// A start refused because a selection is on screen must not change how
@@ -688,6 +830,9 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	if quality != options.JPEGQuality {
 		if err := n.options.SetJPEGQuality(quality); err != nil {
 			n.presentResult(err, "")
+			if n.cardNeeded() {
+				n.card.ReportSetting(optionNotice(err, ""))
+			}
 			if !errors.Is(err, ErrPersistence) {
 				return
 			}
@@ -788,18 +933,14 @@ func (n *NativeView) beginOverlay() {
 	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), mode, size, overlay.Events{
 		OnCapture: n.startRectangleCapture,
 		OnCancel: func() {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
-			n.card.Resume()
+			n.showOutcome(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded})
+			n.resumeCard()
 		},
 		OnSessionLost: func(reason string) {
 			n.reportOutcome(ui.Notice{Kind: ui.NoticeWarning, Message: reason}, "")
-			n.card.Resume()
+			n.resumeCard()
 		},
 	})
-	// A session already on screen keeps the card hidden.
-	if err != nil && !errors.Is(err, overlay.ErrSessionActive) {
-		n.card.Resume()
-	}
 	switch {
 	case err == nil:
 	case errors.Is(err, overlay.ErrPresetTooLarge):
@@ -808,6 +949,11 @@ func (n *NativeView) beginOverlay() {
 		_ = n.status.Show(ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureSessionActive}, 0)
 	default:
 		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, err)}, "")
+	}
+	// A session already on screen keeps the card hidden. A failed start is
+	// reported first, so that moving problems to the status area keeps it.
+	if err != nil && !errors.Is(err, overlay.ErrSessionActive) {
+		n.resumeCard()
 	}
 }
 
@@ -821,7 +967,7 @@ func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) 
 	if n.captureRectangle == nil {
 		restore()
 		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.SelectionCaptureFailed, errors.New(ui.CaptureServiceUnavailable))}, "")
-		n.card.Resume()
+		n.resumeCard()
 		return
 	}
 	options := n.options.Options()
@@ -880,7 +1026,7 @@ func (n *NativeView) finishCapture(result CaptureResult, messages captureMessage
 	n.savedPath = result.Path
 	n.openFolder.Enable(result.Path != "")
 	n.reportOutcome(captureNotice(result, messages), result.Path)
-	n.card.Resume()
+	n.resumeCard()
 }
 
 // captureNotice words one capture's outcome. A save error with a saved path
@@ -1155,6 +1301,8 @@ func (n *NativeView) NativeRestoreDefaults() string {
 	n.shortcut.Edit.SetText(options.Shortcut.String())
 	n.shortcut.Error.SetText("")
 	n.status.ClearShown(n.shortcutNotice, n.optionsNotice)
+	n.card.WithdrawSettings()
+	n.withdrawReclaimedSettings()
 	if n.hotkeys != nil {
 		if err := n.hotkeys.Apply(options.Shortcut); err != nil {
 			n.hotkeys.Release()
@@ -1187,15 +1335,19 @@ func (n *NativeView) refreshFormat() {
 // presentResult shows an option change's outcome in the status area and
 // records it as the option notice (optionsNotice).
 func (n *NativeView) presentResult(err error, success string) {
-	notice := ui.Notice{Kind: ui.NoticeSuccess, Message: success}
+	_ = n.status.Show(optionNotice(err, success), 0)
+	n.optionsNotice = n.status.Revision()
+}
+
+// optionNotice words an option change's outcome.
+func optionNotice(err error, success string) ui.Notice {
 	switch {
 	case errors.Is(err, ErrPersistence):
-		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.OptionsSaveFailed, err)}
+		return ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.OptionsSaveFailed, err)}
 	case err != nil:
-		notice = ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}
+		return ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OptionsOperationFailed, err)}
 	}
-	_ = n.status.Show(notice, 0)
-	n.optionsNotice = n.status.Revision()
+	return ui.Notice{Kind: ui.NoticeSuccess, Message: success}
 }
 
 // refuseOptions shows Start Capture's refusal of the capture options, or of
@@ -1203,8 +1355,12 @@ func (n *NativeView) presentResult(err error, success string) {
 // records it as the option notice (optionsNotice), as the restore of the
 // default settings replaces what it refuses.
 func (n *NativeView) refuseOptions(err error) {
-	n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}, "")
+	notice := ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}
+	n.showOutcome(notice)
 	n.optionsNotice = n.status.Revision()
+	if n.cardNeeded() {
+		n.card.ReportSetting(notice)
+	}
 }
 
 func captureModeLabel(mode CaptureMode) string {

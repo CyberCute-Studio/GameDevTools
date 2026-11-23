@@ -113,6 +113,7 @@ var reviewedProcedures = []string{
 	"SetCursor", "SetFocus", "SetForegroundWindow", "SetProcessDpiAwarenessContext", "SetScrollInfo",
 	"SetTextColor", "SetTimer", "SetWindowLongPtrW", "SetWindowPos", "SetWindowTextW", "ShellExecuteExW",
 	"ShowWindow", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
+	"WindowFromPoint",
 }
 
 // reviewedSystemFunctions is every function of syscall and

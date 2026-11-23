@@ -29,6 +29,16 @@ if ([IntPtr]::Size -ne 8) {
 Add-Type -Namespace PackageCheck -Name Native -MemberDefinition @'
 [DllImport("user32.dll")]
 public static extern IntPtr GetClassLongPtrW(IntPtr window, int index);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+public static extern IntPtr FindWindowW(string className, string windowName);
+[DllImport("user32.dll")]
+public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool IsWindowVisible(IntPtr window);
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+public static extern bool PostMessageW(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 public static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
 [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -89,22 +99,33 @@ function Invoke-App([string]$Executable, [string]$Workspace) {
 
     $process = [System.Diagnostics.Process]::Start($start)
     try {
+        # The main window is found by its title, as Process.MainWindowHandle can
+        # name the result card, which appears at startup when another
+        # application holds the global shortcut.
         $deadline = (Get-Date).AddSeconds($windowWait)
+        $mainWindow = [IntPtr]::Zero
         while ($true) {
             if ($process.HasExited) { throw "The application exited with code $($process.ExitCode) before showing a window." }
-            $process.Refresh()
-            if ($process.MainWindowHandle -ne [IntPtr]::Zero) { break }
-            if ((Get-Date) -gt $deadline) { throw "The application showed no window within $windowWait seconds." }
+            $candidate = [PackageCheck.Native]::FindWindowW([NullString]::Value, $productName)
+            if ($candidate -ne [IntPtr]::Zero -and [PackageCheck.Native]::IsWindowVisible($candidate)) {
+                $owner = [uint32]0
+                [void][PackageCheck.Native]::GetWindowThreadProcessId($candidate, [ref]$owner)
+                if ($owner -eq $process.Id) {
+                    $mainWindow = $candidate
+                    break
+                }
+            }
+            if ((Get-Date) -gt $deadline) { throw "The application showed no window titled '$productName' within $windowWait seconds." }
             Start-Sleep -Milliseconds 100
         }
-        if ($process.MainWindowTitle -cne $productName) { throw "The window is titled '$($process.MainWindowTitle)'." }
         # GCLP_HICON and GCLP_HICONSM: the title bar and taskbar show these.
         foreach ($index in -14, -34) {
-            if ([PackageCheck.Native]::GetClassLongPtrW($process.MainWindowHandle, $index) -eq [IntPtr]::Zero) {
+            if ([PackageCheck.Native]::GetClassLongPtrW($mainWindow, $index) -eq [IntPtr]::Zero) {
                 throw "The main window's class has no icon (index $index)."
             }
         }
-        [void]$process.CloseMainWindow()
+        $wmClose = [uint32]0x0010
+        if (-not [PackageCheck.Native]::PostMessageW($mainWindow, $wmClose, [IntPtr]::Zero, [IntPtr]::Zero)) { throw "The main window could not be asked to close." }
         if (-not $process.WaitForExit($exitWait * 1000)) { throw "The application did not exit within $exitWait seconds." }
         if ($process.ExitCode -ne 0) { throw "The application exited with code $($process.ExitCode)." }
     } finally {

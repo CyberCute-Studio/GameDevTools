@@ -76,6 +76,21 @@ func TestCardQueueTakeReturnsProblemsOldestFirst(t *testing.T) {
 	}
 }
 
+func TestCardQueueWithdrawsOnlySettingProblems(t *testing.T) {
+	var queue cardQueue
+	queue.push(CardEntry{Notice: Notice{Kind: NoticeError, Message: "conflict"}, Setting: true})
+	queue.push(cardEntry(NoticeWarning, "save failed"))
+	if !queue.withdrawSettings() {
+		t.Fatal("nothing was withdrawn")
+	}
+	if len(queue.problems) != 1 || queue.problems[0].Notice.Message != "save failed" {
+		t.Fatalf("problems = %+v", queue.problems)
+	}
+	if queue.withdrawSettings() {
+		t.Fatal("a second withdrawal found a setting problem")
+	}
+}
+
 func TestCardPlacementKeepsTheCardOnTheWorkArea(t *testing.T) {
 	tests := []struct {
 		name  string
