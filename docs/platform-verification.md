@@ -119,7 +119,7 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 | AC-S03 — Click-through interaction | **Partial** | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S04 — Precision placement | **Partial** | [Screenshot record](screenshot-verification.md); a real drag of the production frame's border is manual check [M9](testing.md#manual-pre-release-checks) |
 | AC-S05 — Free rectangle adjustment | **Partial** | [Screenshot record](screenshot-verification.md); drawing a selection with a real pointer is manual check [M15](testing.md#manual-pre-release-checks) |
-| AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios) |
+| AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios); AC-S12 also waits on REL-02A to show a session's end while the Screenshot view is hidden |
 | AC-R01 to AC-R15 | Pass | [Image Resizer record](image-resizer-verification.md), in this run's suite |
 
 ## What these results do not cover

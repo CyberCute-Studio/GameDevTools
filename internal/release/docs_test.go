@@ -39,21 +39,22 @@ var hardwareGated = []string{
 	"TECH-002", "TECH-003", "TECH-009", "AC-S02", "AC-S12",
 }
 
-// manualGated maps each requirement whose defining condition only a manual
-// check exercises, in a real application, to that check. No row may call it
-// complete until docs/testing.md records that check passing it. It is written
-// out so that editing a check's Covers cell cannot remove the guard.
-var manualGated = map[string]string{
-	"SCR-002": "M10", "SCR-005": "M10",
-	"SCR-010": "M15", "SCR-011": "M15", "SCR-012": "M15", "AC-S05": "M15",
-	"SCR-021": "M9", "SCR-022": "M9", "SCR-023": "M9", "SCR-055": "M9",
-	"AC-S03": "M9", "AC-S04": "M9",
-	"SCR-062": "M8",
-	"SCR-063": "M16", "SCR-069": "M16", "RSZ-001": "M16", "RSZ-002": "M16",
-	"RSZ-008": "M16", "RSZ-020": "M16", "RSZ-048": "M16",
-	"AC-A04":  "M12",
-	"APP-005": "M17",
-	"SCR-060": "M18", "AC-S08": "M18", "AC-S09": "M18",
+// manualGated maps each requirement whose defining condition only manual
+// checks exercise, in a real application, to those checks. No row may call it
+// complete until docs/testing.md records each of them passing it. It is
+// written out so that editing a check's Covers cell cannot remove the guard.
+var manualGated = map[string][]string{
+	"SCR-002": {"M10"}, "SCR-005": {"M10"},
+	"SCR-010": {"M15"}, "SCR-011": {"M15"}, "SCR-012": {"M15"}, "AC-S05": {"M15"},
+	"SCR-021": {"M9"}, "SCR-022": {"M9"}, "SCR-023": {"M9"}, "SCR-055": {"M9"},
+	"AC-S03": {"M9"}, "AC-S04": {"M9"},
+	"SCR-062": {"M8"},
+	"SCR-063": {"M16"}, "RSZ-001": {"M16"}, "RSZ-002": {"M16"},
+	"RSZ-008": {"M16"}, "RSZ-020": {"M16"}, "RSZ-048": {"M16"},
+	"SCR-069": {"M16", "M18"},
+	"AC-A04":  {"M12"},
+	"APP-005": {"M17"},
+	"SCR-031": {"M18"}, "SCR-060": {"M18"}, "AC-S08": {"M18"}, "AC-S09": {"M18"},
 }
 
 // gatingChecks are the manual checks that are the only real run of part of a
@@ -268,9 +269,11 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 			t.Errorf("%s must stay Partial until docs/testing.md records a QLT-04A run that passed it", id)
 		}
 	}
-	for id, check := range manualGated {
-		if seen[id].status != "**Partial**" && !recorded[id][check] {
-			t.Errorf("%s must stay Partial until docs/testing.md records a %s run that passed it", id, check)
+	for id, checks := range manualGated {
+		for _, check := range checks {
+			if seen[id].status != "**Partial**" && !recorded[id][check] {
+				t.Errorf("%s must stay Partial until docs/testing.md records a %s run that passed it", id, check)
+			}
 		}
 	}
 	required := regexp.MustCompile(`\*\*QLT-04A — [^\n]*\n[^\n]*\n\s+- \*\*Requirements:\*\* ([^\n]*)`).FindStringSubmatch(plan)
@@ -330,7 +333,7 @@ func manualCheckCoverage(t *testing.T) map[string][]string {
 		if len(cells) != 4 {
 			t.Fatalf("%s has %d cells, want 4", match[1], len(cells))
 		}
-		ids := requirementID.FindAllString(cells[3], -1)
+		ids := requirementID.FindAllString(expandSpans(cells[3]), -1)
 		slices.Sort(ids)
 		covers[match[1]] = ids
 	}
@@ -385,7 +388,7 @@ func checkManualChecks(t *testing.T, rows []traceRow, covers map[string][]string
 				t.Errorf("%s names %s, which docs/testing.md does not define", row.id, check)
 			}
 			named[check] = append(named[check], row.id)
-			if slices.Contains(gatingChecks, check) && manualGated[row.id] != check && confidenceOnly[row.id] != check {
+			if slices.Contains(gatingChecks, check) && !slices.Contains(manualGated[row.id], check) && confidenceOnly[row.id] != check {
 				t.Errorf("%s names %s, which only a real run can satisfy, but is not in manualGated for it", row.id, check)
 			}
 		}
@@ -463,7 +466,12 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		ui.ResizeStateSkipped, ui.ResizeStateFailed, ui.ResizeStateCancelled,
 		ui.PresetLibraryLabel, ui.PresetCreateAction, ui.PresetRenameAction,
 		ui.PresetDuplicateAction, ui.PresetDeleteAction,
-		ui.RestoreDefaultsAction,
+		ui.RestoreDefaultsAction, ui.ResizeModeSummaryLabel,
+		ui.ErrorWriteEncodeLabel, ui.ErrorShortcutRegistrationLabel,
+		// The troubleshooting section quotes these messages by how they begin.
+		strings.Split(ui.CaptureGraphicsFailed, ":")[0],
+		strings.Split(ui.CaptureDisplayChanged, " or ")[0],
+		strings.Split(ui.OutputFolderNameInvalid, ":")[0],
 		screenshot.DefaultShortcut().String(),
 	}
 	names := make([]string, 0, len(texts))

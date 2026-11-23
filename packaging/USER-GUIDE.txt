@@ -37,7 +37,8 @@ choose More info, then Run anyway.
 Nothing is installed. To keep a shortcut, pin the executable to Start or the
 taskbar. README.txt also covers updating and uninstalling.
 
-Only one copy runs at a time. Starting it again brings the open window forward.
+Only one copy runs at a time. Starting it again brings the open window forward,
+unless a capture is under way: see section 11.
 
 Closing the window exits the application, because it has no tray icon. The
 global shortcut works only while the application is running, so minimize the
@@ -375,10 +376,12 @@ Capture
   toolbar back, or press Escape to cancel.
 - If the window was minimized before a capture, do not start the application
   again during that capture. The window can reappear and end up in the image.
-- A capture's result, including a failed save, appears only in the Screenshot
-  view. While the window is minimized or shows another tool, nothing tells you
-  that a capture from the global shortcut was not saved, so check the Screenshot
-  view afterwards.
+- A capture's result appears only in the Screenshot view. That includes the
+  saved path, a failed save or clipboard copy, a capture the global shortcut
+  could not start, such as with a preset larger than the desktop or an invalid
+  JPEG quality, and a selection that ended because a display changed. While the
+  window is minimized or shows another tool, nothing tells you about any of
+  these, so check the Screenshot view after using the shortcut.
 
 Image Resizer
 
@@ -410,12 +413,17 @@ Windows says it protected your PC.
 
 Nothing happens when I start the application again.
   It is already running, and the existing window was brought forward. Look for it
-  on the taskbar.
+  on the taskbar. During a selection the window stays hidden and has no taskbar
+  button: click the capture toolbar or press the global shortcut to bring it
+  forward, then finish or cancel the selection.
 
 The global shortcut does nothing.
-  The application must be running. If the Global shortcut field shows a
+  The application must be running. The shortcut is paused while the Global
+  shortcut field has the focus, so leave the field first. If the field shows a
   "Shortcut registration error", another application owns the combination, so
-  choose a different one.
+  choose a different one. Otherwise open the Screenshot view, where a capture
+  that could not start says why, such as a preset larger than the desktop or an
+  invalid JPEG quality.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

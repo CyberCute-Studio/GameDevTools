@@ -73,10 +73,11 @@ These have not been run, so this version makes no claim about them:
 
 Known issues
 
-- A capture's result, including a failed save or clipboard copy, appears only in
-  the Screenshot view. While the window is minimized or shows another tool,
-  nothing tells you that a capture from the global shortcut failed, so check the
-  Screenshot view afterwards.
+- A capture's result appears only in the Screenshot view, including a failed
+  save or clipboard copy, a capture the global shortcut could not start, and a
+  selection ended by a display change. While the window is minimized or shows
+  another tool, nothing tells you about any of these, so check the Screenshot
+  view after using the shortcut.
 - Where displays differ in size or are offset, the capture toolbar can land in
   a part of the desktop that no display shows. Move the selection to bring it
   back, or press Escape to cancel.

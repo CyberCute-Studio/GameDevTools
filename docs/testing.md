@@ -56,7 +56,7 @@ QLT-04A owns what needs hardware this project's environment does not have: x64 W
 
 ## Manual pre-release checks
 
-No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, M10, M15, M16, M17, and M18 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. M18 cannot pass until REL-02A makes the application report a capture's failure while the Screenshot view is not showing. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
+No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, M10, M15, M16, M17, and M18 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. M18 cannot pass until REL-02A makes the application report a shortcut capture's result or refusal while the Screenshot view is not showing. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
 
 | Check | What to do | Passes when | Covers |
 |---|---|---|---|
@@ -77,11 +77,11 @@ No automated test can stand in for these. None has been done yet, and REL-03 own
 | M15 | With the mouse, draw a Free Rectangle selection, drag inside it to move it, drag a handle to resize it, type a new size, and capture | The toolbar shows the size during the first drag, each drag does what it should and reaches no application beneath, and the image matches the final rectangle | SCR-010, SCR-011, SCR-012, AC-S05 |
 | M16 | Add several images through the Add Images picker. Drag several files, then a folder, from File Explorer onto the Image Resizer. Choose an output folder with Browse in each module. After a capture and a job, press Open Folder and Open Output Folder | Every chosen or dropped image is listed, each module saves to the chosen folder, and Explorer opens at the saved file and at the output folder | SCR-063, SCR-069, RSZ-001, RSZ-002, RSZ-008, RSZ-020, RSZ-048 |
 | M17 | With the application behind another application, and again with it minimized, start the executable a second time | Each time the open window comes to the foreground and the second process exits | APP-005 |
-| M18 | Set the Screenshot output folder to one that cannot be written. With the main window minimized, and again showing the Image Resizer, capture with the global shortcut. Repeat with a writable folder while another program holds the clipboard open | Each failure is reported where it can be seen without opening the Screenshot view | SCR-060, AC-S08, AC-S09 |
+| M18 | With the main window minimized, and again showing the Image Resizer, use the global shortcut for a capture to a writable folder, a capture to a Screenshot output folder that cannot be written, a capture while another program holds the clipboard open, and Preset Rectangle with a preset larger than the whole desktop | Each saved path, failure, and refusal is reported where it can be seen without opening the Screenshot view, and the keyboard focus stays in the other application | SCR-031, SCR-060, SCR-069, AC-S08, AC-S09 |
 
 ## Recorded runs
 
-Add a row here when a QLT-04A run or a manual check passes, giving the commit of the build it ran on and exactly the requirements it passed. A run counts only for that build, so when the release candidate changes, repeat the run and replace its row. The documentation test keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
+Add a row here when a QLT-04A run or a manual check passes, giving the commit of the build it ran on and exactly the requirements it passed. A run counts only for that build, so when the release candidate changes, repeat the run and replace its row. The documentation test checks only that the Build cell is a commit, so REL-03 confirms that each row names the candidate's. It keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
 
 | Date | Run | Build | Passed |
 |---|---|---|---|
