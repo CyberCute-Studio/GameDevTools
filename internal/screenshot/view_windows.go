@@ -431,7 +431,17 @@ func (n *NativeView) reclaimProblems() {
 		return slices.ContainsFunc(entries, func(entry ui.CardEntry) bool { return entry.Notice == notice })
 	}
 	latest, latestSetting := ui.Notice{}, false
-	if n.status.Revision() == n.latestNotice {
+	if n.showingReclaimed() {
+		// Problems moved here earlier have left the card, so the status area
+		// is their only home.
+		fresh := slices.DeleteFunc(entries, func(entry ui.CardEntry) bool {
+			return entry.Notice == n.reclaimedLatest || slices.ContainsFunc(n.reclaimed, func(shown ui.CardEntry) bool {
+				return shown.Notice == entry.Notice
+			})
+		})
+		entries = append(slices.Clone(n.reclaimed), fresh...)
+		latest, latestSetting = n.reclaimedLatest, n.reclaimedLatestSetting
+	} else if n.status.Revision() == n.latestNotice {
 		if !holds(n.latestOutcome) {
 			latest, latestSetting = n.latestOutcome, n.latestNotice == n.optionsNotice
 		}
@@ -763,10 +773,14 @@ func (n *NativeView) revealSaved() {
 
 // revealFromCard is the result card's Open Folder. The card may show an
 // earlier capture's file, and a failure goes back on the card, where the user
-// asked.
+// asked, unless the user has since returned to a status area in sight: no
+// activation is left to come and move it to where the keyboard reaches it.
 func (n *NativeView) revealFromCard(path string) {
 	n.revealFile(path, func(err error) {
 		n.card.Report(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.OpenFolderFailed, err)}, "")
+		if n.foregroundWindow() == n.parent && n.statusInSight() {
+			n.reclaimProblems()
+		}
 	})
 }
 

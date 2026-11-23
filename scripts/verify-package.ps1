@@ -30,7 +30,7 @@ Add-Type -Namespace PackageCheck -Name Native -MemberDefinition @'
 [DllImport("user32.dll")]
 public static extern IntPtr GetClassLongPtrW(IntPtr window, int index);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-public static extern IntPtr FindWindowW(string className, string windowName);
+public static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string className, string windowName);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 public static extern int GetWindowTextW(IntPtr window, System.Text.StringBuilder text, int maxCount);
 [DllImport("user32.dll")]
@@ -108,19 +108,22 @@ function Invoke-App([string]$Executable, [string]$Workspace) {
         $mainWindow = [IntPtr]::Zero
         while ($true) {
             if ($process.HasExited) { throw "The application exited with code $($process.ExitCode) before showing a window." }
-            $candidate = [PackageCheck.Native]::FindWindowW([NullString]::Value, $productName)
-            if ($candidate -ne [IntPtr]::Zero -and [PackageCheck.Native]::IsWindowVisible($candidate)) {
+            # Another application's window can have the same title, as a File
+            # Explorer window on a folder of that name does.
+            $candidate = [IntPtr]::Zero
+            while ($mainWindow -eq [IntPtr]::Zero) {
+                $candidate = [PackageCheck.Native]::FindWindowExW([IntPtr]::Zero, $candidate, [NullString]::Value, $productName)
+                if ($candidate -eq [IntPtr]::Zero) { break }
+                if (-not [PackageCheck.Native]::IsWindowVisible($candidate)) { continue }
                 $owner = [uint32]0
                 [void][PackageCheck.Native]::GetWindowThreadProcessId($candidate, [ref]$owner)
-                if ($owner -eq $process.Id) {
-                    $mainWindow = $candidate
-                    break
-                }
+                if ($owner -eq $process.Id) { $mainWindow = $candidate }
             }
+            if ($mainWindow -ne [IntPtr]::Zero) { break }
             if ((Get-Date) -gt $deadline) { throw "The application showed no window titled '$productName' within $windowWait seconds." }
             Start-Sleep -Milliseconds 100
         }
-        # FindWindowW ignores case, and the title must match exactly.
+        # FindWindowExW ignores case, and the title must match exactly.
         $title = New-Object System.Text.StringBuilder 256
         [void][PackageCheck.Native]::GetWindowTextW($mainWindow, $title, $title.Capacity)
         if ($title.ToString() -cne $productName) { throw "The window is titled '$title'." }

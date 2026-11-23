@@ -33,11 +33,11 @@ const (
 	cardWMCtlColorStatic = 0x0138
 	cardWMMouseActivate  = 0x0021
 	cardWMNCDestroy      = 0x0082
-	cardWMMouseMove      = 0x0200
 	cardWMLButtonDown    = 0x0201
 	cardWMLButtonUp      = 0x0202
 	cardWMLButtonDblClk  = 0x0203
-	cardWMCaptureChanged = 0x0215
+	cardWMMouseLeave     = 0x02a3
+	cardTMELeave         = 0x00000002
 	cardBMSetState       = 0x00f3
 	cardMANoActivate     = 3
 	cardBNClicked        = 0
@@ -81,9 +81,7 @@ var (
 	procCardDrawTextW           = user32.NewProc("DrawTextW")
 	procCardSetWindowLongPtrW   = user32.NewProc("SetWindowLongPtrW")
 	procCardCallWindowProcW     = user32.NewProc("CallWindowProcW")
-	procCardGetClientRect       = user32.NewProc("GetClientRect")
-	procCardSetCapture          = user32.NewProc("SetCapture")
-	procCardReleaseCapture      = user32.NewProc("ReleaseCapture")
+	procCardTrackMouseEvent     = user32.NewProc("TrackMouseEvent")
 	procCardGetModuleHandleW    = cardKernel32.NewProc("GetModuleHandleW")
 	procCardCreateFontIndirectW = cardGDI32.NewProc("CreateFontIndirectW")
 	procCardSelectObject        = cardGDI32.NewProc("SelectObject")
@@ -103,13 +101,22 @@ var (
 // cardButton is a card button's press. A standard button takes the keyboard
 // focus when pressed, and with it the activation of its window, whatever
 // WM_MOUSEACTIVATE answered, so the card handles the mouse on its buttons
-// itself.
+// itself. The card is never the foreground window, whose mouse capture alone
+// follows the pointer off it, so a press ends when the pointer leaves the
+// button rather than wait for a release that may go to another application.
 type cardButton struct {
 	parent   windows.Handle
 	id       int32
 	previous uintptr
 	pressed  bool
 	double   bool
+}
+
+type cardTrackMouse struct {
+	Size      uint32
+	Flags     uint32
+	Track     windows.Handle
+	HoverTime uint32
 }
 
 type cardWindowClass struct {
@@ -172,9 +179,13 @@ type ResultCard struct {
 	font    windows.Handle
 	fontDPI uint32
 	path    string
-	// showing is the result on the card, so that a press on a button ends
-	// when another takes its place.
+	// showing is the result on the card, none while it is hidden, so that a
+	// press on a button ends when another takes its place and a success's
+	// time on screen starts only once.
 	showing CardEntry
+	// heard is the problem on top as the card was suspended, already
+	// announced, so that Resume does not read it out as this capture's.
+	heard CardEntry
 }
 
 // NewResultCard returns a card that appears where place says, as of each
@@ -217,18 +228,23 @@ func (c *ResultCard) WithdrawSettings() {
 // it has been seen and ends here, or a capture that ends with no result of its
 // own, as a cancelled selection does, would bring it back as if it were new.
 func (c *ResultCard) Suspend() {
-	c.suspended = true
-	c.queue.expire()
+	if !c.suspended {
+		c.suspended = true
+		c.queue.expire()
+		c.heard, _ = c.queue.current()
+	}
 	c.hide()
 }
 
-// Resume shows the card again once a capture has ended.
+// Resume shows the card again once a capture has ended, announcing it only
+// if the capture changed what it shows.
 func (c *ResultCard) Resume() {
 	if !c.suspended {
 		return
 	}
 	c.suspended = false
-	c.present(true)
+	entry, ok := c.queue.current()
+	c.present(ok && entry != c.heard)
 }
 
 // Reposition moves a card on screen to where it now belongs, as after a
@@ -267,6 +283,7 @@ func (c *ResultCard) hide() {
 		c.cancelPress()
 		procKillTimer.Call(uintptr(c.hwnd), cardTimerID)
 		procShowWindow.Call(uintptr(c.hwnd), swHide)
+		c.showing = CardEntry{}
 	}
 }
 
@@ -282,7 +299,6 @@ func (c *ResultCard) cancelPress() {
 			continue
 		}
 		state.pressed = false
-		procCardReleaseCapture.Call()
 		procSendMessageW.Call(uintptr(button.hwnd), cardBMSetState, 0, 0)
 	}
 }
@@ -299,7 +315,8 @@ func (c *ResultCard) present(announce bool) {
 	if c.hwnd == 0 && c.create() != nil {
 		return
 	}
-	if entry != c.showing {
+	changed := entry != c.showing
+	if changed {
 		c.cancelPress()
 		c.showing = entry
 	}
@@ -358,8 +375,10 @@ func (c *ResultCard) present(announce bool) {
 		uintptr(uint32(x)), uintptr(uint32(top)), uintptr(uint32(width+2)), uintptr(uint32(height+2)),
 		cardSWPNoActivate|cardSWPShowWindow)
 
-	procKillTimer.Call(uintptr(c.hwnd), cardTimerID)
-	if !entry.lasting() {
+	// A move or a withdrawn problem leaves a success's time running.
+	if entry.lasting() {
+		procKillTimer.Call(uintptr(c.hwnd), cardTimerID)
+	} else if changed || announce {
 		procSetTimer.Call(uintptr(c.hwnd), cardTimerID, uintptr(cardSuccessDuration.Milliseconds()), 0)
 	}
 	if announce {
@@ -506,30 +525,23 @@ func cardButtonProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 	switch message {
 	case cardWMLButtonDown, cardWMLButtonDblClk:
 		button.pressed, button.double = true, message == cardWMLButtonDblClk
-		procCardSetCapture.Call(uintptr(hwnd))
+		track := cardTrackMouse{Flags: cardTMELeave, Track: hwnd}
+		track.Size = uint32(unsafe.Sizeof(track))
+		procCardTrackMouseEvent.Call(uintptr(unsafe.Pointer(&track)))
 		setPressed(true)
 		return 0
-	case cardWMMouseMove:
-		if button.pressed {
-			setPressed(cardPointOnWindow(hwnd, lParam))
-			return 0
-		}
 	case cardWMLButtonUp:
 		if button.pressed {
-			clicked := cardPointOnWindow(hwnd, lParam)
 			notification := uintptr(cardBNClicked)
 			if button.double {
 				notification = cardBNDoubleClicked
 			}
 			button.pressed = false
-			procCardReleaseCapture.Call()
 			setPressed(false)
-			if clicked {
-				procSendMessageW.Call(uintptr(button.parent), cardWMCommand, uintptr(button.id)|notification<<16, uintptr(hwnd))
-			}
+			procSendMessageW.Call(uintptr(button.parent), cardWMCommand, uintptr(button.id)|notification<<16, uintptr(hwnd))
 			return 0
 		}
-	case cardWMCaptureChanged:
+	case cardWMMouseLeave:
 		if button.pressed {
 			button.pressed = false
 			setPressed(false)
@@ -539,17 +551,6 @@ func cardButtonProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 	}
 	r, _, _ := procCardCallWindowProcW.Call(button.previous, uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
-}
-
-// cardPointOnWindow reports whether a mouse message's position is on the
-// window, whose client area it is relative to.
-func cardPointOnWindow(hwnd windows.Handle, lParam uintptr) bool {
-	var client cardRect
-	if r, _, _ := procCardGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client))); r == 0 {
-		return false
-	}
-	x, y := int32(int16(lParam)), int32(int16(lParam>>16))
-	return x >= client.Left && x < client.Right && y >= client.Top && y < client.Bottom
 }
 
 func registerCardClass() error {

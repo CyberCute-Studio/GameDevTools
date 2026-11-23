@@ -476,6 +476,56 @@ func TestProblemsMoveOnceACaptureEndsWithTheUserBack(t *testing.T) {
 	}
 }
 
+// TestLaterCardProblemJoinsThoseAlreadyMoved is an Open Folder from the card
+// that fails after its problems moved to the status area: they have left the
+// card, so the new problem must not replace them there.
+func TestLaterCardProblemJoinsThoseAlreadyMoved(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.showOutcome(ui.Notice{Kind: ui.NoticeSuccess, Message: `Saved to C:\Shots\three.png`})
+	card.Report(ui.Notice{Kind: ui.NoticeWarning, Message: "first failure"}, `C:\Shots\one.png`)
+	card.Report(ui.Notice{Kind: ui.NoticeError, Message: "second failure"}, "")
+	showViewOffScreen(t, view)
+
+	card.Report(ui.Notice{Kind: ui.NoticeError, Message: "open folder failed"}, "")
+	card.Report(ui.Notice{Kind: ui.NoticeError, Message: "second failure"}, "")
+	view.NativeActivated()
+	text := view.status.Text()
+	for _, want := range []string{"first failure", "second failure", "open folder failed", "three.png"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status = %q, want it to keep %q", text, want)
+		}
+	}
+	if strings.Count(text, "second failure") != 1 {
+		t.Fatalf("status = %q, a problem is listed twice", text)
+	}
+}
+
+// TestCardOpenFolderFailureMovesToAViewInFront is the user back in the view
+// when the reveal fails: no activation follows, so the failure moves to the
+// status area. With another window in front it stays on the card.
+func TestCardOpenFolderFailureMovesToAViewInFront(t *testing.T) {
+	view, card, dispatcher := newCardTestView(t)
+	view.reveal = func(string) error { return errors.New("share offline") }
+	showViewOffScreen(t, view)
+
+	view.foregroundWindow = func() windows.Handle { return 0 }
+	view.revealFromCard(`C:\Shots\one.png`)
+	dispatcher.runNext(t)
+	if len(card.reports) != 1 {
+		t.Fatalf("with another window in front: card = %+v", card.reports)
+	}
+
+	view.foregroundWindow = func() windows.Handle { return view.parent }
+	view.revealFromCard(`C:\Shots\two.png`)
+	dispatcher.runNext(t)
+	if len(card.reports) != 0 {
+		t.Fatalf("with the view in front: card = %+v", card.reports)
+	}
+	if text := view.status.Text(); !strings.Contains(text, "share offline") {
+		t.Fatalf("status = %q", text)
+	}
+}
+
 // TestShortcutCaptureGoesOnTheCardOnceTheViewIsCovered is the user leaving
 // for a maximized application during the capture.
 func TestShortcutCaptureGoesOnTheCardOnceTheViewIsCovered(t *testing.T) {

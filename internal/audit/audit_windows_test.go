@@ -112,7 +112,7 @@ var reviewedProcedures = []string{
 	"SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkMode", "SetCapture", "SetClipboardData",
 	"SetCursor", "SetFocus", "SetForegroundWindow", "SetProcessDpiAwarenessContext", "SetScrollInfo",
 	"SetTextColor", "SetTimer", "SetWindowLongPtrW", "SetWindowPos", "SetWindowTextW", "ShellExecuteExW",
-	"ShowWindow", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
+	"ShowWindow", "TrackMouseEvent", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
 	"WindowFromPoint",
 }
 

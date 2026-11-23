@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,6 +18,11 @@ var (
 	procCardTestIsWindowVisible     = user32.NewProc("IsWindowVisible")
 	procCardTestGetForegroundWindow = user32.NewProc("GetForegroundWindow")
 	procCardTestGetWindowLongW      = user32.NewProc("GetWindowLongW")
+	procCardTestGetCapture          = user32.NewProc("GetCapture")
+	procCardTestSetWinEventHook     = user32.NewProc("SetWinEventHook")
+	procCardTestUnhookWinEvent      = user32.NewProc("UnhookWinEvent")
+	procCardTestPeekMessageW        = user32.NewProc("PeekMessageW")
+	procCardTestDispatchMessageW    = user32.NewProc("DispatchMessageW")
 )
 
 func cardVisible(hwnd windows.Handle) bool {
@@ -141,9 +147,9 @@ func TestResultCardPressLeavesActivationAndFocusAlone(t *testing.T) {
 	active, _, _ := procCardTestGetActiveWindow.Call()
 	focus, _, _ := procGetFocus.Call()
 
-	press := func(button *Button, up uintptr) {
+	press := func(button *Button) {
 		procSendMessageW.Call(uintptr(button.hwnd), cardWMLButtonDown, 1, 0x00050005)
-		procSendMessageW.Call(uintptr(button.hwnd), cardWMLButtonUp, 0, up)
+		procSendMessageW.Call(uintptr(button.hwnd), cardWMLButtonUp, 0, 0x00050005)
 	}
 	checkFocus := func(step string) {
 		t.Helper()
@@ -155,20 +161,29 @@ func TestResultCardPressLeavesActivationAndFocusAlone(t *testing.T) {
 		}
 	}
 
-	// A release off the button is no click.
-	press(card.dismiss, 0x7fff7fff)
-	checkFocus("release off Dismiss")
+	// The pointer leaving the button ends the press, as the release may then
+	// go to another application: a later release over it is no click.
+	procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonDown, 1, 0x00050005)
+	if held, _, _ := procCardTestGetCapture.Call(); held != 0 {
+		t.Fatalf("a press took the mouse capture for %#x", held)
+	}
+	procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMMouseLeave, 0, 0)
+	if cardButtons[card.dismiss.hwnd].pressed {
+		t.Fatal("the press outlived the pointer leaving the button")
+	}
+	procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonUp, 0, 0x00050005)
+	checkFocus("release after leaving Dismiss")
 	if card.queue.waiting() != 1 {
-		t.Fatal("a release off Dismiss dismissed the problem")
+		t.Fatal("a release after the pointer left dismissed the problem")
 	}
 
-	press(card.openBtn, 0x00050005)
+	press(card.openBtn)
 	checkFocus("Open Folder")
 	if len(opened) != 1 || opened[0] != `C:\Shots\two.png` {
 		t.Fatalf("opened = %v", opened)
 	}
 
-	press(card.dismiss, 0x00050005)
+	press(card.dismiss)
 	checkFocus("Dismiss")
 	if card.queue.waiting() != 0 {
 		t.Fatal("Dismiss did not dismiss the problem")
@@ -227,6 +242,30 @@ func TestResultCardPressEndsWhenTheResultChanges(t *testing.T) {
 	})
 }
 
+// TestResultCardPressAsksToHearThePointerLeave runs the real leave tracking:
+// the card is off every display, so the pointer is already off the button,
+// and Windows reports that at once. A malformed request would report nothing
+// and leave the press held.
+func TestResultCardPressAsksToHearThePointerLeave(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Report(Notice{Kind: NoticeError, Message: "unread failure"}, "")
+	procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonDown, 1, 0x00050005)
+	var message [64]byte
+	for deadline := time.Now().Add(2 * time.Second); cardButtons[card.dismiss.hwnd].pressed && time.Now().Before(deadline); {
+		if got, _, _ := procCardTestPeekMessageW.Call(uintptr(unsafe.Pointer(&message)), 0, 0, 0, 1); got != 0 {
+			procCardTestDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if cardButtons[card.dismiss.hwnd].pressed {
+		t.Fatal("the press was still held with the pointer off the button")
+	}
+	if len(card.queue.problems) != 1 {
+		t.Fatalf("problems = %+v, want the failure kept", card.queue.problems)
+	}
+}
+
 // TestResultCardDropsASuccessForACapture is a selection started while a
 // success shows and then cancelled: the old success must not come back.
 func TestResultCardDropsASuccessForACapture(t *testing.T) {
@@ -236,6 +275,76 @@ func TestResultCardDropsASuccessForACapture(t *testing.T) {
 	card.Resume()
 	if cardVisible(card.hwnd) {
 		t.Fatalf("the earlier success came back: %q", card.message.Text())
+	}
+}
+
+// TestResultCardMoveLeavesASuccessTimeRunning is a dock sending display changes
+// every few seconds: each repositions the card, and a success must still
+// leave. KillTimer reports whether a timer was running.
+func TestResultCardMoveLeavesASuccessTimeRunning(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	if running, _, _ := procKillTimer.Call(uintptr(card.hwnd), cardTimerID); running == 0 {
+		t.Fatal("a success started no timer")
+	}
+	card.Reposition()
+	if running, _, _ := procKillTimer.Call(uintptr(card.hwnd), cardTimerID); running != 0 {
+		t.Fatal("moving the card restarted the success's time")
+	}
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	if running, _, _ := procKillTimer.Call(uintptr(card.hwnd), cardTimerID); running == 0 {
+		t.Fatal("a new identical success started no timer")
+	}
+}
+
+// TestResultCardResumeAnnouncesOnlyAChange is a problem waiting through a
+// capture with no result of its own: Resume must not read it out as new, and
+// a success identical to an earlier one must still start its time.
+func TestResultCardResumeAnnouncesOnlyAChange(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Report(Notice{Kind: NoticeError, Message: "waiting problem"}, "")
+
+	announcements := 0
+	callback := windows.NewCallback(func(_, _, hwnd, _, _, _, _ uintptr) uintptr {
+		if windows.Handle(hwnd) == card.message.hwnd {
+			announcements++
+		}
+		return 0
+	})
+	hook, _, err := procCardTestSetWinEventHook.Call(eventObjectLiveRegionChanged, eventObjectLiveRegionChanged,
+		0, callback, uintptr(windows.GetCurrentProcessId()), uintptr(windows.GetCurrentThreadId()), 0)
+	if hook == 0 {
+		t.Fatalf("SetWinEventHook: %v", err)
+	}
+	t.Cleanup(func() { procCardTestUnhookWinEvent.Call(hook) })
+	// An out-of-context event arrives as this thread retrieves messages.
+	settle := func() {
+		var message [64]byte
+		for deadline := time.Now().Add(150 * time.Millisecond); time.Now().Before(deadline); {
+			procCardTestPeekMessageW.Call(uintptr(unsafe.Pointer(&message)), 0, 0, 0, 1)
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	card.Suspend()
+	card.Resume()
+	settle()
+	if !cardVisible(card.hwnd) {
+		t.Fatal("the problem did not come back")
+	}
+	if announcements != 0 {
+		t.Fatalf("an unchanged problem was announced %d time(s)", announcements)
+	}
+
+	card.Suspend()
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	card.Resume()
+	settle()
+	if announcements != 1 {
+		t.Fatalf("a new result was announced %d time(s), want 1", announcements)
+	}
+	if running, _, _ := procKillTimer.Call(uintptr(card.hwnd), cardTimerID); running == 0 {
+		t.Fatal("a success shown by Resume started no timer")
 	}
 }
 
