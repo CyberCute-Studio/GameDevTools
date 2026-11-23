@@ -41,22 +41,30 @@ func TestImagePickerFilterIsATerminatedPairList(t *testing.T) {
 }
 
 // TestPickImageFilesOpensTheRealPicker opens the real common dialog, which
-// the view's tests replace with a stand-in, and cancels it.
+// the view's tests replace with a stand-in, and cancels it. Should the picker
+// not close, its parent is closed after a while, which ends its modal loop, so
+// the test fails by itself rather than hanging the package.
 func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
 	const title = "CyberCute Dev Tools picker test"
-	const idCancel = 2
+	const idCancel, wmClose = 2, 0x0010
+	const limit = 30 * time.Second
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	parent := newTestParent(t)
-	var opened atomic.Bool
+	var opened, timedOut atomic.Bool
 	stop := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
+		deadline := time.After(limit)
 		for {
 			select {
 			case <-stop:
 				return
+			case <-deadline:
+				timedOut.Store(true)
+				procPostMessageW.Call(uintptr(parent), wmClose, 0, 0)
+				deadline = nil
 			case <-time.After(50 * time.Millisecond):
 			}
 			dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
@@ -69,6 +77,9 @@ func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
 	paths, picked, err := PickImageFiles(parent, title)
 	close(stop)
 	<-finished
+	if timedOut.Load() {
+		t.Fatalf("the picker was still open after %v (found: %v)", limit, opened.Load())
+	}
 	if err != nil {
 		t.Fatalf("the picker could not be opened: %v", err)
 	}

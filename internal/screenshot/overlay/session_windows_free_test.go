@@ -5,6 +5,7 @@ package overlay
 import (
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -30,6 +31,27 @@ func clientRect(native *windowsSession, left, top, right, bottom int32) display.
 		Right:  native.bounds.Left + right,
 		Bottom: native.bounds.Top + bottom,
 	}
+}
+
+// windowUnderOverlayPoint returns the window Windows' own hit test picks at
+// overlay client coordinates. go test runs packages side by side and another
+// package's topmost overlay can be over this one, so the overlay is raised
+// first and a lost race tried again. A pixel that lets clicks through never
+// hits the overlay, however often it is raised, so the retries cannot hide
+// that failure.
+func windowUnderOverlayPoint(native *windowsSession, x, y int32) uintptr {
+	const hwndTopmost = ^uintptr(0)
+	point := uintptr(uint32(native.bounds.Left+x)) | uintptr(uint32(native.bounds.Top+y))<<32
+	var hit uintptr
+	for range 40 {
+		procSetWindowPos.Call(uintptr(native.overlay), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		hit, _, _ = procWindowFromPoint.Call(point)
+		if windows.Handle(hit) == native.overlay {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return hit
 }
 
 func captureEnabled(native *windowsSession) bool {
@@ -116,8 +138,7 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	}
 	// Windows' own hit test decides where a real click goes, which the mouse
 	// messages this test sends directly to the overlay do not exercise.
-	point := uintptr(uint32(native.bounds.Left+200)) | uintptr(uint32(native.bounds.Top+150))<<32
-	if hit, _, _ := procWindowFromPoint.Call(point); windows.Handle(hit) != native.overlay {
+	if hit := windowUnderOverlayPoint(native, 200, 150); windows.Handle(hit) != native.overlay {
 		t.Fatalf("a real click inside the selection would reach window %#x, not the overlay %#x (SCR-012, SCR-052)", hit, native.overlay)
 	}
 

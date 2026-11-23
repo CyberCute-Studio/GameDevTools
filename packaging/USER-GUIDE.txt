@@ -180,7 +180,10 @@ when the application starts, no shortcut is active. The Screenshot view says so,
 and the result card does too when another tool is showing.
 
 Pressing the shortcut during a selection brings the selection's toolbar back
-instead of starting a second selection.
+instead of starting a second selection. While one of the application's own
+dialogs is open, such as a file or folder picker or a question, the shortcut
+captures nothing and says so, as the dialog would be in the image. Close the
+dialog first.
 
 
 5. Image Resizer
@@ -442,7 +445,8 @@ The global shortcut does nothing.
   Screenshot view. If the field shows a "Shortcut registration error", another
   application owns the combination, so choose a different one. Otherwise the
   result card or the view says why a capture could not start, such as a preset
-  larger than the desktop or an invalid JPEG quality.
+  larger than the desktop, an invalid JPEG quality, or a dialog of the
+  application still open.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

@@ -238,6 +238,9 @@ const (
 	// CaptureShortcutRefused is on the card once a capture has ended, so it
 	// says what happened rather than asking the user to wait.
 	CaptureShortcutRefused = "The shortcut was pressed during a capture, so no second capture was taken."
+	// CaptureShortcutDialogOpen refuses the shortcut while one of the
+	// application's dialogs is open, as the dialog would be in the image.
+	CaptureShortcutDialogOpen = "Nothing was captured because a dialog of this application is open. Close it and press the shortcut again."
 	// CaptureTemporaryLeftBehind follows the result of a capture that was
 	// saved but whose temporary name could not be removed. The temporary name
 	// is a hard link to the saved image, so removing it loses nothing.

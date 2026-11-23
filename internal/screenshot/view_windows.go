@@ -46,6 +46,7 @@ const globalShortcutHotkeyID = 1
 var (
 	viewUser32                  = windows.NewLazySystemDLL("user32.dll")
 	procViewIsWindow            = viewUser32.NewProc("IsWindow")
+	procViewIsWindowEnabled     = viewUser32.NewProc("IsWindowEnabled")
 	procViewIsWindowVisible     = viewUser32.NewProc("IsWindowVisible")
 	procViewIsIconic            = viewUser32.NewProc("IsIconic")
 	procViewGetForegroundWindow = viewUser32.NewProc("GetForegroundWindow")
@@ -867,7 +868,9 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 // capture mode (SCR-002), exactly like the Start Capture button (SCR-001).
 // While a rectangle selection session is on screen, the shortcut brings
 // attention to that session instead of stacking a second overlay (SCR-005).
-// The shell routes WM_HOTKEY here; unknown identifiers are not consumed.
+// While one of the application's modal dialogs is open it captures nothing,
+// as dialogForbidsCapture explains. The shell routes WM_HOTKEY here; unknown
+// identifiers are not consumed.
 func (n *NativeView) NativeHotkey(id int32) bool {
 	if id != globalShortcutHotkeyID || n.hotkeys == nil {
 		return false
@@ -876,8 +879,29 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 		n.sessions.Attention()
 		return true
 	}
+	if n.dialogForbidsCapture() {
+		notice := ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutDialogOpen}
+		if n.statusInSight() {
+			_ = n.status.Show(notice, 0)
+		} else {
+			n.status.Update(notice)
+			n.card.Report(notice, "")
+		}
+		return true
+	}
 	n.startCapture(true)
 	return true
+}
+
+// dialogForbidsCapture reports whether a modal dialog of the application is
+// open, which disables the main window it belongs to. The dialog's own message
+// loop still delivers the shortcut, but hiding the main window leaves the
+// dialog on screen, where it would appear in the image (SCR-044), and that
+// loop does not run the overlay's keyboard handling, so Escape could not
+// cancel a selection (SCR-052).
+func (n *NativeView) dialogForbidsCapture() bool {
+	enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent))
+	return enabled == 0
 }
 
 // NativeShutdown blocks until an in-flight capture has finished delivering

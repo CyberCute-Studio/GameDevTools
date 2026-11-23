@@ -21,8 +21,9 @@ import (
 )
 
 var (
-	procViewTestShowWindow = testUser32.NewProc("ShowWindow")
-	procViewTestMoveWindow = testUser32.NewProc("MoveWindow")
+	procViewTestShowWindow   = testUser32.NewProc("ShowWindow")
+	procViewTestMoveWindow   = testUser32.NewProc("MoveWindow")
+	procViewTestEnableWindow = testUser32.NewProc("EnableWindow")
 )
 
 func newCardTestView(t *testing.T) (*NativeView, *fakeResultCard, *queuedDispatcher) {
@@ -629,6 +630,49 @@ func TestShortcutRefusedDuringACaptureReachesTheCardAfterIt(t *testing.T) {
 	}
 	if !card.suspended {
 		t.Fatal("the refused start showed the card during the capture")
+	}
+}
+
+// TestShortcutCapturesNothingWhileADialogIsOpen is the shortcut pressed with a
+// modal dialog open, which disables the main window: hiding that window would
+// leave the dialog in the image (SCR-044), so nothing starts, the refusal is
+// shown where it can be seen, and the shortcut works again once it closes.
+func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
+	view, card, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	captures := 0
+	view.capture = func(CaptureRequest) CaptureResult {
+		captures++
+		return CaptureResult{Path: `C:\Shots\one.png`}
+	}
+	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
+	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
+
+	if !view.NativeHotkey(globalShortcutHotkeyID) {
+		t.Fatal("the shortcut was not consumed")
+	}
+	if view.inProgress || view.captureAttempts != 0 || card.suspended {
+		t.Fatalf("a capture started behind the dialog: in progress %v, attempts %d, card suspended %v", view.inProgress, view.captureAttempts, card.suspended)
+	}
+	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutDialogOpen {
+		t.Fatalf("card with the status out of sight = %+v", card.reports)
+	}
+
+	// With the status area in sight the refusal stays off the card.
+	showViewOffScreen(t, view)
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 1 {
+		t.Fatalf("card with the status in sight = %+v", card.reports)
+	}
+	if got := view.status.Text(); !strings.Contains(got, ui.CaptureShortcutDialogOpen) {
+		t.Fatalf("status = %q", got)
+	}
+
+	procViewTestEnableWindow.Call(uintptr(view.parent), 1)
+	view.NativeHotkey(globalShortcutHotkeyID)
+	dispatcher.runNext(t)
+	if captures != 1 {
+		t.Fatalf("captures once the dialog closed = %d, want 1", captures)
 	}
 }
 
