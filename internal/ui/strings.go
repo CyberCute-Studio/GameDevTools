@@ -234,14 +234,10 @@ const (
 	// CardDismissProblemAction is the Screenshot view's keyboard-reachable
 	// counterpart to the card's Dismiss.
 	CardDismissProblemAction = "Dismiss Problem"
-	CardMoreProblems         = "%d more problem(s) not yet dismissed."
+	CardEarlierResults       = "%d earlier problem(s) not yet dismissed."
 	// CaptureShortcutRefused is on the card once a capture has ended, so it
 	// says what happened rather than asking the user to wait.
 	CaptureShortcutRefused = "The shortcut was pressed during a capture, so no second capture was taken."
-	// CaptureShortcutDialogOpen refuses the shortcut while one of the
-	// application's dialogs is open, as the dialog would be in the image. It
-	// can outlast the dialog on the card, so it says what happened.
-	CaptureShortcutDialogOpen = "The shortcut was pressed while a dialog of this application was open, so nothing was captured. Press it again once the dialog is closed."
 	// CaptureTemporaryLeftBehind follows the result of a capture that was
 	// saved but whose temporary name could not be removed. The temporary name
 	// is a hard link to the saved image, so removing it loses nothing.

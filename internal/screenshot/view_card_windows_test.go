@@ -635,16 +635,19 @@ func TestShortcutRefusedDuringACaptureReachesTheCardAfterIt(t *testing.T) {
 
 // TestShortcutCapturesNothingWhileADialogIsOpen is the shortcut pressed with a
 // modal dialog open, which disables the main window: hiding that window would
-// leave the dialog in the image (SCR-044), so nothing starts, the refusal is
-// shown where it can be seen, and the shortcut works again once it closes.
+// leave the dialog in the image (SCR-044), so nothing starts and nothing the
+// view or the card holds changes, the dialog flashes, and the shortcut works
+// again once it closes.
 func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
 	view, card, dispatcher := newCardTestView(t)
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
-	captures := 0
+	captures, flashes := 0, 0
 	view.capture = func(CaptureRequest) CaptureResult {
 		captures++
 		return CaptureResult{Path: `C:\Shots\one.png`}
 	}
+	view.flashDialog = func() { flashes++ }
+	status := view.status.Text()
 	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
 	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
 
@@ -654,111 +657,44 @@ func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
 	if view.inProgress || view.captureAttempts != 0 || card.suspended {
 		t.Fatalf("a capture started behind the dialog: in progress %v, attempts %d, card suspended %v", view.inProgress, view.captureAttempts, card.suspended)
 	}
-	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutDialogOpen {
-		t.Fatalf("card with the status out of sight = %+v", card.reports)
+	if flashes != 1 {
+		t.Fatalf("the dialog flashed %d times, want 1", flashes)
 	}
-	if card.behind != 1 {
-		t.Fatalf("refusals that keep a success on the card = %d, want 1", card.behind)
-	}
-
-	// With the status area in sight on another display and another
-	// application in front, the user still hears of it on the card.
-	showViewOffScreen(t, view)
-	view.foregroundWindow = func() windows.Handle { return 0 }
-	view.NativeHotkey(globalShortcutHotkeyID)
-	if len(card.reports) != 2 {
-		t.Fatalf("card with another application in front = %+v", card.reports)
-	}
-
-	// With the user at the dialog, which the main window owns, the refusal
-	// stays off the card.
-	const wsPopup = 0x80000000
-	className, err := windows.UTF16PtrFromString("STATIC")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dialog, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(className)), 0, wsPopup,
-		0, 0, 10, 10, uintptr(view.parent), 0, 0, 0)
-	if dialog == 0 {
-		t.Fatalf("CreateWindowExW(owned dialog): %v", err)
-	}
-	t.Cleanup(func() { procDestroyWindow.Call(dialog) })
-	view.foregroundWindow = func() windows.Handle { return windows.Handle(dialog) }
-	view.NativeHotkey(globalShortcutHotkeyID)
-	if len(card.reports) != 2 {
-		t.Fatalf("card with the user at the dialog = %+v", card.reports)
-	}
-	if got := view.status.Text(); !strings.Contains(got, ui.CaptureShortcutDialogOpen) {
-		t.Fatalf("status = %q", got)
+	if len(card.reports) != 0 || view.status.Text() != status {
+		t.Fatalf("the suspended shortcut changed the card %+v or the status %q", card.reports, view.status.Text())
 	}
 
 	procViewTestEnableWindow.Call(uintptr(view.parent), 1)
 	view.NativeHotkey(globalShortcutHotkeyID)
 	dispatcher.runNext(t)
-	if captures != 1 {
-		t.Fatalf("captures once the dialog closed = %d, want 1", captures)
-	}
-	for _, report := range card.reports {
-		if report.Notice.Message == ui.CaptureShortcutDialogOpen {
-			t.Fatalf("the refusal outlived the capture that followed it: %+v", card.reports)
-		}
-	}
-}
-
-// TestShortcutRefusedBehindADialogKeepsACapturesOutcome is a capture's failure
-// whose only copy is in the status area when a press is refused behind a
-// dialog: the refusal goes on the card and the reason stays (SCR-069), whether
-// or not the status area is in sight.
-func TestShortcutRefusedBehindADialogKeepsACapturesOutcome(t *testing.T) {
-	view, card, dispatcher := newCardTestView(t)
-	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
-	view.capture = func(CaptureRequest) CaptureResult {
-		return CaptureResult{Save: errors.New("access denied")}
-	}
-	view.NativeAction()
-	dispatcher.runNext(t)
-	outcome := view.status.Text()
-	if !strings.Contains(outcome, "access denied") || len(card.reports) != 0 {
-		t.Fatalf("status = %q, card = %+v", outcome, card.reports)
-	}
-	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
-	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
-
-	view.NativeHotkey(globalShortcutHotkeyID)
-	if got := view.status.Text(); got != outcome {
-		t.Fatalf("status with the view out of sight = %q, want %q", got, outcome)
-	}
-	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutDialogOpen {
-		t.Fatalf("card with the view out of sight = %+v", card.reports)
-	}
-
-	showViewOffScreen(t, view)
-	view.foregroundWindow = func() windows.Handle { return view.parent }
-	view.NativeHotkey(globalShortcutHotkeyID)
-	if got := view.status.Text(); got != outcome {
-		t.Fatalf("status with the view in sight = %q, want %q", got, outcome)
-	}
-	if len(card.reports) != 2 {
-		t.Fatalf("card with the view in sight = %+v", card.reports)
+	if captures != 1 || flashes != 1 {
+		t.Fatalf("once the dialog closed: %d captures, %d flashes, want 1 and 1", captures, flashes)
 	}
 }
 
 // TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal is a press
 // while a running capture saves its file and the user has opened a dialog:
-// that capture is not denied, so the press gets the in-progress refusal.
+// that press gets the in-progress refusal, and the dialog is not flashed.
 func TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal(t *testing.T) {
 	view, card, _ := newCardTestView(t)
 	view.inProgress = true
 	view.card.Suspend()
+	flashes := 0
+	view.flashDialog = func() { flashes++ }
 	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
 	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
 
 	view.NativeHotkey(globalShortcutHotkeyID)
-	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutRefused {
-		t.Fatalf("card = %+v", card.reports)
+	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutRefused || flashes != 0 {
+		t.Fatalf("card = %+v, flashes = %d", card.reports, flashes)
 	}
-	if got := view.status.Text(); strings.Contains(got, ui.CaptureShortcutDialogOpen) {
-		t.Fatalf("status denies the running capture: %q", got)
+}
+
+// TestFlashWindowInfoMatchesTheWindowsStructure pins FLASHWINFO's 64-bit size,
+// as FlashWindowEx does nothing for a structure of another size.
+func TestFlashWindowInfoMatchesTheWindowsStructure(t *testing.T) {
+	if got := unsafe.Sizeof(flashWindowInfo{}); got != 32 {
+		t.Fatalf("flashWindowInfo is %d bytes, want 32", got)
 	}
 }
 

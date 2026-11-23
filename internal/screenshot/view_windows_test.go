@@ -113,8 +113,6 @@ type fakeResultCard struct {
 	// settingSuspended is whether the last ReportSetting found the card
 	// suspended.
 	settingSuspended bool
-	// behind counts the problems reported to wait behind a success.
-	behind int
 }
 
 func (f *fakeResultCard) Report(notice ui.Notice, path string) {
@@ -125,10 +123,6 @@ func (f *fakeResultCard) ReportSetting(notice ui.Notice) {
 	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Setting: true})
 	f.settingSuspended = f.suspended
 	f.tell()
-}
-func (f *fakeResultCard) ReportSettingBehind(notice ui.Notice) {
-	f.behind++
-	f.ReportSetting(notice)
 }
 func (f *fakeResultCard) WithdrawSettings() {
 	f.reports = slices.DeleteFunc(f.reports, func(entry ui.CardEntry) bool { return entry.Setting })

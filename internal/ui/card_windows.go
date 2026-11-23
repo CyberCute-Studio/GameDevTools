@@ -4,7 +4,6 @@ package ui
 
 import (
 	"fmt"
-	"slices"
 	"sync"
 	"unsafe"
 
@@ -190,9 +189,6 @@ type ResultCard struct {
 	// not been read out, even one identical to a problem already waiting or
 	// one a success was then read out over.
 	unheard bool
-	// behind is the problems added behind a success and not yet read out. One
-	// withdrawn before then leaves nothing new to read.
-	behind []Notice
 }
 
 // NewResultCard returns a card that appears where place says, as of each
@@ -215,24 +211,6 @@ func (c *ResultCard) ReportSetting(notice Notice) {
 	c.add(CardEntry{Notice: notice, Setting: true})
 }
 
-// ReportSettingBehind adds a problem with a setting, as ReportSetting does,
-// without ending a success on the card, whose saved path and Open Folder the
-// problem would otherwise take away. The problem shows, and is read out, as
-// that success leaves.
-func (c *ResultCard) ReportSettingBehind(notice Notice) {
-	if c.destroyed {
-		return
-	}
-	if c.queue.passing == nil {
-		c.ReportSetting(notice)
-		return
-	}
-	c.queue.pushBehind(CardEntry{Notice: notice, Setting: true})
-	c.behind = append(c.behind, notice)
-	c.present(false)
-	c.tellProblems()
-}
-
 func (c *ResultCard) add(entry CardEntry) {
 	if c.destroyed {
 		return
@@ -247,7 +225,6 @@ func (c *ResultCard) add(entry CardEntry) {
 // settings replaced what they report.
 func (c *ResultCard) WithdrawSettings() {
 	if c.queue.withdrawSettings() {
-		c.behind = nil
 		c.present(false)
 		c.tellProblems()
 	}
@@ -257,7 +234,6 @@ func (c *ResultCard) WithdrawSettings() {
 // longer has it, as a shortcut that has since registered.
 func (c *ResultCard) WithdrawSetting(notice Notice) {
 	if c.queue.withdrawSetting(notice) {
-		c.behind = slices.DeleteFunc(c.behind, func(waiting Notice) bool { return waiting == notice })
 		c.present(false)
 		c.tellProblems()
 	}
@@ -402,7 +378,7 @@ func (c *ResultCard) present(announce bool) {
 	text := entry.Notice.Text()
 	countText := ""
 	if waiting := c.queue.waiting(); waiting > 0 {
-		countText = fmt.Sprintf(CardMoreProblems, waiting)
+		countText = fmt.Sprintf(CardEarlierResults, waiting)
 	}
 	c.path = entry.Path
 	c.message.SetTextQuietly(text)
@@ -448,8 +424,8 @@ func (c *ResultCard) present(announce bool) {
 		procSetTimer.Call(uintptr(c.hwnd), cardTimerID, uintptr(cardSuccessDuration.Milliseconds()), 0)
 	}
 	if entry.lasting() {
-		announce = announce || c.unheard || len(c.behind) > 0
-		c.unheard, c.behind = false, nil
+		announce = announce || c.unheard
+		c.unheard = false
 	}
 	if announce {
 		c.message.Announce()

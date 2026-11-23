@@ -155,7 +155,7 @@ The result card
 
   - A success disappears after a few seconds.
   - A warning or error stays until you press Dismiss, so a later capture cannot
-    hide it. The card says how many other problems are waiting.
+    hide it. The card says how many earlier problems are waiting.
   - Open Folder shows the saved file, when there is one.
   - To dismiss a problem with the keyboard, open the Screenshot view and press
     Dismiss Problem, beside Open Folder. The card then shows the next one.
@@ -182,8 +182,8 @@ and the result card does too when another tool is showing.
 Pressing the shortcut during a selection brings the selection's toolbar back
 instead of starting a second selection. While one of the application's own
 dialogs is open, such as a file or folder picker or a question, the shortcut
-captures nothing and says so, as the dialog would be in the image. Close the
-dialog first.
+captures nothing, as the dialog would be in the image. The dialog flashes and
+Windows beeps instead. Close the dialog first.
 
 
 5. Image Resizer
@@ -445,8 +445,7 @@ The global shortcut does nothing.
   Screenshot view. If the field shows a "Shortcut registration error", another
   application owns the combination, so choose a different one. Otherwise the
   result card or the view says why a capture could not start, such as a preset
-  larger than the desktop, an invalid JPEG quality, or a dialog of the
-  application still open.
+  larger than the desktop or an invalid JPEG quality.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

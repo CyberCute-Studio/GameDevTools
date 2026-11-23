@@ -85,7 +85,7 @@ func TestResultCardHidesForACaptureAndKeepsItsResults(t *testing.T) {
 	if !cardVisible(card.hwnd) || !strings.Contains(card.message.Text(), "second saved") {
 		t.Fatalf("after Resume: visible %v, message %q", cardVisible(card.hwnd), card.message.Text())
 	}
-	if !strings.Contains(card.count.Text(), "1 more") {
+	if !strings.Contains(card.count.Text(), "1 earlier") {
 		t.Fatalf("count = %q, want the failure waiting", card.count.Text())
 	}
 
@@ -411,70 +411,6 @@ func TestResultCardAnnouncesAProblemAfterItsSuccessEndedForACapture(t *testing.T
 	settle()
 	if *announcements != 1 {
 		t.Fatalf("the problem was announced %d time(s), want 1", *announcements)
-	}
-}
-
-// TestResultCardProblemBehindASuccessKeepsIt is a refused press while a
-// capture's success is on the card: the saved path and Open Folder stay, and
-// the problem shows and is read out, once, as the success leaves.
-func TestResultCardProblemBehindASuccessKeepsIt(t *testing.T) {
-	card := newOffScreenCard(t, nil)
-	const path = `C:\Shots\one.png`
-	refused := Notice{Kind: NoticeWarning, Message: "press refused"}
-	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, path)
-	announcements, settle := watchCardAnnouncements(t, card)
-
-	card.ReportSettingBehind(refused)
-	settle()
-	if got := card.message.Text(); !strings.Contains(got, "saved") || card.path != path {
-		t.Fatalf("message = %q, path = %q, want the success kept", got, card.path)
-	}
-	if *announcements != 0 {
-		t.Fatalf("the success was read out again or the problem early: %d", *announcements)
-	}
-
-	cardWindowProc(card.hwnd, cardWMTimer, cardTimerID, 0)
-	settle()
-	if got := card.message.Text(); !strings.Contains(got, "press refused") {
-		t.Fatalf("message after the success left = %q", got)
-	}
-	if *announcements != 1 {
-		t.Fatalf("the problem was announced %d time(s), want 1", *announcements)
-	}
-
-	// With no success on the card, it shows at once.
-	card.DismissProblem()
-	card.ReportSettingBehind(refused)
-	if got := card.message.Text(); !cardVisible(card.hwnd) || !strings.Contains(got, "press refused") {
-		t.Fatalf("message with no success = %q", got)
-	}
-}
-
-// TestResultCardWithdrawnProblemBehindASuccessIsNotHeard is a press refused
-// behind a success and then withdrawn: nothing new is waiting, so the problem
-// already heard under that success is not read out again.
-func TestResultCardWithdrawnProblemBehindASuccessIsNotHeard(t *testing.T) {
-	refused := Notice{Kind: NoticeWarning, Message: "press refused"}
-	for _, withdraw := range []func(*ResultCard){
-		func(card *ResultCard) { card.WithdrawSetting(refused) },
-		func(card *ResultCard) { card.WithdrawSettings() },
-	} {
-		card := newOffScreenCard(t, nil)
-		card.Report(Notice{Kind: NoticeError, Message: "already heard"}, "")
-		card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
-		card.ReportSettingBehind(refused)
-		withdraw(card)
-		announcements, settle := watchCardAnnouncements(t, card)
-
-		card.Suspend()
-		card.Resume()
-		settle()
-		if got := card.message.Text(); !strings.Contains(got, "already heard") {
-			t.Fatalf("message = %q", got)
-		}
-		if *announcements != 0 {
-			t.Fatalf("the problem already heard was read out again: %d", *announcements)
-		}
 	}
 }
 

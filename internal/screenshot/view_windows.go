@@ -46,7 +46,6 @@ const globalShortcutHotkeyID = 1
 var (
 	viewUser32                  = windows.NewLazySystemDLL("user32.dll")
 	procViewIsWindow            = viewUser32.NewProc("IsWindow")
-	procViewIsWindowEnabled     = viewUser32.NewProc("IsWindowEnabled")
 	procViewIsWindowVisible     = viewUser32.NewProc("IsWindowVisible")
 	procViewIsIconic            = viewUser32.NewProc("IsIconic")
 	procViewGetForegroundWindow = viewUser32.NewProc("GetForegroundWindow")
@@ -55,13 +54,31 @@ var (
 	procViewGetAncestor         = viewUser32.NewProc("GetAncestor")
 	procViewGetClientRect       = viewUser32.NewProc("GetClientRect")
 	procViewMapWindowPoints     = viewUser32.NewProc("MapWindowPoints")
+	procViewIsWindowEnabled     = viewUser32.NewProc("IsWindowEnabled")
+	procViewGetLastActivePopup  = viewUser32.NewProc("GetLastActivePopup")
+	procViewFlashWindowEx       = viewUser32.NewProc("FlashWindowEx")
+	procViewMessageBeep         = viewUser32.NewProc("MessageBeep")
 )
 
-// viewGARoot and viewGARootOwner are GetAncestor's GA_ROOT and GA_ROOTOWNER.
+// flashWindowInfo is the FLASHWINFO structure FlashWindowEx takes.
+type flashWindowInfo struct {
+	size    uint32
+	window  windows.Handle
+	flags   uint32
+	count   uint32
+	timeout uint32
+}
+
 const (
-	viewGARoot      = 2
-	viewGARootOwner = 3
+	// flashCaptionAndTaskbar is FLASHW_ALL.
+	flashCaptionAndTaskbar = 3
+	// openDialogFlashes is how many times a suspended shortcut flashes the
+	// open dialog.
+	openDialogFlashes = 3
 )
+
+// viewGARoot is GetAncestor's GA_ROOT.
+const viewGARoot = 2
 
 // controlCoverStep is the most pixels controlCovered leaves between two points
 // it checks along a control, less than any window that could hide a message.
@@ -90,7 +107,6 @@ type hotkeyRegistrar interface {
 type resultCard interface {
 	Report(notice ui.Notice, path string)
 	ReportSetting(notice ui.Notice)
-	ReportSettingBehind(notice ui.Notice)
 	WithdrawSettings()
 	WithdrawSetting(notice ui.Notice)
 	Suspend()
@@ -143,10 +159,6 @@ type NativeView struct {
 	// the restore of the default settings clears while it is still shown, as
 	// the option it reports is replaced.
 	optionsNotice uint64
-	// outcomeNotice is the status area's revision once a capture's outcome was
-	// last shown there. It can be that outcome's only copy, so a refused
-	// shortcut press does not replace it.
-	outcomeNotice uint64
 	// card reports a global-shortcut capture's outcome while the status area
 	// cannot be seen (SCR-060, SCR-069).
 	card resultCard
@@ -172,6 +184,9 @@ type NativeView struct {
 	// windowAlive reports whether the shell window still exists, which ends a
 	// capture's retried completion post.
 	windowAlive func() bool
+	// flashDialog draws attention to the modal dialog that suspends the
+	// shortcut; tests replace it.
+	flashDialog func()
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -225,7 +240,18 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		alive, _, _ := procViewIsWindow.Call(uintptr(view.parent))
 		return alive != 0
 	}
+	view.flashDialog = func() { flashOpenDialog(view.parent) }
 	return view
+}
+
+// flashOpenDialog does what Windows does for a click on a window a modal
+// dialog disables: it flashes the dialog and beeps, without taking the focus.
+func flashOpenDialog(owner windows.Handle) {
+	dialog, _, _ := procViewGetLastActivePopup.Call(uintptr(owner))
+	info := flashWindowInfo{window: windows.Handle(dialog), flags: flashCaptionAndTaskbar, count: openDialogFlashes}
+	info.size = uint32(unsafe.Sizeof(info))
+	procViewFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
+	procViewMessageBeep.Call(0)
 }
 
 // cardPlacement puts the result card on the display under the pointer, where
@@ -434,14 +460,12 @@ func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
 // going on the card is written here quietly, as the card announces it and a
 // screen reader would otherwise read it twice in a row.
 func (n *NativeView) showOutcome(notice ui.Notice) bool {
-	onCard := n.cardNeeded()
-	if onCard {
+	if n.cardNeeded() {
 		n.status.Update(notice)
-	} else {
-		_ = n.status.Show(notice, 0)
+		return true
 	}
-	n.outcomeNotice = n.status.Revision()
-	return onCard
+	_ = n.status.Show(notice, 0)
+	return false
 }
 
 // problemsChanged keeps the Dismiss Problem button in step with what a press
@@ -791,9 +815,6 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 		}
 		return
 	}
-	// This start supersedes a press refused behind a dialog, which would
-	// otherwise return to the card under this capture's result.
-	n.card.WithdrawSetting(shortcutDialogRefusal)
 	// A start refused because a selection is on screen must not change how
 	// that selection's outcome is reported.
 	if n.sessions == nil || !n.sessions.Active() {
@@ -881,9 +902,13 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 // capture mode (SCR-002), exactly like the Start Capture button (SCR-001).
 // While a rectangle selection session is on screen, the shortcut brings
 // attention to that session instead of stacking a second overlay (SCR-005).
-// While one of the application's modal dialogs is open it captures nothing,
-// as dialogForbidsCapture explains. The shell routes WM_HOTKEY here; unknown
-// identifiers are not consumed.
+// While one of the application's modal dialogs is open the shortcut is
+// suspended and flashes that dialog: the dialog's message loop still delivers
+// it, but hiding the main window would leave the dialog in the image (SCR-044),
+// and that loop does not run the overlay's keyboard handling, so Escape could
+// not cancel a selection (SCR-052). A capture already running keeps
+// startCapture's refusal, as a dialog can open while its file is written.
+// The shell routes WM_HOTKEY here; unknown identifiers are not consumed.
 func (n *NativeView) NativeHotkey(id int32) bool {
 	if id != globalShortcutHotkeyID || n.hotkeys == nil {
 		return false
@@ -892,48 +917,12 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 		n.sessions.Attention()
 		return true
 	}
-	// A capture already running keeps startCapture's refusal, as the main
-	// window is back, and a dialog can be open, while its file is written.
-	if !n.inProgress && n.dialogForbidsCapture() {
-		// A capture's outcome keeps the status area, and the refusal goes on
-		// the card instead.
-		keepOutcome := n.outcomeNotice != 0 && n.status.Revision() == n.outcomeNotice
-		if !keepOutcome && n.statusInSight() && n.foregroundIsOwn() {
-			_ = n.status.Show(shortcutDialogRefusal, 0)
-			return true
-		}
-		if !keepOutcome {
-			n.status.Update(shortcutDialogRefusal)
-		}
-		n.card.ReportSettingBehind(shortcutDialogRefusal)
+	if enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent)); !n.inProgress && enabled == 0 {
+		n.flashDialog()
 		return true
 	}
 	n.startCapture(true)
 	return true
-}
-
-// shortcutDialogRefusal answers the shortcut while a dialog is open. On the
-// card it is a withdrawable entry, which the next capture to start removes,
-// and it waits behind a success there rather than ending it.
-var shortcutDialogRefusal = ui.Notice{Kind: ui.NoticeWarning, Message: ui.CaptureShortcutDialogOpen}
-
-// foregroundIsOwn reports whether the window in front is the main window or a
-// dialog it owns. Otherwise the user is in another application, and a status
-// area in sight on another display is not where they are looking.
-func (n *NativeView) foregroundIsOwn() bool {
-	root, _, _ := procViewGetAncestor.Call(uintptr(n.foregroundWindow()), viewGARootOwner)
-	return windows.Handle(root) == n.parent
-}
-
-// dialogForbidsCapture reports whether a modal dialog of the application is
-// open, which disables the main window it belongs to. The dialog's own message
-// loop still delivers the shortcut, but hiding the main window leaves the
-// dialog on screen, where it would appear in the image (SCR-044), and that
-// loop does not run the overlay's keyboard handling, so Escape could not
-// cancel a selection (SCR-052).
-func (n *NativeView) dialogForbidsCapture() bool {
-	enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent))
-	return enabled == 0
 }
 
 // NativeShutdown blocks until an in-flight capture has finished delivering

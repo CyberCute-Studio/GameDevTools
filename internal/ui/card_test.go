@@ -30,21 +30,6 @@ func TestCardQueueKeepsProblemsBehindALaterSuccess(t *testing.T) {
 	}
 }
 
-func TestCardQueuePushBehindKeepsThePassingSuccess(t *testing.T) {
-	var queue cardQueue
-	saved := cardEntry(NoticeSuccess, "saved")
-	refused := cardEntry(NoticeWarning, "refused")
-	queue.push(saved)
-	queue.pushBehind(refused)
-	if got, ok := queue.current(); !ok || got != saved || queue.waiting() != 1 {
-		t.Fatalf("current = %+v, %v with %d waiting, want the success over the problem", got, ok, queue.waiting())
-	}
-	queue.expire()
-	if got, ok := queue.current(); !ok || got != refused {
-		t.Fatalf("after the success left, current = %+v, %v", got, ok)
-	}
-}
-
 func TestCardQueueDismissesProblemsNewestFirst(t *testing.T) {
 	var queue cardQueue
 	queue.push(cardEntry(NoticeError, "one"))
