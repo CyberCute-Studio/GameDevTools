@@ -1,13 +1,13 @@
 # Requirement traceability
 
-This matrix is the REL-02 record of how every requirement and acceptance scenario in the [PRD](../PRD.md) is implemented and verified. It lists each one with the [implementation plan](../IMPLEMENTATION_PLAN.md) items that name it, the automated checks or records that are its evidence, its status, and what is still open. `release.TestTraceabilityCoversEveryRequirement` fails if a requirement is missing, a named test does not exist, or a row that depends on an open hardware run claims to pass.
+This matrix is the REL-02 record of how every requirement and acceptance scenario in the [PRD](../PRD.md) is implemented and verified. It lists each one with the [implementation plan](../IMPLEMENTATION_PLAN.md) items that name it, the automated checks or records that are its evidence, its status, and what is still open. `release.TestTraceabilityCoversEveryRequirement` fails if a requirement is missing, a named test does not exist, a row that waits on an open hardware run or manual check claims to pass, or the lists of blockers below disagree with the rows.
 
-The evidence column names representative checks, not all of them. The verification records hold the full matrices: [Screenshot](screenshot-verification.md), [Image Resizer](image-resizer-verification.md), [accessibility](accessibility-verification.md), [settings and shutdown](reliability-verification.md), [privacy and dependencies](privacy-verification.md), and [platform and performance](platform-verification.md). The [test and verification guide](testing.md) says how to run them.
+The evidence column names representative checks, not all of them, as `package.Test`. The two `output` packages are told apart as `screenshot/output` and `imageresizer/output`. The verification records hold the full matrices: [Screenshot](screenshot-verification.md), [Image Resizer](image-resizer-verification.md), [accessibility](accessibility-verification.md), [settings and shutdown](reliability-verification.md), [privacy and dependencies](privacy-verification.md), and [platform and performance](platform-verification.md). The [test and verification guide](testing.md) says how to run them.
 
 ## Status
 
 - **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as using a real screen reader, and has not been done.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, or M10 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, and a hotkey message delivered directly. The FND-01 spike clicked through a color-keyed window, which is not how the production frame is built.
 
 `M1` to `M14` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns.
 
@@ -15,16 +15,16 @@ The evidence column names representative checks, not all of them. The verificati
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 114 | 10 |
-| P1 requirements | 20 | 14 | 6 |
-| Acceptance scenarios | 32 | 30 | 2 |
-| **All** | **176** | **158** | **18** |
+| P0 requirements | 124 | 110 | 14 |
+| P1 requirements | 20 | 13 | 7 |
+| Acceptance scenarios | 32 | 29 | 3 |
+| **All** | **176** | **152** | **24** |
 
-Every P0 requirement and acceptance scenario below marked Partial is a release blocker until QLT-04A passes or it receives an approved resolution, as PRD section 16 requires:
+Every P0 requirement and acceptance scenario below marked Partial is a release blocker until the hardware run or manual check it names passes or it receives an approved resolution, as PRD section 16 requires:
 
-SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12.
+SCR-002, SCR-020, SCR-021, SCR-022, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S12.
 
-The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
+The Partial P1 requirements are SCR-028, SCR-055, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
 ## Application shell
 
@@ -54,7 +54,7 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
 | SCR-001 | P0 | Start the selected mode from the main window | SCR-05, SCR-09 | `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestNativeViewRectangleModesStartOverlaySession` | Pass |  |
-| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys` | Pass | M10 |
+| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys` | **Partial** | M10: never pressed with another application focused |
 | SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09 | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | Pass |  |
 | SCR-004 | P0 | Shortcut changes persist without reinstalling | SCR-09 | `screenshot.TestNativeViewShortcutCommitAppliesAndPersists` | Pass |  |
 | SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | Pass |  |
@@ -66,8 +66,8 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 | SCR-014 | P0 | Output matches the rectangle, without overlay | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `screenshot.TestNativeViewRectangleCaptureEndToEnd` | Pass |  |
 | SCR-015 | P1 | Free Rectangle without a pointer | QLT-01 | `overlay.TestFreeRectangleTypedSizeCreatesSelection`, `overlay.TestFreeRectangleArrowKeysNudgeSelection` | Pass |  |
 | SCR-020 | P0 | Preset is exact at any monitor scaling | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameCaptureDeliversExactRect` | **Partial** | QLT-04A: any scaling but 100% |
-| SCR-021 | P0 | Frame stays on top of other windows | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface` | Pass | M9 |
-| SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass | M9 |
+| SCR-021 | P0 | Frame stays on top of other windows | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface` | **Partial** | M9: not run while another application is in use |
+| SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
 | SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | Pass |  |
 | SCR-024 | P0 | Toolbar has Capture, Cancel, and dimensions | SCR-07, SCR-08 | `overlay.TestToolbarCaptureCommandDeliversSelection`, `overlay.TestToolbarCancelCommandCancelsSession`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
 | SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08 | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay` | Pass |  |
@@ -87,15 +87,15 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 | SCR-052 | P0 | Failure leaves no invisible overlay | SCR-06, SCR-10 | `overlay.TestBeginFailureRestoresMainWindow`, `screenshot.TestNativeViewOverlayFailureRestoresMainWindow` | Pass |  |
 | SCR-053 | P0 | One selection session at a time | SCR-06 | `overlay.TestBeginRejectsConcurrentSession` | Pass |  |
 | SCR-054 | P0 | Display change revalidates the selection | SCR-10 | `overlay.TestDisplayChangeKeepsFittingSession`, `overlay.TestDisplayChangeEndsSessionThatCannotFit` | **Partial** | QLT-04A: a live disconnect and reconnect |
-| SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | Pass | M9 |
+| SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | **Partial** | M9: activation simulated, no real click in another application |
 | SCR-056 | P0 | Exit removes overlays and restores input | SCR-06, SCR-10 | `overlay.TestShutdownRemovesSessionSilently`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
-| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A | `output.TestDeliverSaveFailureKeepsClipboardSuccess`, `output.TestDeliverClipboardFailureKeepsSaveSuccess` | Pass |  |
+| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess` | Pass |  |
 | SCR-061 | P0 | PNG or JPEG, PNG by default | SCR-01, SCR-04 | `screenshot.TestDefaultOptions`, `screenshot.TestNativeViewFormatQualityAndPattern` | Pass |  |
-| SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `output.TestDeliverJPEGDoesNotDegradeClipboard`, `output.TestSetClipboardImageRoundTrip` | Pass | M8 |
+| SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `screenshot/output.TestDeliverJPEGDoesNotDegradeClipboard`, `screenshot/output.TestSetClipboardImageRoundTrip` | **Partial** | M8: no real application has pasted the image |
 | SCR-063 | P0 | Default Pictures folder; another can be chosen | SCR-01, SCR-04, QLT-03B, QLT-03C | `screenshot.TestDefaultFolderIsOneACaptureCanUse`, `screenshot.TestNativeViewBrowseForOutputFolder` | Pass |  |
-| SCR-064 | P0 | Filename pattern `Screenshot_yyyyMMdd_HHmmssfff` | SCR-01, SCR-04 | `output.TestSaveWritesTimestampedFile`, `screenshot.TestImageFormatExtensionAndFilenameExample` | Pass |  |
-| SCR-065 | P0 | Never overwrites; appends a numeric suffix | SCR-04, QLT-03A | `output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
-| SCR-066 | P0 | Written through a temporary file | SCR-04, QLT-03A | `output.TestSaveEncodeFailureLeavesNoFiles`, `output.TestSaveWithoutHardLinksMovesTheFinishedFile` | Pass | M5 |
+| SCR-064 | P0 | Filename pattern `Screenshot_yyyyMMdd_HHmmssfff` | SCR-01, SCR-04 | `screenshot/output.TestSaveWritesTimestampedFile`, `screenshot.TestImageFormatExtensionAndFilenameExample` | Pass |  |
+| SCR-065 | P0 | Never overwrites; appends a numeric suffix | SCR-04, QLT-03A | `screenshot/output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
+| SCR-066 | P0 | Written through a temporary file | SCR-04, QLT-03A | `screenshot/output.TestSaveEncodeFailureLeavesNoFiles`, `screenshot/output.TestSaveWithoutHardLinksMovesTheFinishedFile` | Pass | M5 |
 | SCR-067 | P0 | JPEG quality 1-100, default 90 | SCR-01, SCR-04 | `screenshot.TestCaptureOptionsValidateBoundaries`, `screenshot.TestParseJPEGQuality` | Pass |  |
 | SCR-068 | P0 | Cursor, frame, toolbar, tint not in the output | SCR-03, SCR-07, SCR-08 | `capture.TestHideExcludesWindowFromCapture`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
 | SCR-069 | P1 | Notification with Open Folder and path or error | SCR-05, SCR-10, QLT-03B | `screenshot.TestNativeViewOpenFolderRevealsSavedFile`, `screenshot.TestNativeViewCaptureFailurePresentations` | Pass |  |
@@ -124,15 +124,15 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 | RSZ-018 | P0 | EXIF orientation applied first | RSZ-03 | `imageresizer.TestAcceptanceR12EXIFOrientation`, `decode.TestDecodeAppliesEveryEXIFOrientation` | Pass |  |
 | RSZ-020 | P0 | Creates new files and preserves originals | RSZ-01, RSZ-05 | `imageresizer.TestAcceptanceR07OriginalsPreserved`, `imageresizer.TestDefaultOptions` | Pass |  |
 | RSZ-021 | P0 | Default folder; last valid folder remembered | RSZ-01, RSZ-05, QLT-03D | `imageresizer.TestDefaultFolder`, `imageresizer.TestOptionsStoreRoundTripAndPresetCoexistence` | Pass |  |
-| RSZ-022 | P0 | Keep Source Format, PNG, JPEG | RSZ-01, RSZ-05, RSZ-06 | `output.TestEncodedFormatAndExtension`, `imageresizer.TestDefaultOptions` | Pass |  |
-| RSZ-023 | P0 | Keeps the base name with a matching extension | RSZ-01, RSZ-05, RSZ-06 | `output.TestPrepareNamesDestinationsAfterSources` | Pass |  |
-| RSZ-024 | P0 | Duplicate destinations follow the policy | RSZ-05 | `output.TestPrepareSameNameFromDifferentFolders`, `imageresizer.TestAcceptanceR08RenameCollisions` | Pass |  |
+| RSZ-022 | P0 | Keep Source Format, PNG, JPEG | RSZ-01, RSZ-05, RSZ-06 | `imageresizer/output.TestEncodedFormatAndExtension`, `imageresizer.TestDefaultOptions` | Pass |  |
+| RSZ-023 | P0 | Keeps the base name with a matching extension | RSZ-01, RSZ-05, RSZ-06 | `imageresizer/output.TestPrepareNamesDestinationsAfterSources` | Pass |  |
+| RSZ-024 | P0 | Duplicate destinations follow the policy | RSZ-05 | `imageresizer/output.TestPrepareSameNameFromDifferentFolders`, `imageresizer.TestAcceptanceR08RenameCollisions` | Pass |  |
 | RSZ-025 | P0 | Rename, Skip, or confirmed Overwrite | RSZ-01, RSZ-05 | `imageresizer.TestNativeViewDefaultsAndCollisionSelection`, `imageresizer.TestNativeViewOverwriteNeedsConfirmation` | Pass |  |
-| RSZ-026 | P0 | A source is never overwritten | RSZ-05 | `output.TestPrepareNeverTargetsSources`, `output.TestPrepareNeverOverwritesASource` | Pass |  |
-| RSZ-027 | P0 | Temporary file, atomic finalize, cleanup | RSZ-06 | `output.TestWriteRemovesTheTemporaryFileWhenEncodingFails`, `output.TestWriteNeverReplacesAFileThatAppeared` | Pass | M5 |
+| RSZ-026 | P0 | A source is never overwritten | RSZ-05 | `imageresizer/output.TestPrepareNeverTargetsSources`, `imageresizer/output.TestPrepareNeverOverwritesASource` | Pass |  |
+| RSZ-027 | P0 | Temporary file, atomic finalize, cleanup | RSZ-06 | `imageresizer/output.TestWriteRemovesTheTemporaryFileWhenEncodingFails`, `imageresizer/output.TestWriteNeverReplacesAFileThatAppeared` | Pass | M5 |
 | RSZ-028 | P0 | PNG alpha kept; JPEG flattened on a background | RSZ-01, RSZ-06 | `imageresizer.TestAcceptanceR11PNGAlpha`, `encode.TestJPEGFlattensTransparencyAgainstTheBackground` | Pass |  |
 | RSZ-029 | P0 | JPEG quality 1-100, default 90 | RSZ-01, RSZ-05, RSZ-06 | `imageresizer.TestResizeOptionsValidateBoundaries`, `encode.TestJPEGUsesTheQuality` | Pass |  |
-| RSZ-030 | P0 | Creates the folder and reports write failures | RSZ-05, RSZ-06, QLT-03C | `output.TestPrepareCreatesTheOutputFolder`, `output.TestWriteReportsWriteFailures` | Pass | M11 |
+| RSZ-030 | P0 | Creates the folder and reports write failures | RSZ-05, RSZ-06, QLT-03C | `imageresizer/output.TestPrepareCreatesTheOutputFolder`, `imageresizer/output.TestWriteReportsWriteFailures` | Pass | M11 |
 | RSZ-040 | P0 | Start validates the whole job | RSZ-07, RSZ-08 | `imageresizer.TestNativeViewRefusesJobsThatCannotStart`, `job.TestRunFailsAnInvalidJobBeforeAnything` | Pass |  |
 | RSZ-041 | P0 | GUI stays responsive | RSZ-07, RSZ-08 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | Pass | M12 |
 | RSZ-042 | P0 | Progress counts and current file | RSZ-07, RSZ-08 | `imageresizer.TestProgressMessageNamesTheCurrentFile`, `imageresizer.TestNativeViewResizesEveryReadyImageEndToEnd` | Pass |  |
@@ -182,16 +182,16 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 | NFR-004 | P1 | Arm and 32-bit are not targets | QLT-04 | [platform record](platform-verification.md) | Pass |  |
 | NFR-010 | P1 | Launch within 2 s | QLT-04, QLT-04A | `app.BenchmarkWarmLaunchToResponsiveMainWindow`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
 | NFR-011 | P1 | Overlay within 300 ms | SCR-11, QLT-04, QLT-04A | `overlay.BenchmarkOverlayAppearFreeRectangle`, `overlay.BenchmarkOverlayAppearPresetRectangle`, [platform record](platform-verification.md) | **Partial** | QLT-04A: **missed** in 2 of 6 batches under x64 emulation; x64 hardware not measured |
-| NFR-012 | P1 | 4K capture to clipboard within 1 s | SCR-11, QLT-04, QLT-04A | `capture.BenchmarkCaptureRectVirtualDesktop`, `output.BenchmarkSetClipboardImage4K`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
+| NFR-012 | P1 | 4K capture to clipboard within 1 s | SCR-11, QLT-04, QLT-04A | `capture.BenchmarkCaptureRectVirtualDesktop`, `screenshot/output.BenchmarkSetClipboardImage4K`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
 | NFR-013 | P1 | 100 12 MP JPEGs within 2 minutes | RSZ-09, QLT-04, QLT-04A | `job.BenchmarkRun100Mixed12MegapixelJPEGsFit1024`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
 | NFR-014 | P0 | Bounded batch memory | RSZ-07, RSZ-09, QLT-04 | `job.TestRunBoundsWorkersAndMemory`, `job.BenchmarkRun100Mixed12MegapixelJPEGsFit1024` | Pass |  |
-| NFR-020 | P0 | Sources never silently modified | RSZ-05, QLT-02, QLT-03D | `imageresizer.TestAcceptanceR07OriginalsPreserved`, `output.TestPrepareNeverOverwritesASource` | Pass |  |
+| NFR-020 | P0 | Sources never silently modified | RSZ-05, QLT-02, QLT-03D | `imageresizer.TestAcceptanceR07OriginalsPreserved`, `imageresizer/output.TestPrepareNeverOverwritesASource` | Pass |  |
 | NFR-021 | P0 | Item errors are contained | RSZ-07, QLT-02 | `job.TestRunIsolatesItemFailures`, `resize.TestResizeContainsASourcePanic` | Pass |  |
 | NFR-022 | P0 | Shutdown unregisters, closes, stops work | SCR-10, QLT-02 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestEndSessionSavesAndStopsWithoutAsking` | Pass | M4 |
-| NFR-023 | P0 | No partial files at final paths | RSZ-06, QLT-02, QLT-03A | `output.TestSaveEncodeFailureLeavesNoFiles`, `output.TestWriteRemovesTheTemporaryFileWhenEncodingFails` | Pass | M5 |
+| NFR-023 | P0 | No partial files at final paths | RSZ-06, QLT-02, QLT-03A | `screenshot/output.TestSaveEncodeFailureLeavesNoFiles`, `imageresizer/output.TestWriteRemovesTheTemporaryFileWhenEncodingFails` | Pass | M5 |
 | NFR-024 | P1 | Logs rotate | FND-04, QLT-02 | `diagnostics.TestLoggerRotatesStructuredEvents` | Pass |  |
 | NFR-030 | P0 | Works locally and offline | QLT-03 | `app.TestCoreWorkflowsRunOffline`, `audit.TestExecutableContainsNoNetworkCode` | Pass | M6 |
-| NFR-031 | P0 | No account, telemetry, or upload | QLT-03 | `audit.TestApplicationLinksNoNetworkPackages`, `output.TestSetClipboardImageOptsOutOfCloudUploadOnly` | Pass | M7 |
+| NFR-031 | P0 | No account, telemetry, or upload | QLT-03 | `audit.TestApplicationLinksNoNetworkPackages`, `screenshot/output.TestSetClipboardImageOptsOutOfCloudUploadOnly` | Pass | M7 |
 | NFR-032 | P0 | Files only at user-selected and own paths | QLT-03, QLT-03B, QLT-03C | `audit.TestFileChangesStayAtReviewedSites`, `app.TestCoreWorkflowsRunOffline` | Pass |  |
 | NFR-033 | P0 | Dependencies inventoried and licenses reviewed | QLT-03 | `audit.TestDependenciesAreInventoried`, `release.TestNoticesCarryTheLinkedLicenses` | Pass | M13 |
 
@@ -207,7 +207,7 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 | TECH-006 | P0 | Bounded, cancellation-aware concurrency | RSZ-07 | `job.TestRunBoundsWorkersAndMemory`, `job.TestRunCancellationKeepsCompletedResults` | Pass |  |
 | TECH-007 | P0 | Verified, maintained dependencies | FND-01, QLT-03 | `audit.TestDependenciesAreInventoried`, [privacy record](privacy-verification.md) | Pass | M13 |
 | TECH-008 | P0 | Documented, versioned settings format | FND-04 | `settings.TestStoreMigrationFixture`, `app.TestOpenSessionUpgradesEverySettingsFormat` | Pass |  |
-| TECH-009 | P0 | Automated test coverage | FND-02, SCR-11, RSZ-09, REL-02 | `preset.TestValidationBoundaries`, `resize.TestPlanFitProperties`, `output.TestPrepareNeverOverwritesASource`, `settings.TestStoreMigrationFixture`, `job.TestRunIsolatesItemFailures`, `capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` | **Partial** | QLT-04A: mixed-DPI capture has not run |
+| TECH-009 | P0 | Automated test coverage | FND-02, SCR-11, RSZ-09, REL-02 | `preset.TestValidationBoundaries`, `resize.TestPlanFitProperties`, `imageresizer/output.TestPrepareNeverOverwritesASource`, `settings.TestStoreMigrationFixture`, `job.TestRunIsolatesItemFailures`, `capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` | **Partial** | QLT-04A: mixed-DPI capture has not run |
 | TECH-010 | P1 | Executable needs no Go toolchain | FND-02, REL-01 | `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, [ADR-0002](adr/0002-product-identity-and-distribution.md) | Pass | M1 |
 
 ## Screenshot acceptance
@@ -216,14 +216,14 @@ The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-
 |---|---|---|---|---|---|---|
 | AC-S01 | — | Exact preset at standard scaling | SCR-11 | `overlay.TestPresetFrameCaptureDeliversExactRect`, `capture.TestCaptureRectDimensionsAndContent` | Pass |  |
 | AC-S02 | — | Exact preset at mixed DPI | SCR-11, QLT-04A | `capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries`, `display.TestLogicalPhysicalConversion` | **Partial** | QLT-04A: mixed scaling, live |
-| AC-S03 | — | Click-through interaction | SCR-11 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass | M9 |
+| AC-S03 | — | Click-through interaction | SCR-11 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
 | AC-S04 | — | Precision placement | SCR-11 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameKeyboardNudges` | Pass |  |
 | AC-S05 | — | Free rectangle adjustment | SCR-11 | `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestOverlayMoveAndResizeAdjustSelection` | Pass |  |
 | AC-S06 | — | Full secondary display | SCR-11 | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | Pass |  |
 | AC-S07 | — | Cancellation | SCR-11 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |
-| AC-S08 | — | Clipboard success with save failure | SCR-11 | `output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes` | Pass |  |
-| AC-S09 | — | Save success with clipboard failure | SCR-11 | `output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes` | Pass |  |
-| AC-S10 | — | Filename collision | SCR-11 | `output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
+| AC-S08 | — | Clipboard success with save failure | SCR-11 | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes` | Pass |  |
+| AC-S09 | — | Save success with clipboard failure | SCR-11 | `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes` | Pass |  |
+| AC-S10 | — | Filename collision | SCR-11 | `screenshot/output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
 | AC-S11 | — | Shortcut conflict | SCR-11 | `screenshot.TestHotkeyConflictKeepsPreviousRegistration`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut` | Pass |  |
 | AC-S12 | — | Monitor removal | SCR-11, QLT-04A | `overlay.TestDisplayChangeEndsSessionThatCannotFit`, `screenshot.TestNativeViewDisplayChangeEndsStaleSession` | **Partial** | QLT-04A: a live disconnect |
 

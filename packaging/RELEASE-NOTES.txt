@@ -55,8 +55,16 @@ These have not been run, so this version makes no claim about them:
   rotated displays, and unplugging a display during a selection. Automated checks
   cover the calculations, but none of these has run on real displays.
 - A clean machine, a real screen reader, the contrast themes switched on, a real
-  sign-out during a job, FAT32 or exFAT drives, and a run with network adapters
-  off.
+  sign-out during a job, and a run with network adapters off.
+- Saving to FAT32 or exFAT drives, network shares, OneDrive folders, or a drive
+  that fills up.
+- Real clipboard sync with a signed-in account, and pasting a capture into Paint
+  or an Office application.
+- The global shortcut pressed while another application has the focus, and real
+  clicks through a preset frame into a running application.
+- Dragging the window with the mouse during a job.
+- The vulnerability scan of this exact build, and the validation workflow on
+  hosted x64 Windows runners.
 
 Known issues
 

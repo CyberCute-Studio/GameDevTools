@@ -41,7 +41,9 @@ Only one copy runs at a time. Starting it again brings the open window forward.
 
 Closing the window exits the application, because it has no tray icon. The
 global shortcut works only while the application is running, so minimize the
-window instead of closing it if you want to keep using the shortcut.
+window instead of closing it if you want to keep using the shortcut. A capture
+reports its result only in the Screenshot view, so check there afterwards: see
+section 10.
 
 
 2. The main window
@@ -61,7 +63,7 @@ undone, such as deleting a preset or replacing files.
 3. Screenshot
 -------------
 
-Choose a capture mode, then press Start Capture. The main window hides so that
+Choose a Capture mode, then press Start Capture. The main window hides so that
 it cannot appear in the image, and comes back when the capture ends.
 
   Free Rectangle    Draw any rectangle on the screen.
@@ -99,8 +101,8 @@ Preset Rectangle
     preset does not change.
   - Press Capture, or Cancel or Escape to stop.
 
-  If you clicked in another application and need the toolbar again, press the
-  global shortcut or use Alt+Tab.
+  If you clicked in another application and need the toolbar again, click the
+  toolbar or press the global shortcut. Alt+Tab does not list the toolbar.
 
   A preset larger than your whole desktop is refused before the frame opens. A
   frame larger than one display is fine as long as it fits the whole desktop.
@@ -122,8 +124,9 @@ What a capture gives you
     (Win+V) and are marked so that Windows clipboard sync does not upload them.
     A third-party clipboard manager may ignore that mark.
   - The file is saved in the Output folder, by default
-    Pictures\CyberCute Dev Tools\Screenshots, as PNG or JPEG. JPEG quality runs
-    from 1 to 100 and defaults to 90.
+    Pictures\CyberCute Dev Tools\Screenshots, as the PNG or JPEG chosen under
+    Save format. PNG is the default. JPEG quality runs from 1 to 100 and
+    defaults to 90.
   - Open Folder shows the saved file in File Explorer.
   - The mouse pointer, frame, toolbar, and dimming are never in the image.
   - Cancelling creates no file and leaves the clipboard as it was.
@@ -155,23 +158,25 @@ instead of starting a second selection.
 ----------------
 
 1. Add images. Press Add Images, or drop files or a folder anywhere on the view.
-   A dropped folder adds the PNG and JPEG files directly inside it, but not
-   those in its subfolders. Adding the same file twice has no effect.
+   A dropped folder adds the files directly inside it that end in .png, .jpg, or
+   .jpeg, but not those in its subfolders. Adding the same file twice has no
+   effect.
 
-2. Review the list. Each row shows the file's name, its upright size once
-   checked, and its status. Select a row to see its full path and details.
-   Remove Selected and Clear List change the list, never the files.
+2. Review the Source images list. Each row shows the file's name, its upright
+   size once checked, and its status. Select a row to see its Full path and
+   details. Remove Selected and Clear List change the list, never the files.
 
      Ready                  The image can be resized.
      Checking               Its content is still being checked.
-     Unsupported format     It is not a PNG or JPEG, whatever its extension.
+     Unsupported format     Its name does not end in .png, .jpg, or .jpeg, or
+                            its content is not a PNG or JPEG that can be read.
      Damaged or incomplete  Its data cannot be decoded.
      Cannot be read         It could not be opened.
      Too large              It would need more than 1 GiB of memory to decode.
 
    A file that cannot be used stays listed and never stops the others.
 
-3. Choose a preset and its fitting mode. The view explains the selected mode.
+3. Choose a preset and its Fitting mode. The view explains the selected mode.
    For a 1000 x 500 image and a 512 x 512 preset:
 
      Fit           512 x 256. The whole image, proportions kept, no padding.
@@ -234,7 +239,9 @@ under "When an output file already exists" decides what happens:
                     alone.
 
   Overwrite         The existing file is replaced, but only after you confirm
-                    for this job.
+                    for this job. A read-only file, or one another program is
+                    holding open, is not replaced: the image ends Failed and
+                    the file stays as it was.
 
 A source image is never overwritten, under any setting. Under Overwrite, the
 result is saved under a numbered name instead when the existing item is a source
@@ -346,6 +353,10 @@ Capture
   in color or sharpness between displays are not corrected.
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
+- A capture's result, including a failed save, appears only in the Screenshot
+  view. While the window is minimized or shows another tool, nothing tells you
+  that a capture from the global shortcut was not saved, so check the Screenshot
+  view afterwards.
 
 Image Resizer
 
@@ -406,25 +417,34 @@ The capture was copied but not saved, or saved but not copied.
   folder with Browse.
 
 An image shows Damaged or incomplete, Unsupported format, or Too large.
-  Select its row to see why. Re-export the image as a standard PNG or JPEG, or at
-  a smaller size. The other images are not affected.
+  Select its row to see why. If a real PNG or JPEG has another extension, such
+  as .jfif, rename it to end in .png or .jpg. Otherwise re-export the image as a
+  standard PNG or JPEG, or at a smaller size. The other images are not affected.
 
 An image ended Failed.
   Select its row. The details give the error's kind and what to do, such as
-  freeing drive space or choosing a folder you may write to. Run the job again.
+  freeing drive space or choosing a folder you may write to. Under Overwrite,
+  the existing file may be read-only or open in another program: clear its
+  Read-only property or close the program. Run the job again.
 
 My results have names like photo_2.png.
   A file with that name already existed. Selecting the row tells you why. Empty
   the output folder or choose another one for clean names.
 
 There are .gamedevtools-*.tmp files in my output folder.
-  The application was stopped while saving. Such a file holds at most one
-  unfinished result and is safe to delete.
+  The application was stopped while saving. Such a file holds one result, which
+  may be complete or unfinished. If a .gamedevtools-replaced-* file is beside
+  it, follow the next entry first. If the image is missing and you cannot make
+  it again, copy this file, give the copy a .png or .jpg extension, and open it
+  to check it. Otherwise it is safe to delete.
 
 There is a .gamedevtools-replaced-* file in my output folder.
-  It holds the file an Overwrite was replacing when it was interrupted or could
-  not finish deleting it. Give it another name if you want to keep it, or delete
-  it.
+  It is the existing file an Overwrite was replacing when it was interrupted or
+  could not finish deleting it. Do not delete it yet. If an image that should be
+  in this folder is missing, this may be its previous version: open it to check,
+  then rename it to the missing name, or run the job again. Once the image is
+  there, keep this file under another name if you want the old version, or
+  delete it.
 
 A warning says my settings were invalid.
   The original file was backed up as settings.json.corrupt-<timestamp> in the

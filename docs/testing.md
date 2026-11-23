@@ -17,14 +17,14 @@ go fmt ./...
 go vet ./...
 go test -count=1 ./...
 ./scripts/package.ps1
-./scripts/verify-package.ps1 -Package bin/release/cybercute-dev-tools-1.0.0-windows-x64.zip
+./scripts/verify-package.ps1 -Package (Get-ChildItem bin/release/*.zip).FullName
 ```
 
-`go fmt` must change nothing. `verify-package.ps1` needs the application closed. It checks the ZIP's checksum, contents, x64 architecture, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade. CI also fails a release executable built with any toolchain other than the one `go.mod` pins.
+`go fmt` must change nothing. The last command expects one ZIP in `bin/release`, so delete any from an earlier version first. `verify-package.ps1` needs the application closed. It checks the ZIP's checksum, contents, x64 architecture, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade. CI also fails a release executable built with any toolchain other than the one `go.mod` pins.
 
 `go test -race` is not available on Windows on Arm, the development machine's platform.
 
-`go test ./internal/release` includes the documentation checks. They fail when the traceability matrix misses a requirement or names a test that does not exist, when a row that depends on an open hardware run claims to pass, when the user guide stops naming one of the application's controls, or when the release notes name another version.
+`go test ./internal/release` includes the documentation checks. They fail when the traceability matrix misses a requirement or names a test that does not exist, when a row that waits on an open hardware run or manual check claims to pass, when its lists of blockers disagree with its rows, when the user guide stops naming one of the application's controls, or when the release notes name another version.
 
 ## The full validation run
 
@@ -56,7 +56,7 @@ QLT-04A owns what needs hardware this project's environment does not have: x64 W
 
 ## Manual pre-release checks
 
-No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate.
+No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, and M10 are the only runs of part of what their requirements say, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. The other checks add confidence to requirements the automated checks already cover.
 
 | Check | What to do | Passes when | Covers |
 |---|---|---|---|

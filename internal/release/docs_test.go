@@ -19,16 +19,26 @@ var (
 	prdScenario     = regexp.MustCompile(`(?m)^\*\*(AC-[SRA]\d+) `)
 	traceabilityRow = regexp.MustCompile(`^\| ((?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+) \|`)
 	planItem        = regexp.MustCompile(`(?m)^\d+\. \*\*([A-Z]+-\d+[A-Z]?) — `)
-	evidenceTest    = regexp.MustCompile("`([a-z]+)\\.((?:Test|Benchmark)\\w+)`")
+	evidenceToken   = regexp.MustCompile("`([^`]+)`")
 	testFunction    = regexp.MustCompile(`(?m)^func ((?:Test|Benchmark)\w+)\(`)
 	manualCheck     = regexp.MustCompile(`\bM\d+\b`)
 	manualCheckRow  = regexp.MustCompile(`^\| (M\d+) \|`)
 	requirementID   = regexp.MustCompile(`(?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+`)
 )
 
-// hardwareGated are the requirements the platform record says QLT-04A must
-// finish, which no row may call complete before that item is Done.
-var hardwareGated = []string{"NFR-001", "NFR-003", "NFR-011", "SCR-042", "AC-S02", "AC-S12"}
+// hardwareGated are the requirements that wait on QLT-04A's hardware, which
+// no row may call complete before that item is Done. It is written out rather
+// than read from the Open column, so that clearing a row's Open cell cannot
+// remove its guard.
+var hardwareGated = []string{
+	"SCR-020", "SCR-026", "SCR-028", "SCR-042", "SCR-043", "SCR-054",
+	"NFR-001", "NFR-003", "NFR-010", "NFR-011", "NFR-012", "NFR-013",
+	"TECH-002", "TECH-003", "TECH-009", "AC-S02", "AC-S12",
+}
+
+// manualGated are the requirements whose defining condition only a manual
+// check exercises, in a real application: M8, M9, and M10, which REL-03 owns.
+var manualGated = []string{"SCR-002", "SCR-021", "SCR-022", "SCR-055", "SCR-062", "AC-S03"}
 
 type traceRow struct {
 	id, priority, items, evidence, status, open string
@@ -53,11 +63,12 @@ func readTraceability(t *testing.T) []traceRow {
 	return rows
 }
 
-// repositoryTests returns every test and benchmark as package.Name, the form
-// the verification records use, where the package is its folder's name.
+// repositoryTests returns every test and benchmark as package.Name, where the
+// package is its folder's name, or parent/folder for the packages that share a
+// folder name, so that a row cannot cite one package's test for another.
 func repositoryTests(t *testing.T) map[string]bool {
 	t.Helper()
-	found := map[string]bool{}
+	byFolder := map[string][]string{}
 	for _, top := range []string{"internal", "cmd"} {
 		root := filepath.Join("..", "..", top)
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -68,14 +79,28 @@ func repositoryTests(t *testing.T) map[string]bool {
 			if err != nil {
 				return err
 			}
-			folder := filepath.Base(filepath.Dir(path))
+			folder := filepath.Dir(path)
 			for _, match := range testFunction.FindAllSubmatch(data, -1) {
-				found[folder+"."+string(match[1])] = true
+				byFolder[folder] = append(byFolder[folder], string(match[1]))
 			}
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+	uses := map[string]int{}
+	for folder := range byFolder {
+		uses[filepath.Base(folder)]++
+	}
+	found := map[string]bool{}
+	for folder, names := range byFolder {
+		name := filepath.Base(folder)
+		if uses[name] > 1 {
+			name = filepath.Base(filepath.Dir(folder)) + "/" + name
+		}
+		for _, test := range names {
+			found[name+"."+test] = true
 		}
 	}
 	return found
@@ -134,8 +159,16 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 			t.Errorf("%s has status %q", row.id, row.status)
 		}
 		counts[kind] = tally
-		if strings.Contains(row.open, "QLT-04A") && row.status != "**Partial**" {
-			t.Errorf("%s waits on QLT-04A but is not Partial", row.id)
+		if strings.Contains(row.open, "QLT-04A") {
+			if row.status != "**Partial**" {
+				t.Errorf("%s waits on QLT-04A but is not Partial", row.id)
+			}
+			if !slices.Contains(hardwareGated, row.id) {
+				t.Errorf("%s waits on QLT-04A but is not in hardwareGated", row.id)
+			}
+		}
+		if row.status == "**Partial**" && row.open == "" {
+			t.Errorf("%s is Partial but its Open cell does not say what remains", row.id)
 		}
 		if row.items == "" {
 			t.Errorf("%s names no plan item", row.id)
@@ -148,9 +181,9 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 		if row.evidence == "" {
 			t.Errorf("%s has no evidence", row.id)
 		}
-		for _, match := range evidenceTest.FindAllStringSubmatch(row.evidence, -1) {
-			if name := match[1] + "." + match[2]; !tests[name] {
-				t.Errorf("%s names %s, which does not exist", row.id, name)
+		for _, match := range evidenceToken.FindAllStringSubmatch(row.evidence, -1) {
+			if !tests[match[1]] {
+				t.Errorf("%s names %s, which does not exist", row.id, match[1])
 			}
 		}
 	}
@@ -175,15 +208,53 @@ func TestTraceabilityCoversEveryRequirement(t *testing.T) {
 		t.Errorf("the summary has no line %q", line)
 	}
 
-	if !planItemDone(t, plan, "QLT-04A") {
-		for _, id := range hardwareGated {
+	for _, gate := range []struct {
+		item string
+		ids  []string
+	}{{"QLT-04A", hardwareGated}, {"REL-03", manualGated}} {
+		if planItemDone(t, plan, gate.item) {
+			continue
+		}
+		for _, id := range gate.ids {
 			if seen[id].status != "**Partial**" {
-				t.Errorf("%s must stay Partial until QLT-04A is Done", id)
+				t.Errorf("%s must stay Partial until %s is Done", id, gate.item)
 			}
 		}
 	}
+	required := regexp.MustCompile(`\*\*QLT-04A — [^\n]*\n[^\n]*\n\s+- \*\*Requirements:\*\* ([^\n]*)`).FindStringSubmatch(plan)
+	if required == nil {
+		t.Fatal("the plan lists no requirements for QLT-04A")
+	}
+	for _, id := range requirementID.FindAllString(required[1], -1) {
+		if !slices.Contains(hardwareGated, id) {
+			t.Errorf("QLT-04A requires %s, which is not in hardwareGated", id)
+		}
+	}
 
+	checkBlockerLists(t, matrix, rows)
 	checkManualChecks(t, rows)
+}
+
+// checkBlockerLists holds the matrix's named lists of Partial requirements to
+// its rows, in row order.
+func checkBlockerLists(t *testing.T, matrix string, rows []traceRow) {
+	t.Helper()
+	var blockers, deferrable []string
+	for _, row := range rows {
+		switch {
+		case row.status != "**Partial**":
+		case row.priority == "P1":
+			deferrable = append(deferrable, row.id)
+		default:
+			blockers = append(blockers, row.id)
+		}
+	}
+	if line := "\n" + strings.Join(blockers, ", ") + ".\n"; !strings.Contains(matrix, line) {
+		t.Errorf("the list of release blockers is not %q", strings.TrimSpace(line))
+	}
+	if line := "The Partial P1 requirements are " + strings.Join(deferrable, ", ") + "."; !strings.Contains(matrix, line) {
+		t.Errorf("the summary has no line %q", line)
+	}
 }
 
 // planItemDone reads an item's status from the plan.
@@ -245,16 +316,48 @@ func label(text string) string {
 	return text
 }
 
+// takeLabel reports whether text names the label as whole words, and returns
+// text without those mentions, so that a shorter label cannot be satisfied by
+// a longer one that contains it, as Capture is by Start Capture.
+func takeLabel(text, name string) (string, bool) {
+	isWord := func(b byte) bool {
+		return b == '_' || b >= '0' && b <= '9' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+	}
+	var kept strings.Builder
+	last, found := 0, false
+	for start := 0; ; {
+		at := strings.Index(text[start:], name)
+		if at < 0 {
+			break
+		}
+		at += start
+		end := at + len(name)
+		start = end
+		if (at > 0 && isWord(text[at-1])) || (end < len(text) && isWord(text[end])) {
+			continue
+		}
+		kept.WriteString(text[last:at])
+		kept.WriteByte(0)
+		last, found = end, true
+	}
+	kept.WriteString(text[last:])
+	return kept.String(), found
+}
+
 // TestUserGuideNamesTheApplicationsControls fails when a control or status is
 // renamed and the packaged guide still calls it by its old name.
 func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 	guide := strings.Join(strings.Fields(string(repositoryFile(t, "packaging", "USER-GUIDE.txt"))), " ")
-	for _, text := range []string{
+	texts := []string{
 		ui.ScreenshotNavigation, ui.ImageResizerNavigation, ui.SettingsNavigation,
-		ui.StartCaptureAction, ui.CaptureAction, ui.CancelAction, ui.OpenFolderAction,
+		// Capture is also a heading, so only the instruction to press it counts.
+		ui.StartCaptureAction, "Press " + ui.CaptureAction, ui.CancelAction, ui.OpenFolderAction,
+		ui.CaptureModeLabel, ui.OutputFormatLabel, ui.BrowseFolderAction,
 		ui.CaptureModeFreeRectangle, ui.CaptureModePresetRectangle, ui.CaptureModeFullDisplay,
 		ui.DisplayLabel, ui.GlobalShortcutLabel, ui.OutputFolderLabel, ui.JPEGQualityLabel,
 		ui.SelectionWidthLabel, ui.SelectionHeightLabel,
+		ui.SourceImagesLabel, ui.SourcePathLabel,
+		ui.PresetNameLabel, ui.PresetWidthLabel, ui.PresetHeightLabel, ui.PresetResizeModeLabel,
 		ui.AddImagesAction, ui.RemoveSelectedAction, ui.ClearListAction,
 		ui.StartResizeAction, ui.CancelResizeAction, ui.OpenOutputFolderAction,
 		ui.SourceStatusReady, ui.SourceStatusChecking, ui.SourceStatusUnsupported,
@@ -268,9 +371,23 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		ui.PresetDuplicateAction, ui.PresetDeleteAction,
 		ui.RestoreDefaultsAction,
 		screenshot.DefaultShortcut().String(),
-	} {
-		if name := label(text); !strings.Contains(guide, name) {
-			t.Errorf("USER-GUIDE.txt does not mention %q", name)
+	}
+	names := make([]string, 0, len(texts))
+	for _, text := range texts {
+		names = append(names, label(text))
+	}
+	// Longest first, so each label's mentions are taken before those of any
+	// shorter label inside it.
+	slices.SortFunc(names, func(a, b string) int {
+		if len(a) != len(b) {
+			return len(b) - len(a)
+		}
+		return strings.Compare(a, b)
+	})
+	for _, name := range slices.Compact(names) {
+		var found bool
+		if guide, found = takeLabel(guide, name); !found {
+			t.Errorf("USER-GUIDE.txt does not mention %q on its own", name)
 		}
 	}
 }
