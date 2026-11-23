@@ -413,6 +413,25 @@ func TestUnchangedDesktopRecoversAToolbarNoDisplayShows(t *testing.T) {
 	if got := windowRect(t, native.toolbar); got.Left != wantX || got.Top != wantY {
 		t.Fatalf("toolbar at (%d, %d), want it back at (%d, %d)", got.Left, got.Top, wantX, wantY)
 	}
+
+	// Two pixels left on the rightmost display cannot be reached either.
+	displays, err := native.monitor.Displays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightmost := displays[0].WorkArea
+	for _, item := range displays {
+		if item.WorkArea.Right > rightmost.Right {
+			rightmost = item.WorkArea
+		}
+	}
+	moveToolbar(rightmost.Right-2, rightmost.Top)
+	if !native.DisplayChanged(native.bounds) {
+		t.Fatal("the session did not survive an unchanged desktop")
+	}
+	if got := windowRect(t, native.toolbar); got.Left != wantX || got.Top != wantY {
+		t.Fatalf("toolbar with a sliver in view at (%d, %d), want it back at (%d, %d)", got.Left, got.Top, wantX, wantY)
+	}
 }
 
 // TestCancelCommitsNoTypedSize pins that ending a session commits nothing

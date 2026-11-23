@@ -4,6 +4,7 @@ package screenshot
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -328,10 +329,10 @@ func TestRegisteredShortcutWithdrawsTheStartupConflict(t *testing.T) {
 	}
 }
 
-// TestStatusRowKeepsItsTextAndButtonsInANarrowWidth covers the widths where
-// the two buttons leave the text no room: at 96 DPI a window 524 to 590 pixels
-// wide, or a half-screen window at higher scaling.
-func TestStatusRowKeepsItsTextAndButtonsInANarrowWidth(t *testing.T) {
+// TestStatusRowGivesItsTextTheWholeWidth covers the widths from a narrow window
+// to a half-screen and a default one: a saved path has no spaces to wrap at, so
+// width the buttons took from the text cut off the file's name.
+func TestStatusRowGivesItsTextTheWholeWidth(t *testing.T) {
 	view, _, _ := newCardTestView(t)
 	scale := func(value int32) int32 { return value }
 	measure := func(string, int32) int32 { return 20 }
@@ -342,7 +343,7 @@ func TestStatusRowKeepsItsTextAndButtonsInANarrowWidth(t *testing.T) {
 		return r
 	}
 	const x = 8
-	for _, width := range []int32{210, 272, 459} {
+	for _, width := range []int32{210, 272, 459, 460, 630, 770} {
 		view.NativeLayout(x, 0, width, scale, measure)
 		status, dismiss, folder := bounds(view.status.Handle()), bounds(view.dismissProblem.Handle()), bounds(view.openFolder.Handle())
 		if status.Right-status.Left != width {
@@ -359,12 +360,81 @@ func TestStatusRowKeepsItsTextAndButtonsInANarrowWidth(t *testing.T) {
 			t.Errorf("width %d: the section is %d tall and its buttons end at %d", width, height, folder.Bottom)
 		}
 	}
+}
 
-	view.NativeLayout(x, 0, 460, scale, measure)
-	status, folder := bounds(view.status.Handle()), bounds(view.openFolder.Handle())
-	if status.Right > bounds(view.dismissProblem.Handle()).Left || folder.Top >= status.Bottom {
-		t.Fatalf("a width that holds the row stacked it: status %+v, folder %+v", status, folder)
+// TestOutcomeAsksTheDesktopOnce is a window moving off the status area between
+// two looks: a result written quietly for the card must then reach the card.
+func TestOutcomeAsksTheDesktopOnce(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	showViewOffScreen(t, view)
+	view.fromShortcut, view.watched = true, true
+	other := newViewTestParent(t)
+	asked := 0
+	view.windowAtPoint = func(int32, int32) uintptr {
+		asked++
+		if asked == 1 {
+			return uintptr(other)
+		}
+		return uintptr(view.status.Handle())
 	}
+	view.finishCapture(CaptureResult{Save: errors.New("access denied")}, displayCaptureMessages)
+	if len(card.reports) != 1 {
+		t.Fatalf("a result written quietly did not reach the card: %+v", card.reports)
+	}
+}
+
+// TestFailedDisplayEnumerationIsAnnouncedOnce is a shortcut capture whose
+// display list fails with the view visible beside another application: the
+// card announces the failure and the status area does not repeat it.
+func TestFailedDisplayEnumerationIsAnnouncedOnce(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	showViewOffScreen(t, view)
+	view.foregroundWindow = func() windows.Handle { return 0 }
+	view.listDisplays = func() ([]display.Display, error) { return nil, errors.New("enumeration failed") }
+	watch, err := uiatest.WatchAnnouncements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(watch.Stop)
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 1 || !strings.Contains(view.status.Text(), "enumeration failed") {
+		t.Fatalf("card = %+v, status = %q", card.reports, view.status.Text())
+	}
+	if got := watch.Count(view.status.Handle()); got != 0 {
+		t.Fatalf("status announcements beside the card = %d, want 0", got)
+	}
+}
+
+// TestUnsavedQualityWarningJoinsTheCardAfterItIsHidden is a quality that cannot
+// be saved as a shortcut capture starts. Reported first, the warning would be
+// announced on a card hidden at once, and a capture ending with no result of
+// its own would not announce it again.
+func TestUnsavedQualityWarningJoinsTheCardAfterItIsHidden(t *testing.T) {
+	parent := newViewTestParent(t)
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := settings.NewStore(settings.Paths{ConfigFile: filepath.Join(blocker, "settings.json")})
+	preset.RegisterValidators(store)
+	value := settings.Default()
+	view := newNativeViewForTest(t, store, &value, testFolder(t), parent)
+	dispatcher := &queuedDispatcher{tasks: make(chan func(), 4)}
+	view.NativeDispatcher(dispatcher)
+	card := view.card.(*fakeResultCard)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.capture = func(CaptureRequest) CaptureResult { return CaptureResult{Path: `C:\Shots\one.png`} }
+	view.quality.Edit.SetText("55")
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 1 || !card.reports[0].Setting || card.reports[0].Notice.Kind != ui.NoticeWarning {
+		t.Fatalf("card = %+v", card.reports)
+	}
+	if !card.settingSuspended {
+		t.Fatal("the warning reached the card before the capture hid it")
+	}
+	dispatcher.runNext(t)
 }
 
 func TestCaptureNoticeReportsASavedImageWithALeftoverNameAsSaved(t *testing.T) {
@@ -598,5 +668,9 @@ func TestDismissProblemButtonFollowsTheCard(t *testing.T) {
 	}
 	if view.dismissProblem.HasFocus() {
 		t.Fatal("the focus was left on a button that has gone")
+	}
+	// A Space pressed once too often must not reach a control that acts on it.
+	if !view.folder.HasFocus() {
+		t.Fatal("the focus did not move to the read-only output folder field")
 	}
 }

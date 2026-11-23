@@ -110,6 +110,9 @@ type fakeResultCard struct {
 	moves     int
 	destroyed bool
 	changed   func(int)
+	// settingSuspended is whether the last ReportSetting found the card
+	// suspended.
+	settingSuspended bool
 }
 
 func (f *fakeResultCard) Report(notice ui.Notice, path string) {
@@ -118,6 +121,7 @@ func (f *fakeResultCard) Report(notice ui.Notice, path string) {
 }
 func (f *fakeResultCard) ReportSetting(notice ui.Notice) {
 	f.reports = append(f.reports, ui.CardEntry{Notice: notice, Setting: true})
+	f.settingSuspended = f.suspended
 	f.tell()
 }
 func (f *fakeResultCard) WithdrawSettings() {
@@ -399,9 +403,10 @@ func TestNativeViewLayoutStacksRadiosAndExpandsForMessages(t *testing.T) {
 
 	narrow := view.NativeHeight(400, scale, measure)
 	wide := view.NativeHeight(600, scale, measure)
-	// Two more radio rows, and the status row's buttons below its text.
-	if narrow != wide+52+36 {
-		t.Fatalf("a narrow width should add two radio rows and a button row: narrow = %d, wide = %d", narrow, wide)
+	// Two more radio rows; the status row's buttons are below its text at
+	// every width.
+	if narrow != wide+52 {
+		t.Fatalf("a narrow width should add two radio rows: narrow = %d, wide = %d", narrow, wide)
 	}
 
 	baseline := view.NativeHeight(600, scale, measure)

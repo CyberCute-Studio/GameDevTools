@@ -892,7 +892,7 @@ func (s *windowsSession) restoreFocus() {
 // notification whose physical topology, cursor-display scaling, and anchor
 // work area all match the session's current measurements changes nothing the
 // surfaces show, so it is answered without re-rendering, though a display
-// inside the desktop's rectangle may have gone with the toolbar on it.
+// inside the desktop's rectangle may have gone with part of the toolbar on it.
 func (s *windowsSession) DisplayChanged(bounds display.Rect) bool {
 	selection, ok := revalidatedSelection(s.selection, bounds)
 	if !ok {
@@ -1368,8 +1368,8 @@ func (s *windowsSession) toolbarPosition() (x, y int32) {
 	return reachableToolbarPlacement(workAreas, s.bounds, s.anchor, s.selection, s.toolbarSize.Width, s.toolbarSize.Height, s.margin)
 }
 
-// recoverToolbar places the toolbar again if no display shows any of it. One
-// that is still partly in view stays, as the user can drag it anywhere.
+// recoverToolbar places the toolbar again unless the displays show all of it,
+// as a sliver left on a neighboring display cannot be reached with the pointer.
 func (s *windowsSession) recoverToolbar() {
 	if s.monitor == nil {
 		return
@@ -1382,13 +1382,13 @@ func (s *windowsSession) recoverToolbar() {
 	if err != nil {
 		return
 	}
+	workAreas := make([]display.Rect, 0, len(displays))
 	for _, item := range displays {
-		area := item.WorkArea
-		if bounds.Left < area.Right && area.Left < bounds.Right && bounds.Top < area.Bottom && area.Top < bounds.Bottom {
-			return
-		}
+		workAreas = append(workAreas, item.WorkArea)
 	}
-	s.placeToolbar()
+	if !toolbarOnDisplays(workAreas, bounds.Left, bounds.Top, bounds.Right-bounds.Left, bounds.Bottom-bounds.Top) {
+		s.placeToolbar()
+	}
 }
 
 // syncDimensions mirrors the live selection dimensions into the toolbar's

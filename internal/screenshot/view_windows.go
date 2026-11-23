@@ -400,30 +400,33 @@ func (n *NativeView) cardNeeded() bool {
 // reportOutcome shows a capture's outcome in the status area and, where
 // cardNeeded says so, on the result card.
 func (n *NativeView) reportOutcome(notice ui.Notice, path string) {
-	n.showOutcome(notice)
-	if n.cardNeeded() {
+	if n.showOutcome(notice) {
 		n.card.Report(notice, path)
 	}
 }
 
-// showOutcome puts an outcome in the status area, quietly when the result card
-// is about to announce the same notice, which a screen reader would otherwise
-// read twice in a row.
-func (n *NativeView) showOutcome(notice ui.Notice) {
+// showOutcome puts an outcome in the status area and reports whether it also
+// goes on the result card. The desktop is asked once per outcome, as a window
+// moving between two looks would leave the result announced nowhere. A result
+// going on the card is written here quietly, as the card announces it and a
+// screen reader would otherwise read it twice in a row.
+func (n *NativeView) showOutcome(notice ui.Notice) bool {
 	if n.cardNeeded() {
 		n.status.Update(notice)
-		return
+		return true
 	}
 	_ = n.status.Show(notice, 0)
+	return false
 }
 
 // problemsChanged keeps the Dismiss Problem button in step with what a press
-// can dismiss on the card. A button about to disappear hands the focus on
-// rather than strand the keyboard.
+// can dismiss on the card. A button about to disappear hands the focus to the
+// read-only Output Folder field, where a Space pressed once too often does
+// nothing, as it would open the folder picker on Browse.
 func (n *NativeView) problemsChanged(problems int) {
 	n.cardProblems = problems
 	if problems == 0 && n.dismissProblem.HasFocus() {
-		n.browseButton.Focus()
+		n.folder.Focus()
 	}
 	n.dismissProblem.Enable(problems > 0)
 	n.dismissProblem.Show(n.shown && problems > 0)
@@ -537,17 +540,13 @@ func (n *NativeView) NativeLayout(x, y, width int32, scale func(int32) int32, me
 	n.patternLabel.Move(x, y, width, scale(20))
 	n.pattern.Move(x, y+scale(24), width, scale(20))
 	y += scale(24) + scale(20) + scale(12)
-	folderWidth, dismissWidth := scale(120), scale(statusDismissWidth)
-	n.status.Move(x, y, statusTextWidth(width, scale), statusHeight)
-	buttonY := y + (statusHeight-scale(28))/2
-	if stackedOptionsLayout(width, scale) {
-		buttonY = y + statusHeight + gap
-		folderWidth = min(folderWidth, max(int32(1), (width-gap)/2))
-		dismissWidth = min(dismissWidth, max(int32(1), width-folderWidth-gap))
-	}
+	n.status.Move(x, y, width, statusHeight)
+	buttonY := y + statusHeight + gap
+	folderWidth := min(scale(120), max(int32(1), (width-gap)/2))
+	dismissWidth := min(scale(statusDismissWidth), max(int32(1), width-folderWidth-gap))
 	n.dismissProblem.Move(x+width-folderWidth-gap-dismissWidth, buttonY, dismissWidth, scale(28))
 	n.openFolder.Move(x+width-folderWidth, buttonY, folderWidth, scale(28))
-	y += statusRowHeight(width, statusHeight, scale) + scale(16)
+	y += statusRowHeight(statusHeight, scale) + scale(16)
 	n.presets.NativeLayout(x, y, width, scale, measure)
 }
 
@@ -571,30 +570,20 @@ func (n *NativeView) optionsSectionHeight(width int32, scale func(int32) int32, 
 	height += shortcut.Height() + scale(12)
 	height += scale(24) + scale(28) + scale(12)
 	height += scale(24) + scale(20) + scale(12)
-	statusHeight := n.status.Height(statusTextWidth(width, scale), scale, measure)
-	return height + statusRowHeight(width, statusHeight, scale) + scale(16), quality, shortcut, statusHeight
+	statusHeight := n.status.Height(width, scale, measure)
+	return height + statusRowHeight(statusHeight, scale) + scale(16), quality, shortcut, statusHeight
 }
 
-// statusDismissWidth is the width at 96 DPI of the Dismiss Problem button. The
-// status row always keeps room for it, as a problem can reach the card with no
-// layout to follow.
+// statusDismissWidth is the width at 96 DPI of the Dismiss Problem button.
 const statusDismissWidth = 140
 
-// statusTextWidth is the width of the status text: beside its two buttons or,
-// in a width too narrow for that, the whole row, with the buttons below it.
-func statusTextWidth(width int32, scale func(int32) int32) int32 {
-	if stackedOptionsLayout(width, scale) {
-		return max(int32(1), width)
-	}
-	return width - scale(120) - scale(statusDismissWidth) - 2*scale(8)
-}
-
-// statusRowHeight is the height of the status text and its buttons.
-func statusRowHeight(width, textHeight int32, scale func(int32) int32) int32 {
-	if stackedOptionsLayout(width, scale) {
-		return textHeight + scale(8) + scale(28)
-	}
-	return textHeight
+// statusRowHeight is the height of the status text and the row of buttons
+// below it. The text has the content's whole width at every window size, as
+// it can hold a saved path with no spaces, which a static control cuts off
+// rather than wraps, and the row keeps room for Dismiss Problem, as a problem
+// can reach the card with no layout to follow.
+func statusRowHeight(textHeight int32, scale func(int32) int32) int32 {
+	return textHeight + scale(8) + scale(28)
 }
 
 func stackedOptionsLayout(width int32, scale func(int32) int32) bool {
@@ -806,13 +795,19 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	if quality != options.JPEGQuality {
 		if err := n.options.SetJPEGQuality(quality); err != nil {
 			notice := optionNotice(err, "")
-			n.showOutcome(notice)
+			onCard := n.showOutcome(notice)
 			n.optionsNotice = n.status.Revision()
-			if n.cardNeeded() {
-				n.card.ReportSetting(notice)
-			}
 			if !errors.Is(err, ErrPersistence) {
+				if onCard {
+					n.card.ReportSetting(notice)
+				}
 				return
+			}
+			// The capture goes on and hides the card, which would cut off this
+			// warning's announcement, so it joins the card after that, and a
+			// selection cancelled with no result of its own still announces it.
+			if onCard {
+				defer n.card.ReportSetting(notice)
 			}
 		}
 	}
@@ -827,8 +822,9 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	}
 	// A stale enumeration failure must not wedge capture: retry it here,
 	// the same way selectMode retries on mode selection, so a recovered
-	// display service works without the user toggling the capture mode.
-	n.refreshDisplays()
+	// display service works without the user toggling the capture mode. Its
+	// failure is reported once, by reportOutcome.
+	_ = n.reloadDisplays()
 	if n.displayErr != nil {
 		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}, "")
 		return
@@ -1069,26 +1065,31 @@ func (n *NativeView) selectMode(notification uint16, mode CaptureMode) {
 // refuses a capture until one succeeds (SCR-040). It runs on the GUI thread,
 // including from the display-change subscription.
 func (n *NativeView) refreshDisplays() {
+	// The picker is hidden outside Full Display mode, so a failure notice
+	// only makes sense there; NativeAction and selectMode surface displayErr
+	// when the mode is selected.
+	if err := n.reloadDisplays(); err != nil && n.options.Options().Mode == ModeFullDisplay {
+		_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
+	}
+}
+
+// reloadDisplays is refreshDisplays without its notice, returning a failed
+// enumeration for the caller to report.
+func (n *NativeView) reloadDisplays() error {
 	if n.displayCombo == nil {
-		return
+		return nil
 	}
 	previous := n.selectedDeviceName()
 	if n.displays == nil {
 		n.displayErr = errors.New(ui.DisplayServiceUnavailable)
 		n.displayList = nil
 		n.displayCombo.Reset()
-		return
+		return nil
 	}
 	displays, err := n.listDisplays()
 	if err != nil {
 		n.displayErr = err
-		// The picker is hidden outside Full Display mode, so a failure
-		// notice only makes sense there; NativeAction and selectMode
-		// surface displayErr when the mode is selected.
-		if n.options.Options().Mode == ModeFullDisplay {
-			_ = n.status.Show(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, err)}, 0)
-		}
-		return
+		return err
 	}
 	n.displayErr = nil
 	n.displayList = displays
@@ -1117,6 +1118,7 @@ func (n *NativeView) refreshDisplays() {
 		selected = 0
 	}
 	n.displayCombo.Select(selected)
+	return nil
 }
 
 func (n *NativeView) selectedDeviceName() string {
@@ -1337,9 +1339,9 @@ func optionNotice(err error, success string) ui.Notice {
 // default settings replaces what it refuses.
 func (n *NativeView) refuseOptions(err error) {
 	notice := ui.Notice{Kind: ui.NoticeError, Message: ui.FormatError(ui.ErrorValidation, err)}
-	n.showOutcome(notice)
+	onCard := n.showOutcome(notice)
 	n.optionsNotice = n.status.Revision()
-	if n.cardNeeded() {
+	if onCard {
 		n.card.ReportSetting(notice)
 	}
 }
