@@ -593,10 +593,13 @@ func (s *StatusArea) Revision() uint64 {
 // NewStatusArea creates the status area on a live label (NewLiveLabel), so
 // a screen reader announces every notice Show presents.
 func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
-	label, err := NewLiveLabel(parent, "")
+	// SS_EDITCONTROL breaks a token wider than the area, such as a saved path
+	// with no spaces, which a plain static control would cut off.
+	label, err := newLabel(parent, "", ssNoPrefix|ssEditControl)
 	if err != nil {
 		return nil, err
 	}
+	label.live = markLive(label.hwnd) == nil
 	return &StatusArea{Label: label, parent: parent}, nil
 }
 

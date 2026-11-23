@@ -197,7 +197,6 @@ var reviewedFileSites = map[string]string{
 	"internal/screenshot/output/finalize_windows.go moveNoReplace windows.MoveFileEx": screenshotFolder,
 	"internal/screenshot/output/output.go removeTemporary os.Remove":                  screenshotFolder,
 	"internal/screenshot/output/output.go saveWithEncoder os.MkdirAll":                screenshotFolder,
-	"internal/screenshot/output/output.go saveWithEncoder os.Remove":                  screenshotFolder,
 
 	"internal/imageresizer/output/identity_windows.go mkdirAll os.MkdirAll":                         resizerFolder,
 	"internal/imageresizer/output/identity_windows.go open windows.CreateFile":                      inspectOnly,

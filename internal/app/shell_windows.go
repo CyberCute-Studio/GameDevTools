@@ -1230,7 +1230,10 @@ func (s *nativeShell) measureText(text string, width int32, font windows.Handle)
 		uintptr(unsafe.Pointer(utf16(text))),
 		^uintptr(0),
 		uintptr(unsafe.Pointer(&bounds)),
-		dtWordBreak|dtCalcRect|dtNoPrefix,
+		// DT_EDITCONTROL breaks a token wider than width as the status area
+		// draws it; without it, the measure widens to the token and counts one
+		// line.
+		dtWordBreak|dtCalcRect|dtNoPrefix|dtEditControl,
 	)
 	if previous != 0 {
 		procSelectObject.Call(dc, previous)

@@ -51,6 +51,15 @@ func (r Rect) Contains(p Point) bool {
 	return p.X >= r.Left && p.X < r.Right && p.Y >= r.Top && p.Y < r.Bottom
 }
 
+// Overlaps reports whether r and other share at least one pixel. An empty
+// rectangle overlaps nothing, and rectangles that only touch at an edge do not
+// overlap, as Right and Bottom are exclusive.
+func (r Rect) Overlaps(other Rect) bool {
+	return !r.Empty() && !other.Empty() &&
+		r.Left < other.Right && other.Left < r.Right &&
+		r.Top < other.Bottom && other.Top < r.Bottom
+}
+
 // Display describes one connected display at its current native desktop
 // pixel dimensions and orientation.
 type Display struct {

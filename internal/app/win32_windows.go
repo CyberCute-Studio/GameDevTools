@@ -104,9 +104,10 @@ const (
 	defaultCharset   = 1
 	clearTypeQuality = 5
 
-	dtWordBreak = 0x0010
-	dtCalcRect  = 0x0400
-	dtNoPrefix  = 0x0800
+	dtWordBreak   = 0x0010
+	dtCalcRect    = 0x0400
+	dtNoPrefix    = 0x0800
+	dtEditControl = 0x2000
 
 	// appIconResource is the application icon's group resource ID, which
 	// internal/release gives it, passed to LoadImageW as MAKEINTRESOURCE.

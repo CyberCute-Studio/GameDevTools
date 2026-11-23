@@ -188,6 +188,7 @@ func TestShortcutReadsWhetherTheViewIsInFront(t *testing.T) {
 func TestShortcutRefusalsAndLostSessionsReachTheCard(t *testing.T) {
 	t.Run("invalid JPEG quality", func(t *testing.T) {
 		view, card, _ := newCardTestView(t)
+		selectJPEG(view)
 		view.quality.Edit.SetText("500")
 		view.NativeHotkey(globalShortcutHotkeyID)
 		if len(card.reports) != 1 || card.reports[0].Notice.Kind != ui.NoticeError {

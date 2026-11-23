@@ -116,15 +116,18 @@ type CreateRequest struct {
 }
 
 // Controller owns the single active rectangle selection session. Monitor
-// resolves the desktop bounds and toolbar anchor; DesktopBounds, Hide, and
-// Create default to the production native services and are replaceable in
-// tests. Hide hides the main window and returns the function that restores
+// resolves the desktop bounds and toolbar anchor; DesktopBounds, DisplayAreas,
+// Hide, and Create default to the production native services and are
+// replaceable in tests. DisplayAreas lists the connected displays' rectangles,
+// which show a selection left on no display when the bounds around them have
+// not changed. Hide hides the main window and returns the function that restores
 // it; every session path runs that restore exactly once — Cancel and
 // Shutdown run it directly, Complete hands it to the OnCapture handler so
 // the window stays hidden until the capture has read the pixels (SCR-044).
 type Controller struct {
 	Monitor       *display.Monitor
 	DesktopBounds func() (display.Rect, error)
+	DisplayAreas  func() ([]display.Rect, error)
 	Hide          func(...uintptr) (restore func(), err error)
 	Create        func(CreateRequest) (NativeSession, error)
 
@@ -148,6 +151,17 @@ func NewController(monitor *display.Monitor) *Controller {
 	controller := &Controller{
 		Monitor:       monitor,
 		DesktopBounds: monitor.VirtualDesktopBounds,
+		DisplayAreas: func() ([]display.Rect, error) {
+			displays, err := monitor.Displays()
+			if err != nil {
+				return nil, err
+			}
+			areas := make([]display.Rect, len(displays))
+			for index, item := range displays {
+				areas[index] = item.Bounds
+			}
+			return areas, nil
+		},
 		Hide: func(windows ...uintptr) (func(), error) {
 			exclusion, err := capture.Hide(windows...)
 			if err != nil {
@@ -242,7 +256,9 @@ type displayChangeSession interface {
 // truly empty notification. Sessions without display-change support are
 // ended when the topology moved — left up, they would cover a desktop they
 // no longer match — and left alone when it did not, because their surface
-// still matches it.
+// still matches it. Either way, a selection that no display shows any more,
+// as after a display was removed from inside an unchanged virtual desktop,
+// ends the session.
 func (c *Controller) DisplayChange() {
 	c.mu.Lock()
 	s := c.session
@@ -259,11 +275,14 @@ func (c *Controller) DisplayChange() {
 	if !ok {
 		if bounds != s.bounds {
 			c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
+			return
 		}
+	} else if !native.DisplayChanged(bounds) {
+		c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
 		return
 	}
-	if !native.DisplayChanged(bounds) {
-		c.endDisplayChangeSession(s, ui.CaptureSessionDisplayLost)
+	if reason := c.selectionProblem(s); reason != "" {
+		c.endDisplayChangeSession(s, reason)
 		return
 	}
 	c.mu.Lock()
@@ -271,6 +290,32 @@ func (c *Controller) DisplayChange() {
 		c.session.bounds = bounds
 	}
 	c.mu.Unlock()
+}
+
+// selectionProblem returns why the session's selection cannot continue after
+// a display change, or "" when it can: no display covers any of it, or the
+// displays could not be read. A session with no selection yet has nothing to
+// lose, and a selection a display covers in part is kept.
+func (c *Controller) selectionProblem(s *session) string {
+	if c.DisplayAreas == nil {
+		return ""
+	}
+	c.mu.Lock()
+	selection := s.selection
+	c.mu.Unlock()
+	if selection.Empty() {
+		return ""
+	}
+	areas, err := c.DisplayAreas()
+	if err != nil {
+		return ui.CaptureSessionDisplayGone
+	}
+	for _, area := range areas {
+		if area.Overlaps(selection) {
+			return ""
+		}
+	}
+	return ui.CaptureSessionDisplayLost
 }
 
 // endDisplayChangeSession ends a session a display change invalidated. The

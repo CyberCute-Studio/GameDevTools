@@ -267,7 +267,7 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 			succeeded = true
 			return final, nil
 		}
-		if err := os.Remove(temporaryPath); err != nil {
+		if err := removeTemporary(temporaryPath, &wait); err != nil {
 			// The final file already exists and is complete; an orphaned
 			// temporary file is reported without hiding the successful
 			// save.
@@ -282,9 +282,9 @@ func saveWithEncoder(img *image.RGBA, options screenshot.CaptureOptions, now tim
 			base+options.Format.Extension()))
 }
 
-// removeTemporary removes a failed save's temporary file, using what is left
-// of the save's wait, since a program holding the file may be why the save
-// failed. A file that has already gone counts as removed.
+// removeTemporary removes a save's temporary file, using what is left of the
+// save's wait, since a program such as a virus scanner may be holding the file
+// for a moment. A file that has already gone counts as removed.
 func removeTemporary(path string, wait *heldWait) error {
 	err := wait.retry(func() error { return os.Remove(path) })
 	if errors.Is(err, fs.ErrNotExist) {

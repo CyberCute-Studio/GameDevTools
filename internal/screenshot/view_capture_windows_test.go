@@ -171,6 +171,9 @@ func fakeOverlaySession(view *NativeView) (*[]string, *fakeOverlayNative, *error
 	view.sessions.DesktopBounds = func() (display.Rect, error) {
 		return display.Rect{Left: 0, Top: 0, Right: 1920, Bottom: 1080}, nil
 	}
+	view.sessions.DisplayAreas = func() ([]display.Rect, error) {
+		return []display.Rect{{Left: 0, Top: 0, Right: 1920, Bottom: 1080}}, nil
+	}
 	view.sessions.Hide = func(...uintptr) (func(), error) {
 		*log = append(*log, "hide")
 		return func() { *log = append(*log, "restore") }, nil
@@ -634,6 +637,7 @@ func TestNativeViewCaptureRejectsUnsavedInvalidQuality(t *testing.T) {
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, folder, parent)
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	selectJPEG(view)
 	view.quality.Edit.SetText("0")
 
 	captureCalled := false
@@ -669,6 +673,7 @@ func TestNativeViewAnnouncesARefusedQualityOnce(t *testing.T) {
 	value := settings.Default()
 	view := newNativeViewForTest(t, store, &value, testFolder(t), parent)
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	selectJPEG(view)
 	view.quality.Edit.SetText("0")
 	view.capture = func(CaptureRequest) CaptureResult {
 		t.Fatal("capture ran with invalid quality text")

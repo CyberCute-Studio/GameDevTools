@@ -112,7 +112,8 @@ Preset Rectangle
   A preset larger than your whole desktop is refused before the frame opens. The
   desktop is the rectangle around all your displays, so a frame can be larger
   than one display. If your displays differ in size or are offset, part of that
-  rectangle is on no display, and that part of a capture comes out blank.
+  rectangle is on no display, and that part of a capture comes out blank. A
+  selection with no part on any display is refused.
 
 Full Display
 
@@ -392,7 +393,8 @@ Capture
   in color or sharpness between displays are not corrected.
 - A rectangle can include areas that no display covers, when displays differ in
   size or are offset. Those areas come out blank, usually black, and the capture
-  is still reported as a success.
+  is still reported as a success. A rectangle with no part on any display is
+  refused instead.
 - On mixed scaling, the second line of the capture toolbar's message can be cut
   off.
 - After a capture, the keyboard focus stays outside the application. Use
@@ -448,7 +450,8 @@ A screenshot is black.
   again.
 
 "The display layout changed..."
-  A display was connected, disconnected, or rearranged. Start the capture again.
+  A display was connected, disconnected, or rearranged, or the selection is on
+  no display. Start the capture again.
 
 "The display list is unavailable"
   Windows could not list the displays, so nothing was captured. Start the

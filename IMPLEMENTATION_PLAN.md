@@ -1,7 +1,7 @@
 # CyberCute Dev Tools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.6\
+**Version:** 1.7\
 **Last updated:** 2026-11-23\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
@@ -33,7 +33,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M1 — Screenshot module | 8–18 | Pending |
 | M2 — Image Resizer module | 19–27 | Pending |
 | M3 — Cross-cutting quality and hardening | 28–36 | Pending |
-| M4 — Distribution and release | 37–40 | Pending |
+| M4 — Distribution and release | 37–41 | Pending |
 
 ## 4. Milestone M0 — Technical validation and application foundation
 
@@ -341,8 +341,15 @@ Each numbered item represents exactly one PR. Items are listed in implementation
     - **Verify:** Confirm each defect first. Test the toolbar on offset and differently sized display layouts and a second launch during a selection and during a capture started while minimized. Follow manual check M18's steps on this item's build as a development check, as the run that counts is REL-03's on the release candidate, and test the overlay failure, the lost session, a failed shortcut capture followed by a successful one, a startup shortcut conflict with another tool remembered, a temporary name that cannot be removed, a failed display enumeration with a display other than the pointer's selected, and a capture and a cancelled selection from a maximized window, which M18 does not cover. Update the user guide, release notes, and traceability rows that record these defects.
     - **Notes:** These defects are already on `main` and were left out of REL-02, a documentation item. Started by explicit request while REL-02 is unmerged; this item's branch contains REL-02's commits and its PR targets `main`, so it lands correctly whichever merges first. A global-shortcut capture's outcome now also goes on `ui.ResultCard`, the design the project owner chose: an always-on-top, unowned tool window in the corner of the display under the pointer that never takes the focus. A success leaves after six seconds; a warning or error stays until dismissed, so a later result cannot hide it; Open Folder shows a saved file; the Screenshot view's Dismiss Problem button, offered while the card holds a problem outside a capture, is the keyboard's way to dismiss them. The card is hidden before every capture and session, so it cannot reach an image. A shortcut conflict found at startup goes on the card when another module is remembered. The capture toolbar stays on a real display's work area, a second launch leaves a window hidden for a capture alone, a saved image with a leftover temporary name is reported as saved, a failed display enumeration keeps the selected display and refuses the capture, and a maximized window returns maximized. M18's steps were followed as a development check on this build, in the real application with the real shortcut, with the window minimized and on another module: a saved capture, a failed save, a held clipboard, and an oversized preset each reached the card without moving the focus. Real clicks on the card's buttons were also checked, which found and fixed a quick second Dismiss being lost as a double click. Review then found that pressing a standard button still took the focus, so the card now handles its buttons' mouse input itself; that is tested with mouse messages to the real buttons, and real pointer clicks on both buttons were then repeated with the foreground unchanged, including a press released off the button and rapid Dismiss clicks. M18 stays open for the release candidate, as do M16, M17, and the hardware runs. The matrix is now 124 Pass and 52 Partial, with 40 P0 requirements or acceptance scenarios Partial.
 
-40. **REL-03 — Validate the release candidate and close the implementation baseline**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02A
+40. **REL-02B — Fix the capture defects REL-02A's review found**
+    - **Status:** In Progress | **PR:** TBD | **Depends on:** REL-02A
+    - **Requirements:** SCR-003, SCR-054, SCR-060, SCR-061, SCR-066, SCR-067, SCR-069, AC-S11, AC-S12.
+    - **Deliver:** End a selection, and refuse its capture, when no display covers it after a display inside an unchanged virtual-desktop rectangle was removed, so that it cannot capture black and report a success; retry removing a hard-link save's temporary name while a program briefly holds it; wrap a path wider than the Screenshot status area rather than cut it off; clear a shortcut failure from the status area once the shortcut registers; stop refusing a PNG capture for invalid text in the disabled JPEG quality field; and keep trying to deliver a capture's result while the window lives, so that a failed post cannot leave the capture in progress and the result card hidden.
+    - **Verify:** Confirm each defect with a failing test first. Test a selection on, partly on, and off the remaining displays with the virtual-desktop rectangle unchanged, a temporary name held for a moment, a path wider than the status area, a shortcut that registers after a failure and a later notice that must stay, a PNG and a JPEG capture with invalid quality text, and a completion post that fails while the window lives and after it is gone. Update the user guide, release notes, and traceability rows where a fix changes what they say.
+    - **Notes:** These defects are already on `main` and were left out of REL-02A, whose diff does not touch them. Started by explicit request while REL-02 and REL-02A are unmerged; this item's branch contains their commits and its PR targets `main`, so it lands correctly whichever merges first. A selection a display still covers in part is kept and captured with the uncovered part blank, the limitation the user guide states. No real display was removed during these tests, so that stays with QLT-04A's live disconnect.
+
+41. **REL-03 — Validate the release candidate and close the implementation baseline**
+    - **Status:** Pending | **PR:** TBD | **Depends on:** REL-02B
     - **Requirements:** All P0 requirements and all acceptance criteria in PRD Section 15.
     - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
     - **Verify:** Test the exact artifact produced by REL-01, not a development build. Complete all P0 acceptance scenarios or record an explicit release blocker. Confirm CI, package integrity, documentation, offline operation, and clean exit.
@@ -358,7 +365,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 |---|---|---|
 | APP-001 through APP-005 | FND-03, FND-04, SCR-09, QLT-02; second-launch fix in REL-02A | QLT-04, REL-03 |
 | PRESET-001 through PRESET-008 | FND-06, FND-07, SCR-01, RSZ-01 | QLT-02, QLT-04 |
-| SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01; output-folder and finalization fixes in QLT-03A and QLT-03B; shared folder rule in QLT-03C; capture-result, startup-conflict, toolbar, second-launch, and display-selection fixes in REL-02A | SCR-11, QLT-04, QLT-04A, REL-03 |
+| SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01; output-folder and finalization fixes in QLT-03A and QLT-03B; shared folder rule in QLT-03C; capture-result, startup-conflict, toolbar, second-launch, and display-selection fixes in REL-02A; removed-display, temporary-name, status, shortcut, quality-field, and result-delivery fixes in REL-02B | SCR-11, QLT-04, QLT-04A, REL-03 |
 | RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08; output-folder fix in QLT-03C | RSZ-09, QLT-04, REL-03 |
 | SET-001 through SET-007 | FND-04, FND-06, module settings items, QLT-02, QLT-03; maximized-window fix in REL-02A | QLT-04, REL-03 |
 | UX-001 through UX-010 | FND-05 and all feature UI items | QLT-01, QLT-04 |
@@ -367,7 +374,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 | NFR-020 through NFR-024 | FND-04, SCR-10, RSZ-05 through RSZ-07, QLT-02 | QLT-04, REL-03 |
 | NFR-030 through NFR-033 | FND-04 and feature implementations | QLT-03, QLT-04 |
 | TECH-001 through TECH-010 | FND-01 through FND-06, SCR-02 through SCR-04, RSZ-03 through RSZ-07, REL-01 | QLT-03, QLT-04, REL-03 |
-| Screenshot acceptance AC-S01 through AC-S12 | SCR-04 through SCR-10; capture-result and startup-conflict fixes in REL-02A | SCR-11, QLT-04, QLT-04A, REL-03 |
+| Screenshot acceptance AC-S01 through AC-S12 | SCR-04 through SCR-10; capture-result and startup-conflict fixes in REL-02A; shortcut-status and removed-display fixes in REL-02B | SCR-11, QLT-04, QLT-04A, REL-03 |
 | Resizer acceptance AC-R01 through AC-R15 | RSZ-03 through RSZ-08 | RSZ-09, QLT-04, REL-03 |
 | Shared acceptance AC-A01 through AC-A05 | FND-04, SCR-09, RSZ-07, RSZ-08, QLT-01 through QLT-03 | QLT-04, REL-03 |
 
@@ -382,3 +389,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.4 | 2026-11-22 | QLT-04: Windows 10 removed from the supported platforms (PRD 1.4). Inserted QLT-04A for the x64 Windows 11, reference-machine, and mixed-DPI runs the available hardware cannot perform; REL-01 now depends on QLT-04A, and later items are renumbered. |
 | 1.5 | 2026-11-22 | REL-01: recorded the product name CyberCute Dev Tools, the portable ZIP, and the signing and update decisions (PRD 1.5, ADR-0002), and that the item started by explicit request while QLT-04A is Pending. |
 | 1.6 | 2026-11-23 | REL-02: added the packaged user guide and release notes, the test and verification guide, and the requirement traceability matrix (PRD 1.6), and recorded that the item started by explicit request while its dependencies are not Done. Inserted REL-02A for the capture defects REL-02's review found already on `main`; REL-03 now depends on REL-02A and is renumbered. |
+| 1.7 | 2026-11-23 | Inserted REL-02B for the capture defects REL-02A's review found already on `main`; REL-03 now depends on REL-02B and is renumbered. |

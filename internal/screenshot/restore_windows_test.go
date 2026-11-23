@@ -185,6 +185,7 @@ func TestNativeViewRestoreDefaultsClearsAPickerRefusal(t *testing.T) {
 // that then shows the default.
 func TestNativeViewRestoreDefaultsClearsAReplacedRefusal(t *testing.T) {
 	view, _ := newHotkeyTestView(t, filepath.Join(t.TempDir(), "settings.json"))
+	selectJPEG(view)
 	view.quality.Edit.SetText("0")
 	view.NativeAction()
 	if got := view.status.Text(); !strings.Contains(got, ui.ErrorValidation.Label()) {
