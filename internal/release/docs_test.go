@@ -55,11 +55,12 @@ var manualGated = map[string][]string{
 	"AC-A04":  {"M12"},
 	"APP-005": {"M17"},
 	"SCR-031": {"M18"}, "SCR-060": {"M18"}, "AC-S08": {"M18"}, "AC-S09": {"M18"},
+	"UX-006": {"M2"}, "AC-A03": {"M2"},
 }
 
 // gatingChecks are the manual checks that are the only real run of part of a
 // requirement.
-var gatingChecks = []string{"M8", "M9", "M10", "M12", "M15", "M16", "M17", "M18"}
+var gatingChecks = []string{"M2", "M8", "M9", "M10", "M12", "M15", "M16", "M17", "M18"}
 
 // confidenceOnly names the gating check a row may cite while it stays Pass,
 // because automated checks already cover that row: the job's thread and its
@@ -473,6 +474,7 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		strings.Split(ui.CaptureGraphicsFailed, ":")[0],
 		strings.Split(ui.CaptureDisplayChanged, " or ")[0],
 		strings.Split(ui.OutputFolderNameInvalid, ":")[0],
+		strings.Split(ui.DisplayUnavailable, ":")[0],
 		screenshot.DefaultShortcut().String(),
 	}
 	names := make([]string, 0, len(texts))

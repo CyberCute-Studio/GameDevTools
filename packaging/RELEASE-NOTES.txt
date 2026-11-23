@@ -53,10 +53,13 @@ These have not been run, so this version makes no claim about them:
 - Any Windows 11 release other than build 26300, where the combined run took
   place, and build 26200, where the Screenshot module's own run took place.
 - Display scaling above 100%, mixed scaling, displays with negative coordinates,
-  rotated displays, and unplugging a display during a selection. Automated checks
-  cover the calculations, but none of these has run on real displays.
+  rotated displays, and unplugging a display during a selection. None of these
+  has run on real displays. Automated checks cover the calculations for all but
+  rotated displays, which have none.
 - A clean machine, a real screen reader, the contrast themes switched on, a real
   sign-out during a job, and a run with network adapters off.
+- A person confirming that the keyboard focus is visible on every control. The
+  automated checks follow where the focus goes, not how it looks.
 - Saving to FAT32 or exFAT drives, network shares, OneDrive folders, or a drive
   that fills up.
 - Real clipboard sync with a signed-in account, and pasting a capture into Paint
@@ -88,13 +91,17 @@ Known issues
   still captures unless the focus is in a size field, where it only applies the
   size, or on Cancel, so after typing a size press Tab to reach Capture first.
   After clicking in another application, press the global shortcut first.
-  Moving the selection also brings the toolbar back, but moving it back hides
-  the toolbar again.
+  Moving the selection brings the toolbar back, but moving it back hides the
+  toolbar again. Set a new size while the toolbar shows: a size that does not
+  fit at the selection's position is refused only on the toolbar, and a capture
+  then saves the old size and reports a success.
 - If Windows fails to list the displays, Full Display can forget the selected
   display although it is still connected, then capture the one under the
-  pointer and report a success. After the message "The display list is
-  unavailable", choose another Capture mode, then Full Display again, and select
-  your display before capturing.
+  pointer and report a success. The message "The display list is unavailable"
+  appears only in the Screenshot view with Full Display selected, so this can
+  happen with no warning. Check the Display list before each Full Display
+  capture. If it is empty, choose another Capture mode, then Full Display again.
+  Then select your display.
 - Starting the application again during a capture that began while its window
   was minimized can bring the window back into the image. Starting it again
   during any selection can take the keyboard from the capture toolbar: click

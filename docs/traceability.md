@@ -6,8 +6,8 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 ## Status
 
-- **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as using a real screen reader, and has not been done.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M8, M9, M10, M12, M15, M16, M17, or M18 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, stand-ins for the file picker, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, and a result written to a view that is not showing. M18 cannot pass until REL-02A makes the application report that result where the user can see it. Those that name REL-02A have a known defect on `main`, which that item fixes. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it, and one that names REL-02A only after that item has also fixed its defect.
+- **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as switching on a contrast theme, and has not been done.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M2, M8, M9, M10, M12, M15, M16, M17, or M18 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: which control has the keyboard focus, not whether its focus indicator is drawn, the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, stand-ins for the file picker, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, and a result written to a view that is not showing. M18 cannot pass until REL-02A makes the application report that result where the user can see it. Those that name REL-02A have a known defect on `main`, which that item fixes. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it, and one that names REL-02A only after that item has also fixed its defect.
 
 `M1` to `M18` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's.
 
@@ -15,14 +15,14 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 95 | 29 |
+| P0 requirements | 124 | 94 | 30 |
 | P1 requirements | 20 | 8 | 12 |
-| Acceptance scenarios | 32 | 23 | 9 |
-| **All** | **176** | **126** | **50** |
+| Acceptance scenarios | 32 | 22 | 10 |
+| **All** | **176** | **124** | **52** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run or manual check it names passes and the defect it names is fixed:
 
-SCR-002, SCR-003, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-040, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S11, AC-S12, AC-A04.
+SCR-002, SCR-003, SCR-010, SCR-011, SCR-012, SCR-020, SCR-021, SCR-022, SCR-023, SCR-025, SCR-026, SCR-031, SCR-040, SCR-042, SCR-043, SCR-044, SCR-052, SCR-054, SCR-060, SCR-062, SCR-063, RSZ-001, RSZ-002, RSZ-020, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S03, AC-S04, AC-S05, AC-S08, AC-S09, AC-S11, AC-S12, AC-A03, AC-A04.
 
 The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
@@ -166,7 +166,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | UX-003 | P0 | Validation beside the field, saying how to fix it | FND-05, FND-07, QLT-01 | `ui.TestDimensionInputPresentsValidation`, `preset.TestNativeManagerValidationAndBuiltInProtection` | Pass |  |
 | UX-004 | P0 | `px` labels and `width x height` | FND-05, FND-07, QLT-01 | `ui.TestFormatDimensions` | Pass |  |
 | UX-005 | P0 | Status is never color alone | FND-05, QLT-01 | `ui.TestNoticeTextUsesExplicitStatus`, `imageresizer.TestNativeViewResizesEveryReadyImageEndToEnd` | Pass |  |
-| UX-006 | P0 | Keyboard navigable with visible focus | FND-05, QLT-01 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestScreenshotOptionsKeyboardOnly`, `app.TestResizerSourcesKeyboardOnly` | Pass | M2 |
+| UX-006 | P0 | Keyboard navigable with visible focus | FND-05, QLT-01 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestScreenshotOptionsKeyboardOnly`, `app.TestResizerSourcesKeyboardOnly` | **Partial** | M2: the tests follow where the focus goes, and nothing has confirmed that a focus indicator is drawn |
 | UX-007 | P0 | WCAG 2.1 AA contrast | FND-05, QLT-01 | `overlay.TestContrastRatioFollowsWCAG`, `overlay.TestRingColorsStandOutOnAnyBackground`, [accessibility record](accessibility-verification.md) | Pass | M3 |
 | UX-008 | P1 | Windows light/dark preference | QLT-01 | `app.TestStaticTextBrushUsesSystemColors`, [accessibility record](accessibility-verification.md) | **Partial** | Deferred by PRD section 20: no dark app mode. M3 |
 | UX-009 | P0 | English, with centralized strings | FND-05, QLT-01 | [accessibility record](accessibility-verification.md) | Pass |  |
@@ -253,6 +253,6 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 |---|---|---|---|---|---|---|
 | AC-A01 | — | Persistence | QLT-02, QLT-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | AC-A02 | — | Offline use | QLT-03, QLT-04 | `app.TestCoreWorkflowsRunOffline` | Pass | M6 |
-| AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | Pass | M2 |
+| AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | **Partial** | M2: nothing has confirmed that a focus indicator is drawn |
 | AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: the window has not been dragged during a job |
 | AC-A05 | — | Clean exit | QLT-02, QLT-04 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass | M4 |

@@ -56,12 +56,12 @@ QLT-04A owns what needs hardware this project's environment does not have: x64 W
 
 ## Manual pre-release checks
 
-No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M8, M9, M10, M15, M16, M17, and M18 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. M18 cannot pass until REL-02A makes the application report a shortcut capture's result or refusal while the Screenshot view is not showing. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
+No automated test can stand in for these. None has been done yet, and REL-03 owns them. Run them on the exact release candidate. M2, M8, M9, M10, M15, M16, M17, and M18 are the only runs of part of what their requirements say, and M12 of AC-A04's moving the window during a job, so those rows are **Partial** in the [traceability matrix](traceability.md) until they pass. M18 cannot pass until REL-02A makes the application report a shortcut capture's result or refusal while the Screenshot view is not showing. The other checks, and M12 for RSZ-041, add confidence to requirements the automated checks already cover.
 
 | Check | What to do | Passes when | Covers |
 |---|---|---|---|
 | M1 | On a clean Windows 11 x64 machine, as a standard user with no Go installed, follow `USER-GUIDE.txt` from the ZIP through the [walkthrough](#user-guide-walkthrough) below | Every step works as written | APP-002, TECH-010 |
-| M2 | Use both modules with the keyboard alone and with Narrator, and NVDA where available | Every control is reachable and announced sensibly | UX-006, AC-A03 |
+| M2 | Use both modules with the keyboard alone and with Narrator, and NVDA where available | Every control is reachable, shows a visible focus indicator while it has the focus, and is announced sensibly | UX-006, AC-A03 |
 | M3 | Turn on each Windows contrast theme and look at both modules and the capture overlay. Also set Windows apps to dark | Everything stays legible | UX-007, UX-008 |
 | M4 | Sign out of Windows with a resize job running, then sign back in | No temporary file in the output folder, and the window opens where it was | NFR-022, AC-A05 |
 | M5 | Save screenshots and resized images to a FAT32 or exFAT drive, a network share, and a OneDrive folder | Files are complete, and nothing is left behind or replaced | SCR-066, RSZ-027, NFR-023 |
