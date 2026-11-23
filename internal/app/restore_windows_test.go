@@ -334,8 +334,9 @@ func TestRestoreDefaultsKeepsTheRestoredSessionWhenTheWriteFails(t *testing.T) {
 // TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails pins the outcome
 // of a restore that finds no settings file and cannot write one: the
 // defaults are in use for the session, and the outcome says that nothing
-// was backed up rather than that a settings file still holds the previous
-// settings, as there is none.
+// was backed up, and that a file on an unavailable drive was not changed,
+// rather than that a settings file still holds the previous settings, as none
+// was found.
 func TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails(t *testing.T) {
 	shell, _ := newExitTestShell(t, &exitRecordingView{})
 	blocker := filepath.Join(t.TempDir(), "not a folder")
@@ -345,7 +346,7 @@ func TestRestoreDefaultsWithoutASettingsFileWhenTheWriteFails(t *testing.T) {
 	shell.store = settings.NewStore(settings.Paths{ConfigFile: filepath.Join(blocker, "settings.json")})
 
 	notice := shell.restoreDefaults()
-	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") || !strings.HasSuffix(notice.Message, "There was no settings file to back up.") {
+	if notice.Kind != ui.NoticeWarning || !strings.HasPrefix(notice.Message, "Default settings are in use for this session, but they could not be saved") || !strings.HasSuffix(notice.Message, "No settings file was found to back up; a file on a drive or network share that is unavailable has not been changed.") {
 		t.Fatalf("outcome = %+v, want the write failure without a settings file", notice)
 	}
 	if strings.Contains(notice.Message, "still holds") {
@@ -447,6 +448,31 @@ func TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead(t *testing.
 		if strings.Join(pair[0], "\n") != strings.Join(pair[1], "\n") {
 			t.Fatalf("%s presets after the restore = %q, want the file's and the session's %q", name, pair[1], pair[0])
 		}
+	}
+}
+
+// TestSaveRefusedAtStartupKeepsTheWarningThatSaysHowToEndIt pins that a save
+// refused because loading disabled saving, as the first module click makes,
+// leaves the startup warning in the shell's note: it alone says why saving
+// is disabled and how to end that. The caller still learns the save failed,
+// so closing asks before losing the changes.
+func TestSaveRefusedAtStartupKeepsTheWarningThatSaysHowToEndIt(t *testing.T) {
+	shell := newAuditShellWhile(t, readFixture(t, "rsz-01"), holdOpen)
+	probeScreenshotRestore(t, shell)
+	startup := shell.notice
+	if !strings.Contains(startup, "saving is disabled") {
+		t.Fatalf("note at startup = %q, want the unread file's warning", startup)
+	}
+
+	shell.selectModule(t, core.ModuleImageResizer)
+	if shell.notice != startup {
+		t.Fatalf("note after a module click = %q, want the startup warning %q", shell.notice, startup)
+	}
+	if err := shell.saveSettings(false); !errors.Is(err, settings.ErrSavingDisabled) {
+		t.Fatalf("saveSettings = %v, want ErrSavingDisabled", err)
+	}
+	if shell.notice != startup {
+		t.Fatalf("note after a refused save = %q, want the startup warning %q", shell.notice, startup)
 	}
 }
 
@@ -621,7 +647,7 @@ func TestChoosingAFolderEndsItsWarningAtOnce(t *testing.T) {
 			shell.nativeViews[core.ModuleScreenshot] = folderChoosingView{nativeView: real, choose: func() error {
 				return shell.capture.SetOutputFolder(filepath.Join(filepath.Dir(shell.path), "Chosen"))
 			}}
-			shellWindowProc(shell.hwnd, wmCommand, uintptr(9999), nil)
+			shellWindowProc(shell.hwnd, wmCommand, uintptr(9999), 0)
 			shell.nativeViews[core.ModuleScreenshot] = real
 			if shell.capture.FolderWarning() != "" {
 				t.Fatal("the chosen folder still has a warning")

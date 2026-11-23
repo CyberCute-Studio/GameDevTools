@@ -583,8 +583,8 @@ func openOfflineShell(t *testing.T, workspace string) (*auditShell, settings.Pat
 		}
 	}
 	state, err := openSession(paths, nil, defaultFolders{
-		screenshot: filepath.Join(workspace, "Pictures", "GameDevTools", "Screenshots"),
-		resizer:    filepath.Join(workspace, "Pictures", "GameDevTools", "Resized"),
+		screenshot: filepath.Join(workspace, "Pictures", ui.AppName, "Screenshots"),
+		resizer:    filepath.Join(workspace, "Pictures", ui.AppName, "Resized"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -627,7 +627,7 @@ func runOfflineCapture(t *testing.T, shell *auditShell, workspace string) (strin
 		t.Fatal(err)
 	}
 	shell.selectModule(t, core.ModuleScreenshot)
-	folder := filepath.Join(workspace, "Pictures", "GameDevTools", "Screenshots")
+	folder := filepath.Join(workspace, "Pictures", ui.AppName, "Screenshots")
 	seen := map[string]bool{}
 	var last, saved string
 	for range 5 {
@@ -690,7 +690,7 @@ func runOfflineResize(t *testing.T, shell *auditShell, workspace string) {
 		_, message := resizer.(nativeCloseGuard).NativeCloseConfirmation()
 		return message == ""
 	})
-	output := filepath.Join(workspace, "Pictures", "GameDevTools", "Resized")
+	output := filepath.Join(workspace, "Pictures", ui.AppName, "Resized")
 	if results := checkResults(t, output); results != len(sources) {
 		t.Fatalf("the job saved %d result(s), want %d", results, len(sources))
 	}
@@ -759,8 +759,8 @@ func checkOfflineWrites(t *testing.T, workspace string, paths settings.Paths) {
 	approved := []string{
 		filepath.Dir(paths.ConfigFile),
 		filepath.Dir(paths.LogFile),
-		filepath.Join(workspace, "Pictures", "GameDevTools", "Screenshots"),
-		filepath.Join(workspace, "Pictures", "GameDevTools", "Resized"),
+		filepath.Join(workspace, "Pictures", ui.AppName, "Screenshots"),
+		filepath.Join(workspace, "Pictures", ui.AppName, "Resized"),
 		filepath.Join(workspace, "Sources"),
 	}
 	folders := append([]string{filepath.Join(workspace, "Temp")}, approved...)

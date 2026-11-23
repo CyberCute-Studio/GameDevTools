@@ -1,16 +1,16 @@
-# GameDevTools — Product Requirements Document
+# CyberCute Dev Tools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.4\
+**Version:** 1.5\
 **Last updated:** 2026-11-22\
-**Product name:** GameDevTools (working name)\
+**Product name:** CyberCute Dev Tools\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
 **Initial modules:** Screenshot, Image Resizer
 
 ## 1. Document purpose
 
-This PRD is the primary product reference for the initial release and future development of GameDevTools. It defines the problem, intended users, product behavior, scope, priorities, acceptance criteria, and high-level technical constraints.
+This PRD is the primary product reference for the initial release and future development of CyberCute Dev Tools. It defines the problem, intended users, product behavior, scope, priorities, acceptance criteria, and high-level technical constraints.
 
 It is intended to remain useful to developers, testers, designers, and maintainers after implementation begins. Detailed API choices, package layouts, UI mockups, and database schemas belong in separate design documents unless explicitly included here.
 
@@ -23,7 +23,7 @@ It is intended to remain useful to developers, testers, designers, and maintaine
 
 ## 2. Product overview
 
-GameDevTools is a modular Windows GUI application that provides focused utilities for common game-development and general desktop workflows. The initial release contains two modules:
+CyberCute Dev Tools is a modular Windows GUI application that provides focused utilities for common game-development and general desktop workflows. The initial release contains two modules:
 
 1. **Screenshot** — capture a free rectangle, a full display, or a rectangle with exact preset pixel dimensions. A persistent, always-on-top selection frame allows the user to interact with the application underneath and position the frame precisely before capture.
 2. **Image Resizer** — resize one or many PNG or JPEG images using reusable dimension presets and configurable aspect-ratio behavior.
@@ -36,7 +36,7 @@ Existing screenshot workflows are often imprecise when a user needs an image of 
 
 Image resizing presents a related problem: resizing many files individually is repetitive, and tools differ in how they handle aspect ratios, upscaling, output naming, and failures. A bulk workflow needs predictable dimensions, reusable presets, per-file status, and safe handling of original files.
 
-GameDevTools addresses both needs with exact, reusable pixel presets and clear, repeatable workflows.
+CyberCute Dev Tools addresses both needs with exact, reusable pixel presets and clear, repeatable workflows.
 
 ## 4. Product vision and principles
 
@@ -127,7 +127,7 @@ The initial release is successful when:
 - Automatic metadata preservation guarantees.
 - macOS or Linux versions.
 - Accounts, cloud synchronization, telemetry, or online activation.
-- Automatic updates until a release/distribution decision is made.
+- Automatic updates (section 20).
 
 ## 8. Application shell and shared behavior
 
@@ -294,7 +294,7 @@ The exact built-in list can change during implementation without changing the re
 
 **SCR-062 (P0):** Clipboard image data must be compatible with common Windows image destinations and must not be degraded by JPEG file encoding. The clipboard receives the captured image before JPEG compression.
 
-**SCR-063 (P0):** The default output folder is the user's Pictures folder under `GameDevTools/Screenshots`. The user must be able to choose another local folder.
+**SCR-063 (P0):** The default output folder is the user's Pictures folder under `CyberCute Dev Tools/Screenshots`. The user must be able to choose another local folder.
 
 **SCR-064 (P0):** The default filename pattern is `Screenshot_yyyyMMdd_HHmmssfff`, with the appropriate `.png` or `.jpg` extension.
 
@@ -374,7 +374,7 @@ Each Image Resizer preset contains width, height, and one fitting mode. Both ups
 
 **RSZ-020 (P0):** The default behavior must create new files in a user-selected output folder and preserve every original file.
 
-**RSZ-021 (P0):** The default output folder is the user's Pictures folder under `GameDevTools/Resized`. The last valid folder must be remembered.
+**RSZ-021 (P0):** The default output folder is the user's Pictures folder under `CyberCute Dev Tools/Resized`. The last valid folder must be remembered.
 
 **RSZ-022 (P0):** Output format options must be Keep Source Format, PNG, and JPEG. Keep Source Format is the default.
 
@@ -576,7 +576,7 @@ Given a simulated clipboard failure, when capture and saving succeed, then the f
 Given an existing file with the generated screenshot name, when another screenshot is saved, then a numeric suffix is used and the existing file remains unchanged.
 
 **AC-S11 — Shortcut conflict**\
-Given another application owns the configured shortcut, when GameDevTools starts or applies that shortcut, then it reports the conflict and allows a replacement without crashing.
+Given another application owns the configured shortcut, when CyberCute Dev Tools starts or applies that shortcut, then it reports the conflict and allows a replacement without crashing.
 
 **AC-S12 — Monitor removal**\
 Given an active selection on a display that is disconnected, when Windows updates the display layout, then the app recovers or requests a restart of the session without leaving an invisible input-capturing window.
@@ -693,19 +693,14 @@ These are not commitments for the initial release:
 - Optional no-upscale behavior, custom crop anchors, padding, rotation, and watermarking.
 - Shared or synchronized dimension presets if user demand justifies changing the initial module-scoped model.
 - Watch folders, command-line batch operation, and automation profiles.
-- Additional GameDevTools modules using the same shell and settings infrastructure.
+- Additional CyberCute Dev Tools modules using the same shell and settings infrastructure.
 - Localization beyond English.
 - Following the Windows dark app mode with a dark theme.
 - Signed installer, automatic updates, and enterprise deployment controls.
 
 ## 19. Open decisions
 
-The following decisions do not block initial implementation but must be resolved before public distribution:
-
-1. Final product and executable name; **GameDevTools** is the working name.
-2. Installer, portable ZIP, or both.
-3. Code-signing approach and release identity.
-4. Whether an automatic update mechanism is needed.
+None. REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md).
 
 ## 20. Confirmed product decisions
 
@@ -725,6 +720,10 @@ For clarity, the following choices have been made and should not be reopened wit
 - Closing the application while a resize job runs asks first, as closing cancels the job. Signing out of, restarting, or shutting down Windows asks nothing: the application saves its settings and stops all work.
 - Screenshots copied to the clipboard are marked so that Windows clipboard sync does not upload them (NFR-031). They stay in the local clipboard history (Win+V). An image that cannot be marked is not placed on the clipboard, which is reported as a clipboard failure while the saved file is kept (SCR-060).
 - The initial release supports Windows 11 only (NFR-001). Windows 10, whose general support from Microsoft ended in October 2025, is not supported or tested; the application does not refuse to start there.
+- The product is named **CyberCute Dev Tools**, and its executable `cybercute-dev-tools.exe`. It was called GameDevTools until PRD 1.5. The first launch takes over the settings of a GameDevTools build, leaving its file in place, and output folders already selected stay selected.
+- The initial release ships as a portable ZIP for 64-bit Intel/AMD Windows, with no installer.
+- The initial release is not code-signed. Each ZIP has a published SHA-256 checksum, and the packaged README explains the Windows SmartScreen warning.
+- The application has no automatic update mechanism and does not check for updates. Users update by replacing the executable.
 
 ## 21. Revision history
 
@@ -735,3 +734,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.2 | 2026-11-20 | QLT-02: confirmed what restoring the default settings keeps and resets (SET-005), that closing while a resize job runs asks first, and that the end of the Windows session asks nothing (section 20). |
 | 1.3 | 2026-11-21 | QLT-03: confirmed that copied screenshots opt out of Windows clipboard sync and stay in the local clipboard history (NFR-031, section 20). |
 | 1.4 | 2026-11-22 | QLT-04: resolved the Windows 10 open decision — the initial release supports Windows 11 only (NFR-001, section 20). |
+| 1.5 | 2026-11-22 | REL-01: resolved the remaining open decisions — the name CyberCute Dev Tools, a portable ZIP, no code signing, and no automatic updates (sections 19 and 20). |

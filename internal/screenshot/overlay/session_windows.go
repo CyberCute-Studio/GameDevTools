@@ -1592,11 +1592,11 @@ func (s *windowsSession) pointerFromClient(lParam uintptr) display.Point {
 // button came up. A finished draw repaints its band once more: the resize
 // handles are skipped while drawing, so without the repaint the resting
 // selection would show no resize affordance at all (SCR-012).
-func (s *windowsSession) endDrag(lParam unsafe.Pointer) {
+func (s *windowsSession) endDrag(lParam uintptr) {
 	if s.drag.op == dragNone {
 		return
 	}
-	p := s.pointerFromClient(uintptr(lParam))
+	p := s.pointerFromClient(lParam)
 	releaseMoved := s.drag.moved || p != s.drag.originPt
 	switch s.drag.op {
 	case dragDraw:
@@ -1636,7 +1636,7 @@ func (s *windowsSession) revealHandles() {
 	}
 }
 
-func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	session := overlayStates[hwnd]
 	if session != nil {
 		switch message {
@@ -1661,7 +1661,7 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 			session.placeToolbar()
 			return 0
 		case wmSetCursor:
-			if uint32(uintptr(lParam))&0xffff == htClient {
+			if uint32(lParam)&0xffff == htClient {
 				procSetCursor.Call(session.zoneCursor())
 				return 1
 			}
@@ -1670,7 +1670,7 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 			return 0
 		}
 	}
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
 }
 
@@ -1680,8 +1680,8 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 // (SCR-010, SCR-012). Preset Rectangle: the interior is alpha zero and its
 // clicks pass to the windows beneath (SCR-022), so a press can only land on
 // the border ring and always starts a move drag (SCR-023).
-func (s *windowsSession) onButtonDown(lParam unsafe.Pointer) {
-	p := s.pointerFromClient(uintptr(lParam))
+func (s *windowsSession) onButtonDown(lParam uintptr) {
+	p := s.pointerFromClient(lParam)
 	if s.mode == ModePresetRectangle {
 		s.drag = dragState{op: dragMove, origin: s.selection, originPt: p}
 		procSetCapture.Call(uintptr(s.overlay))
@@ -1708,11 +1708,11 @@ func (s *windowsSession) onButtonDown(lParam unsafe.Pointer) {
 	procSetCapture.Call(uintptr(s.overlay))
 }
 
-func (s *windowsSession) onMouseMove(lParam unsafe.Pointer) {
+func (s *windowsSession) onMouseMove(lParam uintptr) {
 	if s.drag.op == dragNone {
 		return
 	}
-	p := s.pointerFromClient(uintptr(lParam))
+	p := s.pointerFromClient(lParam)
 	switch s.drag.op {
 	case dragDraw:
 		if !s.drag.moved && p == s.drag.anchor {
@@ -1776,7 +1776,7 @@ func (s *windowsSession) zoneCursor() uintptr {
 	}
 }
 
-func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	session := toolbarStates[hwnd]
 	switch message {
 	case wmCommand:
@@ -1829,11 +1829,11 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 					}
 				}
 			case waActive:
-				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 				session.restoreFocus()
 				return r
 			case waClickActive:
-				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 				procPostMessageW.Call(uintptr(hwnd), wmAppRestoreFocus, 0, 0)
 				return r
 			}
@@ -1877,7 +1877,7 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 		delete(toolbarStates, hwnd)
 		return 0
 	}
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
 }
 

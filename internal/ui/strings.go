@@ -46,7 +46,9 @@ const (
 )
 
 const (
-	AppName         = "GameDevTools"
+	AppName = "CyberCute Dev Tools"
+	// AppFileName names the executable and the diagnostic log.
+	AppFileName     = "cybercute-dev-tools"
 	ToolsHeading    = "TOOLS"
 	PlaceholderNote = "Placeholder view. No files or images are changed."
 
@@ -66,31 +68,49 @@ const (
 	SettingsTitle           = "Settings"
 	SettingsDescription     = "Application preferences are stored locally in a versioned per-user settings file. Diagnostic logs rotate automatically and exclude image, clipboard, and filename data."
 
-	LocalSettingsUnavailable      = "Local settings are unavailable: %v. Changes will remain in memory for this session."
-	LoggingUnavailable            = "Diagnostic logging is unavailable: %v."
-	SettingsPathUnavailable       = "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session."
-	SettingsReadFailed            = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file."
+	LocalSettingsUnavailable  = "Local settings are unavailable: %v. Changes will remain in memory for this session."
+	LoggingUnavailable        = "Diagnostic logging is unavailable: %v."
+	SettingsPathUnavailable   = "Settings are unavailable because the per-user configuration path could not be determined. Changes will remain in memory for this session."
+	SettingsReadFailed        = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled to protect the original file."
+	SettingsFolderUnreachable = "The location of %s cannot be reached: %v. Defaults are in use and saving is disabled so that no settings stored there are replaced. Reconnect its drive or network share and start the application again. If it is gone for good, delete the link or junction at that path or its folder and start the application again, which gives up any settings stored there."
+	// LegacySettingsUnreadable reports an old settings file that exists but
+	// cannot be read, which blocks saving at every launch until it can be.
+	LegacySettingsUnreadable = "Settings could not be read from %s: %v. Defaults are in use and saving is disabled so that those settings are not abandoned. Repair access to that old settings file and start the application again. If you no longer need it, delete or move it and start the application again, which gives up the settings in it."
+	// SettingsFileAppeared is why a save fails once it has found a settings
+	// file the session was only creating, as when another of the user's
+	// Windows sessions saved first.
+	SettingsFileAppeared          = "saving is disabled because a settings file exists that this session has not backed up (%w). Start the application again to load it, which gives up changes not yet saved, or use Restore Default Settings to back it up and replace it"
 	SettingsInvalidBackupFailed   = "Settings in %s are invalid (%v), and a backup could not be created: %v. Defaults are in use and saving is disabled to protect the original file."
 	SettingsInvalidRecovered      = "Settings were invalid (%v). The original was backed up to %s and defaults are now in use."
 	DefaultSettingsWriteFailed    = "Default settings could not be written: %v. Defaults remain in memory."
 	SettingsMigrationBackupFailed = "Settings were migrated in memory, but the original could not be backed up: %v. Saving is disabled to protect %s."
 	MigratedSettingsWriteFailed   = "Migrated settings could not be written: %v. The original remains at %s."
-	SettingsSaveFailed            = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
-	SettingsCloseTitle            = "GameDevTools — Settings not saved"
-	SettingsCloseConfirmation     = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
+	// LegacySettingsNotAdopted and InvalidLegacySettingsNotAdopted report a
+	// first launch that could not write the new settings file, which blocks
+	// saving for the session, and at every launch while that folder stays
+	// unusable, so they say what ends it.
+	LegacySettingsNotAdopted        = "Your settings could not be copied to the new settings file: %[1]v. Changes in this session will not be saved. Your settings remain in %[2]s, and the next launch will try again. If this keeps happening, make sure the folder %[3]s can be written: reconnect its drive or network share or, if it is gone for good, delete the link or junction at that path, which gives up any settings stored through it, or move away a file that holds its name. Then start the application again."
+	InvalidLegacySettingsNotAdopted = "Settings in %[1]s are invalid (%[2]v), and the new settings file could not be written: %[3]v. Defaults are in use and changes in this session will not be saved. The original remains in %[1]s, and the next launch will try again. If this keeps happening, make sure the folder %[4]s can be written: reconnect its drive or network share or, if it is gone for good, delete the link or junction at that path, which gives up any settings stored through it, or move away a file that holds its name. Then start the application again."
+	SettingsSaveFailed              = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
+	SettingsCloseTitle              = AppName + " — Settings not saved"
+	SettingsCloseConfirmation       = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."
 
 	// The Settings view's restore of the default settings (SET-005).
 	SettingsRestoreDescription  = "Restore Default Settings returns the global shortcut, the capture and resize options, and both output folders to their defaults. Custom presets, each module's selected preset, the images in the resize list, and saved images are kept; a preset is deleted only with Delete in its module. The current settings file is backed up first, in the same folder."
 	RestoreDefaultsAction       = "&Restore Default Settings"
-	RestoreDefaultsTitle        = "GameDevTools — Restore default settings"
+	RestoreDefaultsTitle        = AppName + " — Restore default settings"
 	RestoreDefaultsConfirmation = "Restore the default settings?\n\nThe global shortcut, the capture and resize options, and both output folders return to their defaults. Custom presets, each module's selected preset, and saved images are kept.\n\nThe current settings file is backed up first."
 	SettingsRestored            = "Default settings restored. The previous settings were backed up to %s."
 	SettingsRestoredNoBackup    = "Default settings restored."
 	SettingsRestoreFailed       = "Default settings were not restored: %v. Nothing was changed."
-	SettingsRestoreSaveFailed   = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
+	// SettingsRestoreBlocked is why a restore refuses while saving is blocked
+	// and there is no settings file to back up; SettingsRestoreFailed joins it.
+	SettingsRestoreBlocked    = "saving is disabled for this session and no settings file was found at %s to restore (%v). Resolve the problem that disabled saving, then start the application again. If it is a drive or network share that is gone for good, delete the link or junction leading to it and start the application again, which gives up any settings stored there. If it is an old settings file that cannot be read and you no longer need it, delete or move it and start the application again, which gives up the settings in it"
+	SettingsRestoreSaveFailed = "Default settings are in use for this session, but they could not be saved: %v. The settings file still holds the previous settings, which were also backed up to %s."
 	// SettingsRestoreSaveFailedNoFile is the restore's failed write when
-	// there was no settings file to back up or keep.
-	SettingsRestoreSaveFailedNoFile = "Default settings are in use for this session, but they could not be saved: %v. There was no settings file to back up."
+	// no settings file was found to back up, which may be one on a drive or
+	// share that is down.
+	SettingsRestoreSaveFailedNoFile = "Default settings are in use for this session, but they could not be saved: %v. No settings file was found to back up; a file on a drive or network share that is unavailable has not been changed."
 	SettingsRestoreInMemory         = "Default settings are in use for this session, but they cannot be saved: %v. Changes will remain in memory for this session."
 	// SettingsRestoreFollowUp joins what a module still needs after the
 	// restore, such as a default shortcut another application holds, to the
@@ -115,7 +135,7 @@ const (
 	PresetDeleteAction       = "Delete"
 	PresetBuiltInSuffix      = " (built-in)"
 	PresetListFormat         = "%s — %s%s"
-	PresetDeleteTitle        = "GameDevTools — Delete preset"
+	PresetDeleteTitle        = AppName + " — Delete preset"
 	PresetDeleteConfirmation = "Delete the custom preset %q? This cannot be undone."
 	PresetCreated            = "Preset %q was created."
 	PresetUpdated            = "Preset %q was updated."
@@ -216,9 +236,9 @@ const (
 	CaptureClipboardFailed = "Display captured and saved to %s, but copying to the clipboard failed: %v"
 	CaptureOutputsFailed   = "Display captured, but saving failed (%v) and copying to the clipboard failed (%v)."
 
-	OverlayWindowTitle        = "GameDevTools rectangle selection overlay"
-	PresetFrameWindowTitle    = "GameDevTools preset rectangle frame"
-	OverlayToolbarTitle       = "GameDevTools rectangle selection toolbar"
+	OverlayWindowTitle        = AppName + " rectangle selection overlay"
+	PresetFrameWindowTitle    = AppName + " preset rectangle frame"
+	OverlayToolbarTitle       = AppName + " rectangle selection toolbar"
 	OverlayInstructions       = "Drag to draw a rectangle, or type its size and press Enter. Move it with a drag or the arrow keys; resize it with a handle. Escape cancels."
 	OverlayPresetInstructions = "Drag the frame's border to move it, or nudge it with the arrow keys (Shift for ten pixels). Type exact dimensions to resize it. Escape cancels."
 	SelectionWidthLabel       = "&W (px)"
@@ -363,10 +383,10 @@ const (
 	ResizeJobFolderFailed   = "The output folder could not be created or used: %v. Choose another folder with Browse, or check that its drive is connected and writable."
 	ResizeJobJPEGInvalid    = "The JPEG options cannot be used: %v"
 	ResizeJobNotConfirmed   = "Resize not started: existing files are replaced only after you confirm. Choose Rename or Skip to keep them."
-	ResizeOverwriteTitle    = "GameDevTools — Replace existing files"
+	ResizeOverwriteTitle    = AppName + " — Replace existing files"
 	ResizeOverwriteConfirm  = "Resized images will replace existing files with the same names in %s.\n\nSource images are never overwritten, and an image whose existing file cannot be confirmed safe to replace is saved under a numbered name instead.\n\nReplace existing files?"
 	ResizeOpenFolderFailed  = "The output folder could not be opened: %v"
-	ResizeCloseTitle        = "GameDevTools — Resize job running"
+	ResizeCloseTitle        = AppName + " — Resize job running"
 	ResizeCloseConfirmation = "A resize job is running. Close anyway?\n\nClosing cancels the job: images already resized are kept, and the remaining images are not resized."
 
 	ResizeStatePending    = "Pending"

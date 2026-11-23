@@ -17,6 +17,8 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 )
@@ -57,7 +59,7 @@ func requireValidationRun(tb testing.TB) {
 		tb.Skipf("set %s to launch the release executable; scripts/validate.ps1 does", validationEnv)
 	}
 	if instanceRunning(tb) {
-		tb.Skip("GameDevTools is running; close it to validate the release executable")
+		tb.Skip(ui.AppName + " is running; close it to validate the release executable")
 	}
 }
 
@@ -106,8 +108,8 @@ func launchTempDir(tb testing.TB) string {
 // scripts/build.ps1 uses, for the architecture this test binary runs as.
 func buildReleaseExecutable(tb testing.TB) string {
 	tb.Helper()
-	executable := filepath.Join(launchTempDir(tb), "gamedevtools.exe")
-	command := exec.Command("go", "build", "-ldflags=-s -w -H=windowsgui", "-o", executable,
+	executable := filepath.Join(launchTempDir(tb), ui.AppFileName+".exe")
+	command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w -H=windowsgui -buildid=", "-o", executable,
 		"github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
 	command.Env = append(os.Environ(), "GOOS=windows", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=0")
 	if output, err := command.CombinedOutput(); err != nil {
@@ -449,7 +451,7 @@ func TestReleaseExecutableRunsAsStandardUserAndExitsCleanly(t *testing.T) {
 	if instanceRunning(t) {
 		t.Fatal("the single-instance mutex outlived the process")
 	}
-	configFile := filepath.Join(workspace, "Roaming", "GameDevTools", "settings.json")
+	configFile := filepath.Join(workspace, "Roaming", ui.AppName, "settings.json")
 	if _, err := os.Stat(configFile); err != nil {
 		t.Fatalf("the settings file was not written: %v", err)
 	}

@@ -26,8 +26,8 @@ The offline test opens the real main window, captures the real screen, and repla
 The vulnerability scan reads Go's public vulnerability database, so it needs a network connection and is not part of `go test`. It scans a build that keeps its symbol table, because a scan of the stripped release executable cannot tell which functions were linked:
 
 ```bash
-go build -o bin/gamedevtools-audit.exe ./cmd/gamedevtools
-go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -mode=binary bin/gamedevtools-audit.exe
+go build -o bin/cybercute-dev-tools-audit.exe ./cmd/gamedevtools
+go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -mode=binary bin/cybercute-dev-tools-audit.exe
 ```
 
 ## Environment of record
@@ -86,10 +86,10 @@ Windows can sync the clipboard to a user's other devices through their Microsoft
 
 | Location | What is written | Code |
 |---|---|---|
-| `%APPDATA%\GameDevTools` | `settings.json`, its `.settings-*.tmp` while saving, and `settings.json.corrupt-*`, `.migration-*`, and `.reset-*` backups | `internal/settings/store.go` |
-| `%LOCALAPPDATA%\GameDevTools\Logs` | `gamedevtools.log` and up to three rotated copies | `internal/diagnostics/logger.go` |
-| The Screenshot output folder the user chose, by default `Pictures\GameDevTools\Screenshots` (SCR-063) | Captures, through a `.gamedevtools-*.tmp` file in the same folder, given their final name by a hard link or, on a volume without hard links, a rename that never replaces a file | `internal/screenshot/output/output.go`, `internal/screenshot/output/finalize_windows.go` |
-| The Image Resizer output folder the user chose, by default `Pictures\GameDevTools\Resized` (RSZ-021) | Results, through a `.gamedevtools-*.tmp` file in the same folder; a confirmed Overwrite briefly renames the file it replaces to `.gamedevtools-replaced-*` | `internal/imageresizer/output` |
+| `%APPDATA%\CyberCute Dev Tools` | `settings.json`, its `.settings-*.tmp` while saving, and `settings.json.corrupt-*`, `.migration-*`, and `.reset-*` backups. | `internal/settings/store.go`, `internal/settings/rename_windows.go` |
+| `%LOCALAPPDATA%\CyberCute Dev Tools\Logs` | `cybercute-dev-tools.log` and up to three rotated copies | `internal/diagnostics/logger.go` |
+| The Screenshot output folder the user chose, by default `Pictures\CyberCute Dev Tools\Screenshots` (SCR-063) | Captures, through a `.gamedevtools-*.tmp` file in the same folder, given their final name by a hard link or, on a volume without hard links, a rename that never replaces a file | `internal/screenshot/output/output.go`, `internal/screenshot/output/finalize_windows.go` |
+| The Image Resizer output folder the user chose, by default `Pictures\CyberCute Dev Tools\Resized` (RSZ-021) | Results, through a `.gamedevtools-*.tmp` file in the same folder; a confirmed Overwrite briefly renames the file it replaces to `.gamedevtools-replaced-*` | `internal/imageresizer/output` |
 
 The application reads only the settings file, the images the user added or dropped, and the output folder's entries, which it inspects to plan names. A dropped folder contributes the files directly inside it. Source images are opened read-only. One reviewed `CreateFile` site, `output.open`, requests no access to a file's contents and reads only its identity.
 
@@ -108,6 +108,8 @@ Every diagnostic event is a UTC timestamp, a severity, a fixed operation, and a 
 
 The offline test checks a real run's log against this format. User-facing error details may show a path where recovery needs it, as SET-007 allows, and are never copied into the log.
 
+The application also reads `%APPDATA%\GameDevTools\settings.json`, the settings of a build from before the rename, while its own settings file does not exist, at launch only. It never writes to that file. When that file is reported missing too, the application opens its folder, or the nearest folder above it that exists, asks for one entry, and checks whether a link holds the file's name, only to tell a file that is gone from a share that is down. If the old file is gone, it makes the same check for its own settings file, which on a first run normally asks `%APPDATA%` for one entry. It keeps nothing it reads in either check.
+
 ## Dependency and license inventory
 
 `audit.TestDependenciesAreInventoried` fails if the application links a module that is not listed here, a different version, a module `go.mod` replaces with other code, or a changed license text.
@@ -118,7 +120,7 @@ The offline test checks a real run's log against this format. User-facing error 
 | Go standard library and runtime | go1.27.4 | BSD-3-Clause | Linked into the executable; includes the vendored `golang.org/x/net/dns/dnsmessage`, which `net` imports and the same license covers |
 | JPEG test fixtures | Go 1.26.5 distribution | BSD-3-Clause | Test data only, with the license in [`internal/imageresizer/decode/testdata/LICENSE-go`](../internal/imageresizer/decode/testdata/LICENSE-go) |
 
-There is no other module, no cgo, and no unjustified dependency to remove. The BSD-3-Clause license requires its notice to accompany binary distributions, so REL-01's package must include the Go and `x/sys` notices.
+There is no other module, no cgo, and no unjustified dependency to remove. The BSD-3-Clause license requires its notice to accompany binary distributions, so the REL-01 package carries the Go and `x/sys` notices in `THIRD-PARTY-NOTICES.txt`, and `release.TestNoticesCarryTheLinkedLicenses` fails if the Go license text is missing from it.
 
 ## Vulnerability review
 

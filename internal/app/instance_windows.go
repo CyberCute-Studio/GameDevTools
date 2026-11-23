@@ -13,7 +13,13 @@ import (
 
 // instanceMutexName is the per-session named mutex marking the running
 // instance (APP-005). The Local namespace keeps instances per user session,
-// so two users sharing a machine each get their own application.
+// so two users sharing a machine each get their own application. The name,
+// like the main window's class, predates the product's rename and is kept so
+// a build from before it and one after it cannot run side by side in one
+// session, which is what lets the first run there take over the older build's
+// settings safely. An older build in another of the user's sessions is not
+// excluded: it replaces its file whole, so the first run reads one complete
+// version of it, or fails to read it and blocks saving.
 const instanceMutexName = `Local\GameDevTools.SingleInstance`
 
 // instanceWait bounds how long a second launch waits for the instance that

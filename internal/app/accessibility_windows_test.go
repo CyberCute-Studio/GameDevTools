@@ -201,7 +201,7 @@ func (a *auditShell) selectModule(t *testing.T, id core.ModuleID) {
 	t.Helper()
 	for command, module := range a.navIDs {
 		if module == id {
-			shellWindowProc(a.hwnd, wmCommand, uintptr(command), nil)
+			shellWindowProc(a.hwnd, wmCommand, uintptr(command), 0)
 			if a.navigator.Current().ID() != id {
 				t.Fatalf("selecting %s left %s current", id, a.navigator.Current().ID())
 			}

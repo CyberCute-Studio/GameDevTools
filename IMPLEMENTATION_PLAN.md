@@ -1,7 +1,7 @@
-# GameDevTools — Implementation Plan
+# CyberCute Dev Tools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.4\
+**Version:** 1.5\
 **Last updated:** 2026-11-22\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
@@ -321,11 +321,11 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
 37. **REL-01 — Finalize product identity, packaging, and distribution**
-    - **Status:** Pending | **PR:** TBD | **Depends on:** QLT-04A
+    - **Status:** In Progress | **PR:** [#36](https://github.com/CyberCute-Studio/GameDevTools/pull/36) | **Depends on:** QLT-04A
     - **Requirements:** TECH-010 and PRD Section 19 open decisions.
     - **Deliver:** Final product/executable name, version metadata and application icon, installer and/or portable ZIP decision, code-signing decision, update-strategy decision, reproducible release build, and selected packaging implementation.
     - **Verify:** Install/run or extract/run the packaged app in a clean non-admin Windows environment without Go installed. Confirm settings paths, shortcuts, file associations if any, uninstall behavior if applicable, and artifact integrity/signing according to the chosen strategy.
-    - **Notes:** If the selected distribution or update approach cannot fit one PR, split this item before starting it and preserve backward-only dependencies.
+    - **Notes:** Started by explicit request while QLT-04A remains Pending, so this item cannot be Done until it is. Decisions (PRD 1.5, [ADR-0002](docs/adr/0002-product-identity-and-distribution.md)): the product is CyberCute Dev Tools, shipped as an unsigned portable x64 ZIP with a SHA-256 checksum and no update check. The first launch takes over a GameDevTools settings file and leaves it in place. `scripts/verify-package.ps1` checks the exact ZIP with no Go on `PATH` and its per-user folders in a temporary workspace, as a first run and an upgrade, and runs in CI. No clean machine was available, as this one has no Hyper-V or Windows Sandbox, so the clean-machine run stays with REL-03. The project has no license of its own, which must be settled before public distribution.
 
 38. **REL-02 — Complete user documentation, known limitations, and requirement traceability**
     - **Status:** Pending | **PR:** TBD | **Depends on:** REL-01
@@ -373,3 +373,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.2 | 2026-11-22 | Inserted QLT-03C for the Image Resizer defect QLT-03B found already on `main`; QLT-04 now depends on QLT-03C, and later items are renumbered. |
 | 1.3 | 2026-11-22 | Inserted QLT-03D for the settings reset QLT-03C found already on `main`; QLT-04 now depends on QLT-03D, and later items are renumbered. |
 | 1.4 | 2026-11-22 | QLT-04: Windows 10 removed from the supported platforms (PRD 1.4). Inserted QLT-04A for the x64 Windows 11, reference-machine, and mixed-DPI runs the available hardware cannot perform; REL-01 now depends on QLT-04A, and later items are renumbered. |
+| 1.5 | 2026-11-22 | REL-01: recorded the product name CyberCute Dev Tools, the portable ZIP, and the signing and update decisions (PRD 1.5, ADR-0002), and that the item started by explicit request while QLT-04A is Pending. |

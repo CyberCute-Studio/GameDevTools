@@ -383,6 +383,7 @@ func newNativeShell(navigator *core.Navigator, store *settings.Store, initial *s
 	if dpi, _, _ := procGetDpiForWindow.Call(hwnd); dpi != 0 {
 		shell.dpi = uint32(dpi)
 	}
+	setWindowIcons(shell.hwnd, shell.dpi)
 	if err := shell.createControls(); err != nil {
 		procDestroyWindow.Call(hwnd)
 		return nil, err
@@ -417,12 +418,16 @@ func registerShellClassNow() error {
 	if cursor == 0 {
 		return callError("LoadCursorW", err)
 	}
+	large, _, _ := procGetSystemMetrics.Call(smCxIcon)
+	small, _, _ := procGetSystemMetrics.Call(smCxSmIcon)
 	class := wndClassEx{
 		LpfnWndProc:   windows.NewCallback(shellWindowProc),
 		HInstance:     windows.Handle(instance),
+		HIcon:         loadAppIcon(instance, large),
 		HCursor:       windows.Handle(cursor),
 		HbrBackground: windows.Handle(colorWindow + 1),
 		LpszClassName: utf16(shellClassName),
+		HIconSm:       loadAppIcon(instance, small),
 	}
 	class.CbSize = uint32(unsafe.Sizeof(class))
 	atom, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&class)))
@@ -430,6 +435,50 @@ func registerShellClassNow() error {
 		return callError("RegisterClassExW", err)
 	}
 	return nil
+}
+
+// appIcons holds the application icon at each pixel size loaded so far. They
+// are not loaded with LR_SHARED, which LoadImage's documentation rules out for
+// non-standard sizes such as a scaled 20 or 40 pixels. They last as long as
+// the process: a class or window may hold any of them, and there are only as
+// many as there are display scales in use.
+var (
+	appIconsMutex sync.Mutex
+	appIcons      = make(map[uintptr]windows.Handle)
+)
+
+// loadAppIcon returns the executable's application icon at size pixels, or 0
+// when the running program has no icon, as a test binary does, and the class
+// then takes the default icon.
+func loadAppIcon(instance, size uintptr) windows.Handle {
+	appIconsMutex.Lock()
+	defer appIconsMutex.Unlock()
+	if icon, loaded := appIcons[size]; loaded {
+		return icon
+	}
+	icon, _, _ := procLoadImageW.Call(instance, appIconResource, imageIcon, size, size, 0)
+	// A failed load is not kept, so the next DPI change at this size retries.
+	if icon != 0 {
+		appIcons[size] = windows.Handle(icon)
+	}
+	return windows.Handle(icon)
+}
+
+// iconPixels is an icon's size in pixels at dpi, from its size at 100%.
+func iconPixels(base uintptr, dpi uint32) uintptr {
+	return (base*uintptr(dpi) + 48) / 96
+}
+
+// setWindowIcons gives the window the application icon at the sizes its DPI
+// calls for. The class's icons are sized for the system DPI, which Windows
+// would stretch on a display of another scale.
+func setWindowIcons(hwnd windows.Handle, dpi uint32) {
+	instance, _, _ := procGetModuleHandleW.Call(0)
+	for _, icon := range []struct{ kind, size uintptr }{{iconSmall, 16}, {iconBig, 32}} {
+		if handle := loadAppIcon(instance, iconPixels(icon.size, dpi)); handle != 0 {
+			procSendMessageW.Call(uintptr(hwnd), wmSetIcon, icon.kind, uintptr(handle))
+		}
+	}
 }
 
 func (s *nativeShell) createControls() error {
@@ -1027,7 +1076,7 @@ var (
 // controls: it forwards WM_DROPFILES to the shell window, which owns the
 // drop routing and the HDROP lifetime, and defers every other message to the
 // control's original procedure.
-func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	if message == wmDropFiles {
 		if root, _, _ := procGetAncestor.Call(uintptr(hwnd), gaRoot); root != 0 {
 			r, _, _ := procSendMessageW.Call(root, wmDropFiles, wParam, 0)
@@ -1038,10 +1087,10 @@ func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 	}
 	previous := dropForwardOriginals[hwnd]
 	if previous == 0 {
-		r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+		r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 		return r
 	}
-	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, lParam)
 	if message == wmDestroy {
 		delete(dropForwardOriginals, hwnd)
 	}
@@ -1200,12 +1249,17 @@ func (s *nativeShell) scale(value int32) int32 {
 // apply — the warning that the settings the session started from could not
 // be written is gone, as they now are, and an output folder's warning follows
 // the options as they now are, as it does after the module command that
-// chooses a folder (settleStartupNotice).
+// chooses a folder (settleStartupNotice). A save refused because loading
+// disabled saving keeps the startup warning that says so, why, and how to end
+// it, which the refusal's own text does not.
 func (s *nativeShell) saveSettings(captureWindow bool) error {
 	s.recordWindow(captureWindow)
 	err := s.store.Save(*s.settings)
 	if err != nil {
 		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
+		if errors.Is(err, settings.ErrSavingDisabled) && len(s.startup.settingsFile) > 0 {
+			s.notice = s.startup.text()
+		}
 		s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
 	} else {
 		s.startup.unwritten = ""
@@ -1337,8 +1391,8 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 	case err != nil && backup != "":
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreSaveFailed, err, backup)}
 	case err != nil:
-		// There was no settings file, so none holds the previous settings
-		// and nothing was backed up.
+		// No settings file was found, so nothing was backed up, though one
+		// on a share that is down may still hold the previous settings.
 		notice = ui.Notice{Kind: ui.NoticeWarning, Message: fmt.Sprintf(ui.SettingsRestoreSaveFailedNoFile, err)}
 	case backup != "":
 		notice.Message = fmt.Sprintf(ui.SettingsRestored, backup)
@@ -1359,8 +1413,8 @@ func (s *nativeShell) restoreDefaults() ui.Notice {
 
 // settleNotice brings the shell's note up to date once the default settings
 // are restored and the module views show them, err being the restore's
-// failed write, if any. The settings file was then backed up, or there was
-// none to back up, so the warnings about the file the session started from,
+// failed write, if any. The settings file was then backed up, or none was
+// found to back up, so the warnings about the file the session started from,
 // such as saving disabled to protect it or settings that could not be
 // written to it, no longer apply — but for a session without a settings
 // path (settings.ErrPathUnavailable), whose warning about that still does,
@@ -1493,12 +1547,17 @@ func staticTextBrush(dc uintptr) uintptr {
 	return brush
 }
 
-func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
+// shellWindowProc takes lParam as an integer because most messages carry a
+// number there: WM_GETICON, sent once the class has an icon, carries the DPI.
+// Declared as a pointer, a small value crashes the garbage collector when it
+// scans this frame. Only WM_DPICHANGED's lParam is a pointer, to memory
+// Windows owns.
+func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
 	case wmCommand:
 		notification := highWord(wParam)
-		if shell != nil && reportsFocus(notification, uintptr(lParam)) {
+		if shell != nil && reportsFocus(notification, lParam) {
 			shell.focus = windows.Handle(lParam)
 			if !shell.keepScroll {
 				shell.ensureControlVisible(windows.Handle(lParam))
@@ -1526,7 +1585,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				if shell.navigator.Select(id) == nil {
 					_ = shell.saveSettings(false)
 				}
-				if lParam != nil {
+				if lParam != 0 {
 					shell.ensureControlVisible(windows.Handle(lParam))
 				}
 				return 0
@@ -1566,7 +1625,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 				}
 			case waClickActive:
 				shell.clickActivating = true
-				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+				r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 				shell.clickActivating = false
 				return r
 			}
@@ -1651,9 +1710,10 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 	case wmDPIChanged:
 		if shell != nil {
 			shell.dpi = uint32(lowWord(wParam))
+			setWindowIcons(hwnd, shell.dpi)
 			shell.updateFonts()
-			if lParam != nil {
-				suggested := (*rect)(lParam)
+			if lParam != 0 {
+				suggested := *(**rect)(unsafe.Pointer(&lParam))
 				procSetWindowPos.Call(
 					uintptr(hwnd),
 					0,
@@ -1731,6 +1791,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 		return 0
 	}
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
 }

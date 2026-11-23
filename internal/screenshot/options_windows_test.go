@@ -59,7 +59,7 @@ func TestStoredFolderSpellingsStayAbsolute(t *testing.T) {
 // one no capture could use falls back to the profile's, or is reported as
 // unavailable rather than selected.
 func TestDefaultFolderIsOneACaptureCanUse(t *testing.T) {
-	const suffix = `\GameDevTools\Screenshots`
+	const suffix = `\` + ui.AppName + `\Screenshots`
 	profile := func() (string, error) { return `C:\Users\me`, nil }
 	refusedProfile := func() (string, error) { return `C:\COM1\me`, nil }
 	noProfile := func() (string, error) { return "", errors.New("no profile") }

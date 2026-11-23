@@ -103,10 +103,10 @@ var reviewedProcedures = []string{
 	"EnumDisplayMonitors", "FindWindowW", "GetAncestor", "GetClientRect", "GetCursorPos", "GetDC",
 	"GetDpiForMonitor", "GetDpiForWindow", "GetFocus", "GetKeyState", "GetMessageW", "GetModuleHandleW",
 	"GetMonitorInfoW", "GetNextDlgTabItem", "GetOpenFileNameW", "GetScrollInfo", "GetSysColor",
-	"GetSysColorBrush", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW",
+	"GetSysColorBrush", "GetSystemMetrics", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW",
 	"GlobalAlloc", "GlobalFree", "GlobalLock", "GlobalUnlock", "InvalidateRect", "IsChild",
 	"IsDialogMessageW", "IsIconic", "IsWindow", "IsWindowEnabled", "IsWindowVisible", "IsZoomed", "KillTimer",
-	"LoadCursorW", "MapWindowPoints", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
+	"LoadCursorW", "LoadImageW", "MapWindowPoints", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
 	"OpenClipboard", "PostMessageW", "PostQuitMessage", "RegisterClassExW", "RegisterClipboardFormatW",
 	"RegisterHotKey", "ReleaseCapture", "ReleaseDC", "RtlMoveMemory", "SHBrowseForFolderW",
 	"SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkMode", "SetCapture", "SetClipboardData",
@@ -180,14 +180,16 @@ var reviewedFileSites = map[string]string{
 	"internal/diagnostics/logger.go Logger.rotate os.Remove": logFolder,
 	"internal/diagnostics/logger.go Logger.rotate os.Rename": logFolder,
 
-	"internal/settings/store.go Store.backup os.MkdirAll":               settingsFolder,
-	"internal/settings/store.go Store.backup os.OpenFile":               settingsFolder,
-	"internal/settings/store.go Store.backup os.Remove":                 settingsFolder,
-	"internal/settings/store.go Store.removeStaleTemporaries os.Remove": settingsFolder,
-	"internal/settings/store.go Store.write os.CreateTemp":              settingsFolder,
-	"internal/settings/store.go Store.write os.MkdirAll":                settingsFolder,
-	"internal/settings/store.go Store.write os.Remove":                  settingsFolder,
-	"internal/settings/store.go Store.write os.Rename":                  settingsFolder,
+	"internal/settings/rename_windows.go renameNoReplace windows.MoveFileEx": settingsFolder,
+	"internal/settings/store.go Store.backup os.MkdirAll":                    settingsFolder,
+	"internal/settings/store.go Store.backup os.OpenFile":                    settingsFolder,
+	"internal/settings/store.go Store.backup os.Remove":                      settingsFolder,
+	"internal/settings/store.go Store.load os.Remove":                        settingsFolder,
+	"internal/settings/store.go Store.place os.CreateTemp":                   settingsFolder,
+	"internal/settings/store.go Store.place os.MkdirAll":                     settingsFolder,
+	"internal/settings/store.go Store.place os.Remove":                       settingsFolder,
+	"internal/settings/store.go Store.removeStaleTemporaries os.Remove":      settingsFolder,
+	"internal/settings/store.go Store.write os.Rename":                       settingsFolder,
 
 	"internal/screenshot/output/output.go saveWithEncoder os.CreateTemp":              screenshotFolder,
 	"internal/screenshot/output/output.go claimName os.Link":                          screenshotFolder,
@@ -901,4 +903,136 @@ func stringLiteral(expression ast.Expr) (string, bool) {
 	}
 	value, err := strconv.Unquote(literal.Value)
 	return value, err == nil
+}
+
+// TestWindowProceduresTakeLParamAsAnInteger pins that no function declares a
+// message's lParam as a pointer, and that no function given to Windows as a
+// callback takes an unsafe.Pointer under any name or a typed pointer as its
+// fourth parameter, where a window procedure receives lParam. Most messages
+// carry a number there, such as the DPI in WM_GETICON or a position in a mouse
+// message, and the garbage collector crashes the process if it finds a small
+// value in a pointer slot.
+func TestWindowProceduresTakeLParamAsAnInteger(t *testing.T) {
+	for _, problem := range callbackPointerProblems(applicationSources(t)) {
+		t.Error(problem)
+	}
+}
+
+// TestCallbackPointerProblemsFindsEveryForm pins what the audit above catches,
+// as a guard that stops matching passes without saying so.
+func TestCallbackPointerProblemsFindsEveryForm(t *testing.T) {
+	for name, body := range map[string]string{
+		"declared lParam":     `func proc(h uintptr, lParam unsafe.Pointer) uintptr { return 0 }`,
+		"typed lParam":        `func proc(h uintptr, lParam *rect) uintptr { return 0 }`,
+		"literal lParam":      `var proc = func(h uintptr, lParam unsafe.Pointer) uintptr { return 0 }`,
+		"literal callback":    `var c = windows.NewCallback(func(h uintptr, lp unsafe.Pointer) uintptr { return 0 })`,
+		"declared callback":   `var c = windows.NewCallback(proc); func proc(h uintptr, lp unsafe.Pointer) uintptr { return 0 }`,
+		"unresolved callback": `var c = windows.NewCallback(other.Proc)`,
+		"typed fourth":        `var c = windows.NewCallback(proc); func proc(h uintptr, m uint32, w uintptr, lp *rect) uintptr { return 0 }`,
+		"grouped typed":       `var c = windows.NewCallback(func(h uintptr, m uint32, w, lp *rect) uintptr { return 0 })`,
+		"typed lParam fourth": `var c = windows.NewCallback(proc); func proc(h uintptr, m uint32, w uintptr, lParam *rect) uintptr { return 0 }`,
+	} {
+		file, err := parser.ParseFile(token.NewFileSet(), "sample.go", "package sample\n"+body, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if problems := callbackPointerProblems([]sourceFile{{name: "internal/sample/sample.go", file: file}}); len(problems) != 1 {
+			t.Errorf("%s: problems = %v, want one", name, problems)
+		}
+	}
+	// A real pointer before the fourth parameter is what a monitor enumeration
+	// callback receives, so it stays allowed.
+	for _, body := range []string{
+		"var c = windows.NewCallback(proc)\nfunc proc(h uintptr, r *rect, lParam uintptr) uintptr { return 0 }",
+		"var c = windows.NewCallback(proc)\nfunc proc(m, h uintptr, r *rect, data uintptr) uintptr { return 0 }",
+	} {
+		file, err := parser.ParseFile(token.NewFileSet(), "sample.go", "package sample\n"+body, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if problems := callbackPointerProblems([]sourceFile{{name: "internal/sample/sample.go", file: file}}); len(problems) != 0 {
+			t.Errorf("a callback with integer and typed-pointer parameters was refused: %v", problems)
+		}
+	}
+}
+
+// callbackPointerProblems describes every function, declared or literal, with
+// a pointer parameter named lParam, and every function passed to NewCallback
+// with an unsafe.Pointer parameter, a typed pointer as its fourth parameter, or
+// that cannot be found to check.
+func callbackPointerProblems(sources []sourceFile) []string {
+	declared := map[string]*ast.FuncType{}
+	for _, source := range sources {
+		for _, declaration := range source.file.Decls {
+			if function, ok := declaration.(*ast.FuncDecl); ok && function.Recv == nil {
+				declared[filepath.ToSlash(filepath.Dir(source.name))+"."+function.Name.Name] = function.Type
+			}
+		}
+	}
+	isPointer := func(field *ast.Field) bool {
+		selector, ok := field.Type.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "Pointer" {
+			return false
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		return ok && pkg.Name == "unsafe"
+	}
+	isLParam := func(name *ast.Ident) bool { return strings.EqualFold(name.Name, "lParam") }
+	var problems []string
+	checkLParam := func(source sourceFile, function *ast.FuncType) {
+		for _, field := range function.Params.List {
+			_, typed := field.Type.(*ast.StarExpr)
+			if (typed || isPointer(field)) && slices.ContainsFunc(field.Names, isLParam) {
+				problems = append(problems, fmt.Sprintf("%s: a function declares lParam as a pointer", source.name))
+			}
+		}
+	}
+	// A parameter named lParam is left to checkLParam, which sees every
+	// function, so that it is reported once. The fourth parameter is a window
+	// procedure's lParam whatever it is called, so it may not be a typed
+	// pointer either; one before it is real, as a monitor callback's rectangle.
+	checkCallback := func(source sourceFile, function *ast.FuncType) {
+		position := 0
+		for _, field := range function.Params.List {
+			if isPointer(field) && !slices.ContainsFunc(field.Names, isLParam) {
+				problems = append(problems, fmt.Sprintf("%s: a Windows callback takes an unsafe.Pointer", source.name))
+			}
+			count := max(len(field.Names), 1)
+			if _, typed := field.Type.(*ast.StarExpr); typed && position < 4 && position+count >= 4 {
+				if len(field.Names) == 0 || !isLParam(field.Names[3-position]) {
+					problems = append(problems, fmt.Sprintf("%s: a Windows callback takes a pointer as its fourth parameter, a window procedure's lParam", source.name))
+				}
+			}
+			position += count
+		}
+	}
+	for _, source := range sources {
+		ast.Inspect(source.file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.FuncDecl:
+				checkLParam(source, node.Type)
+			case *ast.FuncLit:
+				checkLParam(source, node.Type)
+			case *ast.CallExpr:
+				selector, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok || !strings.HasPrefix(selector.Sel.Name, "NewCallback") || len(node.Args) != 1 {
+					break
+				}
+				switch callback := node.Args[0].(type) {
+				case *ast.FuncLit:
+					checkCallback(source, callback.Type)
+				case *ast.Ident:
+					if function, ok := declared[filepath.ToSlash(filepath.Dir(source.name))+"."+callback.Name]; ok {
+						checkCallback(source, function)
+					} else {
+						problems = append(problems, fmt.Sprintf("%s: cannot find the callback %s to check it", source.name, callback.Name))
+					}
+				default:
+					problems = append(problems, fmt.Sprintf("%s: cannot check a callback that is not a function of this package", source.name))
+				}
+			}
+			return true
+		})
+	}
+	return problems
 }

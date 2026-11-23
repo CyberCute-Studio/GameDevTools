@@ -4,6 +4,7 @@ package app
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -91,6 +92,10 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 // a second launch restores the running instance's minimized window. A
 // missing window reports false instead of failing.
 func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
+	// The window belongs to the thread that creates it, and this thread pumps
+	// no messages, so ShowWindow from any other thread would wait forever.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	if activateExistingInstance("GameDevToolsNoSuchWindowClass", 0) {
 		t.Fatal("activation reported a window that does not exist")
 	}
@@ -146,6 +151,9 @@ func TestActivateExistingInstanceWaitsForStartupWindow(t *testing.T) {
 	destroyed := make(chan struct{})
 	go func() {
 		defer close(destroyed)
+		// Only the thread that creates a window can destroy it.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
 		time.Sleep(100 * time.Millisecond)
 		instance, _, err := procGetModuleHandleW.Call(0)
 		if instance == 0 {
@@ -189,7 +197,7 @@ func TestActivateExistingInstanceWaitsForStartupWindow(t *testing.T) {
 	<-destroyed
 }
 
-func defWindowProcCallback(hwnd windows.Handle, message uint32, wParam uintptr, lParam unsafe.Pointer) uintptr {
-	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, uintptr(lParam))
+func defWindowProcCallback(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	r, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(message), wParam, lParam)
 	return r
 }
