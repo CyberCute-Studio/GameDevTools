@@ -172,6 +172,9 @@ type ResultCard struct {
 	font    windows.Handle
 	fontDPI uint32
 	path    string
+	// showing is the result on the card, so that a press on a button ends
+	// when another takes its place.
+	showing CardEntry
 }
 
 // NewResultCard returns a card that appears where place says, as of each
@@ -210,9 +213,12 @@ func (c *ResultCard) WithdrawSettings() {
 	}
 }
 
-// Suspend hides the card, keeping its results, before a capture.
+// Suspend hides the card before a capture, keeping its problems. A success on
+// it has been seen and ends here, or a capture that ends with no result of its
+// own, as a cancelled selection does, would bring it back as if it were new.
 func (c *ResultCard) Suspend() {
 	c.suspended = true
+	c.queue.expire()
 	c.hide()
 }
 
@@ -258,8 +264,26 @@ func (c *ResultCard) Destroy() {
 
 func (c *ResultCard) hide() {
 	if c.hwnd != 0 {
+		c.cancelPress()
 		procKillTimer.Call(uintptr(c.hwnd), cardTimerID)
 		procShowWindow.Call(uintptr(c.hwnd), swHide)
+	}
+}
+
+// cancelPress ends a press on the card's buttons, so that releasing the mouse
+// cannot dismiss or open a result other than the one it was pressed on.
+func (c *ResultCard) cancelPress() {
+	if c.hwnd == 0 {
+		return
+	}
+	for _, button := range []*Button{c.openBtn, c.dismiss} {
+		state := cardButtons[button.hwnd]
+		if state == nil || !state.pressed {
+			continue
+		}
+		state.pressed = false
+		procCardReleaseCapture.Call()
+		procSendMessageW.Call(uintptr(button.hwnd), cardBMSetState, 0, 0)
 	}
 }
 
@@ -274,6 +298,10 @@ func (c *ResultCard) present(announce bool) {
 	}
 	if c.hwnd == 0 && c.create() != nil {
 		return
+	}
+	if entry != c.showing {
+		c.cancelPress()
+		c.showing = entry
 	}
 	placement := CardPlacement{}
 	if c.place != nil {

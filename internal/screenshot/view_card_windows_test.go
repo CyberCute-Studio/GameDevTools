@@ -121,6 +121,33 @@ func TestShortcutCaptureWatchedInTheViewStaysOffTheCard(t *testing.T) {
 	}
 }
 
+// TestShortcutReadsWhetherTheViewIsInFront runs the real calculation of
+// watched through the shortcut, with the view in front and then behind.
+func TestShortcutReadsWhetherTheViewIsInFront(t *testing.T) {
+	view, card, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	showViewOffScreen(t, view)
+	view.capture = func(CaptureRequest) CaptureResult {
+		return CaptureResult{Save: errors.New("access denied")}
+	}
+
+	view.foregroundWindow = func() windows.Handle { return view.parent }
+	view.NativeHotkey(globalShortcutHotkeyID)
+	// Only the start counts here: a foreground window at the end would move
+	// anything on the card to the status area and hide a wrong report.
+	view.foregroundWindow = func() windows.Handle { return 0 }
+	dispatcher.runNext(t)
+	if len(card.reports) != 0 {
+		t.Fatalf("a capture with the view in front reached the card: %+v", card.reports)
+	}
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	dispatcher.runNext(t)
+	if len(card.reports) != 1 {
+		t.Fatalf("a capture with another application in front: card = %+v", card.reports)
+	}
+}
+
 func TestShortcutRefusalsAndLostSessionsReachTheCard(t *testing.T) {
 	t.Run("invalid JPEG quality", func(t *testing.T) {
 		view, card, _ := newCardTestView(t)
@@ -347,6 +374,83 @@ func TestRestoreDefaultsWithdrawsSettingProblems(t *testing.T) {
 			t.Fatalf("status = %q, want the resolved problem gone", text)
 		}
 	})
+}
+
+// TestRestoreDefaultsKeepsWhatItDoesNotResolve covers a status notice moved
+// from the card: a capture's result survives the restore, a refusal of a
+// setting does not, and a default shortcut still taken does not erase a
+// capture failure.
+func TestRestoreDefaultsKeepsWhatItDoesNotResolve(t *testing.T) {
+	conflict := ui.Notice{Kind: ui.NoticeError, Message: "bad shortcut"}
+	failure := ui.Notice{Kind: ui.NoticeWarning, Message: "save failed"}
+
+	t.Run("the latest result beside a shortcut failure", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		view.showOutcome(ui.Notice{Kind: ui.NoticeSuccess, Message: `Saved to C:\Shots\two.png`})
+		view.shortcut.Error.SetTextQuietly(conflict.Message)
+		card.ReportSetting(conflict)
+		showViewOffScreen(t, view)
+		view.NativeRestoreDefaults()
+		if text := view.status.Text(); strings.Contains(text, "bad shortcut") || !strings.Contains(text, "two.png") {
+			t.Fatalf("status = %q, want the latest result alone", text)
+		}
+	})
+	t.Run("a refused setting beside a capture failure", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		view.quality.Edit.SetText("500")
+		view.NativeAction()
+		card.reports = nil
+		card.Report(failure, "")
+		showViewOffScreen(t, view)
+		if text := view.status.Text(); !strings.Contains(text, "JPEG quality") {
+			t.Fatalf("status before the restore = %q", text)
+		}
+		view.NativeRestoreDefaults()
+		if text := view.status.Text(); strings.Contains(text, "JPEG quality") || !strings.Contains(text, "save failed") {
+			t.Fatalf("status = %q, want the failure alone", text)
+		}
+	})
+	t.Run("a default shortcut still taken", func(t *testing.T) {
+		view, card, _ := newCardTestView(t)
+		card.ReportSetting(conflict)
+		card.Report(failure, "")
+		showViewOffScreen(t, view)
+		view.hotkeys.(*fakeHotkeyRegistrar).applyFunc = func(Shortcut) error { return errors.New("held by another application") }
+		view.NativeRestoreDefaults()
+		text := view.status.Text()
+		if !strings.Contains(text, "save failed") || !strings.Contains(text, "held by another application") || strings.Contains(text, "bad shortcut") {
+			t.Fatalf("status = %q, want the failure and the new conflict", text)
+		}
+	})
+}
+
+// TestReclaimedProblemsKeepADisplayFailure is a failed display list and a
+// shortcut conflict at startup with another module remembered: the failure
+// the status area holds is not replaced by the conflict from the card.
+func TestReclaimedProblemsKeepADisplayFailure(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.listDisplays = func() ([]display.Display, error) { return nil, errors.New("enumeration failed") }
+	view.refreshDisplays()
+	card.ReportSetting(ui.Notice{Kind: ui.NoticeError, Message: "bad shortcut"})
+	showViewOffScreen(t, view)
+	if text := view.status.Text(); !strings.Contains(text, "enumeration failed") || !strings.Contains(text, "bad shortcut") {
+		t.Fatalf("status = %q, want both problems", text)
+	}
+}
+
+// TestStatusScrolledOutOfTheClientAreaIsNotInSight is a status area scrolled
+// up under the main window's title bar, where the window at its center is the
+// main window itself.
+func TestStatusScrolledOutOfTheClientAreaIsNotInSight(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	offScreen := int32(-20000)
+	procViewTestMoveWindow.Call(uintptr(view.parent), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
+	view.status.Move(10, -100, 200, 60)
+	view.windowAtPoint = func(int32, int32) uintptr { return uintptr(view.parent) }
+	if !view.statusCenterCovered() {
+		t.Fatal("a status area above the client area counts as in sight")
+	}
 }
 
 // TestProblemsMoveOnceACaptureEndsWithTheUserBack is the user returning to

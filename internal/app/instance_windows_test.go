@@ -137,6 +137,36 @@ func TestActivateExistingInstanceLeavesACaptureHiddenWindow(t *testing.T) {
 	}
 }
 
+// TestActivateExistingInstanceWaitsForAWindowStillStarting is a launch while
+// the first one's window exists but has not been shown: it is brought forward
+// once it appears, where leaving it would let it open behind other windows.
+func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	className, hwnd := newInstanceTestWindow(t)
+	const swShowNAInstanceTest = 8
+	offScreen := int32(-22000)
+	procSetWindowPos.Call(hwnd, 0, uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 50, 50, swpNoZOrder|swpNoActivate)
+	// The window's own thread shows it, as it does not pump messages for a
+	// ShowWindow from another; the second launch runs beside it.
+	started := time.Now()
+	done := make(chan time.Duration, 1)
+	go func() {
+		activateExistingInstance(className, 0)
+		done <- time.Since(started)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	procShowWindow.Call(hwnd, swShowNAInstanceTest)
+	select {
+	case elapsed := <-done:
+		if elapsed >= instanceShowWait {
+			t.Fatalf("activation took %v, so it did not see the window appear", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("activation did not return")
+	}
+}
+
 const swMinimizeInstanceTest = 6
 
 // newInstanceTestWindow creates a hidden top-level window of a unique class on

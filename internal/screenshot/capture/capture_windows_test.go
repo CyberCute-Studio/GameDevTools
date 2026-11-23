@@ -699,13 +699,22 @@ func TestHideKeepsPreviouslyHiddenWindowHidden(t *testing.T) {
 // main window, which SW_SHOWNOACTIVATE brought back at its normal size, so
 // closing the application then saved it as not maximized (SET-002).
 func TestRestoreKeepsAMaximizedWindowMaximized(t *testing.T) {
-	const swMaximize = 3
+	const (
+		gwlStyle   = ^uintptr(15) // -16 as a uintptr
+		wsMaximize = 0x01000000
+	)
 	isZoomed := user32.NewProc("IsZoomed")
-	monitor := display.NewMonitor()
-	hwnd, _ := createSolidWindow(t, monitor, 240, 180, color.RGBA{R: 0x10, G: 0x60, B: 0xA0, A: 0xFF})
-	procShowWindow.Call(uintptr(hwnd), swMaximize)
+	getStyle := user32.NewProc("GetWindowLongPtrW")
+	setStyle := user32.NewProc("SetWindowLongPtrW")
+	// The window is marked maximized where it is, off every display: really
+	// maximizing it would cover the primary display, topmost, while capture
+	// tests in other packages read it.
+	region := display.Rect{Left: -22000, Top: -22000, Right: -21760, Bottom: -21820}
+	hwnd := showSolidWindow(t, region, color.RGBA{R: 0x10, G: 0x60, B: 0xA0, A: 0xFF})
+	style, _, _ := getStyle.Call(uintptr(hwnd), gwlStyle)
+	setStyle.Call(uintptr(hwnd), gwlStyle, style|wsMaximize)
 	if zoomed, _, _ := isZoomed.Call(uintptr(hwnd)); zoomed == 0 {
-		t.Skip("the test window could not be maximized")
+		t.Fatal("the test window is not marked maximized")
 	}
 
 	exclusion, err := Hide(uintptr(hwnd))

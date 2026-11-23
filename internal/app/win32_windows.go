@@ -12,6 +12,7 @@ import (
 const (
 	wmDestroy         = 0x0002
 	wmSize            = 0x0005
+	sizeMinimized     = 1
 	wmActivate        = 0x0006
 	wmSetFocus        = 0x0007
 	wmGetDlgCode      = 0x0087
@@ -140,6 +141,7 @@ var (
 	procUpdateWindow                  = user32.NewProc("UpdateWindow")
 	procMoveWindow                    = user32.NewProc("MoveWindow")
 	procGetClientRect                 = user32.NewProc("GetClientRect")
+	procGetForegroundWindow           = user32.NewProc("GetForegroundWindow")
 	procGetWindowRect                 = user32.NewProc("GetWindowRect")
 	procGetWindowPlacement            = user32.NewProc("GetWindowPlacement")
 	procIsZoomed                      = user32.NewProc("IsZoomed")

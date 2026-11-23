@@ -31,6 +31,10 @@ const instanceMutexName = `Local\GameDevTools.SingleInstance`
 // shutdown, so raising that bound raises this one.
 const instanceWait = imageresizer.JobShutdownWait + 5*time.Second
 
+// instanceShowWait bounds how long a second launch waits for a hidden window
+// to appear, as one that is starting does.
+const instanceShowWait = time.Second
+
 // enforceSingleInstance guarantees one running instance per user session
 // (APP-005). When another instance already holds the mutex, its window is
 // activated and activated reports true so the caller exits immediately;
@@ -97,7 +101,9 @@ func acquireInstance(name string) (handle uintptr, already bool, err error) {
 // instead of exiting without showing anything. While the existing instance
 // is capturing, its main window is intentionally hidden, and it is left
 // hidden: a window minimized before the capture is still iconic, so restoring
-// it would show it under the overlay and put it in the image (SCR-044).
+// it would show it under the overlay and put it in the image (SCR-044). A
+// window still starting is hidden too, for a moment, so a hidden window gets
+// instanceShowWait to appear before it is taken for a capture's.
 func activateExistingInstance(className string, wait time.Duration) bool {
 	hwnd := findInstanceWindow(className)
 	for deadline := time.Now().Add(wait); hwnd == 0 && time.Now().Before(deadline); {
@@ -107,8 +113,14 @@ func activateExistingInstance(className string, wait time.Duration) bool {
 	if hwnd == 0 {
 		return false
 	}
-	if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
-		return true
+	for deadline := time.Now().Add(instanceShowWait); ; {
+		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible != 0 {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
 		procShowWindow.Call(hwnd, swRestore)

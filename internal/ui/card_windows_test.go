@@ -183,6 +183,62 @@ func TestResultCardPressLeavesActivationAndFocusAlone(t *testing.T) {
 	}
 }
 
+// TestResultCardPressEndsWhenTheResultChanges is a press on Dismiss while the
+// card moves on: releasing it must not remove a problem the user never saw.
+func TestResultCardPressEndsWhenTheResultChanges(t *testing.T) {
+	const onButton = 0x00050005
+	press := func(card *ResultCard) {
+		procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonDown, 1, onButton)
+	}
+	release := func(card *ResultCard) {
+		procSendMessageW.Call(uintptr(card.dismiss.hwnd), cardWMLButtonUp, 0, onButton)
+	}
+
+	t.Run("the success leaves during the press", func(t *testing.T) {
+		card := newOffScreenCard(t, nil)
+		card.Report(Notice{Kind: NoticeError, Message: "unread failure"}, "")
+		card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+		press(card)
+		cardWindowProc(card.hwnd, cardWMTimer, cardTimerID, 0)
+		release(card)
+		if len(card.queue.problems) != 1 {
+			t.Fatalf("problems = %+v, want the failure kept", card.queue.problems)
+		}
+	})
+	t.Run("a capture hides the card during the press", func(t *testing.T) {
+		card := newOffScreenCard(t, nil)
+		card.Report(Notice{Kind: NoticeError, Message: "unread failure"}, "")
+		press(card)
+		card.Suspend()
+		release(card)
+		if len(card.queue.problems) != 1 {
+			t.Fatalf("problems = %+v, want the failure kept", card.queue.problems)
+		}
+	})
+	t.Run("the same result keeps its press", func(t *testing.T) {
+		card := newOffScreenCard(t, nil)
+		card.Report(Notice{Kind: NoticeError, Message: "failure"}, "")
+		press(card)
+		card.Reposition()
+		release(card)
+		if len(card.queue.problems) != 0 {
+			t.Fatalf("problems = %+v, want the press to dismiss it", card.queue.problems)
+		}
+	})
+}
+
+// TestResultCardDropsASuccessForACapture is a selection started while a
+// success shows and then cancelled: the old success must not come back.
+func TestResultCardDropsASuccessForACapture(t *testing.T) {
+	card := newOffScreenCard(t, nil)
+	card.Report(Notice{Kind: NoticeSuccess, Message: "saved"}, `C:\Shots\one.png`)
+	card.Suspend()
+	card.Resume()
+	if cardVisible(card.hwnd) {
+		t.Fatalf("the earlier success came back: %q", card.message.Text())
+	}
+}
+
 func TestResultCardWithdrawsSettingProblems(t *testing.T) {
 	card := newOffScreenCard(t, nil)
 	card.ReportSetting(Notice{Kind: NoticeError, Message: "conflict"})

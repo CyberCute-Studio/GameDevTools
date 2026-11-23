@@ -50,6 +50,8 @@ var (
 	procViewGetWindowRect       = viewUser32.NewProc("GetWindowRect")
 	procViewWindowFromPoint     = viewUser32.NewProc("WindowFromPoint")
 	procViewGetAncestor         = viewUser32.NewProc("GetAncestor")
+	procViewGetClientRect       = viewUser32.NewProc("GetClientRect")
+	procViewMapWindowPoints     = viewUser32.NewProc("MapWindowPoints")
 )
 
 // viewGARoot is GetAncestor's GA_ROOT.
@@ -145,6 +147,9 @@ type NativeView struct {
 	reclaimed       []ui.CardEntry
 	reclaimedLatest ui.Notice
 	reclaimedNotice uint64
+	// reclaimedLatestSetting is whether that later result is Start Capture's
+	// refusal of a setting, which the restore resolves too.
+	reclaimedLatestSetting bool
 	// foregroundWindow and windowAtPoint read the desktop; tests replace them,
 	// as their windows are off every display, where nothing hits them, and
 	// never in front.
@@ -348,14 +353,23 @@ func (n *NativeView) statusInSight() bool {
 	return n.statusVisible() && !n.statusCenterCovered()
 }
 
-// statusCenterCovered reports whether the window at the center of the status
-// area belongs to another top-level window.
+// statusCenterCovered reports whether the center of the status area is out of
+// sight: scrolled outside the main window's client area, where the window
+// there can still be the main window's own title bar, or under another
+// top-level window.
 func (n *NativeView) statusCenterCovered() bool {
-	var bounds viewRect
+	var bounds, client viewRect
 	if r, _, _ := procViewGetWindowRect.Call(uintptr(n.status.Handle()), uintptr(unsafe.Pointer(&bounds))); r == 0 {
 		return true
 	}
+	if r, _, _ := procViewGetClientRect.Call(uintptr(n.parent), uintptr(unsafe.Pointer(&client))); r == 0 {
+		return true
+	}
+	procViewMapWindowPoints.Call(uintptr(n.parent), 0, uintptr(unsafe.Pointer(&client)), 2)
 	x, y := bounds.Left+(bounds.Right-bounds.Left)/2, bounds.Top+(bounds.Bottom-bounds.Top)/2
+	if x < client.Left || x >= client.Right || y < client.Top || y >= client.Bottom {
+		return true
+	}
 	hit := n.windowAtPoint(x, y)
 	if hit == 0 {
 		return true
@@ -403,7 +417,8 @@ func (n *NativeView) resumeCard() {
 // the user can see it, so the keyboard reaches them: the card itself never
 // takes the focus. It waits while a capture runs, whose result would replace
 // them in the status area. A later result the status area shows stays beside
-// them, and Open Folder keeps a saved file when the latest capture has none.
+// them, as does a display failure, which has no other home, and Open Folder
+// keeps a saved file when the latest capture has none.
 func (n *NativeView) reclaimProblems() {
 	if n.inProgress || (n.sessions != nil && n.sessions.Active()) || !n.statusVisible() {
 		return
@@ -412,14 +427,24 @@ func (n *NativeView) reclaimProblems() {
 	if len(entries) == 0 {
 		return
 	}
-	latest := ui.Notice{}
-	if n.status.Revision() == n.latestNotice && !slices.ContainsFunc(entries, func(entry ui.CardEntry) bool {
-		return entry.Notice == n.latestOutcome
-	}) {
-		latest = n.latestOutcome
+	holds := func(notice ui.Notice) bool {
+		return slices.ContainsFunc(entries, func(entry ui.CardEntry) bool { return entry.Notice == notice })
 	}
-	n.showReclaimed(entries, latest)
-	if len(entries) == 1 && entries[0].Setting && entries[0].Notice.Message == n.shortcut.Error.Text() {
+	latest, latestSetting := ui.Notice{}, false
+	if n.status.Revision() == n.latestNotice {
+		if !holds(n.latestOutcome) {
+			latest, latestSetting = n.latestOutcome, n.latestNotice == n.optionsNotice
+		}
+	} else if n.displayErr != nil && n.options.Options().Mode == ModeFullDisplay {
+		failure := ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.DisplayUnavailable, n.displayErr)}
+		if !holds(failure) {
+			entries = append([]ui.CardEntry{{Notice: failure}}, entries...)
+		}
+	}
+	n.showReclaimed(entries, latest, latestSetting)
+	if slices.ContainsFunc(entries, func(entry ui.CardEntry) bool {
+		return entry.Setting && entry.Notice.Message == n.shortcut.Error.Text()
+	}) {
 		// The field shows the same failure, which NativeAnnounceNotice would
 		// otherwise read a second time.
 		n.shortcutNotice = n.status.Revision()
@@ -437,24 +462,36 @@ func (n *NativeView) reclaimProblems() {
 
 // showReclaimed shows problems from the card, and records them so the restore
 // of the default settings can take out those it resolves.
-func (n *NativeView) showReclaimed(entries []ui.CardEntry, latest ui.Notice) {
+func (n *NativeView) showReclaimed(entries []ui.CardEntry, latest ui.Notice, latestSetting bool) {
 	_ = n.status.Show(problemsNotice(entries, latest), 0)
 	n.reclaimed, n.reclaimedLatest, n.reclaimedNotice = entries, latest, n.status.Revision()
+	n.reclaimedLatestSetting = latestSetting
 }
 
-// withdrawReclaimedSettings takes the problems with a setting out of a status
-// notice that came from the card, keeping the rest of it.
+// showingReclaimed reports whether the status area still shows the notice
+// that came from the card.
+func (n *NativeView) showingReclaimed() bool {
+	return n.reclaimedNotice != 0 && n.status.Revision() == n.reclaimedNotice
+}
+
+// withdrawReclaimedSettings takes the problems with a setting, and a later
+// refusal of a setting, out of a status notice that came from the card,
+// keeping the rest of it.
 func (n *NativeView) withdrawReclaimedSettings() {
-	if n.reclaimedNotice == 0 || n.status.Revision() != n.reclaimedNotice {
+	if !n.showingReclaimed() {
 		return
 	}
 	kept := slices.DeleteFunc(slices.Clone(n.reclaimed), func(entry ui.CardEntry) bool { return entry.Setting })
+	latest := n.reclaimedLatest
+	if n.reclaimedLatestSetting {
+		latest = ui.Notice{}
+	}
 	switch {
-	case len(kept) == len(n.reclaimed):
+	case len(kept) == len(n.reclaimed) && latest == n.reclaimedLatest:
 	case len(kept) > 0:
-		n.showReclaimed(kept, n.reclaimedLatest)
-	case n.reclaimedLatest.Message != "":
-		n.showOutcome(n.reclaimedLatest)
+		n.showReclaimed(kept, latest, false)
+	case latest.Message != "":
+		n.showOutcome(latest)
 	default:
 		n.status.Clear()
 	}
@@ -489,9 +526,12 @@ func problemsNotice(entries []ui.CardEntry, latest ui.Notice) ui.Notice {
 // the view, is still hidden, where its announcement goes unheard. A shortcut
 // failure that a later notice replaced in the status area, as a display
 // failure at startup in Full Display mode replaces a conflict, is still
-// shown beside the field, and is announced from there.
+// shown beside the field, and is announced from there. Problems moved from
+// the card were announced as they moved.
 func (n *NativeView) NativeAnnounceNotice() {
-	n.status.Announce()
+	if !n.showingReclaimed() {
+		n.status.Announce()
+	}
 	if n.status.Revision() != n.shortcutNotice {
 		n.shortcut.Error.Announce()
 	}
@@ -806,8 +846,7 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 		n.fromShortcut = fromShortcut
 		n.watched = false
 		if fromShortcut && n.statusVisible() {
-			foreground, _, _ := procViewGetForegroundWindow.Call()
-			n.watched = windows.Handle(foreground) == n.parent
+			n.watched = n.foregroundWindow() == n.parent
 		}
 	}
 	// The quality field otherwise commits only when it loses focus, and
@@ -1300,17 +1339,34 @@ func (n *NativeView) NativeRestoreDefaults() string {
 	options := n.options.Options()
 	n.shortcut.Edit.SetText(options.Shortcut.String())
 	n.shortcut.Error.SetText("")
-	n.status.ClearShown(n.shortcutNotice, n.optionsNotice)
+	// A notice from the card goes first: it can hold a capture's result beside
+	// the setting it reports, which clearing the whole notice would lose.
 	n.card.WithdrawSettings()
 	n.withdrawReclaimedSettings()
+	n.status.ClearShown(n.shortcutNotice, n.optionsNotice)
 	if n.hotkeys != nil {
 		if err := n.hotkeys.Apply(options.Shortcut); err != nil {
 			n.hotkeys.Release()
-			n.presentShortcutFailure(err)
+			n.presentRestoredShortcutFailure(err)
 			followUps = append(followUps, ui.FormatError(ui.ErrorShortcutRegistration, err))
 		}
 	}
 	return strings.Join(followUps, " ")
+}
+
+// presentRestoredShortcutFailure reports a default shortcut another
+// application holds, keeping any problems from the card that the status area
+// still shows, which have no other home.
+func (n *NativeView) presentRestoredShortcutFailure(err error) {
+	if !n.showingReclaimed() {
+		n.presentShortcutFailure(err)
+		return
+	}
+	message := ui.FormatError(ui.ErrorShortcutRegistration, err)
+	n.shortcut.Error.SetTextQuietly(message)
+	conflict := ui.CardEntry{Notice: ui.Notice{Kind: ui.NoticeError, Message: message}, Setting: true}
+	n.showReclaimed(append(slices.Clone(n.reclaimed), conflict), n.reclaimedLatest, n.reclaimedLatestSetting)
+	n.shortcutNotice = n.status.Revision()
 }
 
 func (n *NativeView) refreshMode() {

@@ -31,6 +31,8 @@ Add-Type -Namespace PackageCheck -Name Native -MemberDefinition @'
 public static extern IntPtr GetClassLongPtrW(IntPtr window, int index);
 [DllImport("user32.dll", CharSet = CharSet.Unicode)]
 public static extern IntPtr FindWindowW(string className, string windowName);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+public static extern int GetWindowTextW(IntPtr window, System.Text.StringBuilder text, int maxCount);
 [DllImport("user32.dll")]
 public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 [DllImport("user32.dll")]
@@ -118,6 +120,10 @@ function Invoke-App([string]$Executable, [string]$Workspace) {
             if ((Get-Date) -gt $deadline) { throw "The application showed no window titled '$productName' within $windowWait seconds." }
             Start-Sleep -Milliseconds 100
         }
+        # FindWindowW ignores case, and the title must match exactly.
+        $title = New-Object System.Text.StringBuilder 256
+        [void][PackageCheck.Native]::GetWindowTextW($mainWindow, $title, $title.Capacity)
+        if ($title.ToString() -cne $productName) { throw "The window is titled '$title'." }
         # GCLP_HICON and GCLP_HICONSM: the title bar and taskbar show these.
         foreach ($index in -14, -34) {
             if ([PackageCheck.Native]::GetClassLongPtrW($mainWindow, $index) -eq [IntPtr]::Zero) {

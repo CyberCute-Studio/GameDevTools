@@ -65,6 +65,9 @@ type nativeShell struct {
 	headingFont windows.Handle
 	bodyFont    windows.Handle
 
+	// minimized is whether the last WM_SIZE minimized the window.
+	minimized bool
+
 	// acceptingDrops is whether the shell window and its children are
 	// registered for file drops, as updateDropAcceptance last applied it.
 	acceptingDrops bool
@@ -668,6 +671,23 @@ func (s *nativeShell) announceNotices() {
 	}
 	s.announced = make(map[core.ModuleID]bool)
 	s.announceModuleNotice()
+}
+
+// shellForegroundWindow reads the foreground window; tests replace it, as
+// their windows never take the foreground.
+var shellForegroundWindow = func() windows.Handle {
+	foreground, _, _ := procGetForegroundWindow.Call()
+	return windows.Handle(foreground)
+}
+
+// tellViewActivated tells the current module the user is back at the window,
+// and reports whether it listens, so may have changed what it shows.
+func (s *nativeShell) tellViewActivated() bool {
+	aware, ok := s.nativeViews[s.navigator.Current().ID()].(nativeActivationAware)
+	if ok {
+		aware.NativeActivated()
+	}
+	return ok
 }
 
 // announceModuleNotice asks the current module's view to announce its notice
@@ -1642,8 +1662,7 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 	case wmAppActivated:
 		if shell != nil {
-			if aware, ok := shell.nativeViews[shell.navigator.Current().ID()].(nativeActivationAware); ok {
-				aware.NativeActivated()
+			if shell.tellViewActivated() {
 				shell.layout()
 			}
 			return 0
@@ -1714,6 +1733,13 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		}
 	case wmSize:
 		if shell != nil {
+			// A window activated while still minimized, before its restore,
+			// has no later activation, so the restore tells the view instead.
+			restored := shell.minimized && wParam != sizeMinimized
+			shell.minimized = wParam == sizeMinimized
+			if restored && shellForegroundWindow() == hwnd {
+				shell.tellViewActivated()
+			}
 			shell.layout()
 			return 0
 		}

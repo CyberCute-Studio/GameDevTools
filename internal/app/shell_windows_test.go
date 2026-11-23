@@ -337,6 +337,35 @@ func TestShellTellsTheCurrentViewItWasActivated(t *testing.T) {
 	}
 }
 
+// TestShellTellsTheViewWhenRestoredInFront is a window activated while still
+// minimized, whose activation the view ignored: the restore tells it again,
+// unless another window is in front.
+func TestShellTellsTheViewWhenRestoredInFront(t *testing.T) {
+	native := &activationRecordingView{}
+	shell := newCommandTestShell(t, native)
+	foreground := shell.hwnd
+	previous := shellForegroundWindow
+	shellForegroundWindow = func() windows.Handle { return foreground }
+	t.Cleanup(func() { shellForegroundWindow = previous })
+
+	shellWindowProc(shell.hwnd, wmSize, 0, 0)
+	if native.activations != 0 {
+		t.Fatalf("a resize counted as a restore: %d", native.activations)
+	}
+	shellWindowProc(shell.hwnd, wmSize, sizeMinimized, 0)
+	shellWindowProc(shell.hwnd, wmSize, 0, 0)
+	if native.activations != 1 {
+		t.Fatalf("activations after the restore = %d, want 1", native.activations)
+	}
+
+	foreground = 0
+	shellWindowProc(shell.hwnd, wmSize, sizeMinimized, 0)
+	shellWindowProc(shell.hwnd, wmSize, 0, 0)
+	if native.activations != 1 {
+		t.Fatalf("a restore behind another window told the view: %d", native.activations)
+	}
+}
+
 // TestShellWindowProcForwardsEditSetFocusToView pins the regression where
 // the shell's scroll-into-view branch swallowed EN_SETFOCUS before the
 // module view saw it: the Screenshot shortcut field suspends its global
