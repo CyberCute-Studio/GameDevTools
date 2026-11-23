@@ -51,8 +51,8 @@ const (
 	// or geometry that reaches outside the current virtual desktop.
 	KindValidation Kind = iota
 	// KindDisplay means the display topology no longer matches the request:
-	// the selected display disconnected, or the topology could not be
-	// enumerated at all.
+	// the selected display disconnected, a rectangle is on no connected
+	// display, or the topology could not be enumerated at all.
 	KindDisplay
 	// KindNative means the operating system rejected the capture. Graphics
 	// driver failures, remote-session restrictions, and compositor errors
@@ -91,10 +91,14 @@ func kindError(kind Kind, op string, err error) *Error {
 	return &Error{Kind: kind, Op: op, Err: err}
 }
 
+// ErrNotOnDisplay marks a rectangle no connected display covers, which needs
+// a different area rather than a look at the connected displays.
+var ErrNotOnDisplay = errors.New("the rectangle is not on any connected display")
+
 // CaptureRect captures an arbitrary rectangle in physical virtual-desktop
 // coordinates. The rectangle may span monitors but must fit within the
-// current virtual desktop bounds. The returned image has exactly the
-// rectangle's physical-pixel dimensions.
+// current virtual desktop bounds and share a pixel with a connected display.
+// The returned image has exactly the rectangle's physical-pixel dimensions.
 func CaptureRect(monitor *display.Monitor, region display.Rect) (*image.RGBA, error) {
 	displays, err := monitor.Displays()
 	if err != nil {
@@ -103,7 +107,25 @@ func CaptureRect(monitor *display.Monitor, region display.Rect) (*image.RGBA, er
 	if err := validateRegion(display.VirtualDesktopBounds(displays), region); err != nil {
 		return nil, err
 	}
+	if err := validateOnDisplays(displays, region); err != nil {
+		return nil, err
+	}
 	return captureRegion(region)
+}
+
+// validateOnDisplays refuses a rectangle no connected display covers. The
+// virtual desktop is only the rectangle around the displays, so a display
+// removed from inside it can leave a selection within the bounds that would
+// read as a black image and report a success. A rectangle a display covers in
+// part is captured, with the uncovered part blank.
+func validateOnDisplays(displays []display.Display, region display.Rect) error {
+	for _, item := range displays {
+		if item.Bounds.Overlaps(region) {
+			return nil
+		}
+	}
+	return kindError(KindDisplay, "validate region",
+		fmt.Errorf("capture rectangle %v: %w", region, ErrNotOnDisplay))
 }
 
 // CaptureDisplay captures one connected display, identified by its adapter

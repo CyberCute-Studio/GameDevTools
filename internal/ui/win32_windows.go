@@ -19,6 +19,7 @@ const (
 	bsDefPushButton     = 0x00000001
 	bsAutoRadioButton   = 0x00000009
 	ssNoPrefix          = 0x00000080
+	ssEditControl       = 0x00002000
 	esAutoHScroll       = 0x00000080
 	esReadOnly          = 0x00000800
 	enChange            = 0x0300

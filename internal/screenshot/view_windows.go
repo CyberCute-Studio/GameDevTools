@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -44,6 +45,7 @@ const globalShortcutHotkeyID = 1
 
 var (
 	viewUser32                  = windows.NewLazySystemDLL("user32.dll")
+	procViewIsWindow            = viewUser32.NewProc("IsWindow")
 	procViewIsWindowVisible     = viewUser32.NewProc("IsWindowVisible")
 	procViewIsIconic            = viewUser32.NewProc("IsIconic")
 	procViewGetForegroundWindow = viewUser32.NewProc("GetForegroundWindow")
@@ -158,6 +160,9 @@ type NativeView struct {
 	// never in front.
 	foregroundWindow func() windows.Handle
 	windowAtPoint    func(x, y int32) uintptr
+	// windowAlive reports whether the shell window still exists, which ends a
+	// capture's retried completion post.
+	windowAlive func() bool
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -206,6 +211,10 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 	view.windowAtPoint = func(x, y int32) uintptr {
 		hit, _, _ := procViewWindowFromPoint.Call(uintptr(uint32(x)) | uintptr(uint32(y))<<32)
 		return hit
+	}
+	view.windowAlive = func() bool {
+		alive, _, _ := procViewIsWindow.Call(uintptr(view.parent))
+		return alive != 0
 	}
 	return view
 }
@@ -584,9 +593,9 @@ const statusDismissWidth = 140
 
 // statusRowHeight is the height of the status text and the row of buttons
 // below it. The text has the content's whole width at every window size, as
-// it can hold a saved path with no spaces, which a static control cuts off
-// rather than wraps, and the row keeps room for Dismiss Problem, as a problem
-// can reach the card with no layout to follow.
+// it can hold a saved path with no spaces, which takes more lines the narrower
+// it is, and the row keeps room for Dismiss Problem, as a problem can reach
+// the card with no layout to follow.
 func statusRowHeight(textHeight int32, scale func(int32) int32) int32 {
 	return textHeight + scale(8) + scale(28)
 }
@@ -785,38 +794,41 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	// must not run with stale or invalid quality text. The refusal is shown
 	// beside the field quietly, as the status area announces the same
 	// message, which would otherwise be read twice in a row when the field's
-	// message was not already shown.
-	quality, err := ParseJPEGQuality(n.quality.Edit.Text())
-	if err != nil {
-		n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
-		n.refuseOptions(err)
-		return
-	}
-	options := n.options.Options()
-	// The commit bypasses commitQuality's success notice: the capture
-	// result replaces it moments later, so the notice would only flash.
-	// Failures still surface, and a non-persistence failure aborts the
-	// capture because the new value never reached the options.
-	if quality != options.JPEGQuality {
-		if err := n.options.SetJPEGQuality(quality); err != nil {
-			notice := optionNotice(err, "")
-			onCard := n.showOutcome(notice)
-			n.optionsNotice = n.status.Revision()
-			if !errors.Is(err, ErrPersistence) {
-				if onCard {
-					n.card.ReportSetting(notice)
+	// message was not already shown. A PNG capture does not use the field,
+	// which is disabled, so it neither reads nor commits the field's text.
+	if current := n.options.Options(); current.Format == FormatJPEG {
+		quality, err := ParseJPEGQuality(n.quality.Edit.Text())
+		if err != nil {
+			n.quality.Error.SetTextQuietly(ui.FormatError(ui.ErrorValidation, err))
+			n.refuseOptions(err)
+			return
+		}
+		// The commit bypasses commitQuality's success notice: the capture
+		// result replaces it moments later, so the notice would only flash.
+		// Failures still surface, and a non-persistence failure aborts the
+		// capture because the new value never reached the options.
+		if quality != current.JPEGQuality {
+			if err := n.options.SetJPEGQuality(quality); err != nil {
+				notice := optionNotice(err, "")
+				onCard := n.showOutcome(notice)
+				n.optionsNotice = n.status.Revision()
+				if !errors.Is(err, ErrPersistence) {
+					if onCard {
+						n.card.ReportSetting(notice)
+					}
+					return
 				}
-				return
-			}
-			// The capture goes on and hides the card, which would cut off this
-			// warning's announcement, so it joins the card after that, and a
-			// selection cancelled with no result of its own still announces it.
-			if onCard {
-				defer n.card.ReportSetting(notice)
+				// The capture goes on and hides the card, which would cut off
+				// this warning's announcement, so it joins the card after that,
+				// and a selection cancelled with no result of its own still
+				// announces it.
+				if onCard {
+					defer n.card.ReportSetting(notice)
+				}
 			}
 		}
 	}
-	options = n.options.Options()
+	options := n.options.Options()
 	if err := options.Validate(); err != nil {
 		n.refuseOptions(err)
 		return
@@ -847,7 +859,7 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 	go func() {
 		defer n.pending.Done()
 		result := n.capture(request)
-		n.post(func() { n.finishCapture(result, displayCaptureMessages) })
+		n.postCompletion(func() { n.finishCapture(result, displayCaptureMessages) })
 	}()
 }
 
@@ -871,7 +883,8 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 // NativeShutdown blocks until an in-flight capture has finished delivering
 // its outputs. The shell calls it only once the window is destroyed, on a
 // goroutine of its own, so the worker never waits on the GUI thread here;
-// its final dispatcher post fails harmlessly against the destroyed window.
+// its final dispatcher post fails against the destroyed window, and
+// postCompletion then stops trying.
 // NativeDestroy has already shut down any overlay session, so Shutdown here,
 // the idempotent backstop, finds none to close.
 func (n *NativeView) NativeShutdown() {
@@ -954,7 +967,7 @@ func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) 
 	go func() {
 		defer n.pending.Done()
 		result := n.captureRectangle(region, restore, options)
-		n.post(func() { n.finishCapture(result, selectionCaptureMessages) })
+		n.postCompletion(func() { n.finishCapture(result, selectionCaptureMessages) })
 	}()
 }
 
@@ -1039,9 +1052,30 @@ func (n *NativeView) post(task func()) {
 		task()
 		return
 	}
-	// A failed post means the shell window is gone; the capture pipeline has
-	// already restored the window state, so the result is dropped quietly.
+	// A reveal's failure is worth one try: losing it leaves nothing stuck.
 	_ = n.dispatcher.Post(task)
+}
+
+// completionRetryDelay spaces the attempts to deliver a capture's result.
+const completionRetryDelay = 20 * time.Millisecond
+
+// postCompletion delivers a capture's result to the GUI thread. Only the
+// result ends the capture and brings the result card back, so a post that
+// fails while the window lives, as with a full message queue, is tried again.
+// Once the window is gone the result has nowhere to go and is dropped, as the
+// capture pipeline has already restored the window state, which lets
+// NativeShutdown's wait end.
+func (n *NativeView) postCompletion(task func()) {
+	if n.dispatcher == nil {
+		task()
+		return
+	}
+	for n.dispatcher.Post(task) != nil {
+		if !n.windowAlive() {
+			return
+		}
+		time.Sleep(completionRetryDelay)
+	}
 }
 
 func (n *NativeView) selectMode(notification uint16, mode CaptureMode) {
@@ -1197,6 +1231,7 @@ func (n *NativeView) commitShortcut() {
 // field's focus suspension or a rejected edit. A failure here means the
 // combination itself became unavailable — another application claimed it in
 // the meantime — so the caller reports it like any registration failure.
+// Success ends any earlier failure still shown in the status area.
 func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 	if n.hotkeys == nil {
 		return nil
@@ -1204,6 +1239,7 @@ func (n *NativeView) restoreHotkey(shortcut Shortcut) error {
 	err := n.hotkeys.Apply(shortcut)
 	if err == nil {
 		n.card.WithdrawSetting(n.cardConflict)
+		n.status.ClearShown(n.shortcutNotice)
 	}
 	return err
 }
@@ -1317,6 +1353,11 @@ func (n *NativeView) refreshFormat() {
 	}
 	n.format.Select(formatIndex)
 	n.quality.Enable(options.Format == FormatJPEG)
+	// PNG does not use the field, so a refusal of its text no longer applies.
+	// Choosing JPEG again checks the text at the next commit or capture.
+	if options.Format != FormatJPEG {
+		n.quality.Error.SetText("")
+	}
 	n.pattern.SetText(options.FilenameExample())
 }
 

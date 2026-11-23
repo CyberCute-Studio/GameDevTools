@@ -205,7 +205,7 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	// The detail line says why the selected image cannot be used or how its
 	// resize ended, which its row abbreviates, so a screen reader announces
 	// it as the selection moves.
-	if n.pathDetail, err = ui.NewLiveLabel(parent, ""); err != nil {
+	if n.pathDetail, err = ui.NewWrappingLiveLabel(parent, ""); err != nil {
 		return err
 	}
 	if n.addButton, err = ui.NewButton(parent, ui.AddImagesAction, ui.ButtonOptions{ID: sources + addImagesCommand, Group: true}); err != nil {

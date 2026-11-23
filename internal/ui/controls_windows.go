@@ -86,7 +86,19 @@ func NewLabel(parent windows.Handle, text string) (*Label, error) {
 // Marking is best effort: a label that cannot be marked, where the
 // accessibility services are unavailable, still shows its text.
 func NewLiveLabel(parent windows.Handle, text string) (*Label, error) {
-	label, err := newLabel(parent, text, ssNoPrefix)
+	return newLiveLabel(parent, text, ssNoPrefix)
+}
+
+// NewWrappingLiveLabel is NewLiveLabel for a label a layout sizes by measuring
+// its text. SS_EDITCONTROL breaks a token wider than the label, such as a path
+// with no spaces, as the measure counts it; a plain static control would cut
+// the token off and leave the extra height blank.
+func NewWrappingLiveLabel(parent windows.Handle, text string) (*Label, error) {
+	return newLiveLabel(parent, text, ssNoPrefix|ssEditControl)
+}
+
+func newLiveLabel(parent windows.Handle, text string, style uintptr) (*Label, error) {
+	label, err := newLabel(parent, text, style)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +325,7 @@ func NewTextInput(parent windows.Handle, field string, id int32) (*TextInput, er
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
-	validation, err := NewLiveLabel(parent, "")
+	validation, err := NewWrappingLiveLabel(parent, "")
 	if err != nil {
 		procDestroyWindow.Call(uintptr(edit))
 		procDestroyWindow.Call(uintptr(label.Handle()))
@@ -386,7 +398,7 @@ func NewDimensionInput(parent windows.Handle, field string, id int32) (*Dimensio
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
-	validation, err := NewLiveLabel(parent, "")
+	validation, err := NewWrappingLiveLabel(parent, "")
 	if err != nil {
 		procDestroyWindow.Call(uintptr(edit))
 		procDestroyWindow.Call(uintptr(label.Handle()))
@@ -590,10 +602,11 @@ func (s *StatusArea) Revision() uint64 {
 	return s.revision
 }
 
-// NewStatusArea creates the status area on a live label (NewLiveLabel), so
-// a screen reader announces every notice Show presents.
+// NewStatusArea creates the status area on a live label that wraps a saved
+// path (NewWrappingLiveLabel), so a screen reader announces every notice Show
+// presents.
 func NewStatusArea(parent windows.Handle) (*StatusArea, error) {
-	label, err := NewLiveLabel(parent, "")
+	label, err := NewWrappingLiveLabel(parent, "")
 	if err != nil {
 		return nil, err
 	}

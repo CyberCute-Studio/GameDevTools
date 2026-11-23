@@ -246,6 +246,7 @@ const (
 	CaptureInProgress      = "A capture is already in progress. Wait for it to finish."
 	CaptureFailed          = "The display could not be captured: %v"
 	CaptureDisplayChanged  = "The display layout changed or a display disconnected before the capture could finish: %v. Check the connected displays and try again."
+	CaptureNotOnDisplay    = "The selected area is not on any connected display, so nothing was captured. Select an area on a display and try again."
 	CaptureGraphicsFailed  = "The graphics system could not read the screen: %v. If a full-screen exclusive application or game is running, switch it to windowed mode and try again."
 	CaptureSucceeded       = "Display captured. Saved to %s and copied to the clipboard."
 	CaptureSaveFailed      = "Display captured and copied to the clipboard, but saving failed: %v"

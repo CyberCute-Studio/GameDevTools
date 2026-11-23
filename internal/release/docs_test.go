@@ -477,6 +477,7 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		// The troubleshooting section quotes these messages by how they begin.
 		strings.Split(ui.CaptureGraphicsFailed, ":")[0],
 		strings.Split(ui.CaptureDisplayChanged, " or ")[0],
+		strings.Split(ui.CaptureNotOnDisplay, ",")[0],
 		strings.Split(ui.OutputFolderNameInvalid, ":")[0],
 		strings.Split(ui.DisplayUnavailable, ":")[0],
 		screenshot.DefaultShortcut().String(),
