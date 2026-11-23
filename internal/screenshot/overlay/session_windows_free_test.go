@@ -12,6 +12,8 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
 
+var procWindowFromPoint = user32.NewProc("WindowFromPoint")
+
 // sendMouse delivers a mouse message to the overlay at client coordinates,
 // mirroring a real pointer action on the dimmed surface.
 func sendMouse(hwnd windows.Handle, message uint32, x, y int32) {
@@ -103,14 +105,20 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	// desktop around the selection stays dimmed and the frame is opaque.
 	pixels := native.pixelSlice()
 	at := func(x, y int32) uint32 { return pixels[int(y)*int(native.pixelWidth)+int(x)] }
-	if got := at(200, 150); got != selectionPixel {
-		t.Fatalf("interior pixel = %#08x, want %#08x (visually clear but input-capturing)", got, selectionPixel)
+	if got := at(200, 150); got != 1<<24 {
+		t.Fatalf("interior pixel = %#08x, want black at alpha 1, %#08x (visually clear but input-capturing)", got, uint32(1)<<24)
 	}
 	if got := at(5, 5); got != dimPixel {
 		t.Fatalf("dimmed pixel = %#08x, want %#08x", got, dimPixel)
 	}
 	if got := at(58, 150); got&0xff000000 != 0xff000000 {
 		t.Fatalf("border pixel = %#08x, want an opaque frame", got)
+	}
+	// Windows' own hit test decides where a real click goes, which the mouse
+	// messages this test sends directly to the overlay do not exercise.
+	point := uintptr(uint32(native.bounds.Left+200)) | uintptr(uint32(native.bounds.Top+150))<<32
+	if hit, _, _ := procWindowFromPoint.Call(point); windows.Handle(hit) != native.overlay {
+		t.Fatalf("a real click inside the selection would reach window %#x, not the overlay %#x (SCR-012, SCR-052)", hit, native.overlay)
 	}
 
 	// The toolbar moved near the selection without covering it (SCR-025).

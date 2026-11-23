@@ -1198,7 +1198,7 @@ const dimPixel = uint32(overlayTintAlpha) << 24
 // clicks inside the selection would reach other applications mid-session
 // and the interior move-drag would never start (SCR-012, SCR-052). Alpha 1
 // is imperceptible but hit-tests as solid.
-const selectionPixel = 1
+const selectionPixel = uint32(1) << 24
 
 // renderAll composites the session's initial frame: the fully dimmed
 // desktop for Free Rectangle (painted when the surface was created), or the

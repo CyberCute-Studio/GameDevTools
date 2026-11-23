@@ -68,6 +68,8 @@ These have not been run, so this version makes no claim about them:
 - Saving to FAT32 or exFAT drives, network shares, OneDrive folders, or a drive
   that fills up.
 - Real clipboard sync with a signed-in account.
+- Pasting a capture into an Office application, as Office on the test machine
+  was not signed in. Pasting into Paint was checked.
 
 Known issues
 
@@ -86,6 +88,9 @@ take.
   none.
 - After a capture, the keyboard focus stays outside the application. Use Alt+Tab
   to return to it.
+- The first time File Explorer shows a folder, Open Folder can leave the saved
+  file focused rather than highlighted. Explorer's own select command does the
+  same.
 
 Deferred from the requirements
 

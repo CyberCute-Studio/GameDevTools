@@ -3,10 +3,82 @@
 package ui
 
 import (
+	"runtime"
+	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// TestImagePickerFilterIsATerminatedPairList pins the form GetOpenFileNameW
+// reads: a label, its pattern, each ending in a NUL, and one more NUL.
+func TestImagePickerFilterIsATerminatedPairList(t *testing.T) {
+	filter, err := imagePickerFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filter) < 2 || filter[len(filter)-1] != 0 || filter[len(filter)-2] != 0 {
+		t.Fatalf("the filter does not end in two NULs: %v", filter)
+	}
+	parts := slices.Collect(func(yield func(string) bool) {
+		start := 0
+		for i, unit := range filter[:len(filter)-1] {
+			if unit == 0 {
+				if !yield(windows.UTF16ToString(filter[start:i])) {
+					return
+				}
+				start = i + 1
+			}
+		}
+	})
+	want := []string{ImageFileFilterLabel + " (*.png; *.jpg; *.jpeg)", "*.png;*.jpg;*.jpeg"}
+	if !slices.Equal(parts, want) {
+		t.Fatalf("filter strings = %q, want %q", parts, want)
+	}
+}
+
+// TestPickImageFilesOpensTheRealPicker opens the real common dialog, which
+// the view's tests replace with a stand-in, and cancels it.
+func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
+	const title = "CyberCute Dev Tools picker test"
+	const idCancel = 2
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	parent := newTestParent(t)
+	var opened atomic.Bool
+	stop := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+			dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
+			if dialog != 0 {
+				opened.Store(true)
+				procPostMessageW.Call(dialog, wmCommand, idCancel, 0)
+			}
+		}
+	}()
+	paths, picked, err := PickImageFiles(parent, title)
+	close(stop)
+	<-finished
+	if err != nil {
+		t.Fatalf("the picker could not be opened: %v", err)
+	}
+	if !opened.Load() {
+		t.Fatal("PickImageFiles returned without showing the picker")
+	}
+	if picked || paths != nil {
+		t.Fatalf("a cancelled picker returned %v, %v", paths, picked)
+	}
+}
 
 func TestListBoxMultiSelect(t *testing.T) {
 	parent := newTestParent(t)

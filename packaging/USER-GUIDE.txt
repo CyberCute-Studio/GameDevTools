@@ -399,6 +399,9 @@ Capture
   off.
 - After a capture, the keyboard focus stays outside the application. Use
   Alt+Tab to return to it.
+- The first time File Explorer shows a folder, Open Folder can leave the saved
+  file focused rather than highlighted. Explorer's own select command does the
+  same.
 
 Image Resizer
 
