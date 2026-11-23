@@ -87,9 +87,10 @@ const (
 	MigratedSettingsWriteFailed   = "Migrated settings could not be written: %v. The original remains at %s."
 	// LegacySettingsNotAdopted and InvalidLegacySettingsNotAdopted report a
 	// first launch that could not write the new settings file, which blocks
-	// saving for the session.
-	LegacySettingsNotAdopted        = "Your settings could not be copied to the new settings file: %[1]v. Changes in this session will not be saved. Your settings remain in %[2]s, and the next launch will try again."
-	InvalidLegacySettingsNotAdopted = "Settings in %[1]s are invalid (%[2]v), and the new settings file could not be written: %[3]v. Defaults are in use and changes in this session will not be saved. The original remains in %[1]s, and the next launch will try again."
+	// saving for the session, and at every launch while that folder stays
+	// unusable, so they say what ends it.
+	LegacySettingsNotAdopted        = "Your settings could not be copied to the new settings file: %[1]v. Changes in this session will not be saved. Your settings remain in %[2]s, and the next launch will try again. If this keeps happening, make sure the folder %[3]s can be written: reconnect its drive or network share or, if it is gone for good, delete the link or junction at that path, which gives up any settings stored through it, or move away a file that holds its name. Then start the application again."
+	InvalidLegacySettingsNotAdopted = "Settings in %[1]s are invalid (%[2]v), and the new settings file could not be written: %[3]v. Defaults are in use and changes in this session will not be saved. The original remains in %[1]s, and the next launch will try again. If this keeps happening, make sure the folder %[4]s can be written: reconnect its drive or network share or, if it is gone for good, delete the link or junction at that path, which gives up any settings stored through it, or move away a file that holds its name. Then start the application again."
 	SettingsSaveFailed              = "Settings could not be saved: %v. Your current in-memory session has not been discarded."
 	SettingsCloseTitle              = AppName + " — Settings not saved"
 	SettingsCloseConfirmation       = "Settings could not be saved. Close anyway? These changes will not be available after the application closes."

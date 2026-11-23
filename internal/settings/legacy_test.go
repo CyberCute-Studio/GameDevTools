@@ -272,7 +272,7 @@ func TestStoreFailedAdoptionWarnsAndBlocksSaving(t *testing.T) {
 			if len(result.Warnings) != 1 {
 				t.Fatalf("warnings = %v, want one", result.Warnings)
 			}
-			for _, want := range []string{paths.LegacyConfigFile, "will not be saved", "next launch"} {
+			for _, want := range []string{paths.LegacyConfigFile, "will not be saved", "next launch", filepath.Dir(paths.ConfigFile), "gone for good", "junction"} {
 				if !strings.Contains(result.Warnings[0], want) {
 					t.Errorf("warning %q does not say %q", result.Warnings[0], want)
 				}
@@ -281,8 +281,8 @@ func TestStoreFailedAdoptionWarnsAndBlocksSaving(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatalf("settings folder holds %v, err = %v, want nothing", entries, err)
 			}
-			if err := store.Save(result.Settings); err == nil {
-				t.Fatal("a save succeeded after a failed adoption")
+			if err := store.Save(result.Settings); !errors.Is(err, ErrSavingDisabled) {
+				t.Fatalf("Save after a failed adoption = %v, want ErrSavingDisabled", err)
 			}
 		})
 	}
@@ -300,7 +300,7 @@ func TestStoreAdoptionBackupFailureWarnsAsAFailedWrite(t *testing.T) {
 			if len(result.Warnings) != 1 {
 				t.Fatalf("warnings = %v, want one", result.Warnings)
 			}
-			for _, want := range []string{paths.LegacyConfigFile, "will not be saved", "next launch"} {
+			for _, want := range []string{paths.LegacyConfigFile, "will not be saved", "next launch", filepath.Dir(paths.ConfigFile), "gone for good", "junction"} {
 				if !strings.Contains(result.Warnings[0], want) {
 					t.Errorf("warning %q does not say %q", result.Warnings[0], want)
 				}
@@ -310,6 +310,148 @@ func TestStoreAdoptionBackupFailureWarnsAsAFailedWrite(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A malformed settings file that cannot be replaced keeps one backup however
+// many launches find it, and a different malformed file still gets its own.
+func TestStoreMalformedFileThatCannotBeReplacedKeepsOneBackup(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("a read-only file blocks a rename over it only on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	var named string
+	for launch := 0; launch < 3; launch++ {
+		result := NewStore(Paths{ConfigFile: path}).Load()
+		if result.Unwritten == "" || result.Recovered == "" {
+			t.Fatalf("launch %d = %+v, want the backup named and the write failed", launch, result)
+		}
+		backups, err := filepath.Glob(path + ".corrupt-*")
+		if err != nil || len(backups) != 1 {
+			t.Fatalf("launch %d: backups = %v, err = %v, want one", launch, backups, err)
+		}
+		if !strings.Contains(result.Recovered, backups[0]) {
+			t.Fatalf("launch %d: warning %q does not name %s", launch, result.Recovered, backups[0])
+		}
+		named = backups[0]
+	}
+	requireFileContent(t, named, "{not json")
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	NewStore(Paths{ConfigFile: path}).Load()
+	if backups, err := filepath.Glob(path + ".corrupt-*"); err != nil || len(backups) != 2 {
+		t.Fatalf("backups after a different malformed file = %v, err = %v, want two", backups, err)
+	}
+}
+
+// A failed adoption removes its backup of the legacy file, which must never be
+// an identical backup an earlier recovery named.
+func TestStoreFailedAdoptionKeepsAnEarlierIdenticalBackup(t *testing.T) {
+	paths := legacyPaths(t, `{"version":1,`)
+	if err := os.MkdirAll(filepath.Dir(paths.ConfigFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	earlier := paths.ConfigFile + ".corrupt-20260101T000000.000000000Z"
+	if err := os.WriteFile(earlier, []byte(`{"version":1,`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(paths)
+	store.renameNew = failingCreate
+	if result := store.Load(); store.blocked == nil {
+		t.Fatalf("saving is not blocked: %+v", result)
+	}
+	requireFileContent(t, earlier, `{"version":1,`)
+	if backups, err := filepath.Glob(paths.ConfigFile + ".corrupt-*"); err != nil || len(backups) != 1 {
+		t.Fatalf("backups = %v, err = %v, want only the earlier one", backups, err)
+	}
+}
+
+// A write to a settings file reached through a symbolic link replaces the
+// link's target and keeps the link. Creating a link needs a privilege, so
+// the substitute below holds the same rule where it is missing.
+func TestStoreWritesThroughASymbolicLink(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "settings.json")
+	target := filepath.Join(root, "synced", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte(currentSettingsFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("no privilege to create a symbolic link: %v", err)
+	}
+	store := NewStore(Paths{ConfigFile: path})
+	value := store.Load().Settings
+	value.Shell.SelectedModule = string(shell.ModuleImageResizer)
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: info = %v, err = %v", info, err)
+	}
+	var saved Settings
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Shell.SelectedModule != string(shell.ModuleImageResizer) {
+		t.Fatalf("the target holds module %q, want the saved one", saved.Shell.SelectedModule)
+	}
+}
+
+// The write goes to the file the link resolves to and leaves the name at the
+// settings path alone, and a link that cannot be resolved fails the write.
+func TestStoreWriteGoesToTheResolvedTarget(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "settings.json")
+	target := filepath.Join(root, "synced", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{path, target} {
+		if err := os.WriteFile(file, []byte(currentSettingsFile), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := NewStore(Paths{ConfigFile: path})
+	value := store.Load().Settings
+	store.writeTarget = func(string) (string, error) { return target, nil }
+	value.Shell.SelectedModule = string(shell.ModuleImageResizer)
+	if err := store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	requireFileContent(t, path, currentSettingsFile)
+	data, err := os.ReadFile(target)
+	if err != nil || !strings.Contains(string(data), string(shell.ModuleImageResizer)) {
+		t.Fatalf("target = %s, err = %v, want the saved settings", data, err)
+	}
+
+	before := string(data)
+	store.writeTarget = func(string) (string, error) { return "", errors.New("target is offline") }
+	if err := store.Save(Default()); err == nil || !strings.Contains(err.Error(), "target is offline") {
+		t.Fatalf("Save through an unresolved link = %v", err)
+	}
+	requireFileContent(t, path, currentSettingsFile)
+	requireFileContent(t, target, before)
 }
 
 // Invariant: an existing settings file is never replaced without a backup. A

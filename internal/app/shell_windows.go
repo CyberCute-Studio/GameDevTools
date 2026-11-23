@@ -1249,12 +1249,17 @@ func (s *nativeShell) scale(value int32) int32 {
 // apply — the warning that the settings the session started from could not
 // be written is gone, as they now are, and an output folder's warning follows
 // the options as they now are, as it does after the module command that
-// chooses a folder (settleStartupNotice).
+// chooses a folder (settleStartupNotice). A save refused because loading
+// disabled saving keeps the startup warning that says so, why, and how to end
+// it, which the refusal's own text does not.
 func (s *nativeShell) saveSettings(captureWindow bool) error {
 	s.recordWindow(captureWindow)
 	err := s.store.Save(*s.settings)
 	if err != nil {
 		s.notice = fmt.Sprintf(ui.SettingsSaveFailed, err)
+		if errors.Is(err, settings.ErrSavingDisabled) && len(s.startup.settingsFile) > 0 {
+			s.notice = s.startup.text()
+		}
 		s.logEvent(diagnostics.LevelError, "settings.save", "write-failed")
 	} else {
 		s.startup.unwritten = ""

@@ -39,6 +39,20 @@ var ErrNotRestored = errors.New("the default settings were not restored")
 // settings stay in memory until the application closes.
 var ErrPathUnavailable = errors.New("settings path is unavailable")
 
+// ErrSavingDisabled reports a save refused because Load disabled saving for
+// the session. The warning Load gave says why and how to end that, so a caller
+// still showing it keeps it rather than replace it with this error.
+var ErrSavingDisabled = errors.New("saving is disabled")
+
+// savingDisabled is why a save was refused, marked as ErrSavingDisabled.
+type savingDisabled struct{ err error }
+
+func (e savingDisabled) Error() string {
+	return "saving is disabled because settings recovery is incomplete: " + e.err.Error()
+}
+
+func (e savingDisabled) Unwrap() []error { return []error{ErrSavingDisabled, e.err} }
+
 // notRestored is why Restore wrote nothing, marked as ErrNotRestored without
 // repeating that in its text, which the caller's message says already.
 type notRestored struct{ err error }
@@ -159,6 +173,8 @@ type Store struct {
 	reachable func(string) bool
 	// renameNew is renameNoReplace; tests substitute it.
 	renameNew func(from, to string) error
+	// writeTarget is linkTarget; tests substitute it.
+	writeTarget func(string) (string, error)
 }
 
 func LocalPaths() (Paths, error) {
@@ -193,14 +209,15 @@ func Default() Settings {
 
 func NewStore(paths Paths, migrations ...Migration) *Store {
 	store := &Store{
-		path:       paths.ConfigFile,
-		legacyPath: paths.LegacyConfigFile,
-		migrations: make(map[int]Migration),
-		validators: make(map[string][]ModuleValidator),
-		now:        time.Now,
-		readBack:   os.ReadFile,
-		reachable:  folderReachable,
-		renameNew:  renameNoReplace,
+		path:        paths.ConfigFile,
+		legacyPath:  paths.LegacyConfigFile,
+		migrations:  make(map[int]Migration),
+		validators:  make(map[string][]ModuleValidator),
+		now:         time.Now,
+		readBack:    os.ReadFile,
+		reachable:   folderReachable,
+		renameNew:   renameNoReplace,
+		writeTarget: linkTarget,
 	}
 	for _, migration := range migrations {
 		if migration != nil {
@@ -305,12 +322,12 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 	decoded, migrated, err := s.decode(data)
 	if err != nil {
 		s.unloaded = true
-		backup, backupErr := s.backup(data, "corrupt")
+		backup, backupErr := s.backupMalformed(data)
 		if backupErr != nil {
 			s.blocked = backupErr
 			message := fmt.Sprintf(ui.SettingsInvalidBackupFailed, source, err, backupErr)
 			if s.createOnly {
-				message = fmt.Sprintf(ui.InvalidLegacySettingsNotAdopted, s.legacyPath, err, backupErr)
+				message = fmt.Sprintf(ui.InvalidLegacySettingsNotAdopted, s.legacyPath, err, backupErr, filepath.Dir(s.path))
 			}
 			result.Warnings = append(result.Warnings, message)
 			return result, true
@@ -324,7 +341,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 				return result, false
 			}
 			s.blocked = saveErr
-			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.InvalidLegacySettingsNotAdopted, s.legacyPath, err, saveErr))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.InvalidLegacySettingsNotAdopted, s.legacyPath, err, saveErr, filepath.Dir(s.path)))
 			return result, true
 		}
 		result.Recovered = fmt.Sprintf(ui.SettingsInvalidRecovered, err, backup)
@@ -345,7 +362,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 			s.blocked = backupErr
 			message := fmt.Sprintf(ui.SettingsMigrationBackupFailed, backupErr, source)
 			if s.createOnly {
-				message = fmt.Sprintf(ui.LegacySettingsNotAdopted, backupErr, s.legacyPath)
+				message = fmt.Sprintf(ui.LegacySettingsNotAdopted, backupErr, s.legacyPath, filepath.Dir(s.path))
 			}
 			result.Warnings = append(result.Warnings, message)
 			return result, true
@@ -365,7 +382,7 @@ func (s *Store) load(adopt bool) (LoadResult, bool) {
 				return result, false
 			}
 			s.blocked = saveErr
-			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.LegacySettingsNotAdopted, saveErr, s.legacyPath))
+			result.Warnings = append(result.Warnings, fmt.Sprintf(ui.LegacySettingsNotAdopted, saveErr, s.legacyPath, filepath.Dir(s.path)))
 		}
 	}
 	return result, true
@@ -576,9 +593,18 @@ func folderAnswers(folder string) bool {
 // Windows session — left in the settings directory, so they do not pile up
 // there across launches. Only regular files named as save creates them, and
 // older than staleTemporaryAge, are removed; a failure leaves the file for
-// the next launch.
+// the next launch. A settings file reached through a symbolic link is saved
+// beside its target, so that folder is cleaned too.
 func (s *Store) removeStaleTemporaries() {
 	directory := filepath.Dir(s.path)
+	s.removeStaleTemporariesIn(directory)
+	if target, err := s.writeTarget(s.path); err == nil && filepath.Dir(target) != directory {
+		s.removeStaleTemporariesIn(filepath.Dir(target))
+	}
+}
+
+// removeStaleTemporariesIn removes the stale temporary files in directory.
+func (s *Store) removeStaleTemporariesIn(directory string) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return
@@ -602,7 +628,7 @@ func (s *Store) save(value Settings) error {
 		return fmt.Errorf(ui.SettingsFileAppeared, s.blocked)
 	}
 	if s.blocked != nil {
-		return fmt.Errorf("saving is disabled because settings recovery is incomplete: %w", s.blocked)
+		return savingDisabled{s.blocked}
 	}
 	if s.path == "" {
 		return ErrPathUnavailable
@@ -634,18 +660,35 @@ func (s *Store) check(value Settings) error {
 
 // write puts value, which check has accepted, in the settings file, replacing
 // it, or only creating it while nothing has reached it since Load found it
-// missing (createOnly).
+// missing (createOnly). A symbolic link at the settings path is written
+// through, as a rename would replace the link and leave its target holding
+// the old settings; one whose target cannot be resolved fails the write and
+// stays.
 func (s *Store) write(value Settings) error {
 	if s.createOnly {
 		return s.create(value)
 	}
-	return s.place(value, os.Rename)
+	destination, err := s.writeTarget(s.path)
+	if err != nil {
+		return fmt.Errorf("resolve settings link: %w", err)
+	}
+	return s.place(destination, value, os.Rename)
+}
+
+// linkTarget returns the file a write to path replaces: path itself, or what
+// a symbolic link there leads to.
+func linkTarget(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	return filepath.EvalSymlinks(path)
 }
 
 // create writes value, which check has accepted, as a new settings file, and
 // fails with an error foundSettingsFile reports if there already is one.
 func (s *Store) create(value Settings) error {
-	return s.place(value, func(from, to string) error {
+	return s.place(s.path, value, func(from, to string) error {
 		err := s.renameNew(from, to)
 		if errors.Is(err, os.ErrExist) {
 			return settingsFileFound{err}
@@ -654,15 +697,15 @@ func (s *Store) create(value Settings) error {
 	})
 }
 
-// place puts value at the settings path through a temporary file in the same
+// place puts value at destination through a temporary file in the same
 // folder, which rename moves there once the new settings are written in full.
-func (s *Store) place(value Settings, rename func(from, to string) error) error {
+func (s *Store) place(destination string, value Settings, rename func(from, to string) error) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode settings: %w", err)
 	}
 	data = append(data, '\n')
-	directory := filepath.Dir(s.path)
+	directory := filepath.Dir(destination)
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create settings directory: %w", err)
 	}
@@ -687,7 +730,7 @@ func (s *Store) place(value Settings, rename func(from, to string) error) error 
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary settings file: %w", err)
 	}
-	if err := rename(temporaryPath, s.path); err != nil {
+	if err := rename(temporaryPath, destination); err != nil {
 		return fmt.Errorf("replace settings file: %w", err)
 	}
 	s.unloaded, s.createOnly = false, false
@@ -787,6 +830,45 @@ func validate(value Settings) error {
 		}
 	}
 	return nil
+}
+
+// backupMalformed returns a verified copy of a malformed settings file's
+// bytes: one already beside it, or a new one, so a file that cannot be
+// replaced does not gain a backup at every launch. A malformed legacy file
+// always gets its own, which a failed adoption then removes, and that must
+// not be a backup an earlier warning named.
+func (s *Store) backupMalformed(data []byte) (string, error) {
+	if !s.createOnly {
+		if existing := s.matchingBackup(data, "corrupt"); existing != "" {
+			return existing, nil
+		}
+	}
+	return s.backup(data, "corrupt")
+}
+
+// matchingBackup returns the backup for reason beside the settings file that
+// holds exactly data, or "".
+func (s *Store) matchingBackup(data []byte, reason string) string {
+	directory := filepath.Dir(s.path)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return ""
+	}
+	prefix := filepath.Base(s.path) + "." + reason + "-"
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.Size() != int64(len(data)) {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		if copied, err := s.readBack(path); err == nil && bytes.Equal(copied, data) {
+			return path
+		}
+	}
+	return ""
 }
 
 // backup copies data, the settings file's bytes, to a new file beside it

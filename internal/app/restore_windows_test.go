@@ -451,6 +451,31 @@ func TestRestoreDefaultsKeepsThePresetsOfAFileTheSessionCouldNotRead(t *testing.
 	}
 }
 
+// TestSaveRefusedAtStartupKeepsTheWarningThatSaysHowToEndIt pins that a save
+// refused because loading disabled saving, as the first module click makes,
+// leaves the startup warning in the shell's note: it alone says why saving
+// is disabled and how to end that. The caller still learns the save failed,
+// so closing asks before losing the changes.
+func TestSaveRefusedAtStartupKeepsTheWarningThatSaysHowToEndIt(t *testing.T) {
+	shell := newAuditShellWhile(t, readFixture(t, "rsz-01"), holdOpen)
+	probeScreenshotRestore(t, shell)
+	startup := shell.notice
+	if !strings.Contains(startup, "saving is disabled") {
+		t.Fatalf("note at startup = %q, want the unread file's warning", startup)
+	}
+
+	shell.selectModule(t, core.ModuleImageResizer)
+	if shell.notice != startup {
+		t.Fatalf("note after a module click = %q, want the startup warning %q", shell.notice, startup)
+	}
+	if err := shell.saveSettings(false); !errors.Is(err, settings.ErrSavingDisabled) {
+		t.Fatalf("saveSettings = %v, want ErrSavingDisabled", err)
+	}
+	if shell.notice != startup {
+		t.Fatalf("note after a refused save = %q, want the startup warning %q", shell.notice, startup)
+	}
+}
+
 // TestRestoreDefaultsClearsAFailedSaveWarning pins that a restore whose
 // write succeeds clears the shell's warning that an earlier save failed, as
 // any successful save does.

@@ -3,7 +3,7 @@
 Checks a portable ZIP the way a user receives it.
 
 .DESCRIPTION
-Confirms the checksum, contents, version metadata, icon, and signing state, then
+Confirms the checksum, contents, x64 architecture, version metadata, icon, and signing state, then
 extracts the ZIP and runs the executable with no Go on its PATH and its per-user
 folders in a temporary workspace: once as a first run and once as an upgrade
 from a GameDevTools settings file. Close the application first.
@@ -144,6 +144,19 @@ try {
     Write-Check "contents"
 
     $executable = Join-Path $folder $executableName
+    # The launch checks below pass for any build this machine can run, so an
+    # arm64 executable in a ZIP named x64 needs its PE header read.
+    $image = [System.IO.File]::ReadAllBytes($executable)
+    if ($image.Length -lt 64 -or $image[0] -ne 0x4D -or $image[1] -ne 0x5A) { throw "The executable has no DOS header." }
+    $header = [BitConverter]::ToInt32($image, 0x3C)
+    if ($header -lt 0 -or $header -gt $image.Length - 6 -or
+        $image[$header] -ne 0x50 -or $image[$header + 1] -ne 0x45 -or $image[$header + 2] -ne 0 -or $image[$header + 3] -ne 0) {
+        throw "The executable has no PE header."
+    }
+    $machine = [BitConverter]::ToUInt16($image, $header + 4)
+    if ($machine -ne 0x8664) { throw ("The executable's machine type is 0x{0:X4}, not x64 (0x8664)." -f $machine) }
+    Write-Check "x64 executable"
+
     $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
     if ($info.ProductName -cne $productName) { throw "ProductName is '$($info.ProductName)'." }
     if ($info.OriginalFilename -cne $executableName) { throw "OriginalFilename is '$($info.OriginalFilename)'." }
