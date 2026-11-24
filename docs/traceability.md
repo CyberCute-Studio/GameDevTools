@@ -7,7 +7,7 @@ The evidence column names representative checks, not all of them, as `package.Te
 ## Status
 
 - **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as switching on a contrast theme, and has not been done.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M2, M8, M9, M10, M12, M15, M16, M17, M18, or M19 need a person to do what the requirement describes in a real application, as the automated checks only reach the mechanism: which control has the keyboard focus, not whether its focus indicator is drawn, the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, with one real hit test inside a Free Rectangle selection, a real file picker that is only opened and cancelled, stand-ins for choosing files, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, a stand-in for the result card, and a capture checked by its size or rectangle rather than by what the image shows. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M2, M8, M9, M10, M12, M15, M16, M17, M18, or M19 need a run that does what the requirement describes in a real application, by a person or by a script driving real input as [the test guide](testing.md#manual-pre-release-checks) allows, as the unit tests only reach the mechanism: which control has the keyboard focus, not whether its focus indicator is drawn, the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, with one real hit test inside a Free Rectangle selection, a real file picker that is only opened and cancelled, stand-ins for choosing files, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, a stand-in for the result card, and a capture checked by its size or rectangle rather than by what the image shows. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
 
 `M1` to `M19` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's.
 
@@ -15,16 +15,16 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 95 | 29 |
-| P1 requirements | 20 | 8 | 12 |
-| Acceptance scenarios | 32 | 21 | 11 |
-| **All** | **176** | **124** | **52** |
+| P0 requirements | 124 | 112 | 12 |
+| P1 requirements | 20 | 13 | 7 |
+| Acceptance scenarios | 32 | 28 | 4 |
+| **All** | **176** | **153** | **23** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run or manual check it names passes:
 
-SCR-002, SCR-010, SCR-011, SCR-012, SCR-014, SCR-020, SCR-021, SCR-022, SCR-023, SCR-026, SCR-031, SCR-040, SCR-042, SCR-043, SCR-044, SCR-054, SCR-060, SCR-062, SCR-063, SCR-068, RSZ-001, RSZ-002, RSZ-020, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S01, AC-S02, AC-S03, AC-S04, AC-S05, AC-S06, AC-S08, AC-S09, AC-S12, AC-A03, AC-A04.
+SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
 
-The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ-008, RSZ-048, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
+The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
 
 ## Application shell
 
@@ -34,7 +34,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | APP-002 | P0 | Current module and primary action are obvious | FND-03 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestShellDisablesAnUnavailablePrimaryAction` | Pass | M1 |
 | APP-003 | P1 | Restores the last module | FND-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | APP-004 | P0 | Work keeps unsaved edits and the other module's state | QLT-02 | `app.TestStartingWorkKeepsUnsavedEditsAndTheOtherModule` | Pass |  |
-| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | **Partial** | M17: nothing has confirmed that a second launch brings the window to the foreground |
+| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | Pass |  |
 
 ## Presets
 
@@ -54,21 +54,21 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
 | SCR-001 | P0 | Start the selected mode from the main window | SCR-05, SCR-09 | `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestNativeViewRectangleModesStartOverlaySession` | Pass |  |
-| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys`, `screenshot.TestShortcutCapturesNothingWhileADialogIsOpen` | **Partial** | M10: never pressed with another application focused |
+| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys`, `screenshot.TestShortcutCapturesNothingWhileADialogIsOpen` | Pass |  |
 | SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09, REL-02A, REL-02B | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut`, `screenshot.TestStartupShortcutConflictReachesTheCardWhileTheViewIsHidden`, `screenshot.TestShortcutFailureLeavesTheStatusAreaOnceItRegisters` | Pass |  |
 | SCR-004 | P0 | Shortcut changes persist without reinstalling | SCR-09 | `screenshot.TestNativeViewShortcutCommitAppliesAndPersists` | Pass |  |
-| SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | **Partial** | M10: the toolbar has not been seen coming back from another application |
+| SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | Pass |  |
 | SCR-006 | P0 | Shortcut released on exit | SCR-09 | `screenshot.TestNativeViewDestroyReleasesHotkey`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
-| SCR-010 | P0 | Drag a rectangle of at least 1 x 1 | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestDrawRectNormalizesDragCorners` | **Partial** | M15: no real pointer has drawn a selection |
-| SCR-011 | P0 | Live width and height while dragging | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestOverlayFocusedFieldTracksHandleResize` | **Partial** | M15: the live size has not been seen during a real drag |
-| SCR-012 | P0 | Move and resize after drawing | SCR-07 | `overlay.TestOverlayMoveAndResizeAdjustSelection`, `overlay.TestResizeSelectionAnchorsOppositeEdges` | **Partial** | M15: no real pointer has moved or resized a selection |
+| SCR-010 | P0 | Drag a rectangle of at least 1 x 1 | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestDrawRectNormalizesDragCorners` | Pass |  |
+| SCR-011 | P0 | Live width and height while dragging | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestOverlayFocusedFieldTracksHandleResize` | Pass |  |
+| SCR-012 | P0 | Move and resize after drawing | SCR-07 | `overlay.TestOverlayMoveAndResizeAdjustSelection`, `overlay.TestResizeSelectionAnchorsOppositeEdges` | Pass |  |
 | SCR-013 | P0 | Type exact width and height | SCR-07 | `overlay.TestOverlayDimensionEditingAppliesExactSize` | Pass |  |
-| SCR-014 | P0 | Output matches the rectangle, without overlay | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `screenshot.TestNativeViewRectangleCaptureEndToEnd` | **Partial** | M15: these check the rectangle, and no image from a real selection has been checked for the overlay |
+| SCR-014 | P0 | Output matches the rectangle, without overlay | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `screenshot.TestNativeViewRectangleCaptureEndToEnd` | Pass |  |
 | SCR-015 | P1 | Free Rectangle without a pointer | QLT-01 | `overlay.TestFreeRectangleTypedSizeCreatesSelection`, `overlay.TestFreeRectangleArrowKeysNudgeSelection` | Pass |  |
 | SCR-020 | P0 | Preset is exact at any monitor scaling | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameCaptureDeliversExactRect` | **Partial** | QLT-04A: any scaling but 100% |
-| SCR-021 | P0 | Frame stays on top of other windows | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface` | **Partial** | M9: not run while another application is in use |
-| SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
-| SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | M9: no real pointer has dragged the production frame |
+| SCR-021 | P0 | Frame stays on top of other windows | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface` | Pass |  |
+| SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass |  |
+| SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | Pass |  |
 | SCR-024 | P0 | Toolbar has Capture, Cancel, and dimensions | SCR-07, SCR-08 | `overlay.TestToolbarCaptureCommandDeliversSelection`, `overlay.TestToolbarCancelCommandCancelsSession`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
 | SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08, REL-02A | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay`, `overlay.TestReachableToolbarPlacementStaysOnADisplay` | Pass |  |
 | SCR-026 | P0 | Moves across displays without a size change | SCR-08 | `capture.TestCaptureSpanningDisplayBoundary`, `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | QLT-04A: across a mixed-scaling boundary |
@@ -76,42 +76,42 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | SCR-028 | P1 | X/Y readout, including negative coordinates | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `display.TestVirtualDesktopBounds` | **Partial** | QLT-04A: a display at negative coordinates |
 | SCR-029 | P0 | Ad hoc size edit leaves the saved preset alone | SCR-08 | `overlay.TestPresetFrameDimensionEditResizesExactly`, `screenshot.TestNativeViewPresetAdHocEditKeepsSavedPreset` | Pass |  |
 | SCR-030 | P0 | No resize handles in Preset Rectangle | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass |  |
-| SCR-031 | P0 | Rectangle larger than the desktop is blocked | SCR-08, SCR-11, REL-02A | `overlay.TestBeginPresetValidatesFrameSize`, `screenshot.TestNativeViewPresetRectangleTooLargeBlocked`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | **Partial** | M18: a refusal from the global shortcut has not been checked on the result card of the release candidate |
-| SCR-040 | P0 | Full Display captures one selected display | SCR-05, REL-02A | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestFailedDisplayEnumerationKeepsTheSelectedDisplay` | **Partial** | M19: the test compares each display's size, and nothing checks what the image shows |
+| SCR-031 | P0 | Rectangle larger than the desktop is blocked | SCR-08, SCR-11, REL-02A | `overlay.TestBeginPresetValidatesFrameSize`, `screenshot.TestNativeViewPresetRectangleTooLargeBlocked`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | Pass |  |
+| SCR-040 | P0 | Full Display captures one selected display | SCR-05, REL-02A | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestFailedDisplayEnumerationKeepsTheSelectedDisplay` | Pass |  |
 | SCR-041 | P0 | Picker shows number, name, resolution, primary | SCR-02, SCR-05 | `screenshot.TestDisplayListItemDescribesDisplay`, `display.TestNumberDisplays` | Pass |  |
 | SCR-042 | P0 | Native pixel dimensions and orientation | SCR-03, SCR-05 | `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a rotated display |
 | SCR-043 | P0 | Any display, including other DPI scaling | SCR-02, SCR-05 | `screenshot.TestNativeViewDisplayPickerTracksMode`, `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a secondary display at other scaling |
-| SCR-044 | P0 | Main window and overlays absent from the image | SCR-03, SCR-05, REL-02A | `capture.TestHideExcludesWindowFromCapture`, `execute.TestFullDisplayRunsHideCaptureRestoreDeliverInOrder`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | **Partial** | M9, M15: no image from a real selection has been checked for the overlay |
+| SCR-044 | P0 | Main window and overlays absent from the image | SCR-03, SCR-05, REL-02A | `capture.TestHideExcludesWindowFromCapture`, `execute.TestFullDisplayRunsHideCaptureRestoreDeliverInOrder`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | Pass |  |
 | SCR-050 | P0 | Main window hides before the overlay shows | SCR-06 | `overlay.TestBeginHidesMainWindowBeforeCreatingOverlay` | Pass |  |
 | SCR-051 | P0 | Cancel changes no clipboard or file | SCR-06, SCR-07 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |
 | SCR-052 | P0 | Failure leaves no invisible overlay | SCR-06, SCR-10, REL-02A | `overlay.TestBeginFailureRestoresMainWindow`, `screenshot.TestNativeViewOverlayFailureRestoresMainWindow`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | Pass |  |
 | SCR-053 | P0 | One selection session at a time | SCR-06 | `overlay.TestBeginRejectsConcurrentSession` | Pass |  |
 | SCR-054 | P0 | Display change revalidates the selection | SCR-10, REL-02A, REL-02B | `overlay.TestDisplayChangeKeepsFittingSession`, `overlay.TestDisplayChangeEndsSessionThatCannotFit`, `overlay.TestDisplayChangeEndsASelectionLeftOnNoDisplay`, `capture.TestValidateOnDisplaysRefusesARegionOnNoDisplay`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | **Partial** | QLT-04A: a live disconnect and reconnect |
-| SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | **Partial** | M9: activation simulated, no real click in another application |
+| SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | Pass |  |
 | SCR-056 | P0 | Exit removes overlays and restores input | SCR-06, SCR-10 | `overlay.TestShutdownRemovesSessionSilently`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
-| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A, REL-02B | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard`, `screenshot.TestCaptureNoticeReportsASavedImageWithALeftoverNameAsSaved`, `screenshot.TestFailedCompletionPostIsRetriedWhileTheWindowLives` | **Partial** | M18: a shortcut capture's failure has not been checked on the result card of the release candidate |
+| SCR-060 | P0 | Clipboard and save reported independently | SCR-04, SCR-05, SCR-10, QLT-03A, REL-02A, REL-02B | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard`, `screenshot.TestCaptureNoticeReportsASavedImageWithALeftoverNameAsSaved`, `screenshot.TestFailedCompletionPostIsRetriedWhileTheWindowLives` | Pass |  |
 | SCR-061 | P0 | PNG or JPEG, PNG by default | SCR-01, SCR-04, REL-02B | `screenshot.TestDefaultOptions`, `screenshot.TestNativeViewFormatQualityAndPattern`, `screenshot.TestPNGCaptureIgnoresInvalidTextInTheDisabledQualityField` | Pass |  |
-| SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `screenshot/output.TestDeliverJPEGDoesNotDegradeClipboard`, `screenshot/output.TestSetClipboardImageRoundTrip` | **Partial** | M8: no real application has pasted the image |
-| SCR-063 | P0 | Default Pictures folder; another can be chosen | SCR-01, SCR-04, QLT-03B, QLT-03C | `screenshot.TestDefaultFolderIsOneACaptureCanUse`, `screenshot.TestNativeViewBrowseForOutputFolder` | **Partial** | M16: the real folder picker has not been opened |
+| SCR-062 | P0 | Clipboard image is compatible and not JPEG-degraded | SCR-04 | `screenshot/output.TestDeliverJPEGDoesNotDegradeClipboard`, `screenshot/output.TestSetClipboardImageRoundTrip` | **Partial** | M8: a capture pasted into Paint at full size on the release candidate, and no Office application has pasted it, as Office on the test machine was not signed in |
+| SCR-063 | P0 | Default Pictures folder; another can be chosen | SCR-01, SCR-04, QLT-03B, QLT-03C | `screenshot.TestDefaultFolderIsOneACaptureCanUse`, `screenshot.TestNativeViewBrowseForOutputFolder` | Pass |  |
 | SCR-064 | P0 | Filename pattern `Screenshot_yyyyMMdd_HHmmssfff` | SCR-01, SCR-04 | `screenshot/output.TestSaveWritesTimestampedFile`, `screenshot.TestImageFormatExtensionAndFilenameExample` | Pass |  |
 | SCR-065 | P0 | Never overwrites; appends a numeric suffix | SCR-04, QLT-03A | `screenshot/output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
 | SCR-066 | P0 | Written through a temporary file | SCR-04, QLT-03A, REL-02B | `screenshot/output.TestSaveEncodeFailureLeavesNoFiles`, `screenshot/output.TestSaveWithoutHardLinksMovesTheFinishedFile`, `screenshot/output.TestHardLinkSaveWaitsToRemoveABrieflyHeldTemporaryName` | Pass | M5 |
 | SCR-067 | P0 | JPEG quality 1-100, default 90 | SCR-01, SCR-04, REL-02B | `screenshot.TestCaptureOptionsValidateBoundaries`, `screenshot.TestParseJPEGQuality`, `screenshot.TestNativeViewCaptureRejectsUnsavedInvalidQuality` | Pass |  |
-| SCR-068 | P0 | Cursor, frame, toolbar, tint not in the output | SCR-03, SCR-07, SCR-08 | `capture.TestHideExcludesWindowFromCapture`, `overlay.TestPresetFrameCaptureDeliversExactRect` | **Partial** | M9, M15: no image from a real selection has been checked for the pointer, frame, toolbar, or tint |
-| SCR-069 | P1 | Notification with Open Folder and path or error | SCR-05, SCR-10, QLT-03B, REL-02A, REL-02B | `screenshot.TestNativeViewOpenFolderRevealsSavedFile`, `screenshot.TestNativeViewCaptureFailurePresentations`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard`, `ui.TestResultCardButtons`, `ui.TestStatusAreaBreaksATokenWiderThanItself`, `app.TestMeasureTextCountsTheLinesOfALongPath` | **Partial** | M18: a shortcut capture's saved path or error has not been checked on the result card of the release candidate. M16: Open Folder has not opened Explorer |
+| SCR-068 | P0 | Cursor, frame, toolbar, tint not in the output | SCR-03, SCR-07, SCR-08 | `capture.TestHideExcludesWindowFromCapture`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
+| SCR-069 | P1 | Notification with Open Folder and path or error | SCR-05, SCR-10, QLT-03B, REL-02A, REL-02B | `screenshot.TestNativeViewOpenFolderRevealsSavedFile`, `screenshot.TestNativeViewCaptureFailurePresentations`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard`, `ui.TestResultCardButtons`, `ui.TestStatusAreaBreaksATokenWiderThanItself`, `app.TestMeasureTextCountsTheLinesOfALongPath` | **Partial** | M16: the first time File Explorer shows a folder, Open Folder focuses the saved file without highlighting it, as `explorer /select` does without the application; whether that opens it at the file is the project owner's decision |
 
 ## Image Resizer
 
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
-| RSZ-001 | P0 | Multi-file picker | RSZ-02 | `imageresizer.TestNativeViewAddImagesThroughPicker`, `ui.TestParsePickedPaths`, `ui.TestPickImageFilesOpensTheRealPicker` | **Partial** | M16: the real file picker has been opened and cancelled, but no file has been chosen in it |
-| RSZ-002 | P0 | Drag and drop multiple files | RSZ-02 | `imageresizer.TestNativeViewDropFilesAndFolder` | **Partial** | M16: no real drop from File Explorer |
+| RSZ-001 | P0 | Multi-file picker | RSZ-02 | `imageresizer.TestNativeViewAddImagesThroughPicker`, `ui.TestParsePickedPaths`, `ui.TestPickImageFilesOpensTheRealPicker` | Pass |  |
+| RSZ-002 | P0 | Drag and drop multiple files | RSZ-02 | `imageresizer.TestNativeViewDropFilesAndFolder` | Pass |  |
 | RSZ-003 | P0 | PNG/JPEG extensions, validated by content | RSZ-02, RSZ-03 | `imageresizer.TestSupportedExtensionIsCaseInsensitive`, `decode.TestContentDecidesFormat` | Pass |  |
 | RSZ-004 | P0 | Bad files are identified and block nothing | RSZ-02, RSZ-03 | `imageresizer.TestInventoryAddClassifiesMixedBatch`, `imageresizer.TestAcceptanceR06MixedBatch` | Pass |  |
 | RSZ-005 | P0 | List shows name, path, dimensions, status | RSZ-02, RSZ-03, RSZ-08 | `imageresizer.TestSourceItemRowAndDetailText`, `imageresizer.TestNativeViewSelectionShowsStatusDetail` | Pass |  |
 | RSZ-006 | P0 | Remove selected and clear | RSZ-02 | `imageresizer.TestNativeViewRemoveSelectedAndClearSources`, `imageresizer.TestInventoryRemoveAndClear` | Pass |  |
 | RSZ-007 | P0 | No duplicate items for one path | RSZ-02 | `imageresizer.TestInventoryAddDeduplicatesFullPathsCaseInsensitively` | Pass |  |
-| RSZ-008 | P1 | Folder drop adds its direct files | RSZ-02 | `imageresizer.TestInventoryAddExpandsFoldersNonrecursively`, `imageresizer.TestNativeViewDropFilesAndFolder` | **Partial** | M16: no real folder drop from File Explorer |
+| RSZ-008 | P1 | Folder drop adds its direct files | RSZ-02 | `imageresizer.TestInventoryAddExpandsFoldersNonrecursively`, `imageresizer.TestNativeViewDropFilesAndFolder` | Pass |  |
 | RSZ-009 | P0 | Inputs opened read-only and never modified | RSZ-02 | `decode.TestSourcesAreOpenedReadOnly`, `imageresizer.TestInventoryAddNeverModifiesSources` | Pass |  |
 | RSZ-010 | P0 | Stretch, with a distortion warning | RSZ-01, RSZ-04 | `imageresizer.TestAcceptanceR01Stretch`, `imageresizer.TestNativeViewModeDescriptionFollowsPresetSelection` | Pass |  |
 | RSZ-011 | P0 | Fit keeps aspect ratio, no padding | RSZ-04 | `imageresizer.TestAcceptanceR02FitLandscape` | Pass |  |
@@ -122,7 +122,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | RSZ-016 | P0 | Fitting mode explained before starting | RSZ-01, RSZ-08 | `imageresizer.TestNativeViewModeDescriptionFollowsPresetSelection` | Pass |  |
 | RSZ-017 | P0 | High-quality, deterministic resampling | RSZ-04 | `resize.TestResizeIsDeterministic`, `resize.TestResizeMatchesTheFloatReference` | Pass |  |
 | RSZ-018 | P0 | EXIF orientation applied first | RSZ-03 | `imageresizer.TestAcceptanceR12EXIFOrientation`, `decode.TestDecodeAppliesEveryEXIFOrientation` | Pass |  |
-| RSZ-020 | P0 | Creates new files and preserves originals | RSZ-01, RSZ-05 | `imageresizer.TestAcceptanceR07OriginalsPreserved`, `imageresizer.TestDefaultOptions` | **Partial** | M16: the real folder picker has not chosen an output folder |
+| RSZ-020 | P0 | Creates new files and preserves originals | RSZ-01, RSZ-05 | `imageresizer.TestAcceptanceR07OriginalsPreserved`, `imageresizer.TestDefaultOptions` | Pass |  |
 | RSZ-021 | P0 | Default folder; last valid folder remembered | RSZ-01, RSZ-05, QLT-03D | `imageresizer.TestDefaultFolder`, `imageresizer.TestOptionsStoreRoundTripAndPresetCoexistence` | Pass |  |
 | RSZ-022 | P0 | Keep Source Format, PNG, JPEG | RSZ-01, RSZ-05, RSZ-06 | `imageresizer/output.TestEncodedFormatAndExtension`, `imageresizer.TestDefaultOptions` | Pass |  |
 | RSZ-023 | P0 | Keeps the base name with a matching extension | RSZ-01, RSZ-05, RSZ-06 | `imageresizer/output.TestPrepareNamesDestinationsAfterSources` | Pass |  |
@@ -141,7 +141,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | RSZ-045 | P0 | Cancel stops new items and keeps results | RSZ-07, RSZ-08 | `job.TestRunCancellationKeepsCompletedResults`, `imageresizer.TestAcceptanceR13Cancellation` | Pass |  |
 | RSZ-046 | P0 | Completion summary and per-file details | RSZ-07, RSZ-08 | `imageresizer.TestSummaryNoticeCountsEveryOutcome`, `imageresizer.TestResultDetailNamesEveryReasonAndLeftoverFile` | Pass |  |
 | RSZ-047 | P0 | Output folder never opens by itself | RSZ-08 | `imageresizer.TestNativeViewResizesEveryReadyImageEndToEnd` | Pass |  |
-| RSZ-048 | P1 | Open Output Folder action | RSZ-08 | `imageresizer.TestNativeViewKeepsOfferingTheLatestResults`, `imageresizer.TestNativeViewShowsAnOpenFailureOutsideTheJobSection` | **Partial** | M16: Open Output Folder has not opened Explorer |
+| RSZ-048 | P1 | Open Output Folder action | RSZ-08 | `imageresizer.TestNativeViewKeepsOfferingTheLatestResults`, `imageresizer.TestNativeViewShowsAnOpenFailureOutsideTheJobSection` | Pass |  |
 | RSZ-049 | P0 | Re-run re-evaluates collisions and inputs | RSZ-07, RSZ-08 | `job.TestRunRenamesDuplicatesAndReplansOnRerun`, `imageresizer.TestNativeViewRerunsPlanAroundEarlierResults` | Pass |  |
 | RSZ-050 | P1 | Bounded parallelism | RSZ-07 | `job.TestRunBoundsWorkersAndMemory`, `job.TestDefaultWorkersLeaveAProcessorFree` | Pass |  |
 
@@ -193,7 +193,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | NFR-030 | P0 | Works locally and offline | QLT-03 | `app.TestCoreWorkflowsRunOffline`, `audit.TestExecutableContainsNoNetworkCode` | Pass | M6 |
 | NFR-031 | P0 | No account, telemetry, or upload | QLT-03 | `audit.TestApplicationLinksNoNetworkPackages`, `screenshot/output.TestSetClipboardImageOptsOutOfCloudUploadOnly` | Pass | M7 |
 | NFR-032 | P0 | Files only at user-selected and own paths | QLT-03, QLT-03B, QLT-03C | `audit.TestFileChangesStayAtReviewedSites`, `app.TestCoreWorkflowsRunOffline` | Pass |  |
-| NFR-033 | P0 | Dependencies inventoried and licenses reviewed | QLT-03 | `audit.TestDependenciesAreInventoried`, `release.TestNoticesCarryTheLinkedLicenses` | Pass | M13 |
+| NFR-033 | P0 | Dependencies inventoried and licenses reviewed | QLT-03 | `audit.TestDependenciesAreInventoried`, `release.TestNoticesCarryTheLinkedLicenses` | Pass |  |
 
 ## Technical guardrails
 
@@ -205,7 +205,7 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | TECH-004 | P0 | Separate modules behind a shared shell | FND-03 | `shell.TestNavigatorPreservesModuleViewState`, `preset.TestLibrariesHaveIndependentNamespaces` | Pass |  |
 | TECH-005 | P0 | Heavy work runs off the GUI thread | FND-03, SCR-03, RSZ-03, RSZ-07 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob`, `capture.TestCaptureConcurrentCallsDoNotDeadlock`, `shell.TestDispatchQueueConcurrentPost` | Pass |  |
 | TECH-006 | P0 | Bounded, cancellation-aware concurrency | RSZ-07 | `job.TestRunBoundsWorkersAndMemory`, `job.TestRunCancellationKeepsCompletedResults` | Pass |  |
-| TECH-007 | P0 | Verified, maintained dependencies | FND-01, QLT-03 | `audit.TestDependenciesAreInventoried`, [privacy record](privacy-verification.md) | Pass | M13 |
+| TECH-007 | P0 | Verified, maintained dependencies | FND-01, QLT-03 | `audit.TestDependenciesAreInventoried`, [privacy record](privacy-verification.md) | Pass |  |
 | TECH-008 | P0 | Documented, versioned settings format | FND-04 | `settings.TestStoreMigrationFixture`, `app.TestOpenSessionUpgradesEverySettingsFormat` | Pass |  |
 | TECH-009 | P0 | Automated test coverage | FND-02, SCR-11, RSZ-09, REL-02 | `preset.TestValidationBoundaries`, `resize.TestPlanFitProperties`, `imageresizer/output.TestPrepareNeverOverwritesASource`, `settings.TestStoreMigrationFixture`, `job.TestRunIsolatesItemFailures`, `capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries` | **Partial** | QLT-04A: mixed-DPI capture has not run |
 | TECH-010 | P1 | Executable needs no Go toolchain | FND-02, REL-01 | `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, [ADR-0002](adr/0002-product-identity-and-distribution.md) | Pass | M1 |
@@ -214,15 +214,15 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
-| AC-S01 | — | Exact preset at standard scaling | SCR-11 | `overlay.TestPresetFrameCaptureDeliversExactRect`, `capture.TestCaptureRectDimensionsAndContent` | **Partial** | M9: no image from a real preset session has been checked for the frame or toolbar |
+| AC-S01 | — | Exact preset at standard scaling | SCR-11 | `overlay.TestPresetFrameCaptureDeliversExactRect`, `capture.TestCaptureRectDimensionsAndContent` | Pass |  |
 | AC-S02 | — | Exact preset at mixed DPI | SCR-11, QLT-04A | `capture.TestCaptureExactPresetOnEveryDisplayAndAcrossBoundaries`, `display.TestLogicalPhysicalConversion` | **Partial** | QLT-04A: mixed scaling, live |
-| AC-S03 | — | Click-through interaction | SCR-11 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | **Partial** | M9: no real click through the production frame |
-| AC-S04 | — | Precision placement | SCR-11 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameKeyboardNudges` | **Partial** | M9: no real pointer has dragged the production frame |
-| AC-S05 | — | Free rectangle adjustment | SCR-11 | `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestOverlayMoveAndResizeAdjustSelection` | **Partial** | M15: no selection has been drawn with a real pointer |
-| AC-S06 | — | Full secondary display | SCR-11 | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | **Partial** | M19: the tests compare the display's size, and nothing checks that the image holds only that display's contents |
+| AC-S03 | — | Click-through interaction | SCR-11 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass |  |
+| AC-S04 | — | Precision placement | SCR-11 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `overlay.TestPresetFrameKeyboardNudges` | Pass |  |
+| AC-S05 | — | Free rectangle adjustment | SCR-11 | `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestOverlayMoveAndResizeAdjustSelection` | Pass |  |
+| AC-S06 | — | Full secondary display | SCR-11 | `capture.TestCaptureDisplay`, `screenshot.TestNativeViewFullDisplayCaptureSucceeds` | Pass |  |
 | AC-S07 | — | Cancellation | SCR-11 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |
-| AC-S08 | — | Clipboard success with save failure | SCR-11, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard` | **Partial** | M18: a shortcut capture's failed save has not been checked on the result card of the release candidate |
-| AC-S09 | — | Save success with clipboard failure | SCR-11, REL-02A | `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard` | **Partial** | M18: a shortcut capture's clipboard failure has not been checked on the result card of the release candidate |
+| AC-S08 | — | Clipboard success with save failure | SCR-11, REL-02A | `screenshot/output.TestDeliverSaveFailureKeepsClipboardSuccess`, `execute.TestFullDisplayReportsIndependentDeliveryOutcomes`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard` | Pass |  |
+| AC-S09 | — | Save success with clipboard failure | SCR-11, REL-02A | `screenshot/output.TestDeliverClipboardFailureKeepsSaveSuccess`, `execute.TestRectangleReportsIndependentDeliveryOutcomes`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard` | Pass |  |
 | AC-S10 | — | Filename collision | SCR-11 | `screenshot/output.TestSaveAppendsNumericSuffixOnCollision` | Pass |  |
 | AC-S11 | — | Shortcut conflict | SCR-11, REL-02A, REL-02B | `screenshot.TestHotkeyConflictKeepsPreviousRegistration`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestStartupShortcutConflictReachesTheCardWhileTheViewIsHidden`, `screenshot.TestShortcutFailureLeavesTheStatusAreaOnceItRegisters` | Pass |  |
 | AC-S12 | — | Monitor removal | SCR-11, QLT-04A, REL-02A, REL-02B | `overlay.TestDisplayChangeEndsSessionThatCannotFit`, `overlay.TestDisplayChangeEndsASelectionLeftOnNoDisplay`, `screenshot.TestNativeViewDisplayChangeEndsStaleSession`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | **Partial** | QLT-04A: a live disconnect |
@@ -254,5 +254,5 @@ The Partial P1 requirements are APP-005, SCR-005, SCR-028, SCR-055, SCR-069, RSZ
 | AC-A01 | — | Persistence | QLT-02, QLT-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | AC-A02 | — | Offline use | QLT-03, QLT-04 | `app.TestCoreWorkflowsRunOffline` | Pass | M6 |
 | AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | **Partial** | M2: nothing has confirmed that a focus indicator is drawn |
-| AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: the window has not been dragged during a job |
+| AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: on the release candidate, under x64 emulation, 1 of 3 drags lagged up to 153 ms, over the check's 100 ms |
 | AC-A05 | — | Clean exit | QLT-02, QLT-04 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass | M4 |

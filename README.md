@@ -111,7 +111,7 @@ The version and the date stamped on the ZIP's files are in `internal/release/rel
 go generate ./cmd/gamedevtools
 ```
 
-To use the application, read the [user guide](packaging/USER-GUIDE.txt). To check it, start with the [test and verification guide](docs/testing.md), which lists the commands, the records below, and the manual checks still open. [Requirement traceability](docs/traceability.md) maps every PRD requirement to its implementation, evidence, and status, including those not yet complete.
+To use the application, read the [user guide](packaging/USER-GUIDE.txt). To check it, start with the [test and verification guide](docs/testing.md), which lists the commands, the records below, and the manual checks still open. The [release candidate record](docs/release-candidate.md) has REL-03's checklist, its results, and what still blocks a release. [Requirement traceability](docs/traceability.md) maps every PRD requirement to its implementation, evidence, and status, including those not yet complete.
 
 The Screenshot module's acceptance and performance verification is recorded in [Screenshot verification and acceptance results](docs/screenshot-verification.md): the repeatable test matrix for every Screenshot acceptance scenario, the NFR-011 overlay-appearance and NFR-012 capture-to-clipboard benchmarks, the environment of record the results were measured on, and the scenarios still gated on mixed-DPI hardware.
 
