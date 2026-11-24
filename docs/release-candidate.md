@@ -88,7 +88,7 @@ Each defect below was already on `main`, was reproduced on a candidate, and has 
 |---|---|---|
 | Dragging inside a Free Rectangle selection did not move it, and the press reached the application beneath | Candidate 1, every drag inside a selection: 4 of 4 in its recorded results | The interior pixel was alpha 0, which Windows hit-tests as transparent. It is now alpha 1 |
 | Add Images never opened its picker, in any build | Candidate 1, every press: its recorded M16 run's press reported "invalid argument" | The filter held NUL characters, which the UTF-16 conversion always refused. Each string is now converted separately |
-| After a real press on the Free Rectangle overlay, it covered the toolbar, and a click meant for Capture or a size field started a new selection | Candidate 2, 4 of 4 runs | The toolbar is put back in front of the overlay whenever it is placed, including after a right, middle, or side-button press |
+| After a real press on the Free Rectangle overlay, it covered the toolbar, and a click meant for Capture or a size field started a new selection | Candidate 2, 4 of 4 runs. Candidate 1's M15 run had also found the toolbar covered after its drags and brought it forward with the shortcut, as the guide says | The toolbar is put back in front of the overlay whenever it is placed, including after a right, middle, or side-button press |
 
 Putting the toolbar back after a right, middle, or side-button press also moves it beside the selection, so such a press undoes a drag of the toolbar aside. Raising it without moving it needs an executable change and is left for a later candidate.
 
@@ -115,7 +115,7 @@ A release needs each of these:
 
 M3 to M7 and M11 add confidence to requirements already covered and do not block on their own. UX-008 is deferred by PRD section 20.
 
-The packaged release notes describe the candidate as built. The next candidate's notes must add M12's result. They must also reflect whatever the owner decides about the dialog suspension and Open Folder.
+The packaged release notes and user guide describe the candidate as built. The next candidate's notes must add M12's result. They must also reflect whatever the owner decides about the dialog suspension and Open Folder. The guide's keyboard reference says Enter captures after you draw a rectangle, which after a draw with the mouse holds only once the toolbar is clicked, as listed below. Its known limitations name neither the live size showing through the tint during the first draw nor a right, middle, or side-button press moving a toolbar dragged aside. The next candidate must fix each of these, or its guide must state it.
 
 ## Found and left for later
 
@@ -124,7 +124,7 @@ These are on `main`, outside a release-blocking fix, and need their own plan ite
 - The shortcut can start a capture during a keyboard move or size of the main window, or with its system menu open.
 - A second launch brings forward a main window that a modal dialog has disabled.
 - A dialog opened in the instant after a Full Display capture starts can appear in the image. Add Images can now reach this.
-- A real press on the Free Rectangle overlay makes it the active window. Enter and Tab then do nothing in the toolbar until it is clicked. The guide promises Enter only in the typed-size flow, which presses nothing on the overlay. The press also applies a size typed in a field but not yet applied, as the field loses the focus before any drag starts.
+- A real press on the Free Rectangle overlay makes it the active window. Enter and Tab then do nothing in the toolbar until it is clicked, although the user guide's keyboard reference says Enter captures after you draw a rectangle. The press also applies a size typed in a field but not yet applied, as the field loses the focus before any drag starts.
 - The press that activates the Free Rectangle overlay raises it above the toolbar until the button is released, so during the first draw the live size shows through the overlay's tint.
 
 ## Plan status
