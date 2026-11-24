@@ -54,7 +54,7 @@ Results below were recorded on 2026-11-22 from commit `8c06406`, with a clean wo
 
 ## Running without administrator rights
 
-`app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` builds the executable with the release flags and runs it with its per-user folders in a temporary workspace. It confirms the process has no enabled Administrators group, its window appears and answers, a second launch exits and leaves the first window in place (APP-005), its settings are written, it exits with code 0 and releases the single-instance mutex (AC-A05), and, with the file then changed to select the other module and a custom preset, it restarts and keeps both, with no recovery or temporary file (AC-A01). The runs recorded below, from `8c06406`, predate the check that those changed values are kept. On an elevated host, such as a GitHub-hosted runner, the test is written to drop first to a restricted, medium-integrity token; that path has not run yet, as this machine's runs were not elevated.
+`app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` builds the executable with the release flags and runs it with its per-user folders in a temporary workspace. It confirms the process has no enabled Administrators group, its window appears and answers, a second launch exits and leaves the first window in place (APP-005), its settings are written, it exits with code 0 and releases the single-instance mutex (AC-A05), and, with the file then changed to select the other module and a custom preset, it restarts and keeps both, with no recovery or temporary file (AC-A01). The runs recorded below, from `8c06406`, predate the check that those changed values are kept. On an elevated host, such as a GitHub-hosted runner, the test is written to drop first to a restricted, medium-integrity token. This machine's runs were not elevated. The hosted `Validation matrix` [run 45341616501](https://github.com/CyberCute-Studio/GameDevTools/actions/runs/45341616501) on the release candidate ran that path on two elevated runners, and the test passed on both.
 
 ## Performance
 
@@ -100,6 +100,8 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 
 ## Results by requirement
 
+The rows that waited on a manual check give the result of REL-03's run of it on the release candidate `c646471`, as the [release candidate record](release-candidate.md#manual-checks) says.
+
 | Requirement | Result | Evidence |
 |---|---|---|
 | NFR-001 — Windows 11, 64-bit | **Partial** | Passed on Windows 11 ARM64, native and x64 under emulation; x64 hardware is QLT-04A |
@@ -112,22 +114,22 @@ Across the four full runs of each architecture on 2026-11-22, at `aabff6e`, `e1a
 | AC-A01 — Persistence | Pass | [Reliability record](reliability-verification.md) and the release executable test |
 | AC-A02 — Offline use | Pass | `app.TestCoreWorkflowsRunOffline`, [privacy record](privacy-verification.md) |
 | AC-A03 — Keyboard access | **Partial** | [Accessibility record](accessibility-verification.md); that the focus is visible is manual check [M2](testing.md#manual-pre-release-checks) |
-| AC-A04 — Responsive batch UI | **Partial** | [Image Resizer record](image-resizer-verification.md); a real drag during a job is manual check [M12](testing.md#manual-pre-release-checks) |
+| AC-A04 — Responsive batch UI | **Partial** | [Image Resizer record](image-resizer-verification.md); a real drag during a job is manual check [M12](testing.md#manual-pre-release-checks), which failed on the release candidate, under emulation, in 1 of 3 drags |
 | AC-A05 — Clean exit | Pass | The exit matrix in the [reliability record](reliability-verification.md) and the release executable test |
 | AC-S07, AC-S10 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |
-| AC-S01 — Exact preset at standard scaling | **Partial** | [Screenshot record](screenshot-verification.md); checking a real preset capture's image for the frame and toolbar is manual check [M9](testing.md#manual-pre-release-checks) |
-| AC-S06 — Full secondary display | **Partial** | [Screenshot record](screenshot-verification.md); that the image holds only the selected display's contents is manual check [M19](testing.md#manual-pre-release-checks) |
+| AC-S01 — Exact preset at standard scaling | Pass | [Screenshot record](screenshot-verification.md); checking a real preset capture's image for the frame and toolbar is manual check [M9](testing.md#manual-pre-release-checks), which passed |
+| AC-S06 — Full secondary display | Pass | [Screenshot record](screenshot-verification.md); that the image holds only the selected display's contents is manual check [M19](testing.md#manual-pre-release-checks), which passed |
 | AC-S11 — Shortcut conflict | Pass | [Screenshot record](screenshot-verification.md) |
-| AC-S08, AC-S09 — Independent output failures | **Partial** | [Screenshot record](screenshot-verification.md); the result card on the release candidate is manual check [M18](testing.md#manual-pre-release-checks) |
-| AC-S03 — Click-through interaction | **Partial** | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks) |
-| AC-S04 — Precision placement | **Partial** | [Screenshot record](screenshot-verification.md); a real drag of the production frame's border is manual check [M9](testing.md#manual-pre-release-checks) |
-| AC-S05 — Free rectangle adjustment | **Partial** | [Screenshot record](screenshot-verification.md); drawing a selection with a real pointer is manual check [M15](testing.md#manual-pre-release-checks) |
+| AC-S08, AC-S09 — Independent output failures | Pass | [Screenshot record](screenshot-verification.md); the result card on the release candidate is manual check [M18](testing.md#manual-pre-release-checks), which passed |
+| AC-S03 — Click-through interaction | Pass | [Screenshot record](screenshot-verification.md); a real click through the production frame is manual check [M9](testing.md#manual-pre-release-checks), which passed |
+| AC-S04 — Precision placement | Pass | [Screenshot record](screenshot-verification.md); a real drag of the production frame's border is manual check [M9](testing.md#manual-pre-release-checks), which passed |
+| AC-S05 — Free rectangle adjustment | Pass | [Screenshot record](screenshot-verification.md); drawing a selection with a real pointer is manual check [M15](testing.md#manual-pre-release-checks), which passed |
 | AC-S02, AC-S12 | **Mechanism level; live run is QLT-04A** | [Screenshot record](screenshot-verification.md#hardware-gated-scenarios) |
 | AC-R01 to AC-R15 | Pass | [Image Resizer record](image-resizer-verification.md), in this run's suite |
 
 ## What these results do not cover
 
-- **x64 hardware.** The x64 build ran only under emulation on this machine. The hosted Windows Server runs have not happened yet.
+- **x64 hardware.** The x64 build ran only under emulation on this machine. The hosted Windows Server runs passed on the release candidate, but Windows Server does not stand in for Windows 11.
 - **Other Windows 11 releases.** Only build 26300 was run.
 - **Any scaling but 100%.** Mixed-DPI behavior has still never been exercised live, which is the blocker [ADR-0001](adr/0001-native-windows-stack.md) recorded.
 - **Other display arrangements.** No display had negative coordinates or was rotated, and none was disconnected during a selection.

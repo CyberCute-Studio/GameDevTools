@@ -6,10 +6,10 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 ## Status
 
-- **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as switching on a contrast theme, and has not been done.
+- **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as switching on a contrast theme, and has not passed: it has not been done, or, for RSZ-041's M12, it failed on the release candidate, as the row says.
 - **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M2, M8, M9, M10, M12, M15, M16, M17, M18, or M19 need a run that does what the requirement describes in a real application, by a person or by a script driving real input as [the test guide](testing.md#manual-pre-release-checks) allows, as the unit tests only reach the mechanism: which control has the keyboard focus, not whether its focus indicator is drawn, the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, with one real hit test inside a Free Rectangle selection, a real file picker that is only opened and cancelled, stand-ins for choosing files, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, a stand-in for the result card, and a capture checked by its size or rectangle rather than by what the image shows. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
 
-`M1` to `M19` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's.
+`M1` to `M19` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's. So M12's failure on the [release candidate](release-candidate.md#manual-checks) keeps AC-A04 Partial and leaves RSZ-041 Pass on its automated checks.
 
 ## Summary
 
@@ -24,7 +24,9 @@ PRD section 16 makes every P0 item a release blocker. Every P0 requirement and a
 
 SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
 
-The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only.
+The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only, in QLT-04's runs; the release candidate's x64 validation met it.
+
+SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner's confirmation: the shortcut captures nothing while one of the application's own modal dialogs is open. The [release candidate record](release-candidate.md#release-blockers) lists that decision as a release blocker.
 
 ## Application shell
 
@@ -134,7 +136,7 @@ The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-
 | RSZ-029 | P0 | JPEG quality 1-100, default 90 | RSZ-01, RSZ-05, RSZ-06 | `imageresizer.TestResizeOptionsValidateBoundaries`, `encode.TestJPEGUsesTheQuality` | Pass |  |
 | RSZ-030 | P0 | Creates the folder and reports write failures | RSZ-05, RSZ-06, QLT-03C | `imageresizer/output.TestPrepareCreatesTheOutputFolder`, `imageresizer/output.TestWriteReportsWriteFailures` | Pass | M11 |
 | RSZ-040 | P0 | Start validates the whole job | RSZ-07, RSZ-08 | `imageresizer.TestNativeViewRefusesJobsThatCannotStart`, `job.TestRunFailsAnInvalidJobBeforeAnything` | Pass |  |
-| RSZ-041 | P0 | GUI stays responsive | RSZ-07, RSZ-08 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | Pass | M12 |
+| RSZ-041 | P0 | GUI stays responsive | RSZ-07, RSZ-08 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | Pass | M12, for confidence only: it failed on the release candidate in 1 of 3 drags, as AC-A04's row says |
 | RSZ-042 | P0 | Progress counts and current file | RSZ-07, RSZ-08 | `imageresizer.TestProgressMessageNamesTheCurrentFile`, `imageresizer.TestNativeViewResizesEveryReadyImageEndToEnd` | Pass |  |
 | RSZ-043 | P0 | Per-item states | RSZ-07, RSZ-08 | `job.TestRunMixedBatch`, `imageresizer.TestSourceItemShowsJobResults` | Pass |  |
 | RSZ-044 | P0 | One failure does not stop the rest | RSZ-07, RSZ-08 | `job.TestRunIsolatesItemFailures`, `imageresizer.TestAcceptanceR06MixedBatch` | Pass |  |
@@ -181,7 +183,7 @@ The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-
 | NFR-003 | P0 | Per-monitor DPI, 100-500%, negative coordinates, disconnect | SCR-02, QLT-04, QLT-04A | `display.TestLogicalPhysicalConversion`, `overlay.TestDisplayChangeResolvesScalingOnUnchangedTopology` | **Partial** | QLT-04A: all but 100%, live |
 | NFR-004 | P1 | Arm and 32-bit are not targets | QLT-04 | [platform record](platform-verification.md) | Pass |  |
 | NFR-010 | P1 | Launch within 2 s | QLT-04, QLT-04A | `app.BenchmarkWarmLaunchToResponsiveMainWindow`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
-| NFR-011 | P1 | Overlay within 300 ms | SCR-11, QLT-04, QLT-04A | `overlay.BenchmarkOverlayAppearFreeRectangle`, `overlay.BenchmarkOverlayAppearPresetRectangle`, [platform record](platform-verification.md) | **Partial** | QLT-04A: **missed** in 2 of 6 batches under x64 emulation; x64 hardware not measured |
+| NFR-011 | P1 | Overlay within 300 ms | SCR-11, QLT-04, QLT-04A | `overlay.BenchmarkOverlayAppearFreeRectangle`, `overlay.BenchmarkOverlayAppearPresetRectangle`, [platform record](platform-verification.md) | **Partial** | QLT-04A: **missed** in 2 of 6 batches under x64 emulation in QLT-04, and met in the release candidate's x64 validation; x64 hardware not measured |
 | NFR-012 | P1 | 4K capture to clipboard within 1 s | SCR-11, QLT-04, QLT-04A | `capture.BenchmarkCaptureRectVirtualDesktop`, `screenshot/output.BenchmarkSetClipboardImage4K`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
 | NFR-013 | P1 | 100 12 MP JPEGs within 2 minutes | RSZ-09, QLT-04, QLT-04A | `job.BenchmarkRun100Mixed12MegapixelJPEGsFit1024`, [platform record](platform-verification.md) | **Partial** | QLT-04A: the reference machine |
 | NFR-014 | P0 | Bounded batch memory | RSZ-07, RSZ-09, QLT-04 | `job.TestRunBoundsWorkersAndMemory`, `job.BenchmarkRun100Mixed12MegapixelJPEGsFit1024` | Pass |  |
@@ -254,5 +256,5 @@ The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-
 | AC-A01 | — | Persistence | QLT-02, QLT-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | AC-A02 | — | Offline use | QLT-03, QLT-04 | `app.TestCoreWorkflowsRunOffline` | Pass | M6 |
 | AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | **Partial** | M2: nothing has confirmed that a focus indicator is drawn |
-| AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: on the release candidate, under x64 emulation, 1 of 3 drags lagged up to 153 ms, over the check's 100 ms |
+| AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: on the release candidate, under x64 emulation, 1 of 3 drags lagged up to 153 ms, over the 100 ms the scripted run took as following smoothly |
 | AC-A05 | — | Clean exit | QLT-02, QLT-04 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass | M4 |

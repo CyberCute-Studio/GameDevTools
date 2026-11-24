@@ -2,7 +2,7 @@
 
 This is REL-03's record of the 1.0.0 release candidate: what was built, the checklist it was held to, each result, the defects the validation found, and the explicit list of what still blocks a release. [Requirement traceability](traceability.md) holds the per-requirement status, and [the test guide](testing.md#recorded-runs) holds the recorded runs.
 
-**Result: the candidate is not releasable yet.** It passes every automated gate and eight of the nine manual checks that this environment can run, apart from one condition of M16. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open.
+**Result: the candidate is not releasable yet.** It passes every automated gate. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open.
 
 ## The candidate
 
@@ -39,7 +39,7 @@ Performance in the x64 validation, under emulation:
 | NFR-010, warm launch, mean and slowest of 20 | 319.6 ms, 370.4 ms | 2,000 ms |
 | NFR-011, Free Rectangle overlay, mean and slowest of 30 | 83.6 ms, 114.1 ms | 300 ms |
 | NFR-011, Preset Rectangle overlay, mean and slowest of 30 | 30.5 ms, 36.3 ms | 300 ms |
-| NFR-012, 3840 × 2160 capture to clipboard | 168.5 ms | 1,000 ms |
+| NFR-012, 3840 × 2160 capture to clipboard, estimated from the desktop capture as the [platform record](platform-verification.md#performance) describes | 168.5 ms | 1,000 ms |
 | NFR-013, 100 mixed 12 MP JPEGs, slowest of 3 | 15.4 s | 120 s |
 | NFR-014, peak heap during the batch | 220.3 MiB | 1,024 MiB |
 
@@ -52,7 +52,9 @@ These limits applied to every run:
 - `Ctrl+Alt+S` was already registered by another program on this machine, so the runs used `Ctrl+Shift+F9`.
 - The window was minimized with Alt+Space, N.
 
-The script also had guards. It refused a click on any window that was not its own, the application's, or a window it had opened. It refused any key unless one of those windows was in front. It stopped at the first input it had not sent itself. The first attempt on this candidate stopped that way, when a Remote Desktop client sent input. It was discarded, and the run was repeated with nothing else using the machine.
+The script also had guards. It refused a click on any window that was not its own, the application's, or a window it had opened. It refused any key unless one of those windows was in front. It stopped at the first input it had not sent itself. The first attempt on this candidate stopped that way, when another program injected a keyboard event during M19. It was discarded, and the run was repeated with nothing else using the machine.
+
+The first M15 run on this candidate failed on one of the 19 samples taken as Enter pressed Capture, which found the overlay above the toolbar. The script could not then tell whether the capture had already hidden one of the windows. It was changed to count only samples with both windows visible, and M15 was run again. In that run every sample of that phase had a window hidden, and M15 passed. Apart from the discarded first attempt, no other check was repeated.
 
 | Check | Result | What was measured |
 |---|---|---|
@@ -67,10 +69,10 @@ The script also had guards. It refused a click on any window that was not its ow
 | M9 | Pass | Clicks inside the HD frame reached the application beneath, the frame kept its place and size, and a border drag moved it by exactly (137, 61). The image was 1280 × 720, with 0 of 921,600 pixels differing from the known pattern beneath |
 | M10 | Pass | Each capture mode started from another focused application. A second press brought the toolbar forward with the focus, with no second selection |
 | M11 | Not run | Needs a drive that fills up |
-| M12 | **Fail** | Three drags of the window during a 100-image job. In one, 6 of 240 pointer positions were reflected after more than 100 ms, the worst at 153.3 ms. The other two stayed within 69 ms. The job ran throughout every drag |
+| M12 | **Fail** | Three drags of the window during a 100-image job, a number fixed before the runs. The script took "follows smoothly" to mean every pointer position reflected within 100 ms, a limit it set, as the check names none. In one drag, 6 of 240 positions were reflected after more than 100 ms, the worst at 153.3 ms. The other two stayed within 69 ms. The job ran throughout every drag |
 | M13 | Pass | Listed above |
 | M14 | Pass | Listed above |
-| M15 | Pass | A real draw showed the live size at every step. Moving, resizing, and a right-click reached nothing beneath. Real clicks on the toolbar's size field and Capture worked after every drag. The 640 × 360 image differed from the pattern in 0 pixels |
+| M15 | Pass | A real draw showed the live size at every step. Moving, resizing, and a right-click reached nothing beneath. Sampled about every 2 ms, the overlay was never above the toolbar, while both were visible, once a drag or press had ended. A real click on the size field after the three drags, and on Capture after the right-click, reached the toolbar. Both 640 × 360 images differed from the pattern in 0 pixels. This was the second run, as described above |
 | M16 | **Fail on one condition** | The real file picker added files. Files and a folder dropped from File Explorer were listed. Browse chose the output folder in each module, and Open Output Folder opened it. Open Folder opened the right folder with the saved file focused, but not highlighted, the first time Explorer showed that folder. A second press highlighted it, and `explorer /select` behaves the same without the application. With a file picker open, the shortcut captured nothing and the picker's title bar flashed |
 | M17 | Pass | From behind another application and from minimized, a second launch brought the window forward, and the second process exited |
 | M18 | Pass | With the window minimized and with the Image Resizer showing: a saved capture, an unwritable folder, a held clipboard, and an oversized preset each reached the result card. The focus never left the other application |
@@ -84,8 +86,8 @@ Each defect below was already on `main`, was reproduced on a candidate, and has 
 
 | Defect | Found on | Fix |
 |---|---|---|
-| Dragging inside a Free Rectangle selection did not move it, and the press reached the application beneath | Candidate 1, 5 of 5 drags | The interior pixel was alpha 0, which Windows hit-tests as transparent. It is now alpha 1 |
-| Add Images never opened its picker, in any build | Candidate 1, 12 of 12 presses | The filter held NUL characters, which the UTF-16 conversion always refused. Each string is now converted separately |
+| Dragging inside a Free Rectangle selection did not move it, and the press reached the application beneath | Candidate 1, every drag inside a selection: 4 of 4 in its recorded results | The interior pixel was alpha 0, which Windows hit-tests as transparent. It is now alpha 1 |
+| Add Images never opened its picker, in any build | Candidate 1, every press: its recorded M16 run's press reported "invalid argument" | The filter held NUL characters, which the UTF-16 conversion always refused. Each string is now converted separately |
 | After a real press on the Free Rectangle overlay, it covered the toolbar, and a click meant for Capture or a size field started a new selection | Candidate 2, 4 of 4 runs | The toolbar is put back in front of the overlay whenever it is placed, including after a right, middle, or side-button press |
 
 Making the picker work also let the global shortcut fire while a modal dialog was open, which would have put the dialog in the image. The shortcut now captures nothing while a dialog of the application is open. Instead it flashes that dialog and beeps. PRD 1.7 records this narrowing of SCR-002 as awaiting the project owner's confirmation.
@@ -96,7 +98,7 @@ Making the picker work also let the global shortcut fire while a modal dialog wa
 | 2 | `be2d299` | `89bdd408…` | Gates passed. The third defect was found. M12 had one position at 104.2 ms in one of three runs |
 | 3 | `c646471` | `bbcbdc13…` | This record |
 
-Results on candidates 1 and 2 do not count for the release. The first two x64 validation runs on candidate 1 failed only while deleting an x64 test executable that had just run. On this Arm machine the `XtaCache` service holds such a file for a moment after it exits: 80 of 80 probe runs could not delete one at once. The third run passed.
+Results on candidates 1 and 2 do not count for the release. M16's Open Folder condition failed on both, as on this one. The first two x64 validation runs on candidate 1 failed only while deleting an x64 test executable that had just run. On this Arm machine the `XtaCache` service holds such a file for a moment after it exits: 80 of 80 probe runs could not delete one at once. The third run passed.
 
 ## Release blockers
 
@@ -105,9 +107,9 @@ A release needs each of these:
 1. **The hardware runs QLT-04A owns:** x64 Windows 11, including the reference machine; display scaling above 100% and mixed scaling; negative coordinates; a rotated display; and a display disconnected during a selection. They hold SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, and AC-S12, and the P1 SCR-028 and NFR-010 to NFR-013.
 2. **M2**, keyboard and screen reader, which holds UX-006 and AC-A03.
 3. **M8's Office half**, which holds SCR-062.
-4. **M12**, which holds AC-A04. It failed on this candidate under emulation, and has to pass, or the lag be explained, on x64 hardware.
+4. **M12**, which holds AC-A04. It failed on this candidate under emulation, and has to pass, or the lag be explained, on x64 hardware. RSZ-041 names M12 only for added confidence and stays Pass, as [the matrix](traceability.md#status) explains.
 5. **M1**, the clean-machine walkthrough, which REL-01 and REL-02 also wait on.
-6. **The project owner's decisions** on the shortcut's dialog suspension and on M16's Open Folder condition, which holds the P1 SCR-069.
+6. **The project owner's decisions** on the shortcut's dialog suspension, on which SCR-002's Pass rests, and on M16's Open Folder condition, which holds the P1 SCR-069.
 
 M3 to M7 and M11 add confidence to requirements already covered and do not block on their own. UX-008 is deferred by PRD section 20.
 
