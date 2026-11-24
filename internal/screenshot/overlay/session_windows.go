@@ -63,6 +63,9 @@ const (
 	wmMouseMove      = 0x0200
 	wmLButtonDown    = 0x0201
 	wmLButtonUp      = 0x0202
+	wmRButtonDown    = 0x0204
+	wmMButtonDown    = 0x0207
+	wmXButtonDown    = 0x020B
 	wmCaptureChanged = 0x0215
 	// wmAppRestoreFocus asks the toolbar to give the focus back once a
 	// click that activated it has been handled, as toolbarWindowProc
@@ -529,8 +532,10 @@ func (s *windowsSession) configure(dpi uint32, anchor display.Rect) {
 
 // createWindow creates the session's input surface: the desktop-sized Free
 // Rectangle tint overlay, or the Preset Rectangle frame sized to the
-// selection plus its border ring. The window never activates, so it cannot
-// rise above the toolbar or steal keyboard focus.
+// selection plus its border ring. WS_EX_NOACTIVATE keeps a press on it from
+// taking the foreground from another application, but a press still raises it
+// within the topmost band, over the toolbar, so the press's handling puts the
+// toolbar back in front (placeToolbar).
 func (s *windowsSession) createWindow(title string) error {
 	window := display.Rect{Left: s.bounds.Left, Top: s.bounds.Top, Right: s.bounds.Right, Bottom: s.bounds.Bottom}
 	if s.mode == ModePresetRectangle {
@@ -1695,6 +1700,13 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 		case wmLButtonUp:
 			session.endDrag(lParam)
 			return 0
+		case wmRButtonDown, wmMButtonDown, wmXButtonDown:
+			// A press of any other button raises the overlay as a left press
+			// does, but starts no drag whose end places the toolbar. Mid-drag
+			// the drag's own end places it.
+			if session.drag.op == dragNone {
+				session.placeToolbar()
+			}
 		case wmCaptureChanged:
 			// Capture can be lost mid-draw without a button release (another
 			// window claiming the capture, or Close tearing down the

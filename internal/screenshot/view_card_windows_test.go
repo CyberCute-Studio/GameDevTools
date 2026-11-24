@@ -690,11 +690,16 @@ func TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal(t *testing.
 	}
 }
 
-// TestFlashWindowInfoMatchesTheWindowsStructure pins FLASHWINFO's 64-bit size,
-// as FlashWindowEx does nothing for a structure of another size.
+// TestFlashWindowInfoMatchesTheWindowsStructure pins FLASHWINFO's size, 32
+// bytes on 64-bit Windows and 20 on 32-bit, as FlashWindowEx does nothing for
+// a structure of another size.
 func TestFlashWindowInfoMatchesTheWindowsStructure(t *testing.T) {
-	if got := unsafe.Sizeof(flashWindowInfo{}); got != 32 {
-		t.Fatalf("flashWindowInfo is %d bytes, want 32", got)
+	want := uintptr(32)
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		want = 20
+	}
+	if got := unsafe.Sizeof(flashWindowInfo{}); got != want {
+		t.Fatalf("flashWindowInfo is %d bytes, want %d", got, want)
 	}
 }
 

@@ -159,6 +159,32 @@ func TestToolbarReturnsAboveTheOverlayAfterADrag(t *testing.T) {
 	}
 }
 
+// TestToolbarReturnsAboveTheOverlayAfterAnotherButton is a real right, middle,
+// or X-button press on the overlay, which raises it as a left press does
+// before the press reaches it, but starts no drag whose end places the toolbar.
+func TestToolbarReturnsAboveTheOverlayAfterAnotherButton(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	const hwndTopmost = ^uintptr(0)
+	for _, press := range []struct {
+		name    string
+		message uint32
+	}{{"right", wmRButtonDown}, {"middle", wmMButtonDown}, {"X", wmXButtonDown}} {
+		procSetWindowPos.Call(uintptr(native.overlay), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		if !windowAbove(native.overlay, native.toolbar) {
+			t.Fatalf("%s: the test could not raise the overlay above the toolbar", press.name)
+		}
+		sendMouse(native.overlay, press.message, 300, 200)
+		if !windowAbove(native.toolbar, native.overlay) {
+			t.Fatalf("%s: the overlay stayed in front of the toolbar after the press (SCR-024, SCR-025)", press.name)
+		}
+	}
+}
+
 func captureEnabled(native *windowsSession) bool {
 	r, _, _ := procIsWindowEnabled.Call(uintptr(native.captureButton))
 	return r != 0
