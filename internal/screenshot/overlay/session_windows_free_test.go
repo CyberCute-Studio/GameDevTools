@@ -108,6 +108,57 @@ func windowIsBehindOverlay(native *windowsSession, hit uintptr) bool {
 	return false
 }
 
+// windowAbove reports whether a is in front of b in the z-order.
+func windowAbove(a, b windows.Handle) bool {
+	const gwHwndNext = 2
+	next, _, _ := procTestGetWindow.Call(uintptr(a), gwHwndNext)
+	// The bound ends the walk if the z-order changes under it.
+	for range 4096 {
+		if next == 0 {
+			return false
+		}
+		if windows.Handle(next) == b {
+			return true
+		}
+		next, _, _ = procTestGetWindow.Call(next, gwHwndNext)
+	}
+	return false
+}
+
+// TestToolbarReturnsAboveTheOverlayAfterADrag is a real press on the overlay,
+// which raises it above the toolbar within the topmost band. Once the drag
+// ends the toolbar must be in front again, or the overlay covers its fields
+// and Capture, and a click meant for them starts a new selection.
+func TestToolbarReturnsAboveTheOverlayAfterADrag(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	const hwndTopmost = ^uintptr(0)
+	for _, drag := range []struct {
+		name         string
+		fromX, fromY int32
+		toX, toY     int32
+	}{
+		{"draw", 60, 40, 460, 340},
+		{"move", 200, 150, 260, 190},
+	} {
+		sendMouse(native.overlay, wmLButtonDown, drag.fromX, drag.fromY)
+		// What a real press on the overlay does to the z-order.
+		procSetWindowPos.Call(uintptr(native.overlay), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		if !windowAbove(native.overlay, native.toolbar) {
+			t.Fatalf("%s: the test could not raise the overlay above the toolbar", drag.name)
+		}
+		sendMouse(native.overlay, wmMouseMove, drag.toX, drag.toY)
+		sendMouse(native.overlay, wmLButtonUp, drag.toX, drag.toY)
+		if !windowAbove(native.toolbar, native.overlay) {
+			t.Fatalf("%s: the overlay stayed in front of the toolbar after the drag (SCR-024, SCR-025)", drag.name)
+		}
+	}
+}
+
 func captureEnabled(native *windowsSession) bool {
 	r, _, _ := procIsWindowEnabled.Call(uintptr(native.captureButton))
 	return r != 0

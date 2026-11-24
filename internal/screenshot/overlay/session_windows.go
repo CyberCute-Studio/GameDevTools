@@ -104,6 +104,9 @@ const (
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+	// hwndTop is SetWindowPos's HWND_TOP: in front of the window's own band,
+	// which for a topmost window is the topmost band.
+	hwndTop = 0
 
 	ulwAlpha   = 0x00000002
 	acSrcAlpha = 0x01
@@ -1341,7 +1344,10 @@ func rectUnion(a, b display.Rect) display.Rect {
 // placeToolbar moves the toolbar near the selection without covering it
 // where practical (SCR-025). It runs when a drag or dimension edit
 // finishes, not on every mouse move, so the toolbar does not jump around
-// under the pointer mid-drag.
+// under the pointer mid-drag. It also puts the toolbar back in front: a real
+// press on the overlay raises it within the topmost band, where it would
+// cover the toolbar's fields and Capture, and a click meant for them would
+// start a new selection.
 func (s *windowsSession) placeToolbar() {
 	if s.toolbar == 0 {
 		// WM_CAPTURECHANGED can arrive while Close is destroying the
@@ -1349,9 +1355,9 @@ func (s *windowsSession) placeToolbar() {
 		return
 	}
 	x, y := s.toolbarPosition()
-	procSetWindowPos.Call(uintptr(s.toolbar), 0,
+	procSetWindowPos.Call(uintptr(s.toolbar), hwndTop,
 		uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,
-		swpNoSize|swpNoZOrder|swpNoActivate)
+		swpNoSize|swpNoActivate)
 }
 
 // toolbarPosition places the toolbar on the displays as they are now. If they
