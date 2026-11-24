@@ -49,7 +49,7 @@ Results below were recorded on 2026-11-22 from commit `8c06406`, with a clean wo
 | Windows 11 26H2 on ARM64, `windows/amd64` under x64 emulation | **Passed.** The release target's code, but not on x64 hardware |
 | x64 Windows 11, on the reference machine | **Not run** (QLT-04A) |
 | Each other Windows 11 release Microsoft supports | **Not run** (QLT-04A) |
-| x64 Windows Server 2025 and 2022, GitHub-hosted | **Passed** on the release candidate `c646471` ([run 45341616501](https://github.com/CyberCute-Studio/GameDevTools/actions/runs/45341616501)), as the [release candidate record](release-candidate.md) says. Not supported targets: they exercise the x64 executable and the suite, and do not stand in for Windows 11 |
+| x64 Windows Server 2025 and 2022, GitHub-hosted | **Passed** on the release candidate `c646471` ([run 45341616501](https://github.com/CyberCute-Studio/GameDevTools/actions/runs/45341616501)), as the [release candidate record](release-candidate.md) says. On both, the Preset Rectangle overlay benchmark skipped, as the runner's 1024 × 768 desktop cannot hold a 1280 × 720 frame. Not supported targets: they exercise the x64 executable and the suite, and do not stand in for Windows 11 |
 | Windows 10 22H2 | **Not supported** |
 
 ## Running without administrator rights

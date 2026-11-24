@@ -700,7 +700,7 @@ These are not commitments for the initial release:
 
 ## 19. Open decisions
 
-One decision awaits the project owner, in REL-03's pull request: whether to confirm the exception section 20 records, that the global shortcut captures nothing while one of the application's own modal dialogs is open. REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md).
+Two decisions await the project owner, in REL-03's pull request: whether to confirm the exception section 20 records, that the global shortcut captures nothing while one of the application's own modal dialogs is open; and whether Open Folder (SCR-069) opens File Explorer at the saved file, as manual check M16 requires, when the first time Explorer shows a folder it focuses the file without highlighting it, as Explorer's own select command does. REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md).
 
 ## 20. Confirmed product decisions
 
@@ -739,4 +739,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.5 | 2026-11-22 | REL-01: resolved the remaining open decisions — the name CyberCute Dev Tools, a portable ZIP, no code signing, and no automatic updates (sections 19 and 20). |
 | 1.6 | 2026-11-23 | REL-02: recorded that the ZIP carries the user guide and release notes, changed the confirmed update decision from replacing the executable to replacing the extracted folder's files so that an update also refreshes those documents, and pointed to the requirement traceability matrix (section 20). No numbered requirement changed. |
 | 1.7 | 2026-11-23 | REL-03: recorded the project owner's choice of the MIT License, carried in the repository and the ZIP, and, pending the owner's confirmation, that the global shortcut captures nothing while one of the application's own dialogs is open (section 20). No numbered requirement's text changed. |
-| 1.8 | 2026-11-24 | REL-03: listed the owner's pending confirmation of the shortcut's dialog exception as an open decision (section 19). No numbered requirement changed. |
+| 1.8 | 2026-11-24 | REL-03: listed the owner's pending confirmation of the shortcut's dialog exception, and the pending decision on whether Open Folder meets SCR-069, as open decisions (section 19). No numbered requirement changed. |
