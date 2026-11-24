@@ -2,7 +2,7 @@
 
 This is REL-03's record of the 1.0.0 release candidate: what was built, the checklist it was held to, each result, the defects the validation found, and the explicit list of what still blocks a release. [Requirement traceability](traceability.md) holds the per-requirement status, and [the test guide](testing.md#recorded-runs) holds the recorded runs.
 
-**Result: the candidate is not releasable yet.** It passes every automated gate that has run. The pull request's CI has not run yet. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open.
+**Result: the candidate is not releasable yet.** It passes every automated gate that has run. The pull request's CI has not run yet. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The packaged user guide does not match the candidate in three places. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open.
 
 ## The candidate
 
@@ -16,7 +16,7 @@ This is REL-03's record of the 1.0.0 release candidate: what was built, the chec
 | Machine | Windows 11 Home 26H2, build 26300.9974, on ARM64 (Snapdragon X Plus X1P42100, 32 GB). The x64 executable ran under Windows' x64 emulation |
 | Displays | 3440 × 1440 primary at (0, 0) and 1920 × 1200 at (3440, 623), both at 100% |
 
-Later commits on the REL-03 branch change records and the documentation test only, not the ZIP's contents.
+Later commits on the REL-03 branch change the records, the PRD's list of open decisions, and the documentation test only, not the ZIP's contents.
 
 ## Checklist
 
@@ -28,7 +28,8 @@ Later commits on the REL-03 branch change records and the documentation test onl
 | x64 validation, `validate.ps1 -Architecture amd64` | Pass | `validation-amd64-26300-20261124-064118.json`; every target met, listed below |
 | Offline operation | Pass (automated) | `app.TestCoreWorkflowsRunOffline` in the suite. M6 with real adapters off was not run |
 | Clean exit | Pass (automated) | The release executable test in the validation and the [exit matrix](reliability-verification.md) |
-| M13, vulnerability scan | Pass | govulncheck v1.10.0 on the packaged executable found no vulnerabilities |
+| Documentation matches the candidate | **Fail** | The documentation tests in the suite pass. The user guide's keyboard reference and known limitations do not match the candidate in the three ways [blocker 8](#release-blockers) lists, and the release notes do not give M12's result. M1, which follows the guide on a clean machine, was not run |
+| M13, vulnerability scan | Pass | govulncheck v1.10.0 on the packaged executable found no vulnerabilities, scanning on 2026-11-24. The run did not record the vulnerability database's date |
 | M14, `Validation matrix` workflow | Pass | [Run 45341616501](https://github.com/CyberCute-Studio/GameDevTools/actions/runs/45341616501) on windows-2025 and windows-2022 |
 | CI on the pull request | Required | The pull request's own CI run |
 
@@ -54,7 +55,7 @@ These limits applied to every run:
 
 The script also had guards. It refused a click on any window that was not its own, the application's, or a window it had opened. It refused any key unless one of those windows was in front. It stopped at the first input it had not sent itself. The first attempt on this candidate stopped that way, when another program injected a keyboard event during M19. It was discarded, and the run was repeated with nothing else using the machine.
 
-The first M15 run on this candidate failed on one of the 19 samples taken as Enter pressed Capture, which found the overlay above the toolbar. The script could not then tell whether the capture had already hidden one of the windows. It was changed to count only samples with both windows visible, and M15 was run again. In that run every sample of that phase had a window hidden, and M15 passed. Apart from the discarded first attempt, no other check was repeated.
+The first M15 run on this candidate failed on one of the 19 samples taken as Enter pressed Capture, which found the overlay above the toolbar. The script could not then tell whether the capture had already hidden one of the windows. It was changed to count only samples with both windows visible, and M15 was run again. In that run every sample of that phase had a window hidden, so neither run settled whether the overlay was above the toolbar as Enter pressed Capture. The z-order is not one of M15's conditions, and in both runs the image of that capture differed from the pattern in 0 pixels, so M15 passed. Apart from the discarded first attempt, no other check was repeated.
 
 | Check | Result | What was measured |
 |---|---|---|
@@ -72,7 +73,7 @@ The first M15 run on this candidate failed on one of the 19 samples taken as Ent
 | M12 | **Fail** | Three drags of the window during a 100-image job, a number fixed before the runs. The script took "follows smoothly" to mean every pointer position reflected within 100 ms, a limit it set, as the check names none. In one drag, 6 of 240 positions were reflected after more than 100 ms, the worst at 153.3 ms. The other two stayed within 69 ms. The job ran throughout every drag |
 | M13 | Pass | Listed above |
 | M14 | Pass | Listed above |
-| M15 | Pass | During a real draw the toolbar's fields held the live size at every step. The overlay was above the toolbar while the button was down, so the size showed through its tint. Moving, resizing, and a right-click reached nothing beneath. Sampled about every 2 ms, the overlay was never above the toolbar, while both were visible, once a drag or press had ended. A real click on the size field after the three drags, and on Capture after the right-click, reached the toolbar. Both 640 × 360 images differed from the pattern in 0 pixels. This was the second run, as described above |
+| M15 | Pass | During a real draw the toolbar's fields held the live size at every step. The overlay was above the toolbar while the button was down, so the size showed through its tint. Moving, resizing, and a right-click reached nothing beneath. Sampled about every 2 ms, the overlay was never above the toolbar, while both were visible, once a drag or press had ended. No sample after the press on Capture, or after the Enter that pressed it, had both visible. A real click on the size field after the three drags, and on Capture after the right-click, reached the toolbar. Both 640 × 360 images differed from the pattern in 0 pixels. This was the second run, as described above |
 | M16 | **Fail on one condition** | The real file picker added files. Files and a folder dropped from File Explorer were listed. Browse chose the output folder in each module, and Open Output Folder opened it. Open Folder opened the right folder with the saved file focused, but not highlighted, the first time Explorer showed that folder. A second press highlighted it. On candidate 1, `explorer /select` without the application did the same in 3 of 3 tries. With a file picker open, the shortcut captured nothing and the picker's title bar flashed |
 | M17 | Pass | From behind another application and from minimized, a second launch brought the window forward, and the second process exited |
 | M18 | Pass | With the window minimized and with the Image Resizer showing: a saved capture, an unwritable folder, a held clipboard, and an oversized preset each reached the result card. The focus never left the other application |
@@ -112,14 +113,14 @@ A release needs each of these:
 4. **M12**, which holds AC-A04. It failed on this candidate under emulation, and has to pass, or the lag be explained, on x64 hardware. RSZ-041 names M12 only for added confidence and stays Pass, as [the matrix](traceability.md#status) explains.
 5. **M1**, the clean-machine walkthrough, which REL-01 and REL-02 also wait on.
 6. **The project owner's decisions** on the shortcut's dialog suspension, on which SCR-002's Pass rests, and on M16's Open Folder condition, which holds the P1 SCR-069.
+7. **A fix for the dialog that can appear in a Full Display image**, the defect on `main` listed [below](#found-and-left-for-later), which holds SCR-044. PRD section 20 counts the application's own dialog in the image against SCR-044. The fix changes the executable, so it falls to a later candidate.
+8. **Packaged documentation that matches the next candidate.** This candidate's release notes and user guide stay exactly as the runs used them, and do not match it. The next candidate's notes must add M12's result and reflect whatever the owner decides about the dialog suspension and Open Folder. The guide's keyboard reference says Enter captures after you draw a rectangle, which after a draw with the mouse holds only once the toolbar is clicked, as listed below. Its known limitations name neither the live size showing through the tint during the first draw nor a right, middle, or side-button press moving a toolbar dragged aside. The next candidate must fix each of these, or its guide must state it.
 
 M3 to M7 and M11 add confidence to requirements already covered and do not block on their own. UX-008 is deferred by PRD section 20.
 
-The packaged release notes and user guide describe the candidate as built. The next candidate's notes must add M12's result. They must also reflect whatever the owner decides about the dialog suspension and Open Folder. The guide's keyboard reference says Enter captures after you draw a rectangle, which after a draw with the mouse holds only once the toolbar is clicked, as listed below. Its known limitations name neither the live size showing through the tint during the first draw nor a right, middle, or side-button press moving a toolbar dragged aside. The next candidate must fix each of these, or its guide must state it.
-
 ## Found and left for later
 
-These are on `main`, outside a release-blocking fix, and need their own plan items:
+These are on `main` and outside the fixes REL-03 made. Each needs its own plan item, which the plan does not have yet. The third holds SCR-044, so a release also waits on its fix, as blocker 7 says.
 
 - The shortcut can start a capture during a keyboard move or size of the main window, or with its system menu open.
 - A second launch brings forward a main window that a modal dialog has disabled.
