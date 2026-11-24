@@ -113,7 +113,7 @@ The rows that waited on a manual check give the result of REL-03's run of it on 
 | NFR-014 — Bounded batch memory | Pass | Peak heap 220 MiB, about 7% of the 3,094 MiB that decoding every source at once would take |
 | AC-A01 — Persistence | Pass | [Reliability record](reliability-verification.md) and the release executable test |
 | AC-A02 — Offline use | Pass | `app.TestCoreWorkflowsRunOffline`, [privacy record](privacy-verification.md) |
-| AC-A03 — Keyboard access | **Partial** | [Accessibility record](accessibility-verification.md); that the focus is visible is manual check [M2](testing.md#manual-pre-release-checks) |
+| AC-A03 — Keyboard access | **Partial** | [Accessibility record](accessibility-verification.md); that the focus is visible is manual check [M2](testing.md#manual-pre-release-checks), which has not run |
 | AC-A04 — Responsive batch UI | **Partial** | [Image Resizer record](image-resizer-verification.md); a real drag during a job is manual check [M12](testing.md#manual-pre-release-checks), which failed on the release candidate, under emulation, in 1 of 3 drags |
 | AC-A05 — Clean exit | Pass | The exit matrix in the [reliability record](reliability-verification.md) and the release executable test |
 | AC-S07, AC-S10 | Pass | [Screenshot record](screenshot-verification.md), in this run's suite |

@@ -2,7 +2,7 @@
 
 This is REL-03's record of the 1.0.0 release candidate: what was built, the checklist it was held to, each result, the defects the validation found, and the explicit list of what still blocks a release. [Requirement traceability](traceability.md) holds the per-requirement status, and [the test guide](testing.md#recorded-runs) holds the recorded runs.
 
-**Result: the candidate is not releasable yet.** It passes every automated gate. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open.
+**Result: the candidate is not releasable yet.** It passes every automated gate that has run. The pull request's CI has not run yet. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open.
 
 ## The candidate
 
@@ -16,7 +16,7 @@ This is REL-03's record of the 1.0.0 release candidate: what was built, the chec
 | Machine | Windows 11 Home 26H2, build 26300.9974, on ARM64 (Snapdragon X Plus X1P42100, 32 GB). The x64 executable ran under Windows' x64 emulation |
 | Displays | 3440 × 1440 primary at (0, 0) and 1920 × 1200 at (3440, 623), both at 100% |
 
-Later commits on the REL-03 branch change records only, not the ZIP's contents.
+Later commits on the REL-03 branch change records and the documentation test only, not the ZIP's contents.
 
 ## Checklist
 
@@ -45,7 +45,7 @@ Performance in the x64 validation, under emulation:
 
 ## Manual checks
 
-The project owner decided that a scripted run counts as a manual check when it drives the release build with real Windows input and measures every condition, as [the test guide](testing.md#manual-pre-release-checks) states. Every run below was scripted that way, on the candidate's own executable, with its settings and output redirected into a scratch workspace.
+The project owner decided that a scripted run counts as a manual check when it drives the release build with real Windows input and measures every condition, as [the test guide](testing.md#manual-pre-release-checks) states. Every run below apart from M13 and M14 was scripted that way, on the candidate's own executable, with its settings and output redirected into a scratch workspace. M13 scanned that executable, and M14 built and tested the candidate's commit on GitHub's runners.
 
 These limits applied to every run:
 - The "other application" was the script's own separate process, with real windows and controls.
@@ -72,8 +72,8 @@ The first M15 run on this candidate failed on one of the 19 samples taken as Ent
 | M12 | **Fail** | Three drags of the window during a 100-image job, a number fixed before the runs. The script took "follows smoothly" to mean every pointer position reflected within 100 ms, a limit it set, as the check names none. In one drag, 6 of 240 positions were reflected after more than 100 ms, the worst at 153.3 ms. The other two stayed within 69 ms. The job ran throughout every drag |
 | M13 | Pass | Listed above |
 | M14 | Pass | Listed above |
-| M15 | Pass | A real draw showed the live size at every step. Moving, resizing, and a right-click reached nothing beneath. Sampled about every 2 ms, the overlay was never above the toolbar, while both were visible, once a drag or press had ended. A real click on the size field after the three drags, and on Capture after the right-click, reached the toolbar. Both 640 × 360 images differed from the pattern in 0 pixels. This was the second run, as described above |
-| M16 | **Fail on one condition** | The real file picker added files. Files and a folder dropped from File Explorer were listed. Browse chose the output folder in each module, and Open Output Folder opened it. Open Folder opened the right folder with the saved file focused, but not highlighted, the first time Explorer showed that folder. A second press highlighted it, and `explorer /select` behaves the same without the application. With a file picker open, the shortcut captured nothing and the picker's title bar flashed |
+| M15 | Pass | During a real draw the toolbar's fields held the live size at every step. The overlay was above the toolbar while the button was down, so the size showed through its tint. Moving, resizing, and a right-click reached nothing beneath. Sampled about every 2 ms, the overlay was never above the toolbar, while both were visible, once a drag or press had ended. A real click on the size field after the three drags, and on Capture after the right-click, reached the toolbar. Both 640 × 360 images differed from the pattern in 0 pixels. This was the second run, as described above |
+| M16 | **Fail on one condition** | The real file picker added files. Files and a folder dropped from File Explorer were listed. Browse chose the output folder in each module, and Open Output Folder opened it. Open Folder opened the right folder with the saved file focused, but not highlighted, the first time Explorer showed that folder. A second press highlighted it. On candidate 1, `explorer /select` without the application did the same in 3 of 3 tries. With a file picker open, the shortcut captured nothing and the picker's title bar flashed |
 | M17 | Pass | From behind another application and from minimized, a second launch brought the window forward, and the second process exited |
 | M18 | Pass | With the window minimized and with the Image Resizer showing: a saved capture, an unwritable folder, a held clipboard, and an oversized preset each reached the result card. The focus never left the other application |
 | M19 | Pass | Each display captured at its native size, with 0 pixels differing from what that display showed, with the pointer on the other display |
@@ -90,7 +90,9 @@ Each defect below was already on `main`, was reproduced on a candidate, and has 
 | Add Images never opened its picker, in any build | Candidate 1, every press: its recorded M16 run's press reported "invalid argument" | The filter held NUL characters, which the UTF-16 conversion always refused. Each string is now converted separately |
 | After a real press on the Free Rectangle overlay, it covered the toolbar, and a click meant for Capture or a size field started a new selection | Candidate 2, 4 of 4 runs | The toolbar is put back in front of the overlay whenever it is placed, including after a right, middle, or side-button press |
 
-Making the picker work also let the global shortcut fire while a modal dialog was open, which would have put the dialog in the image. The shortcut now captures nothing while a dialog of the application is open. Instead it flashes that dialog and beeps. PRD 1.7 records this narrowing of SCR-002 as awaiting the project owner's confirmation.
+Putting the toolbar back after a right, middle, or side-button press also moves it beside the selection, so such a press undoes a drag of the toolbar aside. Raising it without moving it needs an executable change and is left for a later candidate.
+
+The global shortcut could also fire while one of the application's modal dialogs was open, which would put the dialog in the image. That was already on `main`, behind the Browse folder pickers and the application's yes-or-no questions. The working picker added one more such dialog, which is how REL-03 found it. The shortcut now captures nothing while a dialog of the application is open. Instead it flashes that dialog and beeps. While the application is minimized the dialog is hidden too, so only the beep can be noticed, as the user guide says. Flashing the taskbar button then instead needs an executable change. PRD 1.7 records this narrowing of SCR-002 as awaiting the project owner's confirmation.
 
 | Candidate | Commit | ZIP SHA-256 | Outcome |
 |---|---|---|---|
@@ -122,7 +124,8 @@ These are on `main`, outside a release-blocking fix, and need their own plan ite
 - The shortcut can start a capture during a keyboard move or size of the main window, or with its system menu open.
 - A second launch brings forward a main window that a modal dialog has disabled.
 - A dialog opened in the instant after a Full Display capture starts can appear in the image. Add Images can now reach this.
-- A real press on the Free Rectangle overlay makes it the active window. Enter and Tab then do nothing in the toolbar until it is clicked. The guide promises Enter only in the typed-size flow, which presses nothing on the overlay.
+- A real press on the Free Rectangle overlay makes it the active window. Enter and Tab then do nothing in the toolbar until it is clicked. The guide promises Enter only in the typed-size flow, which presses nothing on the overlay. The press also applies a size typed in a field but not yet applied, as the field loses the focus before any drag starts.
+- The press that activates the Free Rectangle overlay raises it above the toolbar until the button is released, so during the first draw the live size shows through the overlay's tint.
 
 ## Plan status
 
