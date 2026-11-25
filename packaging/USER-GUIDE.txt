@@ -37,8 +37,9 @@ choose More info, then Run anyway.
 Nothing is installed. To keep a shortcut, pin the executable to Start or the
 taskbar. README.txt also covers updating and uninstalling.
 
-Only one copy runs at a time. Starting it again brings the open window forward.
-During a selection it leaves the selection as it is.
+Only one copy runs at a time. Starting it again brings the open window forward,
+or the application's open dialog if one is waiting for an answer. During a
+selection it leaves the selection as it is.
 
 Closing the window exits the application, because it has no tray icon. The
 global shortcut works only while the application is running, so minimize the
@@ -185,7 +186,16 @@ dialogs is open, such as a file or folder picker or a question, the shortcut
 captures nothing, as the dialog would be in the image. The dialog flashes and
 Windows beeps instead. Close the dialog first. While the application is
 minimized its dialog is hidden too, so you may only hear the beep. Restore the
-application to reach the dialog.
+application to reach the dialog. The shortcut also captures nothing, and
+Windows beeps, while you move or size the main window, or while one of its
+menus is open, such as the menu Alt+Space opens. Finish the move or close the
+menu first.
+
+From the moment a capture starts until it has read the screen, and for as long
+as a selection is on screen, the application's dialogs do not open: a file or
+folder picker or a question asked for then, such as by a click on Add Images or
+Browse just as you pressed the shortcut, is refused with a beep, and a question
+counts as answered No. Ask again once the capture has finished.
 
 
 5. Image Resizer
@@ -437,9 +447,10 @@ Windows says it protected your PC.
   choose More info, then Run anyway.
 
 Nothing happens when I start the application again.
-  It is already running, and the existing window was brought forward. Look for it
-  on the taskbar. During a selection the window stays hidden and has no taskbar
-  button: finish or cancel the selection on its toolbar.
+  It is already running, and the existing window was brought forward, or the
+  dialog it has open. Look for it on the taskbar. During a selection the window
+  stays hidden and has no taskbar button: finish or cancel the selection on its
+  toolbar.
 
 The global shortcut does nothing.
   The application must be running. The shortcut is paused while the Global
@@ -447,11 +458,18 @@ The global shortcut does nothing.
   application's dialogs is open, even behind another window, the shortcut only
   flashes that dialog and beeps, so close the dialog. While the application is
   minimized the dialog is hidden too, so you may only hear the beep: restore the
-  application to reach it. Then open the Screenshot view. If the field shows a
+  application to reach it. While you move or size the main window, or one of
+  its menus is open, the shortcut only beeps: finish the move or close the
+  menu. Then open the Screenshot view. If the field shows a
   "Shortcut registration error", another application owns the combination, so
   choose a different one. Otherwise the result card or the view says why a
   capture could not start, such as a preset larger than the desktop or an
   invalid JPEG quality.
+
+Add Images, Browse, or a question only beeped.
+  A capture was starting or a selection was on screen, which keeps the
+  application's dialogs closed so that none can appear in the image. Finish or
+  cancel the selection, or wait for the capture to finish, and ask again.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

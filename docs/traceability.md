@@ -7,7 +7,7 @@ The evidence column names representative checks, not all of them, as `package.Te
 ## Status
 
 - **Pass.** The named checks cover the requirement and pass on the environment of record. An entry under Open is a manual check that adds confidence, such as switching on a contrast theme, and has not passed: it has not been done, or, for RSZ-041's M12, it failed on the release candidate, as the row says.
-- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M2, M8, M9, M10, M12, M15, M16, M17, M18, or M19 need a run that does what the requirement describes in a real application, by a person or by a script driving real input as [the test guide](testing.md#manual-pre-release-checks) allows, as the unit tests only reach the mechanism: which control has the keyboard focus, not whether its focus indicator is drawn, the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, with one real hit test inside a Free Rectangle selection, a real file picker that is only opened and cancelled, stand-ins for choosing files, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, a stand-in for the result card, and a capture checked by its size or rectangle rather than by what the image shows. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it. SCR-044 has passed its runs and waits instead on a fix for a known defect on `main`, which the [release candidate record](release-candidate.md#release-blockers) lists as a release blocker.
+- **Partial.** Part of the requirement has not been exercised, as the Open column says. **A Partial requirement is not complete.** Those that name QLT-04A need hardware this project's environment does not have. Those that name M2, M8, M9, M10, M12, M15, M16, M17, M18, or M19 need a run that does what the requirement describes in a real application, by a person or by a script driving real input as [the test guide](testing.md#manual-pre-release-checks) allows, as the unit tests only reach the mechanism: which control has the keyboard focus, not whether its focus indicator is drawn, the clipboard's format, the frame's window style and transparent pixels, mouse messages sent directly to the overlay or frame, with one real hit test inside a Free Rectangle selection, a real file picker that is only opened and cancelled, stand-ins for choosing files, the folder picker, and Open Folder, a drop handed directly to the view, a hotkey message delivered directly, a foreground request whose result nothing checks, a window move made by a direct call with no message loop running, a stand-in for the result card, and a capture checked by its size or rectangle rather than by what the image shows. The FND-01 spike clicked through and dragged a color-keyed window, which is not how the production frame is built. A row that waits on a run leaves Partial once the [recorded runs](testing.md#recorded-runs) name it.
 
 `M1` to `M19` in the Open column are the [manual pre-release checks](testing.md#manual-pre-release-checks), which REL-03 owns. RSZ-041 names M12 only for added confidence: the job's thread and its coalesced progress are what keep the GUI responsive, and the drag itself is AC-A04's. So M12's failure on the [release candidate](release-candidate.md#manual-checks) keeps AC-A04 Partial and leaves RSZ-041 Pass on its automated checks.
 
@@ -15,18 +15,18 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 111 | 13 |
+| P0 requirements | 124 | 112 | 12 |
 | P1 requirements | 20 | 13 | 7 |
 | Acceptance scenarios | 32 | 28 | 4 |
-| **All** | **176** | **152** | **24** |
+| **All** | **176** | **153** | **23** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run, manual check, or fix its Open cell names passes or lands:
 
-SCR-020, SCR-026, SCR-042, SCR-043, SCR-044, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
+SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
 
 The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only, in QLT-04's runs; the release candidate's x64 validation met it.
 
-SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner's confirmation: the shortcut captures nothing while one of the application's own modal dialogs is open. The [release candidate record](release-candidate.md#release-blockers) lists that decision as a release blocker.
+SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner's confirmation: the shortcut captures nothing while one of the application's own modal dialogs is open. The project owner decided in REL-02C that it also captures nothing while the main window is moved or sized or one of its menus is open (PRD 1.9). The [release candidate record](release-candidate.md#release-blockers) lists that decision as a release blocker.
 
 ## Application shell
 
@@ -36,7 +36,7 @@ SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner
 | APP-002 | P0 | Current module and primary action are obvious | FND-03 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestShellDisablesAnUnavailablePrimaryAction` | Pass | M1 |
 | APP-003 | P1 | Restores the last module | FND-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | APP-004 | P0 | Work keeps unsaved edits and the other module's state | QLT-02 | `app.TestStartingWorkKeepsUnsavedEditsAndTheOtherModule` | Pass |  |
-| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | Pass |  |
+| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A, REL-02C | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow`, `app.TestActivateExistingInstanceBringsTheOpenDialogForward` | Pass |  |
 
 ## Presets
 
@@ -56,23 +56,23 @@ SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
 | SCR-001 | P0 | Start the selected mode from the main window | SCR-05, SCR-09 | `screenshot.TestNativeViewFullDisplayCaptureSucceeds`, `screenshot.TestNativeViewRectangleModesStartOverlaySession` | Pass |  |
-| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09 | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys`, `screenshot.TestShortcutCapturesNothingWhileADialogIsOpen` | Pass |  |
+| SCR-002 | P0 | Global shortcut while another app has focus | SCR-09, REL-02C | `screenshot.TestNativeHotkeyInvokesSelectedCaptureMode`, `app.TestShellWindowProcRoutesHotkeys`, `screenshot.TestShortcutCapturesNothingWhileADialogIsOpen`, `screenshot.TestShortcutCapturesNothingWithAMenuOpen`, `screenshot.TestInMoveOrMenuReadsAKeyboardMove` | Pass |  |
 | SCR-003 | P0 | Default `Ctrl+Alt+S`; conflicts reported and replaceable | SCR-09, REL-02A, REL-02B | `screenshot.TestDefaultShortcut`, `screenshot.TestNativeViewStartupConflictIsReported`, `screenshot.TestNativeViewShortcutConflictKeepsOldShortcut`, `screenshot.TestStartupShortcutConflictReachesTheCardWhileTheViewIsHidden`, `screenshot.TestShortcutFailureLeavesTheStatusAreaOnceItRegisters` | Pass |  |
 | SCR-004 | P0 | Shortcut changes persist without reinstalling | SCR-09 | `screenshot.TestNativeViewShortcutCommitAppliesAndPersists` | Pass |  |
 | SCR-005 | P1 | Shortcut during a selection draws attention to it | SCR-09 | `screenshot.TestNativeHotkeyDuringSessionBringsAttention`, `overlay.TestNativeSessionAttentionForegroundsToolbar` | Pass |  |
 | SCR-006 | P0 | Shortcut released on exit | SCR-09 | `screenshot.TestNativeViewDestroyReleasesHotkey`, `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut` | Pass |  |
 | SCR-010 | P0 | Drag a rectangle of at least 1 x 1 | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestDrawRectNormalizesDragCorners` | Pass |  |
-| SCR-011 | P0 | Live width and height while dragging | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestOverlayFocusedFieldTracksHandleResize` | Pass |  |
+| SCR-011 | P0 | Live width and height while dragging | SCR-07, REL-02C | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `overlay.TestOverlayFocusedFieldTracksHandleResize`, `overlay.TestToolbarStaysAboveTheOverlayWhileThePressIsDown` | Pass |  |
 | SCR-012 | P0 | Move and resize after drawing | SCR-07 | `overlay.TestOverlayMoveAndResizeAdjustSelection`, `overlay.TestResizeSelectionAnchorsOppositeEdges` | Pass |  |
-| SCR-013 | P0 | Type exact width and height | SCR-07 | `overlay.TestOverlayDimensionEditingAppliesExactSize` | Pass |  |
+| SCR-013 | P0 | Type exact width and height | SCR-07, REL-02C | `overlay.TestOverlayDimensionEditingAppliesExactSize`, `overlay.TestPressOnTheOverlayLeavesTheToolbarTheKeyboard` | Pass |  |
 | SCR-014 | P0 | Output matches the rectangle, without overlay | SCR-07 | `overlay.TestOverlayDragDrawsAndCapturesSelection`, `screenshot.TestNativeViewRectangleCaptureEndToEnd` | Pass |  |
-| SCR-015 | P1 | Free Rectangle without a pointer | QLT-01 | `overlay.TestFreeRectangleTypedSizeCreatesSelection`, `overlay.TestFreeRectangleArrowKeysNudgeSelection` | Pass |  |
+| SCR-015 | P1 | Free Rectangle without a pointer | QLT-01, REL-02C | `overlay.TestFreeRectangleTypedSizeCreatesSelection`, `overlay.TestFreeRectangleArrowKeysNudgeSelection`, `overlay.TestPressOnTheOverlayLeavesTheToolbarTheKeyboard` | Pass |  |
 | SCR-020 | P0 | Preset is exact at any monitor scaling | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameCaptureDeliversExactRect` | **Partial** | QLT-04A: any scaling but 100% |
 | SCR-021 | P0 | Frame stays on top of other windows | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface` | Pass |  |
 | SCR-022 | P0 | Interior is unobscured and click-through | SCR-08 | `overlay.TestPresetFrameExactSizeAndSurface`, `overlay.TestPresetFrameClickOnBorderLeavesSelectionUnchanged` | Pass |  |
 | SCR-023 | P0 | Border drags without resizing | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | Pass |  |
-| SCR-024 | P0 | Toolbar has Capture, Cancel, and dimensions | SCR-07, SCR-08 | `overlay.TestToolbarCaptureCommandDeliversSelection`, `overlay.TestToolbarCancelCommandCancelsSession`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
-| SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08, REL-02A | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay`, `overlay.TestReachableToolbarPlacementStaysOnADisplay` | Pass |  |
+| SCR-024 | P0 | Toolbar has Capture, Cancel, and dimensions | SCR-07, SCR-08, REL-02C | `overlay.TestToolbarCaptureCommandDeliversSelection`, `overlay.TestToolbarCancelCommandCancelsSession`, `overlay.TestPresetFrameCaptureDeliversExactRect`, `overlay.TestPressOnThePresetFrameLeavesTheToolbarTheKeyboard` | Pass |  |
+| SCR-025 | P0 | Toolbar near the selection and reachable at edges | SCR-07, SCR-08, REL-02A, REL-02C | `overlay.TestToolbarPlacementFollowsTheSelection`, `overlay.TestToolbarPlacementWithoutSelectionAnchorsToCursorDisplay`, `overlay.TestReachableToolbarPlacementStaysOnADisplay`, `overlay.TestAnotherButtonKeepsADraggedToolbarWhereItIs` | Pass |  |
 | SCR-026 | P0 | Moves across displays without a size change | SCR-08 | `capture.TestCaptureSpanningDisplayBoundary`, `overlay.TestPresetFrameBorderDragMovesWithoutResizing` | **Partial** | QLT-04A: across a mixed-scaling boundary |
 | SCR-027 | P0 | Arrow keys move 1 px, Shift+Arrow 10 px | SCR-08 | `overlay.TestPresetFrameKeyboardNudges` | Pass |  |
 | SCR-028 | P1 | X/Y readout, including negative coordinates | SCR-08 | `overlay.TestPresetFrameBorderDragMovesWithoutResizing`, `display.TestVirtualDesktopBounds` | **Partial** | QLT-04A: a display at negative coordinates |
@@ -83,10 +83,10 @@ SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner
 | SCR-041 | P0 | Picker shows number, name, resolution, primary | SCR-02, SCR-05 | `screenshot.TestDisplayListItemDescribesDisplay`, `display.TestNumberDisplays` | Pass |  |
 | SCR-042 | P0 | Native pixel dimensions and orientation | SCR-03, SCR-05 | `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a rotated display |
 | SCR-043 | P0 | Any display, including other DPI scaling | SCR-02, SCR-05 | `screenshot.TestNativeViewDisplayPickerTracksMode`, `capture.TestCaptureDisplay` | **Partial** | QLT-04A: a secondary display at other scaling |
-| SCR-044 | P0 | Main window and overlays absent from the image | SCR-03, SCR-05, REL-02A | `capture.TestHideExcludesWindowFromCapture`, `execute.TestFullDisplayRunsHideCaptureRestoreDeliverInOrder`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow` | **Partial** | A defect on `main` that the [release candidate record](release-candidate.md#found-and-left-for-later) leaves for later: a dialog opened in the instant after a Full Display capture starts can appear in the image, which PRD section 20 counts against this requirement |
+| SCR-044 | P0 | Main window and overlays absent from the image | SCR-03, SCR-05, REL-02A, REL-02C | `capture.TestHideExcludesWindowFromCapture`, `execute.TestFullDisplayRunsHideCaptureRestoreDeliverInOrder`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow`, `screenshot.TestNoDialogOpensUntilAFullDisplayCaptureReadsTheScreen`, `execute.TestFullDisplayRunsCapturedOnceTheScreenIsRead`, `ui.TestHeldDialogsDoNotOpen` | Pass |  |
 | SCR-050 | P0 | Main window hides before the overlay shows | SCR-06 | `overlay.TestBeginHidesMainWindowBeforeCreatingOverlay` | Pass |  |
 | SCR-051 | P0 | Cancel changes no clipboard or file | SCR-06, SCR-07 | `overlay.TestOverlayEscapeCancelsWithoutOutput`, `screenshot.TestNativeViewRectangleCancelProducesNoOutput` | Pass |  |
-| SCR-052 | P0 | Failure leaves no invisible overlay | SCR-06, SCR-10, REL-02A | `overlay.TestBeginFailureRestoresMainWindow`, `screenshot.TestNativeViewOverlayFailureRestoresMainWindow`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | Pass |  |
+| SCR-052 | P0 | Failure leaves no invisible overlay | SCR-06, SCR-10, REL-02A, REL-02C | `overlay.TestBeginFailureRestoresMainWindow`, `screenshot.TestNativeViewOverlayFailureRestoresMainWindow`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard`, `overlay.TestSessionHoldsDialogsUntilTheWindowIsRestored` | Pass |  |
 | SCR-053 | P0 | One selection session at a time | SCR-06 | `overlay.TestBeginRejectsConcurrentSession` | Pass |  |
 | SCR-054 | P0 | Display change revalidates the selection | SCR-10, REL-02A, REL-02B | `overlay.TestDisplayChangeKeepsFittingSession`, `overlay.TestDisplayChangeEndsSessionThatCannotFit`, `overlay.TestDisplayChangeEndsASelectionLeftOnNoDisplay`, `capture.TestValidateOnDisplaysRefusesARegionOnNoDisplay`, `screenshot.TestShortcutRefusalsAndLostSessionsReachTheCard` | **Partial** | QLT-04A: a live disconnect and reconnect |
 | SCR-055 | P1 | Selection survives losing activation | SCR-08 | `overlay.TestToolbarRestoresFocusOnActivation` | Pass |  |
@@ -168,7 +168,7 @@ SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner
 | UX-003 | P0 | Validation beside the field, saying how to fix it | FND-05, FND-07, QLT-01 | `ui.TestDimensionInputPresentsValidation`, `preset.TestNativeManagerValidationAndBuiltInProtection` | Pass |  |
 | UX-004 | P0 | `px` labels and `width x height` | FND-05, FND-07, QLT-01 | `ui.TestFormatDimensions` | Pass |  |
 | UX-005 | P0 | Status is never color alone | FND-05, QLT-01 | `ui.TestNoticeTextUsesExplicitStatus`, `imageresizer.TestNativeViewResizesEveryReadyImageEndToEnd` | Pass |  |
-| UX-006 | P0 | Keyboard navigable with visible focus | FND-05, QLT-01 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestScreenshotOptionsKeyboardOnly`, `app.TestResizerSourcesKeyboardOnly` | **Partial** | M2: the tests follow where the focus goes, and nothing has confirmed that a focus indicator is drawn |
+| UX-006 | P0 | Keyboard navigable with visible focus | FND-05, QLT-01, REL-02C | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestScreenshotOptionsKeyboardOnly`, `app.TestResizerSourcesKeyboardOnly`, `overlay.TestPressOnTheOverlayLeavesTheToolbarTheKeyboard` | **Partial** | M2: the tests follow where the focus goes, and nothing has confirmed that a focus indicator is drawn |
 | UX-007 | P0 | WCAG 2.1 AA contrast | FND-05, QLT-01 | `overlay.TestContrastRatioFollowsWCAG`, `overlay.TestRingColorsStandOutOnAnyBackground`, [accessibility record](accessibility-verification.md) | Pass | M3 |
 | UX-008 | P1 | Windows light/dark preference | QLT-01 | `app.TestStaticTextBrushUsesSystemColors`, [accessibility record](accessibility-verification.md) | **Partial** | Deferred by PRD section 20: no dark app mode. M3 |
 | UX-009 | P0 | English, with centralized strings | FND-05, QLT-01 | [accessibility record](accessibility-verification.md) | Pass |  |
