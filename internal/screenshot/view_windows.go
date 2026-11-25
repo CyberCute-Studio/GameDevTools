@@ -54,6 +54,27 @@ var (
 	procViewGetAncestor         = viewUser32.NewProc("GetAncestor")
 	procViewGetClientRect       = viewUser32.NewProc("GetClientRect")
 	procViewMapWindowPoints     = viewUser32.NewProc("MapWindowPoints")
+	procViewIsWindowEnabled     = viewUser32.NewProc("IsWindowEnabled")
+	procViewGetLastActivePopup  = viewUser32.NewProc("GetLastActivePopup")
+	procViewFlashWindowEx       = viewUser32.NewProc("FlashWindowEx")
+	procViewMessageBeep         = viewUser32.NewProc("MessageBeep")
+)
+
+// flashWindowInfo is the FLASHWINFO structure FlashWindowEx takes.
+type flashWindowInfo struct {
+	size    uint32
+	window  windows.Handle
+	flags   uint32
+	count   uint32
+	timeout uint32
+}
+
+const (
+	// flashCaptionAndTaskbar is FLASHW_ALL.
+	flashCaptionAndTaskbar = 3
+	// openDialogFlashes is how many times a suspended shortcut flashes the
+	// open dialog.
+	openDialogFlashes = 3
 )
 
 // viewGARoot is GetAncestor's GA_ROOT.
@@ -163,6 +184,9 @@ type NativeView struct {
 	// windowAlive reports whether the shell window still exists, which ends a
 	// capture's retried completion post.
 	windowAlive func() bool
+	// flashDialog draws attention to the modal dialog that suspends the
+	// shortcut; tests replace it.
+	flashDialog func()
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -216,7 +240,18 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		alive, _, _ := procViewIsWindow.Call(uintptr(view.parent))
 		return alive != 0
 	}
+	view.flashDialog = func() { flashOpenDialog(view.parent) }
 	return view
+}
+
+// flashOpenDialog does what Windows does for a click on a window a modal
+// dialog disables: it flashes the dialog and beeps, without taking the focus.
+func flashOpenDialog(owner windows.Handle) {
+	dialog, _, _ := procViewGetLastActivePopup.Call(uintptr(owner))
+	info := flashWindowInfo{window: windows.Handle(dialog), flags: flashCaptionAndTaskbar, count: openDialogFlashes}
+	info.size = uint32(unsafe.Sizeof(info))
+	procViewFlashWindowEx.Call(uintptr(unsafe.Pointer(&info)))
+	procViewMessageBeep.Call(0)
 }
 
 // cardPlacement puts the result card on the display under the pointer, where
@@ -867,6 +902,12 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 // capture mode (SCR-002), exactly like the Start Capture button (SCR-001).
 // While a rectangle selection session is on screen, the shortcut brings
 // attention to that session instead of stacking a second overlay (SCR-005).
+// While one of the application's modal dialogs is open the shortcut is
+// suspended and flashes that dialog: the dialog's message loop still delivers
+// it, but hiding the main window would leave the dialog in the image (SCR-044),
+// and that loop does not run the overlay's keyboard handling, so Escape could
+// not cancel a selection (SCR-052). A capture already running keeps
+// startCapture's refusal, as a dialog can open while its file is written.
 // The shell routes WM_HOTKEY here; unknown identifiers are not consumed.
 func (n *NativeView) NativeHotkey(id int32) bool {
 	if id != globalShortcutHotkeyID || n.hotkeys == nil {
@@ -874,6 +915,10 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 	}
 	if n.sessions != nil && n.sessions.Active() {
 		n.sessions.Attention()
+		return true
+	}
+	if enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent)); !n.inProgress && enabled == 0 {
+		n.flashDialog()
 		return true
 	}
 	n.startCapture(true)

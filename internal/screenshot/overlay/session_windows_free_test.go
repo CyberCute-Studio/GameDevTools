@@ -5,12 +5,38 @@ package overlay
 import (
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 )
+
+var (
+	procWindowFromPoint             = user32.NewProc("WindowFromPoint")
+	procTestGetAncestor             = user32.NewProc("GetAncestor")
+	procTestGetDesktopWindow        = user32.NewProc("GetDesktopWindow")
+	procTestGetWindow               = user32.NewProc("GetWindow")
+	procWTSQuerySessionInformationW = windows.NewLazySystemDLL("wtsapi32.dll").NewProc("WTSQuerySessionInformationW")
+)
+
+// sessionLockedOrInactive reports whether Windows says this session is locked
+// or not the active one. The lock screen is over every topmost window on the
+// same desktop, so Windows' own hit test finds it rather than the overlay.
+func sessionLockedOrInactive() bool {
+	const currentSession, sessionInfoEx = ^uint32(0), 25
+	const stateActive, flagsLocked = 0, 0
+	// WTSINFOEX level 1: the level, padding, the session's ID, state, and flags.
+	var info *[5]int32
+	var size uint32
+	if ok, _, _ := procWTSQuerySessionInformationW.Call(0, uintptr(currentSession), sessionInfoEx,
+		uintptr(unsafe.Pointer(&info)), uintptr(unsafe.Pointer(&size))); ok == 0 {
+		return false
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(info)))
+	return info[3] != stateActive || info[4] == flagsLocked
+}
 
 // sendMouse delivers a mouse message to the overlay at client coordinates,
 // mirroring a real pointer action on the dimmed surface.
@@ -27,6 +53,135 @@ func clientRect(native *windowsSession, left, top, right, bottom int32) display.
 		Top:    native.bounds.Top + top,
 		Right:  native.bounds.Left + right,
 		Bottom: native.bounds.Top + bottom,
+	}
+}
+
+// windowUnderOverlayPoint returns the window Windows' own hit test picks at
+// overlay client coordinates. go test runs packages side by side and another
+// package's topmost overlay can be over this one, so the overlay is raised
+// first and a lost race tried again. A pixel that lets clicks through never
+// hits the overlay, however often it is raised, so the retries cannot hide
+// that failure.
+func windowUnderOverlayPoint(native *windowsSession, x, y int32) uintptr {
+	const hwndTopmost = ^uintptr(0)
+	point := uintptr(uint32(native.bounds.Left+x)) | uintptr(uint32(native.bounds.Top+y))<<32
+	var hit uintptr
+	for range 40 {
+		procSetWindowPos.Call(uintptr(native.overlay), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		hit, _, _ = procWindowFromPoint.Call(point)
+		if windows.Handle(hit) == native.overlay {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return hit
+}
+
+// windowIsBehindOverlay reports whether a hit window is one a click could only
+// reach through the overlay: a top-level window after it in the z-order, or the
+// desktop. Start and the on-screen keyboard are in a higher band, which that
+// order does not list, and stay in front however often the overlay is raised,
+// so a hit on one of them says nothing about the overlay's pixel. Neither does
+// no window at all, which a secure desktop such as a UAC prompt can leave. The
+// desktop is compared before GetAncestor, which returns zero for it.
+func windowIsBehindOverlay(native *windowsSession, hit uintptr) bool {
+	const gaRoot, gwHwndNext = 2, 2
+	desktop, _, _ := procTestGetDesktopWindow.Call()
+	if hit == desktop {
+		return true
+	}
+	root, _, _ := procTestGetAncestor.Call(hit, gaRoot)
+	if root == 0 {
+		return false
+	}
+	behind, _, _ := procTestGetWindow.Call(uintptr(native.overlay), gwHwndNext)
+	// The bound ends the walk if the z-order changes under it.
+	for range 4096 {
+		if behind == 0 {
+			return false
+		}
+		if behind == root {
+			return true
+		}
+		behind, _, _ = procTestGetWindow.Call(behind, gwHwndNext)
+	}
+	return false
+}
+
+// windowAbove reports whether a is in front of b in the z-order.
+func windowAbove(a, b windows.Handle) bool {
+	const gwHwndNext = 2
+	next, _, _ := procTestGetWindow.Call(uintptr(a), gwHwndNext)
+	// The bound ends the walk if the z-order changes under it.
+	for range 4096 {
+		if next == 0 {
+			return false
+		}
+		if windows.Handle(next) == b {
+			return true
+		}
+		next, _, _ = procTestGetWindow.Call(next, gwHwndNext)
+	}
+	return false
+}
+
+// TestToolbarReturnsAboveTheOverlayAfterADrag is a real press on the overlay,
+// which raises it above the toolbar within the topmost band. Once the drag
+// ends the toolbar must be in front again, or the overlay covers its fields
+// and Capture, and a click meant for them starts a new selection.
+func TestToolbarReturnsAboveTheOverlayAfterADrag(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	const hwndTopmost = ^uintptr(0)
+	for _, drag := range []struct {
+		name         string
+		fromX, fromY int32
+		toX, toY     int32
+	}{
+		{"draw", 60, 40, 460, 340},
+		{"move", 200, 150, 260, 190},
+	} {
+		sendMouse(native.overlay, wmLButtonDown, drag.fromX, drag.fromY)
+		// What a real press on the overlay does to the z-order.
+		procSetWindowPos.Call(uintptr(native.overlay), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		if !windowAbove(native.overlay, native.toolbar) {
+			t.Fatalf("%s: the test could not raise the overlay above the toolbar", drag.name)
+		}
+		sendMouse(native.overlay, wmMouseMove, drag.toX, drag.toY)
+		sendMouse(native.overlay, wmLButtonUp, drag.toX, drag.toY)
+		if !windowAbove(native.toolbar, native.overlay) {
+			t.Fatalf("%s: the overlay stayed in front of the toolbar after the drag (SCR-024, SCR-025)", drag.name)
+		}
+	}
+}
+
+// TestToolbarReturnsAboveTheOverlayAfterAnotherButton is a real right, middle,
+// or X-button press on the overlay, which raises it as a left press does
+// before the press reaches it, but starts no drag whose end places the toolbar.
+func TestToolbarReturnsAboveTheOverlayAfterAnotherButton(t *testing.T) {
+	controller, _ := newNativeSessionController(t)
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeOf(t, controller)
+	t.Cleanup(controller.Shutdown)
+	const hwndTopmost = ^uintptr(0)
+	for _, press := range []struct {
+		name    string
+		message uint32
+	}{{"right", wmRButtonDown}, {"middle", wmMButtonDown}, {"X", wmXButtonDown}} {
+		procSetWindowPos.Call(uintptr(native.overlay), hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
+		if !windowAbove(native.overlay, native.toolbar) {
+			t.Fatalf("%s: the test could not raise the overlay above the toolbar", press.name)
+		}
+		sendMouse(native.overlay, press.message, 300, 200)
+		if !windowAbove(native.toolbar, native.overlay) {
+			t.Fatalf("%s: the overlay stayed in front of the toolbar after the press (SCR-024, SCR-025)", press.name)
+		}
 	}
 }
 
@@ -103,14 +258,24 @@ func TestOverlayDragDrawsAndCapturesSelection(t *testing.T) {
 	// desktop around the selection stays dimmed and the frame is opaque.
 	pixels := native.pixelSlice()
 	at := func(x, y int32) uint32 { return pixels[int(y)*int(native.pixelWidth)+int(x)] }
-	if got := at(200, 150); got != selectionPixel {
-		t.Fatalf("interior pixel = %#08x, want %#08x (visually clear but input-capturing)", got, selectionPixel)
+	if got := at(200, 150); got != 1<<24 {
+		t.Fatalf("interior pixel = %#08x, want black at alpha 1, %#08x (visually clear but input-capturing)", got, uint32(1)<<24)
 	}
 	if got := at(5, 5); got != dimPixel {
 		t.Fatalf("dimmed pixel = %#08x, want %#08x", got, dimPixel)
 	}
 	if got := at(58, 150); got&0xff000000 != 0xff000000 {
 		t.Fatalf("border pixel = %#08x, want an opaque frame", got)
+	}
+	// Windows' own hit test decides where a real click goes, which the mouse
+	// messages this test sends directly to the overlay do not exercise.
+	if sessionLockedOrInactive() {
+		t.Log("the session is locked or inactive, so the real hit test is skipped")
+	} else if hit := windowUnderOverlayPoint(native, 200, 150); windows.Handle(hit) != native.overlay {
+		if windowIsBehindOverlay(native, hit) {
+			t.Fatalf("a real click inside the selection would reach window %#x, not the overlay %#x (SCR-012, SCR-052)", hit, native.overlay)
+		}
+		t.Logf("the hit test found window %#x, which is not behind the overlay, so it cannot tell", hit)
 	}
 
 	// The toolbar moved near the selection without covering it (SCR-025).

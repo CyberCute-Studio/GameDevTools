@@ -180,7 +180,12 @@ when the application starts, no shortcut is active. The Screenshot view says so,
 and the result card does too when another tool is showing.
 
 Pressing the shortcut during a selection brings the selection's toolbar back
-instead of starting a second selection.
+instead of starting a second selection. While one of the application's own
+dialogs is open, such as a file or folder picker or a question, the shortcut
+captures nothing, as the dialog would be in the image. The dialog flashes and
+Windows beeps instead. Close the dialog first. While the application is
+minimized its dialog is hidden too, so you may only hear the beep. Restore the
+application to reach the dialog.
 
 
 5. Image Resizer
@@ -399,6 +404,9 @@ Capture
   off.
 - After a capture, the keyboard focus stays outside the application. Use
   Alt+Tab to return to it.
+- The first time File Explorer shows a folder, Open Folder can leave the saved
+  file focused rather than highlighted. Explorer's own select command does the
+  same.
 
 Image Resizer
 
@@ -435,11 +443,15 @@ Nothing happens when I start the application again.
 
 The global shortcut does nothing.
   The application must be running. The shortcut is paused while the Global
-  shortcut field has the focus, so leave the field first. Then open the
-  Screenshot view. If the field shows a "Shortcut registration error", another
-  application owns the combination, so choose a different one. Otherwise the
-  result card or the view says why a capture could not start, such as a preset
-  larger than the desktop or an invalid JPEG quality.
+  shortcut field has the focus, so leave the field first. While one of the
+  application's dialogs is open, even behind another window, the shortcut only
+  flashes that dialog and beeps, so close the dialog. While the application is
+  minimized the dialog is hidden too, so you may only hear the beep: restore the
+  application to reach it. Then open the Screenshot view. If the field shows a
+  "Shortcut registration error", another application owns the combination, so
+  choose a different one. Otherwise the result card or the view says why a
+  capture could not start, such as a preset larger than the desktop or an
+  invalid JPEG quality.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

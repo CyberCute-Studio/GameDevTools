@@ -3,10 +3,107 @@
 package ui
 
 import (
+	"runtime"
+	"slices"
 	"testing"
+	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// TestImagePickerFilterIsATerminatedPairList pins the form GetOpenFileNameW
+// reads: a label, its pattern, each ending in a NUL, and one more NUL.
+func TestImagePickerFilterIsATerminatedPairList(t *testing.T) {
+	filter, err := imagePickerFilter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filter) < 2 || filter[len(filter)-1] != 0 || filter[len(filter)-2] != 0 {
+		t.Fatalf("the filter does not end in two NULs: %v", filter)
+	}
+	parts := slices.Collect(func(yield func(string) bool) {
+		start := 0
+		for i, unit := range filter[:len(filter)-1] {
+			if unit == 0 {
+				if !yield(windows.UTF16ToString(filter[start:i])) {
+					return
+				}
+				start = i + 1
+			}
+		}
+	})
+	want := []string{ImageFileFilterLabel + " (*.png; *.jpg; *.jpeg)", "*.png;*.jpg;*.jpeg"}
+	if !slices.Equal(parts, want) {
+		t.Fatalf("filter strings = %q, want %q", parts, want)
+	}
+}
+
+// TestPickImageFilesOpensTheRealPicker opens the real common dialog, which
+// the view's tests replace with a stand-in, and cancels it. The picker runs on
+// a thread of its own, so the test fails at its limit even if a shell call
+// blocks that thread and the picker never returns.
+func TestPickImageFilesOpensTheRealPicker(t *testing.T) {
+	const title = "CyberCute Dev Tools picker test"
+	const idCancel = 2
+	const limit = 30 * time.Second
+	type outcome struct {
+		paths  []string
+		picked bool
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		// Never unlocked, so the thread ends with this goroutine.
+		runtime.LockOSThread()
+		paths, picked, err := PickImageFiles(0, title)
+		done <- outcome{paths, picked, err}
+	}()
+	closePicker := func() bool {
+		dialog, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(utf16("#32770"))), uintptr(unsafe.Pointer(utf16(title))))
+		if dialog != 0 {
+			procPostMessageW.Call(dialog, wmCommand, idCancel, 0)
+		}
+		return dialog != 0
+	}
+	returned := false
+	// A picker left open would disturb the package's later tests.
+	t.Cleanup(func() {
+		for range 40 {
+			if returned {
+				return
+			}
+			closePicker()
+			select {
+			case <-done:
+				returned = true
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	})
+	opened := false
+	deadline := time.After(limit)
+	for {
+		select {
+		case result := <-done:
+			returned = true
+			if result.err != nil {
+				t.Fatalf("the picker could not be opened: %v", result.err)
+			}
+			if !opened {
+				t.Fatal("PickImageFiles returned without showing the picker")
+			}
+			if result.picked || result.paths != nil {
+				t.Fatalf("a cancelled picker returned %v, %v", result.paths, result.picked)
+			}
+			return
+		case <-deadline:
+			t.Fatalf("the picker was still open after %v (found: %v)", limit, opened)
+		case <-time.After(50 * time.Millisecond):
+		}
+		opened = closePicker() || opened
+	}
+}
 
 func TestListBoxMultiSelect(t *testing.T) {
 	parent := newTestParent(t)

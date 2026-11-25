@@ -62,10 +62,7 @@ type openFileName struct {
 // reports false without an error when the user cancels.
 func PickImageFiles(parent windows.Handle, title string) ([]string, bool, error) {
 	buffer := make([]uint16, pickerBufferCapacity)
-	// The picker filter is a pair of NUL-separated strings — the label the
-	// user reads and the semicolon-separated pattern — and UTF16FromString
-	// appends the final NUL that terminates the list.
-	filter, err := windows.UTF16FromString(ImageFileFilterLabel + " (*.png; *.jpg; *.jpeg)\x00*.png;*.jpg;*.jpeg\x00")
+	filter, err := imagePickerFilter()
 	if err != nil {
 		return nil, false, err
 	}
@@ -92,6 +89,22 @@ func PickImageFiles(parent windows.Handle, title string) ([]string, bool, error)
 		return nil, false, fmt.Errorf("GetOpenFileNameW failed with code %#x", code)
 	}
 	return parsePickedPaths(buffer), true, nil
+}
+
+// imagePickerFilter builds the picker's filter: the label the user reads and
+// the semicolon-separated pattern, each ending in a NUL, and a last NUL that
+// ends the list. They are converted separately because UTF16FromString refuses
+// a string that holds a NUL.
+func imagePickerFilter() ([]uint16, error) {
+	label, err := windows.UTF16FromString(ImageFileFilterLabel + " (*.png; *.jpg; *.jpeg)")
+	if err != nil {
+		return nil, err
+	}
+	pattern, err := windows.UTF16FromString("*.png;*.jpg;*.jpeg")
+	if err != nil {
+		return nil, err
+	}
+	return append(append(label, pattern...), 0), nil
 }
 
 // parsePickedPaths reads the picker's multi-select buffer: with several files

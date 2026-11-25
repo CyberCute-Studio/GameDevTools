@@ -63,6 +63,9 @@ const (
 	wmMouseMove      = 0x0200
 	wmLButtonDown    = 0x0201
 	wmLButtonUp      = 0x0202
+	wmRButtonDown    = 0x0204
+	wmMButtonDown    = 0x0207
+	wmXButtonDown    = 0x020B
 	wmCaptureChanged = 0x0215
 	// wmAppRestoreFocus asks the toolbar to give the focus back once a
 	// click that activated it has been handled, as toolbarWindowProc
@@ -104,6 +107,9 @@ const (
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+	// hwndTop is SetWindowPos's HWND_TOP: in front of the window's own band,
+	// which for a topmost window is the topmost band.
+	hwndTop = 0
 
 	ulwAlpha   = 0x00000002
 	acSrcAlpha = 0x01
@@ -526,8 +532,10 @@ func (s *windowsSession) configure(dpi uint32, anchor display.Rect) {
 
 // createWindow creates the session's input surface: the desktop-sized Free
 // Rectangle tint overlay, or the Preset Rectangle frame sized to the
-// selection plus its border ring. The window never activates, so it cannot
-// rise above the toolbar or steal keyboard focus.
+// selection plus its border ring. WS_EX_NOACTIVATE keeps a press on it from
+// taking the foreground from another application, but a press still raises it
+// within the topmost band, over the toolbar, so the press's handling puts the
+// toolbar back in front (placeToolbar).
 func (s *windowsSession) createWindow(title string) error {
 	window := display.Rect{Left: s.bounds.Left, Top: s.bounds.Top, Right: s.bounds.Right, Bottom: s.bounds.Bottom}
 	if s.mode == ModePresetRectangle {
@@ -1198,7 +1206,7 @@ const dimPixel = uint32(overlayTintAlpha) << 24
 // clicks inside the selection would reach other applications mid-session
 // and the interior move-drag would never start (SCR-012, SCR-052). Alpha 1
 // is imperceptible but hit-tests as solid.
-const selectionPixel = 1
+const selectionPixel = uint32(1) << 24
 
 // renderAll composites the session's initial frame: the fully dimmed
 // desktop for Free Rectangle (painted when the surface was created), or the
@@ -1231,9 +1239,9 @@ func (s *windowsSession) renderFrame() error {
 // the union of the old and new visual bounds is re-dimmed, the new
 // selection interior is cleared to the visually transparent
 // selectionPixel, and its border and handles are drawn on top. The border
-// ring sits outside the selection rectangle, so even an incompletely
-// flushed frame could never put selection visuals inside the captured
-// pixels (SCR-068).
+// ring sits outside the selection rectangle, and the interior's alpha 1 is
+// kept out of the image by destroying the session's windows and flushing
+// the compositor before the pixels are read (SCR-068).
 func (s *windowsSession) renderSelection(oldVisual display.Rect) error {
 	dirty := rectUnion(oldVisual, s.visualBounds())
 	if dirty.Empty() {
@@ -1341,7 +1349,10 @@ func rectUnion(a, b display.Rect) display.Rect {
 // placeToolbar moves the toolbar near the selection without covering it
 // where practical (SCR-025). It runs when a drag or dimension edit
 // finishes, not on every mouse move, so the toolbar does not jump around
-// under the pointer mid-drag.
+// under the pointer mid-drag. It also puts the toolbar back in front: a real
+// press on the overlay raises it within the topmost band, where it would
+// cover the toolbar's fields and Capture, and a click meant for them would
+// start a new selection.
 func (s *windowsSession) placeToolbar() {
 	if s.toolbar == 0 {
 		// WM_CAPTURECHANGED can arrive while Close is destroying the
@@ -1349,9 +1360,9 @@ func (s *windowsSession) placeToolbar() {
 		return
 	}
 	x, y := s.toolbarPosition()
-	procSetWindowPos.Call(uintptr(s.toolbar), 0,
+	procSetWindowPos.Call(uintptr(s.toolbar), hwndTop,
 		uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,
-		swpNoSize|swpNoZOrder|swpNoActivate)
+		swpNoSize|swpNoActivate)
 }
 
 // toolbarPosition places the toolbar on the displays as they are now. If they
@@ -1689,6 +1700,13 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 		case wmLButtonUp:
 			session.endDrag(lParam)
 			return 0
+		case wmRButtonDown, wmMButtonDown, wmXButtonDown:
+			// A press of any other button raises the overlay as a left press
+			// does, but starts no drag whose end places the toolbar. Mid-drag
+			// the drag's own end places it.
+			if session.drag.op == dragNone {
+				session.placeToolbar()
+			}
 		case wmCaptureChanged:
 			// Capture can be lost mid-draw without a button release (another
 			// window claiming the capture, or Close tearing down the

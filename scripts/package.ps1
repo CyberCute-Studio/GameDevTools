@@ -4,9 +4,9 @@ Builds the portable x64 ZIP and its SHA-256 checksum file.
 
 .DESCRIPTION
 Builds the release executable for 64-bit Intel/AMD Windows with the toolchain
-go.mod pins, then packages it with the README, user guide, release notes, and
-third-party notices. The same commit gives the same bytes, wherever it is
-checked out and whatever the machine's Go configuration.
+go.mod pins, then packages it with the license, README, user guide, release
+notes, and third-party notices. The same commit gives the same bytes, wherever
+it is checked out and whatever the machine's Go configuration.
 #>
 [CmdletBinding()]
 param(

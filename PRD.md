@@ -1,8 +1,8 @@
 # CyberCute Dev Tools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.6\
-**Last updated:** 2026-11-23\
+**Version:** 1.8\
+**Last updated:** 2026-11-24\
 **Product name:** CyberCute Dev Tools\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
@@ -700,7 +700,7 @@ These are not commitments for the initial release:
 
 ## 19. Open decisions
 
-None. REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md).
+Two decisions await the project owner, in REL-03's pull request: whether to confirm the exception section 20 records, that the global shortcut captures nothing while one of the application's own modal dialogs is open; and whether Open Folder (SCR-069) opens File Explorer at the saved file, as manual check M16 requires, when the first time Explorer shows a folder it focuses the file without highlighting it, as Explorer's own select command does. REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md).
 
 ## 20. Confirmed product decisions
 
@@ -714,7 +714,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - Screenshot and Image Resizer use separate preset libraries.
 - Resizing writes new files and preserves originals by default.
 - Initial image format support is PNG and JPEG only.
-- Screenshots can be started from the main window or a configurable global shortcut.
+- Screenshots can be started from the main window or a configurable global shortcut. While one of the application's own modal dialogs is open, the shortcut (SCR-002) captures nothing and flashes the dialog with a beep, as the dialog would be in the image (SCR-044) and Escape could not cancel a selection (SCR-052). REL-03's review added this exception, and the project owner has yet to confirm it in that item's pull request.
 - The initial release draws every window in the Windows system colors, so it follows the Windows contrast (high-contrast) themes, and does not follow the Windows dark app mode, which the standard Win32 controls it uses have no documented way to render; the application stays light and legible when Windows apps are set to dark (UX-008).
 - Restoring the default settings (SET-005) backs the settings file up first and keeps each module's custom presets and its selected preset, the window placement, and the current module; every other setting — the global shortcut, the capture and resize options, and both output folders — returns to its default.
 - Closing the application while a resize job runs asks first, as closing cancels the job. Signing out of, restarting, or shutting down Windows asks nothing: the application saves its settings and stops all work.
@@ -725,6 +725,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - The initial release is not code-signed. Each ZIP has a published SHA-256 checksum, and the packaged README explains the Windows SmartScreen warning.
 - The application has no automatic update mechanism and does not check for updates. Users update by replacing the extracted folder's files with those from the new ZIP.
 - The ZIP carries the user documentation, as a user guide and release notes in plain text, so that it is available offline beside the executable. [docs/traceability.md](docs/traceability.md) records each requirement's implementation, evidence, and status.
+- CyberCute Dev Tools is released under the MIT License. The repository's `LICENSE` and the ZIP's `LICENSE.txt` carry it.
 
 ## 21. Revision history
 
@@ -737,3 +738,5 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.4 | 2026-11-22 | QLT-04: resolved the Windows 10 open decision — the initial release supports Windows 11 only (NFR-001, section 20). |
 | 1.5 | 2026-11-22 | REL-01: resolved the remaining open decisions — the name CyberCute Dev Tools, a portable ZIP, no code signing, and no automatic updates (sections 19 and 20). |
 | 1.6 | 2026-11-23 | REL-02: recorded that the ZIP carries the user guide and release notes, changed the confirmed update decision from replacing the executable to replacing the extracted folder's files so that an update also refreshes those documents, and pointed to the requirement traceability matrix (section 20). No numbered requirement changed. |
+| 1.7 | 2026-11-23 | REL-03: recorded the project owner's choice of the MIT License, carried in the repository and the ZIP, and, pending the owner's confirmation, that the global shortcut captures nothing while one of the application's own dialogs is open (section 20). No numbered requirement's text changed. |
+| 1.8 | 2026-11-24 | REL-03: listed the owner's pending confirmation of the shortcut's dialog exception, and the pending decision on whether Open Folder meets SCR-069, as open decisions (section 19). No numbered requirement changed. |

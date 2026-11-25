@@ -26,7 +26,7 @@ var (
 	manualCheckRow  = regexp.MustCompile(`^\| (M\d+) \|`)
 	requirementID   = regexp.MustCompile(`(?:APP|PRESET|SCR|RSZ|SET|UX|NFR|TECH)-\d+|AC-[SRA]\d+`)
 	requirementSpan = regexp.MustCompile(`([A-Z]+(?:-[SRA])?-?)(\d+) through ([A-Z]+(?:-[SRA])?-?)(\d+)`)
-	recordedRun     = regexp.MustCompile(`^\| \d{4}-\d{2}-\d{2} \| (M\d+|QLT-04A) \| [0-9a-f]{7,40} \| ([^|]+) \|$`)
+	recordedRun     = regexp.MustCompile(`^\| \d{4}-\d{2}-\d{2} \| (M\d+|QLT-04A) \| [0-9a-f]{7,40} \|([^|]*)\|$`)
 )
 
 // hardwareGated are the requirements that wait on QLT-04A's hardware, which

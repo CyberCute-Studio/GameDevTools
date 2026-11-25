@@ -21,8 +21,9 @@ import (
 )
 
 var (
-	procViewTestShowWindow = testUser32.NewProc("ShowWindow")
-	procViewTestMoveWindow = testUser32.NewProc("MoveWindow")
+	procViewTestShowWindow   = testUser32.NewProc("ShowWindow")
+	procViewTestMoveWindow   = testUser32.NewProc("MoveWindow")
+	procViewTestEnableWindow = testUser32.NewProc("EnableWindow")
 )
 
 func newCardTestView(t *testing.T) (*NativeView, *fakeResultCard, *queuedDispatcher) {
@@ -629,6 +630,76 @@ func TestShortcutRefusedDuringACaptureReachesTheCardAfterIt(t *testing.T) {
 	}
 	if !card.suspended {
 		t.Fatal("the refused start showed the card during the capture")
+	}
+}
+
+// TestShortcutCapturesNothingWhileADialogIsOpen is the shortcut pressed with a
+// modal dialog open, which disables the main window: hiding that window would
+// leave the dialog in the image (SCR-044), so nothing starts and nothing the
+// view or the card holds changes, the dialog flashes, and the shortcut works
+// again once it closes.
+func TestShortcutCapturesNothingWhileADialogIsOpen(t *testing.T) {
+	view, card, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	captures, flashes := 0, 0
+	view.capture = func(CaptureRequest) CaptureResult {
+		captures++
+		return CaptureResult{Path: `C:\Shots\one.png`}
+	}
+	view.flashDialog = func() { flashes++ }
+	status := view.status.Text()
+	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
+	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
+
+	if !view.NativeHotkey(globalShortcutHotkeyID) {
+		t.Fatal("the shortcut was not consumed")
+	}
+	if view.inProgress || view.captureAttempts != 0 || card.suspended {
+		t.Fatalf("a capture started behind the dialog: in progress %v, attempts %d, card suspended %v", view.inProgress, view.captureAttempts, card.suspended)
+	}
+	if flashes != 1 {
+		t.Fatalf("the dialog flashed %d times, want 1", flashes)
+	}
+	if len(card.reports) != 0 || view.status.Text() != status {
+		t.Fatalf("the suspended shortcut changed the card %+v or the status %q", card.reports, view.status.Text())
+	}
+
+	procViewTestEnableWindow.Call(uintptr(view.parent), 1)
+	view.NativeHotkey(globalShortcutHotkeyID)
+	dispatcher.runNext(t)
+	if captures != 1 || flashes != 1 {
+		t.Fatalf("once the dialog closed: %d captures, %d flashes, want 1 and 1", captures, flashes)
+	}
+}
+
+// TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal is a press
+// while a running capture saves its file and the user has opened a dialog:
+// that press gets the in-progress refusal, and the dialog is not flashed.
+func TestShortcutDuringACaptureWithADialogOpenKeepsTheCaptureRefusal(t *testing.T) {
+	view, card, _ := newCardTestView(t)
+	view.inProgress = true
+	view.card.Suspend()
+	flashes := 0
+	view.flashDialog = func() { flashes++ }
+	procViewTestEnableWindow.Call(uintptr(view.parent), 0)
+	t.Cleanup(func() { procViewTestEnableWindow.Call(uintptr(view.parent), 1) })
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if len(card.reports) != 1 || card.reports[0].Notice.Message != ui.CaptureShortcutRefused || flashes != 0 {
+		t.Fatalf("card = %+v, flashes = %d", card.reports, flashes)
+	}
+}
+
+// TestFlashWindowInfoMatchesTheWindowsStructure pins FLASHWINFO's size, 32
+// bytes on 64-bit Windows and 20 on 32-bit, as FlashWindowEx does nothing for
+// a structure of another size.
+func TestFlashWindowInfoMatchesTheWindowsStructure(t *testing.T) {
+	want := uintptr(32)
+	if unsafe.Sizeof(uintptr(0)) == 4 {
+		want = 20
+	}
+	if got := unsafe.Sizeof(flashWindowInfo{}); got != want {
+		t.Fatalf("flashWindowInfo is %d bytes, want %d", got, want)
 	}
 }
 

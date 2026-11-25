@@ -9,7 +9,7 @@ From the repository root on Windows:
 ```bash
 go fmt ./...
 go vet ./...
-go test -count=1 ./...
+go test -count=1 -p 1 ./...
 ```
 
 `go test` runs every check below except the vulnerability scan. To run only this record's own tests:
@@ -179,5 +179,5 @@ The logs and the dependency set needed no change.
 - **What Windows itself records.** Windows can keep its own history of dialogs and of folders opened in File Explorer. Those records were not measured.
 - **A folder the picker cannot tell from its neighbor.** When `v2` and `v2..` stand side by side, or a folder named only periods sits directly on the root of a drive or network share, the shell reports the other folder's path, which exists, so the picker cannot detect it. File Explorer cannot create such names.
 - **A missing parent such as `con.d` on Windows 10.** `os.MkdirAll` may read such a name as a device there, failing the save with an error. It does not reproduce on the Windows 11 build of record, so it was not changed, and QLT-04 closed it when Windows 10 left the supported platforms.
-- **Future advisories.** The scan reflects the database's date above. Run it again on the release candidate (REL-03).
+- **Future advisories.** The scan reflects the database's date above. REL-03 ran it again on the release candidate on 2026-11-24, as manual check M13, and it found no vulnerabilities, as the [release candidate record](release-candidate.md#checklist) says. That run did not record the database's date. Run it again on each later candidate, and record the database's date.
 - **Performance on the new toolchain.** Earlier performance figures were measured on go1.26.5. The [platform record](platform-verification.md#performance) has the figures on go1.27.4.

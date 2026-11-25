@@ -29,7 +29,7 @@ var Date = time.Date(2026, time.November, 22, 0, 0, 0, 0, time.UTC)
 
 // PackagedDocuments names the files in the packaging folder that ship beside
 // the executable. scripts/verify-package.ps1 checks for the same list.
-var PackagedDocuments = []string{"README.txt", "RELEASE-NOTES.txt", "THIRD-PARTY-NOTICES.txt", "USER-GUIDE.txt"}
+var PackagedDocuments = []string{"LICENSE.txt", "README.txt", "RELEASE-NOTES.txt", "THIRD-PARTY-NOTICES.txt", "USER-GUIDE.txt"}
 
 // ExecutableName is the released executable's file name.
 func ExecutableName() string { return ui.AppFileName + ".exe" }

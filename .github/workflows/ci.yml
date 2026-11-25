@@ -35,8 +35,11 @@ jobs:
       - name: Run static analysis
         run: go vet ./...
 
+      # One package at a time, as scripts/validate.ps1 does: overlay tests show
+      # topmost windows over the whole desktop and the real picker test takes
+      # the foreground, either of which can disturb a test running beside them.
       - name: Run unit tests
-        run: go test -count=1 ./...
+        run: go test -count=1 -p 1 ./...
 
       - name: Build portable x64 package
         shell: pwsh
