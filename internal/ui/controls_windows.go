@@ -175,12 +175,26 @@ func newMnemonicLabel(parent windows.Handle, text string) (*Label, error) {
 	return NewMnemonicLabel(parent, text)
 }
 
+// newLabel creates a label. One whose text has an access key names the field
+// after it, and is drawn as a field label (TextLabel); any other is drawn as
+// content until SetStyle says otherwise.
 func newLabel(parent windows.Handle, text string, style uintptr) (*Label, error) {
 	hwnd, err := createControl(parent, "STATIC", text, wsChild|wsVisible|style, 0, 0)
 	if err != nil {
 		return nil, err
 	}
+	textStyle := TextBody
+	if style&ssNoPrefix == 0 {
+		textStyle = TextLabel
+	}
+	themeControl(hwnd, &themedControl{role: roleLabel, style: textStyle})
 	return &Label{Control: Control{hwnd: hwnd}}, nil
+}
+
+// SetStyle sets the role of the label's text, which chooses the color it is
+// drawn in, such as TextMuted for a description or a hint.
+func (l *Label) SetStyle(style TextStyle) {
+	setTextStyle(l.hwnd, style)
 }
 
 type ButtonOptions struct {
@@ -189,6 +203,11 @@ type ButtonOptions struct {
 	Radio    bool
 	Group    bool
 	Disabled bool
+	// Navigation draws a radio button as an item of the application's
+	// navigation, with Icon, a glyph of the Windows icon font, before its
+	// text.
+	Navigation bool
+	Icon       rune
 }
 
 type Button struct {
@@ -221,6 +240,14 @@ func NewButton(parent windows.Handle, text string, options ButtonOptions) (*Butt
 	if err != nil {
 		return nil, err
 	}
+	role := rolePushButton
+	switch {
+	case options.Radio && options.Navigation:
+		role = roleNavigation
+	case options.Radio:
+		role = roleRadioButton
+	}
+	themeControl(hwnd, &themedControl{role: role, primary: options.Primary, icon: options.Icon})
 	return &Button{Control: Control{hwnd: hwnd}}, nil
 }
 
@@ -244,11 +271,15 @@ type ComboBox struct {
 	Control
 }
 
+// NewComboBox creates a drop-down list. Its items are drawn by the theme
+// (owner-drawn) and keep their strings, so they read as the items of any
+// drop-down list.
 func NewComboBox(parent windows.Handle, id int32) (*ComboBox, error) {
-	hwnd, err := createControl(parent, "COMBOBOX", "", wsChild|wsVisible|wsTabStop|cbsDropDownList|cbsNoIntegralHeight, 0, id)
+	hwnd, err := createControl(parent, "COMBOBOX", "", wsChild|wsVisible|wsTabStop|cbsDropDownList|cbsNoIntegralHeight|cbsOwnerDrawFixed|cbsHasStrings, 0, id)
 	if err != nil {
 		return nil, err
 	}
+	themeControl(hwnd, &themedControl{role: roleComboBox})
 	return &ComboBox{Control{hwnd: hwnd}}, nil
 }
 
@@ -320,7 +351,7 @@ func NewTextInput(parent windows.Handle, field string, id int32) (*TextInput, er
 	if err != nil {
 		return nil, err
 	}
-	edit, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll, wsExClientEdge, id)
+	edit, err := newField(parent, id, false)
 	if err != nil {
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
@@ -331,6 +362,7 @@ func NewTextInput(parent windows.Handle, field string, id int32) (*TextInput, er
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
+	validation.SetStyle(TextError)
 	return &TextInput{Label: label, Edit: Control{hwnd: edit}, Error: validation, id: id}, nil
 }
 
@@ -393,7 +425,7 @@ func NewDimensionInput(parent windows.Handle, field string, id int32) (*Dimensio
 	if err != nil {
 		return nil, err
 	}
-	edit, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll, wsExClientEdge, id)
+	edit, err := newField(parent, id, false)
 	if err != nil {
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
@@ -404,6 +436,7 @@ func NewDimensionInput(parent windows.Handle, field string, id int32) (*Dimensio
 		procDestroyWindow.Call(uintptr(label.Handle()))
 		return nil, err
 	}
+	validation.SetStyle(TextError)
 	return &DimensionInput{
 		Label: label,
 		Edit:  Control{hwnd: edit},
@@ -461,11 +494,28 @@ func (d *DimensionInput) HandleCommand(id int32, notification uint16) bool {
 // as the selection toolbar, where TextInput's stacked label and error labels
 // do not fit; validation presentation stays with the caller.
 func NewEdit(parent windows.Handle, id int32) (*Control, error) {
-	hwnd, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll, wsExClientEdge, id)
+	hwnd, err := newField(parent, id, false)
 	if err != nil {
 		return nil, err
 	}
 	return &Control{hwnd: hwnd}, nil
+}
+
+// newField creates a single-line text field, read-only or not, whose frame
+// the theme paints.
+func newField(parent windows.Handle, id int32, readOnly bool) (windows.Handle, error) {
+	style := uintptr(wsChild | wsVisible | wsTabStop | esAutoHScroll)
+	role := roleEdit
+	if readOnly {
+		style |= esReadOnly
+		role = roleReadOnly
+	}
+	hwnd, err := createControl(parent, "EDIT", "", style, wsExClientEdge, id)
+	if err != nil {
+		return 0, err
+	}
+	themeControl(hwnd, &themedControl{role: role})
+	return hwnd, nil
 }
 
 // ReadOnlyText displays a value such as a chosen path. It is keyboard
@@ -476,7 +526,7 @@ type ReadOnlyText struct {
 }
 
 func NewReadOnlyText(parent windows.Handle, id int32) (*ReadOnlyText, error) {
-	hwnd, err := createControl(parent, "EDIT", "", wsChild|wsVisible|wsTabStop|esAutoHScroll|esReadOnly, wsExClientEdge, id)
+	hwnd, err := newField(parent, id, true)
 	if err != nil {
 		return nil, err
 	}
@@ -490,11 +540,14 @@ type ListBox struct {
 	Control
 }
 
+// NewListBox creates the list. Its rows are drawn by the theme (owner-drawn)
+// and keep their strings, so they read as the rows of any list box.
 func NewListBox(parent windows.Handle, id int32) (*ListBox, error) {
-	hwnd, err := createControl(parent, "LISTBOX", "", wsChild|wsVisible|wsTabStop|wsVScroll|lbsNotify|lbsExtendedSel|lbsNoIntegralHeight, wsExClientEdge, id)
+	hwnd, err := createControl(parent, "LISTBOX", "", wsChild|wsVisible|wsTabStop|wsVScroll|lbsNotify|lbsExtendedSel|lbsNoIntegralHeight|lbsOwnerDrawFixed|lbsHasStrings, wsExClientEdge, id)
 	if err != nil {
 		return nil, err
 	}
+	themeControl(hwnd, &themedControl{role: roleListBox})
 	return &ListBox{Control{hwnd: hwnd}}, nil
 }
 
@@ -660,6 +713,7 @@ func (s *StatusArea) Show(notice Notice, timeout time.Duration) error {
 func (s *StatusArea) Update(notice Notice) {
 	s.stopTimer()
 	s.revision++
+	s.SetStyle(noticeStyle(notice.Kind))
 	s.SetTextQuietly(notice.Text())
 }
 

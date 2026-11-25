@@ -17,6 +17,10 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
 )
 
+// wmCtlColorStatic is the message a label asks its parent for its colors
+// with.
+const wmCtlColorStatic = 0x0138
+
 var (
 	procGetBkMode             = gdi32.NewProc("GetBkMode")
 	procGetTextColor          = gdi32.NewProc("GetTextColor")
@@ -83,28 +87,38 @@ func TestWorkspaceOffset(t *testing.T) {
 	}
 }
 
-func TestStaticTextBrushUsesSystemColors(t *testing.T) {
-	dc, _, err := procGetDC.Call(0)
+// TestShellDrawsTextInThePalette pins that the shell's labels take their
+// colors from the theme (UX-008): a label's text is drawn transparently in
+// its style's color of the current palette — the dark palette, or a contrast
+// theme's system colors — and over a brush of the surface behind it.
+func TestShellDrawsTextInThePalette(t *testing.T) {
+	shell := newCommandTestShell(t, nil)
+	label, err := ui.NewLabel(shell.hwnd, "Description")
+	if err != nil {
+		t.Fatal(err)
+	}
+	label.SetStyle(ui.TextMuted)
+	dc, _, err := procGetDC.Call(uintptr(shell.hwnd))
 	if dc == 0 {
-		t.Fatalf("GetDC(desktop): %v", err)
+		t.Fatalf("GetDC: %v", err)
 	}
-	defer procReleaseDC.Call(0, dc)
-	previousColor, _, _ := procSetTextColor.Call(dc, 0x00010203)
-	defer procSetTextColor.Call(dc, previousColor)
-	previousMode, _, _ := procSetBkMode.Call(dc, transparent)
-	defer procSetBkMode.Call(dc, previousMode)
-
-	if brush := staticTextBrush(dc); brush == 0 {
-		t.Fatal("staticTextBrush() returned a null brush")
+	defer procReleaseDC.Call(uintptr(shell.hwnd), dc)
+	if brush := shellWindowProc(shell.hwnd, wmCtlColorStatic, dc, uintptr(label.Handle())); brush == 0 {
+		t.Fatal("WM_CTLCOLORSTATIC returned a null brush")
 	}
-	wantColor, _, _ := procGetSysColor.Call(colorWindowText)
+	palette := ui.CurrentPalette()
 	gotColor, _, _ := procGetTextColor.Call(dc)
-	if gotColor != wantColor {
-		t.Fatalf("text color = %#x, want system COLOR_WINDOWTEXT %#x", gotColor, wantColor)
+	if wantColor := colorRef(palette.TextMuted); gotColor != wantColor {
+		t.Fatalf("text color = %#x, want the palette's muted text %#x", gotColor, wantColor)
 	}
 	if gotMode, _, _ := procGetBkMode.Call(dc); gotMode != transparent {
 		t.Fatalf("background mode = %d, want TRANSPARENT", gotMode)
 	}
+}
+
+// colorRef returns a palette color as the COLORREF GDI reports.
+func colorRef(color ui.Color) uintptr {
+	return uintptr(color>>16&0xff) | uintptr(color>>8&0xff)<<8 | uintptr(color&0xff)<<16
 }
 
 func TestCalculateShellLayout(t *testing.T) {

@@ -119,7 +119,8 @@ func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 // image (SCR-044).
 func TestActivateExistingInstanceLeavesACaptureHiddenWindow(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	procShowWindow.Call(hwnd, swMinimizeInstanceTest)
 	procShowWindow.Call(hwnd, swHide)
@@ -142,7 +143,8 @@ func TestActivateExistingInstanceLeavesACaptureHiddenWindow(t *testing.T) {
 // once it appears, where leaving it would let it open behind other windows.
 func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	const swShowNAInstanceTest = 8
 	offScreen := int32(-22000)
@@ -174,7 +176,8 @@ func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
 // with nothing left running.
 func TestActivateExistingInstanceSeesAWindowDestroyed(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	done := make(chan bool, 1)
 	go func() { done <- activateExistingInstance(className, 0) }()

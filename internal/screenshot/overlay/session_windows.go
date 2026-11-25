@@ -60,7 +60,6 @@ const (
 	wmNCHitTest      = 0x0084
 	wmKeyDown        = 0x0100
 	wmCommand        = 0x0111
-	wmCtlColorStatic = 0x0138
 	wmMouseMove      = 0x0200
 	wmLButtonDown    = 0x0201
 	wmLButtonUp      = 0x0202
@@ -175,8 +174,6 @@ var (
 	procSelectObject                = gdi32.NewProc("SelectObject")
 	procDeleteObject                = gdi32.NewProc("DeleteObject")
 	procDeleteDC                    = gdi32.NewProc("DeleteDC")
-	procSetBkMode                   = gdi32.NewProc("SetBkMode")
-	procSetTextColor                = gdi32.NewProc("SetTextColor")
 
 	registerClassesOnce sync.Once
 	registerClassesErr  error
@@ -652,6 +649,7 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 		return callError("CreateWindowExW(toolbar)", err)
 	}
 	s.toolbar = windows.Handle(toolbar)
+	ui.ThemeWindow(s.toolbar, ui.WindowPopup)
 	toolbarStates[s.toolbar] = s
 
 	// The message shows the instructions and, in their place, why a typed
@@ -1859,6 +1857,10 @@ func (s *windowsSession) zoneCursor() uintptr {
 }
 
 func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	// The theme colors and draws the controls and the background.
+	if result, handled := ui.ThemeMessage(hwnd, message, wParam, lParam); handled {
+		return result
+	}
 	session := toolbarStates[hwnd]
 	switch message {
 	case wmCommand:
@@ -1949,12 +1951,6 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 		// The toolbar background drags the toolbar; child controls still
 		// receive their own hit tests.
 		return htCaption
-	case wmCtlColorStatic:
-		procSetBkMode.Call(wParam, transparent)
-		textColor, _, _ := procGetSysColor.Call(colorWindowText)
-		procSetTextColor.Call(wParam, textColor)
-		brush, _, _ := procGetSysColorBrush.Call(colorWindow)
-		return brush
 	case wmDestroy:
 		delete(toolbarStates, hwnd)
 		return 0

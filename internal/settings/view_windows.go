@@ -46,6 +46,7 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.description, err = ui.NewLabel(parent, ui.SettingsRestoreDescription); err != nil {
 		return err
 	}
+	n.description.SetStyle(ui.TextMuted)
 	if n.restoreAll, err = ui.NewButton(parent, ui.RestoreDefaultsAction, ui.ButtonOptions{ID: restoreDefaultsCommand, Group: true}); err != nil {
 		return err
 	}

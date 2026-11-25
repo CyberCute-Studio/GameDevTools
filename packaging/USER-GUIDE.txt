@@ -396,8 +396,9 @@ Platform
   automated checks, but have not yet been run on real hardware. Rotated
   displays are designed for, but no automated check or real hardware has
   tested them.
-- The application stays light when Windows apps are set to dark. It does follow
-  the Windows contrast themes.
+- The application stays dark when Windows apps are set to light. It does follow
+  the Windows contrast themes, and its message boxes and file pickers keep the
+  look Windows gives them.
 - Under x64 emulation, the Free Rectangle overlay took slightly longer than its
   300 ms target in 2 of 6 test batches, at 312 and 317 ms. Whether this happens
   on x64 hardware is not yet known.

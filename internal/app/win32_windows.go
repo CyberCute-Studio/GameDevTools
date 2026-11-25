@@ -21,7 +21,7 @@ const (
 	wmCommand         = 0x0111
 	wmHotkey          = 0x0312
 	wmVScroll         = 0x0115
-	wmCtlColorStatic  = 0x0138
+	wmPaint           = 0x000f
 	wmSetFont         = 0x0030
 	wmMouseWheel      = 0x020a
 	wmTimer           = 0x0113
@@ -109,17 +109,14 @@ const (
 
 	cwUseDefault = 0x80000000
 
-	colorWindow     = 5
-	colorWindowText = 8
-	transparent     = 1
-	fwNormal        = 400
-	fwSemiBold      = 600
-
-	defaultCharset   = 1
-	clearTypeQuality = 5
+	colorWindow = 5
+	transparent = 1
+	fwNormal    = 400
+	fwSemiBold  = 600
 
 	dtWordBreak   = 0x0010
 	dtCalcRect    = 0x0400
+	dtSingleLine  = 0x0020
 	dtNoPrefix    = 0x0800
 	dtEditControl = 0x2000
 
@@ -180,11 +177,10 @@ var (
 	procGetNextDlgTabItem             = user32.NewProc("GetNextDlgTabItem")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procGetDpiForWindow               = user32.NewProc("GetDpiForWindow")
-	procGetSysColor                   = user32.NewProc("GetSysColor")
-	procGetSysColorBrush              = user32.NewProc("GetSysColorBrush")
 	procGetDC                         = user32.NewProc("GetDC")
 	procReleaseDC                     = user32.NewProc("ReleaseDC")
 	procDrawTextW                     = user32.NewProc("DrawTextW")
+	procInvalidateRect                = user32.NewProc("InvalidateRect")
 	procGetModuleHandleW              = kernel32.NewProc("GetModuleHandleW")
 	procCreateMutexW                  = kernel32.NewProc("CreateMutexW")
 	procCloseHandle                   = kernel32.NewProc("CloseHandle")
@@ -192,11 +188,8 @@ var (
 	procGetLastActivePopup            = user32.NewProc("GetLastActivePopup")
 	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
 	procIsIconic                      = user32.NewProc("IsIconic")
-	procCreateFontIndirectW           = gdi32.NewProc("CreateFontIndirectW")
 	procSelectObject                  = gdi32.NewProc("SelectObject")
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")
-	procSetBkMode                     = gdi32.NewProc("SetBkMode")
-	procSetTextColor                  = gdi32.NewProc("SetTextColor")
 	procDragAcceptFiles               = shell32.NewProc("DragAcceptFiles")
 	procDragQueryFileW                = shell32.NewProc("DragQueryFileW")
 	procDragFinish                    = shell32.NewProc("DragFinish")
@@ -277,23 +270,6 @@ type wndClassEx struct {
 	HIconSm       windows.Handle
 }
 
-type logFont struct {
-	Height         int32
-	Width          int32
-	Escapement     int32
-	Orientation    int32
-	Weight         int32
-	Italic         byte
-	Underline      byte
-	StrikeOut      byte
-	CharSet        byte
-	OutPrecision   byte
-	ClipPrecision  byte
-	Quality        byte
-	PitchAndFamily byte
-	Face           [32]uint16
-}
-
 func enablePerMonitorDPI() error {
 	const dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3)
 	r, _, err := procSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorAwareV2)
@@ -344,23 +320,4 @@ func moveWindow(hwnd windows.Handle, x, y, width, height int32) {
 
 func setControlFont(hwnd windows.Handle, font windows.Handle) {
 	procSendMessageW.Call(uintptr(hwnd), wmSetFont, uintptr(font), 1)
-}
-
-func createFont(height int32, weight int32) (windows.Handle, error) {
-	description := logFont{
-		Height:  height,
-		Weight:  weight,
-		CharSet: defaultCharset,
-		Quality: clearTypeQuality,
-	}
-	face, err := windows.UTF16FromString("Segoe UI")
-	if err != nil {
-		return 0, err
-	}
-	copy(description.Face[:], face)
-	font, _, err := procCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&description)))
-	if font == 0 {
-		return 0, callError("CreateFontIndirectW", err)
-	}
-	return windows.Handle(font), nil
 }

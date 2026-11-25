@@ -458,6 +458,7 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.patternLabel, err = ui.NewLabel(parent, ui.FilenamePatternLabel); err != nil {
 		return err
 	}
+	n.patternLabel.SetStyle(ui.TextLabel)
 	if n.pattern, err = ui.NewLabel(parent, ""); err != nil {
 		return err
 	}

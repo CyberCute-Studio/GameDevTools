@@ -68,13 +68,13 @@ The application has no network code, account, sign-in, activation, update check,
 | `net` is imported only by `golang.org/x/sys/windows`, for a few types | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
 | The built executable holds no function, in `net`, `syscall`, or `x/sys/windows`, that opens, connects, or listens on a socket or resolves a name | `audit.TestExecutableContainsNoNetworkCode` | Pass |
 | No application code calls a socket or name-resolution function, or starts a program through `os`, `syscall`, or `x/sys/windows`. The only program it starts is File Explorer, through one reviewed `ShellExecuteExW` binding, for Open Folder and Reveal in Explorer when the user asks | `audit.TestApplicationCallsNoNetworkOrProgramFunction` | Pass |
-| The application's own code loads only nine reviewed Windows libraries, each from the system folder, none of them a network API, and binds no function by address | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
+| The application's own code loads only ten reviewed Windows libraries, each from the system folder, none of them a network API, and binds no function by address | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
 | Every Windows function the application's own code binds by name is on a reviewed list, so a new binding fails until it is reviewed | `audit.TestApplicationBindsOnlyReviewedProcedures` | Pass |
 | Every function of `syscall` and `x/sys/windows` the application's own code uses is on a reviewed list, so a new one fails until it is reviewed | `audit.TestApplicationUsesOnlyReviewedSystemFunctions` | Pass |
 | No application file dot-imports `os`, `io/ioutil`, `syscall`, or `x/sys/windows`, which would hide its calls from these source checks | `audit.TestAuditedPackagesAreNotDotImported` | Pass |
 | No string in the application is a URL | `audit.TestApplicationNamesNoNetworkEndpoint` | Pass |
 
-The nine libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, and `user32`. The process also holds libraries the Go runtime and standard library load for themselves, which this check does not list. Among them is the Winsock library `ws2_32.dll`, loaded because `golang.org/x/sys/windows` imports `net`; the checks above show that nothing in the application can open a socket through it.
+The ten libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, `user32`, and `uxtheme`, which UX-01's dark theme added for the scroll bars' theme (`SetWindowTheme`). The process also holds libraries the Go runtime and standard library load for themselves, which this check does not list. Among them is the Winsock library `ws2_32.dll`, loaded because `golang.org/x/sys/windows` imports `net`; the checks above show that nothing in the application can open a socket through it.
 
 ### What Windows does with a copied screenshot
 
