@@ -59,8 +59,12 @@ type openFileName struct {
 
 // PickImageFiles opens the common file picker filtered to the supported PNG
 // and JPEG extensions (RSZ-003) and returns every selected absolute path. It
-// reports false without an error when the user cancels.
+// reports false without an error when the user cancels, or when HoldDialogs
+// keeps it from opening.
 func PickImageFiles(parent windows.Handle, title string) ([]string, bool, error) {
+	if dialogRefused() {
+		return nil, false, nil
+	}
 	buffer := make([]uint16, pickerBufferCapacity)
 	filter, err := imagePickerFilter()
 	if err != nil {

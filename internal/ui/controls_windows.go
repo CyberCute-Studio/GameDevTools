@@ -708,8 +708,12 @@ func (s *StatusArea) stopTimer() {
 // No, even one given just before, so the caller does nothing more with a
 // window that is gone. Windows ends the question with no answer once its
 // owner is destroyed; the parent is also checked once it returns, so every
-// caller has that guarantee whatever the question's answer.
+// caller has that guarantee whatever the question's answer. A question asked
+// while HoldDialogs keeps the dialogs closed is not shown and answers No.
 func Confirm(parent windows.Handle, title, message string) bool {
+	if dialogRefused() {
+		return false
+	}
 	answer, _, _ := procMessageBoxW.Call(
 		uintptr(parent),
 		uintptr(unsafe.Pointer(utf16(message))),

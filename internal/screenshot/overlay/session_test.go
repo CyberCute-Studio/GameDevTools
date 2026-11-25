@@ -656,3 +656,92 @@ func TestSetFontForwardsToNativeSession(t *testing.T) {
 	controller.SetFont(43)
 	controller.Cancel()
 }
+
+// TestSessionHoldsDialogsUntilTheWindowIsRestored pins that a session keeps
+// the application's dialogs closed from before the main window hides until
+// it is restored, on every path: a cancel, a shutdown, a session a display
+// change ends, and a capture, whose hold lasts until the handler restores the
+// window once the rectangle is read (SCR-044, SCR-052). A start that fails
+// releases the hold it took.
+func TestSessionHoldsDialogsUntilTheWindowIsRestored(t *testing.T) {
+	type outcome struct {
+		holds, releases int
+		heldAtHide      bool
+	}
+	newHeldController := func() (*Controller, *sessionFixture, *outcome) {
+		controller, fixture := newFixtureController()
+		result := &outcome{}
+		hide := controller.Hide
+		controller.Hide = func(windows ...uintptr) (func(), error) {
+			result.heldAtHide = result.holds > result.releases
+			return hide(windows...)
+		}
+		controller.HoldDialogs = func() func() {
+			result.holds++
+			released := false
+			return func() {
+				if !released {
+					released = true
+					result.releases++
+				}
+			}
+		}
+		return controller, fixture, result
+	}
+	held := func(result *outcome) bool { return result.holds > result.releases }
+
+	for _, end := range []string{"cancel", "shutdown", "display lost"} {
+		controller, _, result := newHeldController()
+		if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
+			t.Fatal(err)
+		}
+		if !result.heldAtHide || !held(result) {
+			t.Fatalf("%s: the session did not hold the dialogs from before the hide", end)
+		}
+		switch end {
+		case "cancel":
+			controller.Cancel()
+		case "shutdown":
+			controller.Shutdown()
+		case "display lost":
+			controller.DesktopBounds = func() (display.Rect, error) { return display.Rect{}, errors.New("gone") }
+			controller.DisplayChange()
+		}
+		if held(result) || result.holds != 1 {
+			t.Fatalf("%s: holds %d, releases %d, want one of each", end, result.holds, result.releases)
+		}
+	}
+
+	controller, fixture, result := newHeldController()
+	var restore func()
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{
+		OnCapture: func(_ display.Rect, r func()) { restore = r },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.native.onSelection(display.Rect{Left: 10, Top: 10, Right: 50, Bottom: 40})
+	fixture.native.onCapture()
+	if restore == nil || !held(result) {
+		t.Fatal("the dialogs were not held while the capture reads the rectangle")
+	}
+	restore()
+	restore()
+	if held(result) || result.releases != 1 {
+		t.Fatalf("after the capture's restore: holds %d, releases %d, want one of each", result.holds, result.releases)
+	}
+
+	for _, failure := range []string{"hide", "create"} {
+		controller, fixture, result := newHeldController()
+		if failure == "hide" {
+			fixture.hideErr = errors.New("hide failed")
+		} else {
+			fixture.createErr = errors.New("create failed")
+		}
+		if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err == nil {
+			t.Fatalf("%s failure: Begin succeeded", failure)
+		}
+		if held(result) {
+			t.Fatalf("%s failure: the failed start kept the dialogs held", failure)
+		}
+	}
+}

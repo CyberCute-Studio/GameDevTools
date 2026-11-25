@@ -67,14 +67,23 @@ func NewService(monitor *display.Monitor) *Service {
 // restores the window, and delivers the captured image to the clipboard and
 // the output folder. A hide or capture failure is reported as Err and skips
 // delivery; delivery outcomes are reported independently. The window is
-// restored before this function returns on every path.
+// restored before this function returns on every path, and the request's
+// Captured runs once the pixels are read and the window restored, before
+// delivery, or once the hide or capture has failed.
 func (s *Service) FullDisplay(request screenshot.CaptureRequest) screenshot.CaptureResult {
+	captured := func() {
+		if request.Captured != nil {
+			request.Captured()
+		}
+	}
 	restore, err := s.Hide(request.Window)
 	if err != nil {
+		captured()
 		return screenshot.CaptureResult{Err: err}
 	}
 	img, captureErr := s.Capture(s.Monitor, request.DeviceName)
 	restore()
+	captured()
 	if captureErr != nil {
 		return screenshot.CaptureResult{Err: captureErr}
 	}

@@ -87,13 +87,17 @@ func initializeCOM() (uninitialize func()) {
 }
 
 // BrowseForFolder opens the modal folder picker and returns the chosen
-// absolute folder. It reports false without an error when the user cancels.
+// absolute folder. It reports false without an error when the user cancels,
+// or when HoldDialogs keeps it from opening.
 // The shell reports a folder without the periods its name ends in, so a
 // folder named v2.. comes back as v2, and one named only periods as its
 // parent with a separator after it. A reported path that does not exist, or
 // that has that separator, is refused with an error rather than returned, as
 // is one whose drive does not answer within shellNameWait.
 func BrowseForFolder(parent windows.Handle, title string) (string, bool, error) {
+	if dialogRefused() {
+		return "", false, nil
+	}
 	// The picker requires an initialized COM apartment on the calling thread.
 	defer initializeCOM()()
 	displayName := make([]uint16, windows.MAX_PATH)

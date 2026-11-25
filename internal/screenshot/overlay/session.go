@@ -117,8 +117,10 @@ type CreateRequest struct {
 
 // Controller owns the single active rectangle selection session. Monitor
 // resolves the desktop bounds and toolbar anchor; DesktopBounds, DisplayAreas,
-// Hide, and Create default to the production native services and are
-// replaceable in tests. DisplayAreas lists the connected displays' rectangles,
+// Hide, HoldDialogs, and Create default to the production native services and
+// are replaceable in tests. HoldDialogs keeps the application's dialogs closed
+// until the function it returns runs, which the session's restore does; nil
+// means ui.HoldDialogs. DisplayAreas lists the connected displays' rectangles,
 // which show a selection left on no display when the bounds around them have
 // not changed. Hide hides the main window and returns the function that restores
 // it; every session path runs that restore exactly once — Cancel and
@@ -129,6 +131,7 @@ type Controller struct {
 	DesktopBounds func() (display.Rect, error)
 	DisplayAreas  func() ([]display.Rect, error)
 	Hide          func(...uintptr) (restore func(), err error)
+	HoldDialogs   func() (release func())
 	Create        func(CreateRequest) (NativeSession, error)
 
 	mu      sync.Mutex
@@ -169,7 +172,8 @@ func NewController(monitor *display.Monitor) *Controller {
 			}
 			return exclusion.Restore, nil
 		},
-		Create: createNative,
+		HoldDialogs: ui.HoldDialogs,
+		Create:      createNative,
 	}
 	if monitor != nil {
 		monitor.Subscribe(controller.DisplayChange)
@@ -377,9 +381,26 @@ func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, size display
 			return fmt.Errorf("%w: "+ui.PresetRectangleTooLarge, ErrPresetTooLarge, width, height, bounds.Width(), bounds.Height())
 		}
 	}
-	restore, err := c.Hide(window)
+	// The application's dialogs stay closed for the whole session, from
+	// before the main window is hidden until it is restored: once the
+	// rectangle's pixels are read for a capture, or the session ends without
+	// one. The GUI thread goes on dispatching messages, so a click already
+	// queued could otherwise open a dialog that a capture would put in the
+	// image (SCR-044), and whose modal loop would keep Escape from cancelling
+	// the selection (SCR-052). Every session path runs restore exactly once.
+	hold := c.HoldDialogs
+	if hold == nil {
+		hold = ui.HoldDialogs
+	}
+	release := hold()
+	hidden, err := c.Hide(window)
 	if err != nil {
+		release()
 		return fmt.Errorf("hide the main window: %w", err)
+	}
+	restore := func() {
+		hidden()
+		release()
 	}
 	// The native session can report an initial selection while it is being
 	// created — Preset Rectangle's exact frame exists from the start

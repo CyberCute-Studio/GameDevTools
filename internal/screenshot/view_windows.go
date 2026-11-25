@@ -932,13 +932,22 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 		return
 	}
 	n.inProgress = true
-	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options}
+	// The dialogs stay closed until the display is read: the GUI thread goes
+	// on dispatching messages while the worker hides the window, so a click
+	// already queued, on Add Images or Browse, could open a dialog the image
+	// would show (SCR-044). The hold is taken here, on the GUI thread, before
+	// the worker starts, and released as soon as the pixels are read, so a
+	// dialog may open while the file is written; the worker releases it too,
+	// for a capture whose pipeline does not run Captured.
+	release := ui.HoldDialogs()
+	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options, Captured: release}
 	// The card is hidden first so that it cannot appear in the image.
 	n.card.Suspend()
 	n.pending.Add(1)
 	go func() {
 		defer n.pending.Done()
 		result := n.capture(request)
+		release()
 		n.postCompletion(func() { n.finishCapture(result, displayCaptureMessages) })
 	}()
 }
