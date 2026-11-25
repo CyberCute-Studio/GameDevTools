@@ -63,6 +63,9 @@ func newFixtureController() (*Controller, *sessionFixture) {
 		DesktopBounds: func() (display.Rect, error) {
 			return testDesktop, nil
 		},
+		// The process's own hold would outlast a test that leaves its session
+		// running, and keep the dialogs closed for the tests after it.
+		HoldDialogs: func() func() { return func() {} },
 	}
 	controller.Hide = func(...uintptr) (func(), error) {
 		fixture.log = append(fixture.log, "hide")

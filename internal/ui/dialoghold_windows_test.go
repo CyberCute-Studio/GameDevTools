@@ -58,13 +58,20 @@ func openWithin(t *testing.T, limit time.Duration, open func()) bool {
 // cancelled, with a beep, and the question answers No; once every hold is
 // released, the question opens again.
 func TestHeldDialogsDoNotOpen(t *testing.T) {
+	if DialogsHeld() {
+		t.Fatal("the dialogs were already held as the test started: an earlier test left a hold")
+	}
 	beeps := 0
 	previous := refusalBeep
 	refusalBeep = func() { beeps++ }
 	t.Cleanup(func() { refusalBeep = previous })
 
+	// Releasing twice is harmless, so a test that fails early still leaves
+	// the dialogs free for the tests after it.
 	outer := HoldDialogs()
+	t.Cleanup(outer)
 	inner := HoldDialogs()
+	t.Cleanup(inner)
 	if !DialogsHeld() {
 		t.Fatal("a hold did not hold the dialogs")
 	}

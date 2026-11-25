@@ -189,13 +189,16 @@ minimized its dialog is hidden too, so you may only hear the beep. Restore the
 application to reach the dialog. The shortcut also captures nothing, and
 Windows beeps, while you move or size the main window, or while one of its
 menus is open, such as the menu Alt+Space opens. Finish the move or close the
-menu first.
+menu first. A drop-down list that is open, such as the Display list, closes,
+and the capture goes ahead.
 
 From the moment a capture starts until it has read the screen, and for as long
-as a selection is on screen, the application's dialogs do not open: a file or
-folder picker or a question asked for then, such as by a click on Add Images or
-Browse just as you pressed the shortcut, is refused with a beep, and a question
-counts as answered No. Ask again once the capture has finished.
+as a selection is on screen, the application's dialogs, menus, and lists do not
+open, so that none can appear in the image. A click or key press on the main
+window made then, such as on Add Images or Browse just as you pressed the
+shortcut, only beeps. A file or folder picker or a question asked for then is
+refused with a beep too, and a question counts as answered No. Try again once
+the capture has finished.
 
 
 5. Image Resizer
@@ -466,10 +469,11 @@ The global shortcut does nothing.
   capture could not start, such as a preset larger than the desktop or an
   invalid JPEG quality.
 
-Add Images, Browse, or a question only beeped.
+A click, Add Images, Browse, or a question only beeped.
   A capture was starting or a selection was on screen, which keeps the
-  application's dialogs closed so that none can appear in the image. Finish or
-  cancel the selection, or wait for the capture to finish, and ask again.
+  application's dialogs and menus closed so that none can appear in the image.
+  Finish or cancel the selection, or wait for the capture to finish, and try
+  again.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

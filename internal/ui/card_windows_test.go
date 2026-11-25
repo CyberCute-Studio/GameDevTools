@@ -128,6 +128,26 @@ func TestResultCardButtons(t *testing.T) {
 	}
 }
 
+// TestResultCardOpensNothingWhileHiddenForACapture is a click on Open Folder
+// queued just before a capture hid the card, which still reaches its hidden
+// button: the Explorer window it would open could be in the image (SCR-044).
+// Once the card is back, Open Folder opens the folder again.
+func TestResultCardOpensNothingWhileHiddenForACapture(t *testing.T) {
+	var opened []string
+	card := newOffScreenCard(t, func(path string) { opened = append(opened, path) })
+	card.Report(Notice{Kind: NoticeWarning, Message: "saved, clipboard failed"}, `C:\Shots\one.png`)
+	card.Suspend()
+	cardWindowProc(card.hwnd, cardWMCommand, cardOpenCommand, 0)
+	if len(opened) != 0 {
+		t.Fatalf("a hidden card opened %v", opened)
+	}
+	card.Resume()
+	cardWindowProc(card.hwnd, cardWMCommand, cardOpenCommand, 0)
+	if len(opened) != 1 || opened[0] != `C:\Shots\one.png` {
+		t.Fatalf("once the card was back, opened = %v", opened)
+	}
+}
+
 // TestResultCardPressLeavesActivationAndFocusAlone presses the real buttons
 // with another window of this thread active, as the main window is when the
 // card shows over another tool: a standard button would take the focus, and

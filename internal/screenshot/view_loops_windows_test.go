@@ -21,6 +21,8 @@ var (
 	procViewTestSendMessageW     = testUser32.NewProc("SendMessageW")
 	procViewTestPostMessageW     = testUser32.NewProc("PostMessageW")
 	procViewTestGetGUIThreadInfo = testUser32.NewProc("GetGUIThreadInfo")
+	procViewTestSetActiveWindow  = testUser32.NewProc("SetActiveWindow")
+	procViewTestGetActiveWindow  = testUser32.NewProc("GetActiveWindow")
 )
 
 // inLoopTimer is the timer that runs a test's step inside a modal loop: the
@@ -152,6 +154,113 @@ func TestShortcutCapturesNothingDuringAMoveOrSize(t *testing.T) {
 	dispatcher.runNext(t)
 	if captures != 1 || beeps != 1 {
 		t.Fatalf("once the move ended: %d captures, %d beeps, want 1 and 1", captures, beeps)
+	}
+}
+
+// TestShortcutEndsAMenuModeThatShowsNoMenu is the shortcut pressed after Alt
+// was pressed and released on its own in the main window, which has no menu
+// bar: Windows then keeps the window in menu mode, with its system menu
+// selected but nothing on screen, until another key ends it. Nothing of it can
+// be in the image, so the capture starts without a beep, and the menu mode is
+// ended, so that its loop cannot take a selection's keys (SCR-052). The test
+// sends the SC_KEYMENU that DefWindowProc sends for that Alt, as no test sends
+// real input, and makes the test window active, as Windows enters the mode
+// only for the active window.
+func TestShortcutEndsAMenuModeThatShowsNoMenu(t *testing.T) {
+	view, card, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	captures := 0
+	view.capture = func(CaptureRequest) CaptureResult {
+		captures++
+		return CaptureResult{Path: `C:\Shots\one.png`}
+	}
+	beeps := 0
+	view.beep = func() { beeps++ }
+	showActiveOffScreen(t, view.parent)
+
+	inMenu, shown, attempts, inProgress := false, false, uint64(0), false
+	started := time.Now()
+	ran := runInsideModalLoop(t, view.parent, func() {
+		const wmSysCommand, scKeyMenu = 0x0112, 0xf100
+		procViewTestSendMessageW.Call(uintptr(view.parent), wmSysCommand, scKeyMenu, 0)
+	}, func() {
+		inMenu = guiThreadFlags()&guiInMenuMode != 0
+		shown = threadShowsMenu(uintptr(windows.GetCurrentThreadId()))
+		view.NativeHotkey(globalShortcutHotkeyID)
+		attempts, inProgress = view.captureAttempts, view.inProgress
+	}, func() {})
+	// runInsideModalLoop's watchdog ends a loop left running after 5 s.
+	ended := time.Since(started) < 4*time.Second
+	if !ran || !inMenu {
+		t.Skip("Windows did not put the test window in menu mode on this desktop")
+	}
+	if shown {
+		t.Fatal("a menu was on screen in the menu mode Alt alone leaves")
+	}
+	if attempts != 1 || !inProgress || !card.suspended || beeps != 0 {
+		t.Fatalf("in menu mode with no menu shown: attempts %d, in progress %v, card suspended %v, beeps %d", attempts, inProgress, card.suspended, beeps)
+	}
+	if !ended {
+		t.Fatal("the shortcut left the menu mode running")
+	}
+	dispatcher.runNext(t)
+	if captures != 1 {
+		t.Fatalf("%d captures, want 1", captures)
+	}
+}
+
+// TestShortcutClosesAnOpenDropDownList is the shortcut pressed while a
+// drop-down list of the main window is open, such as the display list: the
+// list is a window of its own, which hiding the main window leaves on
+// screen, where a Full Display image would show it (SCR-044). The shortcut
+// closes it, as Windows closes it before a dialog opens, and then captures.
+func TestShortcutClosesAnOpenDropDownList(t *testing.T) {
+	view, _, dispatcher := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	captures := 0
+	view.capture = func(CaptureRequest) CaptureResult {
+		captures++
+		return CaptureResult{Path: `C:\Shots\one.png`}
+	}
+	view.beep = func() { t.Error("the shortcut beeped with a drop-down list open") }
+	showActiveOffScreen(t, view.parent)
+
+	const cbShowDropDown, cbGetDroppedState = 0x014f, 0x0157
+	combo := uintptr(view.displayCombo.Handle())
+	procViewTestSendMessageW.Call(combo, cbShowDropDown, 1, 0)
+	t.Cleanup(func() { procViewTestSendMessageW.Call(combo, cbShowDropDown, 0, 0) })
+	if dropped, _, _ := procViewTestSendMessageW.Call(combo, cbGetDroppedState, 0, 0); dropped == 0 {
+		t.Skip("the display list did not drop down on this desktop")
+	}
+	if _, info, _ := readGUIThread(view.parent); info.handles[guiCaptureHandle] == 0 {
+		t.Skip("the open display list did not take the mouse on this desktop")
+	}
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if dropped, _, _ := procViewTestSendMessageW.Call(combo, cbGetDroppedState, 0, 0); dropped != 0 {
+		t.Fatal("the display list stayed open as the capture started (SCR-044)")
+	}
+	if view.captureAttempts != 1 || !view.inProgress {
+		t.Fatalf("with a drop-down list open: attempts %d, in progress %v", view.captureAttempts, view.inProgress)
+	}
+	dispatcher.runNext(t)
+	if captures != 1 {
+		t.Fatalf("%d captures, want 1", captures)
+	}
+}
+
+// showActiveOffScreen shows window far from every display and makes it the
+// active window of its thread, as the main window is when the user presses
+// a key in it. No input is sent.
+func showActiveOffScreen(t *testing.T, window windows.Handle) {
+	t.Helper()
+	const swShowNoActivate = 4
+	offScreen := int32(-20000)
+	procViewTestMoveWindow.Call(uintptr(window), uintptr(uint32(offScreen)), uintptr(uint32(offScreen)), 400, 300, 0)
+	procViewTestShowWindow.Call(uintptr(window), swShowNoActivate)
+	procViewTestSetActiveWindow.Call(uintptr(window))
+	if active, _, _ := procViewTestGetActiveWindow.Call(); windows.Handle(active) != window {
+		t.Skip("the test window could not be made active on this desktop")
 	}
 }
 
