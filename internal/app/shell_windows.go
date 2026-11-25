@@ -16,6 +16,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/diagnostics"
 	"github.com/CyberCute-Studio/GameDevTools/internal/display"
 	"github.com/CyberCute-Studio/GameDevTools/internal/preset"
+	"github.com/CyberCute-Studio/GameDevTools/internal/screenshot/capture"
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -1550,11 +1551,15 @@ func staticTextBrush(dc uintptr) uintptr {
 	return brush
 }
 
+// refusedShowBeep is how the shell refuses to show a window a capture keeps
+// hidden; tests replace it.
+var refusedShowBeep = func() { procMessageBeep.Call(0) }
+
 // shellWindowProc takes lParam as an integer because most messages carry a
 // number there: WM_GETICON, sent once the class has an icon, carries the DPI.
 // Declared as a pointer, a small value crashes the garbage collector when it
-// scans this frame. Only WM_DPICHANGED's lParam is a pointer, to memory
-// Windows owns.
+// scans this frame. Only WM_DPICHANGED's and WM_WINDOWPOSCHANGING's lParam
+// are pointers, to memory Windows owns.
 func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
@@ -1659,6 +1664,28 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		if shell != nil {
 			shell.scroll(lowWord(wParam))
 			return 0
+		}
+	case wmSysCommand:
+		// The taskbar restores or maximizes a window with this command, sent
+		// or posted, and one arriving in the instant after a capture hid the
+		// main window would show it before the screen is read (SCR-044), or
+		// under a selection; while the capture keeps the window hidden it is
+		// refused with a beep, as the application's dialogs are then. The
+		// capture's own restore shows the window as it was. A minimize, as
+		// the taskbar sends for the active window, shows nothing and is let
+		// through, so the window comes back minimized.
+		if command := wParam & scCommandMask; (command == scRestore || command == scMaximize) && capture.KeptHidden(uintptr(hwnd)) {
+			refusedShowBeep()
+			return 0
+		}
+	case wmWindowPosChanging:
+		// Nothing else may show a window a capture keeps hidden either, such
+		// as another program's ShowWindow, so a change that would show it is
+		// kept from doing so, and from activating it.
+		if lParam != 0 && capture.KeptHidden(uintptr(hwnd)) {
+			if pos := *(**windowPos)(unsafe.Pointer(&lParam)); pos.flags&swpShowWindow != 0 {
+				pos.flags = pos.flags&^swpShowWindow | swpNoActivate
+			}
 		}
 	case wmHotkey:
 		// A module's global hotkey fires here regardless of which
