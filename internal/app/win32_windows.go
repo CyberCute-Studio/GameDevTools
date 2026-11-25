@@ -32,9 +32,12 @@ const (
 	// wmWindowPosChanging is WM_WINDOWPOSCHANGING, sent before a window's
 	// position, size, or visibility changes, with the change it may alter.
 	wmWindowPosChanging = 0x0046
-	// scRestore and scMaximize are the WM_SYSCOMMAND commands, after the
-	// low four bits Windows uses, that the taskbar and the window menu send
-	// to restore or maximize a window.
+	// scCommandMask keeps the bits of a WM_SYSCOMMAND's wParam that name the
+	// command, as DefWindowProc reads it; Windows uses the four low bits
+	// itself.
+	scCommandMask = 0xfff0
+	// scRestore and scMaximize are the WM_SYSCOMMAND commands that the
+	// taskbar and the window menu send to restore or maximize a window.
 	scRestore  = 0xf120
 	scMaximize = 0xf030
 	// The shell's own messages are in the WM_APP range, as the capture

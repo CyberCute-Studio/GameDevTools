@@ -59,18 +59,35 @@ func DialogsHeld() bool {
 	return dialogHolds > 0
 }
 
-// waitWhileDialogsHeld returns once no hold keeps the dialogs closed. A
-// capture's hold is released from its worker or the GUI thread, so the GUI
-// thread must never wait here: it would wait for itself.
-func waitWhileDialogsHeld() {
+// waitWhileDialogsHeld returns once no hold keeps the dialogs closed, and
+// reports whether one did, so that it had to wait. A capture's hold is
+// released from its worker or the GUI thread, so the GUI thread must never
+// wait here: it would wait for itself.
+func waitWhileDialogsHeld() (waited bool) {
 	for {
 		holdMu.Lock()
 		if dialogHolds == 0 {
 			holdMu.Unlock()
-			return
+			return waited
 		}
 		ended := holdsEnded
 		holdMu.Unlock()
 		<-ended
+		waited = true
+	}
+}
+
+// checkOutsideHolds runs check, and once more each time it had to wait for a
+// hold to end after it, so that the last check ran with no hold after it: a
+// selection can stay on screen long enough for a file or folder looked at
+// before it to be moved or deleted. It returns check's first failure.
+func checkOutsideHolds(check func() error) error {
+	for {
+		if err := check(); err != nil {
+			return err
+		}
+		if !waitWhileDialogsHeld() {
+			return nil
+		}
 	}
 }

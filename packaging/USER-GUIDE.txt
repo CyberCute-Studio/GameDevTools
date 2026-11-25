@@ -200,9 +200,9 @@ Browse just as you pressed the shortcut, only beeps. A file or folder picker or
 a question asked for then is refused with a beep too, and a question counts as
 answered No. Try again once the capture has finished. Open Folder or Open
 Output Folder pressed just before waits, and File Explorer opens once the
-screen has been read or the selection has ended. A click on the application's
-taskbar button in that instant beeps too and leaves the window as it was: click
-it again once the capture has finished.
+screen has been read or the selection has ended. If the main window was
+minimized, a click on its taskbar button in that instant beeps too and leaves
+it minimized: click it again once the capture has finished.
 
 
 5. Image Resizer

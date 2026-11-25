@@ -131,7 +131,7 @@ These were on `main` and outside the fixes REL-03 made. REL-02C fixed each of th
 
 REL-02C's review found two more on `main`, which this candidate also has, and REL-02D fixed them:
 
-- An Open Folder or Open Output Folder pressed just before a capture can open File Explorer during the screen read, as each looks at the file or folder on a goroutine of its own before it calls the shell. REL-02D: Explorer is started only once the capture's hold on the dialogs has ended. A window the shell had already been asked for can still open during the read, as Explorer opens it on its own time.
+- An Open Folder or Open Output Folder pressed just before a capture can open File Explorer during the screen read, as each looks at the file or folder on a goroutine of its own before it calls the shell. REL-02D: Explorer is started only once the capture's hold on the dialogs has ended, and the file or folder is looked at again then. A window the shell had already been, or was being, asked for as the capture started can still open during the read, as Explorer opens it on its own time.
 - A restore from the taskbar arriving in the instant after a capture hid the main window can show it before the screen is read. REL-02D: while a capture keeps the window hidden, a restore or maximize is refused with a beep and nothing else can show it, until the capture's own restore.
 
 ## Plan status

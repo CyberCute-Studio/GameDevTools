@@ -807,33 +807,47 @@ func TestConvertDIB(t *testing.T) {
 // window procedure reads to refuse showing a window a capture hides: it starts
 // as Hide hides the window and ends as its Exclusion restores it, once however
 // often Restore runs, and two exclusions of one window keep it until both have
-// restored it.
+// restored it, in either order. The window stays hidden until then, and the
+// last restore shows it as the first exclusion found it: the window procedure
+// would refuse an earlier show, and the later exclusion found it hidden.
 func TestKeptHiddenLastsFromHideToRestore(t *testing.T) {
 	region := display.Rect{Left: -22000, Top: -22000, Right: -21760, Bottom: -21820}
 	hwnd := uintptr(showSolidWindow(t, region, color.RGBA{R: 0x20, G: 0x40, B: 0x60, A: 0xFF}))
 	if KeptHidden(hwnd) {
 		t.Fatal("a window no capture hid counts as kept hidden")
 	}
-	first, err := Hide(hwnd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !KeptHidden(hwnd) {
-		t.Fatal("Hide did not record the window it hid")
-	}
-	second, err := Hide(hwnd)
-	if err != nil {
-		first.Restore()
-		t.Fatal(err)
-	}
-	first.Restore()
-	first.Restore()
-	if !KeptHidden(hwnd) {
-		second.Restore()
-		t.Fatal("restoring one exclusion twice released the other's record")
-	}
-	second.Restore()
-	if KeptHidden(hwnd) {
-		t.Fatal("the record outlived every exclusion")
+	for _, firstRestoresFirst := range []bool{true, false} {
+		first, err := Hide(hwnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(first.Restore)
+		if !KeptHidden(hwnd) {
+			t.Fatal("Hide did not record the window it hid")
+		}
+		second, err := Hide(hwnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(second.Restore)
+		earlier, later := first, second
+		if !firstRestoresFirst {
+			earlier, later = second, first
+		}
+		earlier.Restore()
+		earlier.Restore()
+		if !KeptHidden(hwnd) {
+			t.Fatalf("first restores first %v: restoring one exclusion twice released the other's record", firstRestoresFirst)
+		}
+		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible != 0 {
+			t.Fatalf("first restores first %v: the window showed while another exclusion kept it hidden", firstRestoresFirst)
+		}
+		later.Restore()
+		if KeptHidden(hwnd) {
+			t.Fatalf("first restores first %v: the record outlived every exclusion", firstRestoresFirst)
+		}
+		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
+			t.Fatalf("first restores first %v: the last restore did not show the window the first exclusion found visible", firstRestoresFirst)
+		}
 	}
 }

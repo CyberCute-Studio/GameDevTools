@@ -68,13 +68,24 @@ type bitmapInfo struct {
 	Masks  [3]uint32
 }
 
-// keptHidden counts, for each window, the exclusions that keep it hidden for
-// a capture, under keptHiddenMu: from just before Hide hides it until just
-// before Restore shows it again.
+// keptHidden holds, for each window that exclusions keep hidden for a
+// capture, under keptHiddenMu, how many do and the state the first of them
+// found it in: from just before the first Hide hides it until just before
+// the last Restore shows it again.
 var (
 	keptHiddenMu sync.Mutex
-	keptHidden   = map[uintptr]int{}
+	keptHidden   = map[uintptr]*keptWindow{}
 )
+
+// keptWindow is a window that exclusions keep hidden. The last of them to
+// restore it puts it back as the first found it, as the window procedure
+// refuses to show it while any keeps it hidden, so an earlier one's show
+// would be refused and a later one found it already hidden.
+type keptWindow struct {
+	exclusions   int
+	wasVisible   bool
+	wasMinimized bool
+}
 
 // KeptHidden reports whether a capture keeps window hidden: Hide has hidden
 // it and its Exclusion has not restored it yet. The application's window
@@ -84,21 +95,46 @@ var (
 func KeptHidden(window uintptr) bool {
 	keptHiddenMu.Lock()
 	defer keptHiddenMu.Unlock()
-	return keptHidden[window] > 0
+	return keptHidden[window] != nil
 }
 
-func keepHidden(window uintptr) {
+// keepHidden counts one more exclusion keeping window hidden and reports
+// whether it is the first, which records the state it finds the window in.
+func keepHidden(window uintptr) (first bool) {
 	keptHiddenMu.Lock()
 	defer keptHiddenMu.Unlock()
-	keptHidden[window]++
-}
-
-func releaseHidden(window uintptr) {
-	keptHiddenMu.Lock()
-	defer keptHiddenMu.Unlock()
-	if keptHidden[window]--; keptHidden[window] <= 0 {
-		delete(keptHidden, window)
+	kept := keptHidden[window]
+	if kept == nil {
+		kept = &keptWindow{}
+		keptHidden[window] = kept
 	}
+	kept.exclusions++
+	return kept.exclusions == 1
+}
+
+// recordHidden records the state the first exclusion found window in.
+func recordHidden(window uintptr, wasVisible, wasMinimized bool) {
+	keptHiddenMu.Lock()
+	defer keptHiddenMu.Unlock()
+	if kept := keptHidden[window]; kept != nil {
+		kept.wasVisible, kept.wasMinimized = wasVisible, wasMinimized
+	}
+}
+
+// releaseHidden counts one exclusion fewer keeping window hidden. Once none
+// does, it reports the state the first found the window in, to restore it to.
+func releaseHidden(window uintptr) (found keptWindow, last bool) {
+	keptHiddenMu.Lock()
+	defer keptHiddenMu.Unlock()
+	kept := keptHidden[window]
+	if kept == nil {
+		return keptWindow{}, false
+	}
+	if kept.exclusions--; kept.exclusions > 0 {
+		return keptWindow{}, false
+	}
+	delete(keptHidden, window)
+	return *kept, true
 }
 
 // captureMu serializes native captures. Every call builds its own device
@@ -196,23 +232,24 @@ func FlushCompositor() error {
 // leaves it alone rather than forcing it visible.
 //
 // Until Restore, each window counts as KeptHidden, which the application's
-// window procedure reads to refuse showing it.
+// window procedure reads to refuse showing it. A window another Exclusion
+// already keeps hidden keeps the state that one found it in, and is shown
+// only once both have restored it, in either order.
 //
 // ShowWindow acts through each window's owner thread, so that thread must
 // keep pumping messages while Hide runs. Calling Hide while the GUI
 // thread is blocked — for example synchronously waiting for the capture
 // result, which TECH-005 forbids — deadlocks the caller.
 func Hide(hwnd ...uintptr) (*Exclusion, error) {
-	exclusion := &Exclusion{windows: make([]hiddenWindow, 0, len(hwnd))}
+	exclusion := &Exclusion{windows: make([]uintptr, 0, len(hwnd))}
 	for _, window := range hwnd {
-		keepHidden(window)
+		first := keepHidden(window)
 		minimized, _, _ := procIsIconic.Call(window)
 		shown, _, _ := procShowWindow.Call(window, swHide)
-		exclusion.windows = append(exclusion.windows, hiddenWindow{
-			hwnd:         window,
-			wasVisible:   shown != 0,
-			wasMinimized: minimized != 0,
-		})
+		if first {
+			recordHidden(window, shown != 0, minimized != 0)
+		}
+		exclusion.windows = append(exclusion.windows, window)
 	}
 	if err := FlushCompositor(); err != nil {
 		exclusion.Restore()
@@ -224,27 +261,31 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 // Restore returns each window to the state Hide found it in: windows that
 // were visible are shown again, maximized ones still maximized, minimized
 // windows are shown minimized again, and windows that were already hidden
-// stay hidden, so Restore
-// never resurrects a window another flow hid or pops open one the user
-// minimized. Each window stops counting as KeptHidden just before it is
-// shown, so that its own restore is not refused. Nothing is activated, so restoring after capture never moves
-// input focus. Restore is idempotent and safe for concurrent use, so a
-// deferred Restore is harmless after an earlier explicit call. Like Hide,
-// Restore acts through each window's owner thread, which must keep
-// pumping messages.
+// stay hidden, so Restore never resurrects a window another flow hid or pops
+// open one the user minimized. A window another Exclusion still keeps hidden
+// stays hidden,
+// and the last to restore it puts it back as the first found it. Each window
+// stops counting as KeptHidden just before it is shown, so that its own
+// restore is not refused. Nothing is activated, so restoring after capture
+// never moves input focus. Restore is idempotent and safe for concurrent
+// use, so a deferred Restore is harmless after an earlier explicit call.
+// Like Hide, Restore acts through each window's owner thread, which must
+// keep pumping messages.
 func (e *Exclusion) Restore() {
 	if !e.restored.CompareAndSwap(false, true) {
 		return
 	}
 	for _, window := range e.windows {
-		releaseHidden(window.hwnd)
+		found, last := releaseHidden(window)
 		switch {
-		case !window.wasVisible:
+		case !last:
+			// Another exclusion still keeps it hidden.
+		case !found.wasVisible:
 			// Already hidden before Hide; leave it hidden.
-		case window.wasMinimized:
-			procShowWindow.Call(window.hwnd, swShowMinNoActivate)
+		case found.wasMinimized:
+			procShowWindow.Call(window, swShowMinNoActivate)
 		default:
-			procShowWindow.Call(window.hwnd, swShowNA)
+			procShowWindow.Call(window, swShowNA)
 		}
 	}
 }

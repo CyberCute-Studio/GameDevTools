@@ -1551,15 +1551,15 @@ func staticTextBrush(dc uintptr) uintptr {
 	return brush
 }
 
-// shellWindowProc takes lParam as an integer because most messages carry a
-// number there: WM_GETICON, sent once the class has an icon, carries the DPI.
-// Declared as a pointer, a small value crashes the garbage collector when it
-// scans this frame. Only WM_DPICHANGED's lParam is a pointer, to memory
-// Windows owns.
 // refusedShowBeep is how the shell refuses to show a window a capture keeps
 // hidden; tests replace it.
 var refusedShowBeep = func() { procMessageBeep.Call(0) }
 
+// shellWindowProc takes lParam as an integer because most messages carry a
+// number there: WM_GETICON, sent once the class has an icon, carries the DPI.
+// Declared as a pointer, a small value crashes the garbage collector when it
+// scans this frame. Only WM_DPICHANGED's and WM_WINDOWPOSCHANGING's lParam
+// are pointers, to memory Windows owns.
 func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
 	shell := shellStates[hwnd]
 	switch message {
@@ -1671,8 +1671,10 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 		// main window would show it before the screen is read (SCR-044), or
 		// under a selection; while the capture keeps the window hidden it is
 		// refused with a beep, as the application's dialogs are then. The
-		// capture's own restore shows the window as it was.
-		if command := wParam &^ 0xf; (command == scRestore || command == scMaximize) && capture.KeptHidden(uintptr(hwnd)) {
+		// capture's own restore shows the window as it was. A minimize, as
+		// the taskbar sends for the active window, shows nothing and is let
+		// through, so the window comes back minimized.
+		if command := wParam & scCommandMask; (command == scRestore || command == scMaximize) && capture.KeptHidden(uintptr(hwnd)) {
 			refusedShowBeep()
 			return 0
 		}

@@ -3,6 +3,8 @@
 package ui
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,6 +68,61 @@ func TestExplorerDoesNotStartWhileDialogsAreHeld(t *testing.T) {
 		}
 		if err := <-done; err != nil {
 			t.Fatalf("%s: %v", open.name, err)
+		}
+	}
+}
+
+// TestExplorerIsNotStartedForAPathGoneDuringAHold is Open Folder asked for
+// just before a selection, during which the file or folder it looked at is
+// deleted, as a sync client or a script may: Explorer handed a missing file
+// would open some other folder and report success. Each looks again once the
+// hold ends and refuses the path instead.
+func TestExplorerIsNotStartedForAPathGoneDuringAHold(t *testing.T) {
+	if DialogsHeld() {
+		t.Fatal("the dialogs were already held as the test began")
+	}
+	for _, open := range []struct {
+		name string
+		call func(folder, file string) error
+		want error
+	}{
+		{"reveal", func(_, file string) error { return RevealInFolder(file) }, errSavedFileNotFound},
+		{"folder", func(folder, _ string) error { return OpenFolder(folder) }, fs.ErrNotExist},
+	} {
+		folder := filepath.Join(t.TempDir(), "Screenshots")
+		if err := os.Mkdir(folder, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(folder, "Screenshot_1.png")
+		if err := os.WriteFile(file, []byte("png"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		started := recordShellStarts(t)
+		release := HoldDialogs()
+		t.Cleanup(release)
+		done := make(chan error, 1)
+		go func() { done <- open.call(folder, file) }()
+		select {
+		case err := <-done:
+			t.Fatalf("%s: returned %v while the dialogs were held", open.name, err)
+		case <-time.After(300 * time.Millisecond):
+		}
+		if err := os.RemoveAll(folder); err != nil {
+			t.Fatal(err)
+		}
+		release()
+		select {
+		case err := <-done:
+			if !errors.Is(err, open.want) {
+				t.Fatalf("%s: returned %v for a path gone during the hold, want %v", open.name, err, open.want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: did not return once the hold ended", open.name)
+		}
+		select {
+		case what := <-started:
+			t.Fatalf("%s: File Explorer was handed %s, gone during the hold", open.name, what)
+		default:
 		}
 	}
 }

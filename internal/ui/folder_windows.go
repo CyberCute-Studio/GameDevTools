@@ -196,16 +196,23 @@ func checkShellName(folder string) error {
 // loop, is released then. While HoldDialogs holds the dialogs for a capture,
 // File Explorer is not started until the hold ends, as a window it opens
 // during the capture's screen read would be in the image (SCR-044), so it
-// must never run on the GUI thread, which releases the hold.
+// must never run on the GUI thread, which releases the hold. The folder is
+// looked at again once a hold has ended, as it may have gone meanwhile. A
+// hold taken as the shell is being called does not stop it, and Explorer
+// then opens on its own time, as it does for a request already handed over.
 func OpenFolder(folder string) error {
-	info, err := os.Stat(folder)
-	if err != nil {
+	var target string
+	err := checkOutsideHolds(func() error {
+		info, err := os.Stat(folder)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a folder", folder)
+		}
+		target, err = shellPath(folder)
 		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a folder", folder)
-	}
-	target, err := shellPath(folder)
+	})
 	if err != nil {
 		return err
 	}
@@ -214,7 +221,6 @@ func OpenFolder(folder string) error {
 	// As for the folder picker, shell extensions the verb may load expect an
 	// initialized COM apartment.
 	defer initializeCOM()()
-	waitWhileDialogsHeld()
 	return startShell("explore", utf16("explore"), utf16(target), nil)
 }
 
@@ -231,30 +237,33 @@ func OpenFolder(folder string) error {
 // block for as long as its drive does not respond, so the GUI thread calls it
 // on a goroutine of its own, which it keeps on one thread while it holds the
 // COM apartment it initializes, and File Explorer waits for a capture's hold
-// on the dialogs to end, as OpenFolder does.
+// on the dialogs to end, the file then looked at again, as OpenFolder does.
 func RevealInFolder(path string) error {
-	target, err := shellPath(path)
-	if err != nil {
+	var target, explorer string
+	err := checkOutsideHolds(func() error {
+		var err error
+		if target, err = shellPath(path); err != nil {
+			return err
+		}
+		if strings.HasPrefix(target, `\\?\`) {
+			return errNoDriveOrShare
+		}
+		info, err := os.Stat(path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist), err == nil && info.IsDir():
+			return errSavedFileNotFound
+		case err != nil:
+			return err
+		}
+		explorer, err = explorerPath()
 		return err
-	}
-	if strings.HasPrefix(target, `\\?\`) {
-		return errNoDriveOrShare
-	}
-	info, err := os.Stat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist), err == nil && info.IsDir():
-		return errSavedFileNotFound
-	case err != nil:
-		return err
-	}
-	explorer, err := explorerPath()
+	})
 	if err != nil {
 		return err
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer initializeCOM()()
-	waitWhileDialogsHeld()
 	return startShell("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
 
