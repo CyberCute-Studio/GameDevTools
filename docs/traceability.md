@@ -16,17 +16,19 @@ The evidence column names representative checks, not all of them, as `package.Te
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
 | P0 requirements | 124 | 112 | 12 |
-| P1 requirements | 20 | 13 | 7 |
+| P1 requirements | 20 | 14 | 6 |
 | Acceptance scenarios | 32 | 28 | 4 |
-| **All** | **176** | **153** | **23** |
+| **All** | **176** | **154** | **22** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run, manual check, or fix its Open cell names passes or lands:
 
 SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
 
-The Partial P1 requirements are SCR-028, SCR-069, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only, in QLT-04's runs; the release candidate's x64 validation met it.
+The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only, in QLT-04's runs; the release candidate's x64 validation met it.
 
-SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner's confirmation: the shortcut captures nothing while one of the application's own modal dialogs is open. The project owner decided in REL-02C that it also captures nothing while the main window is moved or sized or one of its menus is open (PRD 1.9). The [release candidate record](release-candidate.md#release-blockers) lists that decision as a release blocker.
+SCR-002 is Pass with the exception PRD 1.7 recorded and the project owner confirmed (PRD 1.10): the shortcut captures nothing while one of the application's own modal dialogs is open. The project owner decided in REL-02C that it also captures nothing while the main window is moved or sized or one of its menus is open (PRD 1.9).
+
+SCR-069 is Pass on the project owner's decision that Open Folder opens File Explorer at the saved file, as M16 requires, when the first time Explorer shows a folder it focuses the file without highlighting it, as `explorer /select` does without the application (PRD 1.10). The user guide and release notes state it as a known limitation.
 
 ## Application shell
 
@@ -100,7 +102,7 @@ SCR-002 is Pass with the exception PRD 1.7 records as awaiting the project owner
 | SCR-066 | P0 | Written through a temporary file | SCR-04, QLT-03A, REL-02B | `screenshot/output.TestSaveEncodeFailureLeavesNoFiles`, `screenshot/output.TestSaveWithoutHardLinksMovesTheFinishedFile`, `screenshot/output.TestHardLinkSaveWaitsToRemoveABrieflyHeldTemporaryName` | Pass | M5 |
 | SCR-067 | P0 | JPEG quality 1-100, default 90 | SCR-01, SCR-04, REL-02B | `screenshot.TestCaptureOptionsValidateBoundaries`, `screenshot.TestParseJPEGQuality`, `screenshot.TestNativeViewCaptureRejectsUnsavedInvalidQuality` | Pass |  |
 | SCR-068 | P0 | Cursor, frame, toolbar, tint not in the output | SCR-03, SCR-07, SCR-08 | `capture.TestHideExcludesWindowFromCapture`, `overlay.TestPresetFrameCaptureDeliversExactRect` | Pass |  |
-| SCR-069 | P1 | Notification with Open Folder and path or error | SCR-05, SCR-10, QLT-03B, REL-02A, REL-02B, REL-02D | `screenshot.TestNativeViewOpenFolderRevealsSavedFile`, `screenshot.TestNativeViewCaptureFailurePresentations`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard`, `ui.TestResultCardButtons`, `ui.TestStatusAreaBreaksATokenWiderThanItself`, `app.TestMeasureTextCountsTheLinesOfALongPath`, `ui.TestExplorerDoesNotStartWhileDialogsAreHeld`, `ui.TestExplorerIsNotStartedForAPathGoneDuringAHold` | **Partial** | M16: the first time File Explorer shows a folder, Open Folder focuses the saved file without highlighting it, as `explorer /select` does without the application; whether that opens it at the file is the project owner's decision |
+| SCR-069 | P1 | Notification with Open Folder and path or error | SCR-05, SCR-10, QLT-03B, REL-02A, REL-02B, REL-02D | `screenshot.TestNativeViewOpenFolderRevealsSavedFile`, `screenshot.TestNativeViewCaptureFailurePresentations`, `screenshot.TestShortcutCaptureReportsEveryOutcomeOnTheCard`, `ui.TestResultCardButtons`, `ui.TestStatusAreaBreaksATokenWiderThanItself`, `app.TestMeasureTextCountsTheLinesOfALongPath`, `ui.TestExplorerDoesNotStartWhileDialogsAreHeld`, `ui.TestExplorerIsNotStartedForAPathGoneDuringAHold` | Pass |  |
 
 ## Image Resizer
 

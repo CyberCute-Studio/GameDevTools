@@ -82,7 +82,7 @@ No unit test can stand in for these, and REL-03 owns them. Run them on the exact
 
 ## Recorded runs
 
-Add a row here when a QLT-04A run or a manual check passes, giving the commit of the build it ran on and exactly the requirements it passed. A check that covers no requirement, such as M14, leaves Passed empty. A check that held for some of the requirements it covers and not others names only those it passed, as M16 does on the release candidate: whether its Open Folder condition holds is the project owner's decision, so SCR-069 is not listed. A run counts only for that build, so when the release candidate changes, repeat the run and replace its row. The documentation test counts a row only when its Build cell has a commit's form, 7 to 40 lowercase hexadecimal digits, ignores one that does not without reporting it, and neither checks that the commit exists nor compares it with the candidate, so REL-03 confirms that each row is counted and names the candidate's. It keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
+Add a row here when a QLT-04A run or a manual check passes, giving the commit of the build it ran on and exactly the requirements it passed. A check that covers no requirement, such as M14, leaves Passed empty. A check that held for some of the requirements it covers and not others names only those it passed. M16 on the release candidate names SCR-069 on the project owner's decision that a saved file Explorer focuses without highlighting meets its Open Folder condition (PRD 1.10). A run counts only for that build, so when the release candidate changes, repeat the run and replace its row. The documentation test counts a row only when its Build cell has a commit's form, 7 to 40 lowercase hexadecimal digits, ignores one that does not without reporting it, and neither checks that the commit exists nor compares it with the candidate, so REL-03 confirms that each row is counted and names the candidate's. It keeps a gated row **Partial** until this table names it for its run, so the pull request that records a run can also mark the row **Pass**, before the plan marks its item Done.
 
 | Date | Run | Build | Passed |
 |---|---|---|---|
@@ -91,7 +91,7 @@ Add a row here when a QLT-04A run or a manual check passes, giving the commit of
 | 2026-11-24 | M13 | c646471 | NFR-033, TECH-007 |
 | 2026-11-24 | M14 | c646471 |  |
 | 2026-11-24 | M15 | c646471 | SCR-010, SCR-011, SCR-012, SCR-014, SCR-044, SCR-068, AC-S05 |
-| 2026-11-24 | M16 | c646471 | SCR-063, RSZ-001, RSZ-002, RSZ-008, RSZ-020, RSZ-048 |
+| 2026-11-24 | M16 | c646471 | SCR-063, SCR-069, RSZ-001, RSZ-002, RSZ-008, RSZ-020, RSZ-048 |
 | 2026-11-24 | M17 | c646471 | APP-005 |
 | 2026-11-24 | M18 | c646471 | SCR-031, SCR-060, SCR-069, AC-S08, AC-S09 |
 | 2026-11-24 | M19 | c646471 | SCR-040, AC-S06 |
