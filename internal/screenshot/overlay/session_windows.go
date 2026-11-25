@@ -56,6 +56,7 @@ const (
 	wmClose          = 0x0010
 	wmSysColorChange = 0x0015
 	wmSetCursor      = 0x0020
+	wmMouseActivate  = 0x0021
 	wmNCHitTest      = 0x0084
 	wmKeyDown        = 0x0100
 	wmCommand        = 0x0111
@@ -93,6 +94,10 @@ const (
 
 	htClient  = 1
 	htCaption = 2
+
+	// maNoActivate is WM_MOUSEACTIVATE's MA_NOACTIVATE: the press reaches
+	// the window, which is not activated.
+	maNoActivate = 3
 
 	wsPopup        = 0x80000000
 	wsExLayered    = 0x00080000
@@ -533,9 +538,11 @@ func (s *windowsSession) configure(dpi uint32, anchor display.Rect) {
 // createWindow creates the session's input surface: the desktop-sized Free
 // Rectangle tint overlay, or the Preset Rectangle frame sized to the
 // selection plus its border ring. WS_EX_NOACTIVATE keeps a press on it from
-// taking the foreground from another application, but a press still raises it
-// within the topmost band, over the toolbar, so the press's handling puts the
-// toolbar back in front (placeToolbar).
+// taking the foreground from another application, and the window answers
+// WM_MOUSEACTIVATE with MA_NOACTIVATE, so a press never takes the activation
+// from the toolbar either (overlayWindowProc). Every press also puts the
+// toolbar back in front (raiseToolbar), as a press that raised the surface
+// within the topmost band would cover the toolbar's fields and Capture.
 func (s *windowsSession) createWindow(title string) error {
 	window := display.Rect{Left: s.bounds.Left, Top: s.bounds.Top, Right: s.bounds.Right, Bottom: s.bounds.Bottom}
 	if s.mode == ModePresetRectangle {
@@ -1349,10 +1356,8 @@ func rectUnion(a, b display.Rect) display.Rect {
 // placeToolbar moves the toolbar near the selection without covering it
 // where practical (SCR-025). It runs when a drag or dimension edit
 // finishes, not on every mouse move, so the toolbar does not jump around
-// under the pointer mid-drag. It also puts the toolbar back in front: a real
-// press on the overlay raises it within the topmost band, where it would
-// cover the toolbar's fields and Capture, and a click meant for them would
-// start a new selection.
+// under the pointer mid-drag. It also puts the toolbar back in front, as
+// raiseToolbar does.
 func (s *windowsSession) placeToolbar() {
 	if s.toolbar == 0 {
 		// WM_CAPTURECHANGED can arrive while Close is destroying the
@@ -1363,6 +1368,19 @@ func (s *windowsSession) placeToolbar() {
 	procSetWindowPos.Call(uintptr(s.toolbar), hwndTop,
 		uintptr(uint32(x)), uintptr(uint32(y)), 0, 0,
 		swpNoSize|swpNoActivate)
+}
+
+// raiseToolbar puts the toolbar back in front of the session's surface without
+// moving it, so a toolbar the user dragged aside stays there. A press on the
+// surface could raise it within the topmost band, where it would cover the
+// toolbar's fields and Capture, so that a click meant for them started a new
+// selection and the live size showed only through the tint (SCR-011).
+func (s *windowsSession) raiseToolbar() {
+	if s.toolbar == 0 {
+		return
+	}
+	procSetWindowPos.Call(uintptr(s.toolbar), hwndTop, 0, 0, 0, 0,
+		swpNoMove|swpNoSize|swpNoActivate)
 }
 
 // toolbarPosition places the toolbar on the displays as they are now. If they
@@ -1688,11 +1706,20 @@ func (s *windowsSession) revealHandles() {
 }
 
 func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	if message == wmMouseActivate {
+		// A press never activates the surface: the toolbar keeps the
+		// keyboard, so Enter and Tab keep working there (SCR-015, UX-006),
+		// and a field holding a size typed but not applied keeps the focus
+		// rather than applying it as it loses the focus before any drag
+		// starts (SCR-013).
+		return maNoActivate
+	}
 	session := overlayStates[hwnd]
 	if session != nil {
 		switch message {
 		case wmLButtonDown:
 			session.onButtonDown(lParam)
+			session.raiseToolbar()
 			return 0
 		case wmMouseMove:
 			session.onMouseMove(lParam)
@@ -1701,12 +1728,9 @@ func overlayWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 			session.endDrag(lParam)
 			return 0
 		case wmRButtonDown, wmMButtonDown, wmXButtonDown:
-			// A press of any other button raises the overlay as a left press
-			// does, but starts no drag whose end places the toolbar. Mid-drag
-			// the drag's own end places it.
-			if session.drag.op == dragNone {
-				session.placeToolbar()
-			}
+			// A press of any other button starts no drag, so the toolbar is
+			// only put back in front, where the user left it.
+			session.raiseToolbar()
 		case wmCaptureChanged:
 			// Capture can be lost mid-draw without a button release (another
 			// window claiming the capture, or Close tearing down the
