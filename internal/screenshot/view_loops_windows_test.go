@@ -23,6 +23,7 @@ var (
 	procViewTestGetGUIThreadInfo = testUser32.NewProc("GetGUIThreadInfo")
 	procViewTestSetActiveWindow  = testUser32.NewProc("SetActiveWindow")
 	procViewTestGetActiveWindow  = testUser32.NewProc("GetActiveWindow")
+	procViewTestReleaseCapture   = testUser32.NewProc("ReleaseCapture")
 )
 
 // inLoopTimer is the timer that runs a test's step inside a modal loop: the
@@ -224,20 +225,10 @@ func TestShortcutClosesAnOpenDropDownList(t *testing.T) {
 	}
 	view.beep = func() { t.Error("the shortcut beeped with a drop-down list open") }
 	showActiveOffScreen(t, view.parent)
-
-	const cbShowDropDown, cbGetDroppedState = 0x014f, 0x0157
-	combo := uintptr(view.displayCombo.Handle())
-	procViewTestSendMessageW.Call(combo, cbShowDropDown, 1, 0)
-	t.Cleanup(func() { procViewTestSendMessageW.Call(combo, cbShowDropDown, 0, 0) })
-	if dropped, _, _ := procViewTestSendMessageW.Call(combo, cbGetDroppedState, 0, 0); dropped == 0 {
-		t.Skip("the display list did not drop down on this desktop")
-	}
-	if _, info, _ := readGUIThread(view.parent); info.handles[guiCaptureHandle] == 0 {
-		t.Skip("the open display list did not take the mouse on this desktop")
-	}
+	combo := dropDisplayList(t, view)
 
 	view.NativeHotkey(globalShortcutHotkeyID)
-	if dropped, _, _ := procViewTestSendMessageW.Call(combo, cbGetDroppedState, 0, 0); dropped != 0 {
+	if displayListDropped(combo) {
 		t.Fatal("the display list stayed open as the capture started (SCR-044)")
 	}
 	if view.captureAttempts != 1 || !view.inProgress {
@@ -246,6 +237,111 @@ func TestShortcutClosesAnOpenDropDownList(t *testing.T) {
 	dispatcher.runNext(t)
 	if captures != 1 {
 		t.Fatalf("%d captures, want 1", captures)
+	}
+}
+
+// The display list's drop-down messages: CB_SHOWDROPDOWN and
+// CB_GETDROPPEDSTATE.
+const viewTestCBShowDropDown, viewTestCBGetDroppedState = 0x014f, 0x0157
+
+// dropDisplayList opens the view's display list, as Alt+Down does, and closes
+// it when the test ends. It skips the test on a desktop where the list does
+// not drop down or does not take the mouse.
+func dropDisplayList(t *testing.T, view *NativeView) uintptr {
+	t.Helper()
+	combo := uintptr(view.displayCombo.Handle())
+	procViewTestSendMessageW.Call(combo, viewTestCBShowDropDown, 1, 0)
+	t.Cleanup(func() { procViewTestSendMessageW.Call(combo, viewTestCBShowDropDown, 0, 0) })
+	if !displayListDropped(combo) {
+		t.Skip("the display list did not drop down on this desktop")
+	}
+	if _, info, _ := readGUIThread(view.parent); info.handles[guiCaptureHandle] == 0 {
+		t.Skip("the open display list did not take the mouse on this desktop")
+	}
+	return combo
+}
+
+// displayListDropped reports whether combo's list is open.
+func displayListDropped(combo uintptr) bool {
+	dropped, _, _ := procViewTestSendMessageW.Call(combo, viewTestCBGetDroppedState, 0, 0)
+	return dropped != 0
+}
+
+// TestAnOpenDropDownListClosesOnceItLosesTheMouse pins what the shortcut's
+// WM_CANCELMODE relies on to close an open drop-down list: the list holds the
+// mouse for as long as it is open and closes once it loses it, so no list can
+// stay on screen that the window with the mouse capture does not name.
+func TestAnOpenDropDownListClosesOnceItLosesTheMouse(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	showActiveOffScreen(t, view.parent)
+	combo := dropDisplayList(t, view)
+	procViewTestReleaseCapture.Call()
+	if displayListDropped(combo) {
+		t.Fatal("the display list stayed open once it lost the mouse, where WM_CANCELMODE to the window with the mouse would not close it")
+	}
+}
+
+// TestARefusedShortcutLeavesADropDownListOpen is the shortcut pressed with the
+// display list open while the JPEG quality text is invalid: startCapture
+// refuses the capture, so the list stays open, as the menu mode Alt alone
+// leaves would, rather than close for a capture that never starts.
+func TestARefusedShortcutLeavesADropDownListOpen(t *testing.T) {
+	view, _, _ := newCardTestView(t)
+	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
+	view.capture = func(CaptureRequest) CaptureResult {
+		t.Error("a refused shortcut captured")
+		return CaptureResult{}
+	}
+	view.beep = func() {}
+	selectJPEG(view)
+	view.quality.Edit.SetText("abc")
+	showActiveOffScreen(t, view.parent)
+	combo := dropDisplayList(t, view)
+
+	view.NativeHotkey(globalShortcutHotkeyID)
+	if view.captureAttempts != 1 || view.inProgress {
+		t.Fatalf("with invalid quality text: attempts %d, in progress %v, want one refused attempt", view.captureAttempts, view.inProgress)
+	}
+	if !displayListDropped(combo) {
+		t.Fatal("a shortcut refused for its JPEG quality closed the display list")
+	}
+}
+
+// TestMoveOrMenuReadsTheGUIThreadFlags pins the GetGUIThreadInfo flags that
+// suspend the shortcut, by the values winuser.h gives them, as no test enters
+// a real move or size loop: a real keyboard move puts the pointer on the
+// window. A move or size suspends it, and so does menu mode with a menu on
+// screen; menu mode with none shown, as Alt alone leaves it, does not.
+func TestMoveOrMenuReadsTheGUIThreadFlags(t *testing.T) {
+	const (
+		caretBlinking, inMoveSize, inMenuMode = 0x01, 0x02, 0x04
+		systemMenuMode, popupMenuMode         = 0x08, 0x10
+	)
+	for _, c := range []struct {
+		name      string
+		flags     uint32
+		menuShown bool
+		want      bool
+	}{
+		{"a move or size", inMoveSize, false, true},
+		{"a move with the caret blinking", inMoveSize | caretBlinking, false, true},
+		{"the system menu open", inMenuMode | systemMenuMode, true, true},
+		{"a shortcut menu open", inMenuMode | popupMenuMode, true, true},
+		{"menu mode with no menu shown", inMenuMode | systemMenuMode, false, false},
+		{"a menu window of the thread outside menu mode", caretBlinking, true, false},
+		{"nothing", 0, true, false},
+	} {
+		asked := false
+		got := moveOrMenu(c.flags, func() bool {
+			asked = true
+			return c.menuShown
+		})
+		if got != c.want {
+			t.Errorf("%s: moveOrMenu = %v, want %v", c.name, got, c.want)
+		}
+		if asked && c.flags&inMenuMode == 0 {
+			t.Errorf("%s: looked for a menu window outside menu mode", c.name)
+		}
 	}
 }
 

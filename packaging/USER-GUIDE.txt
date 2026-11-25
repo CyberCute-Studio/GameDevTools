@@ -193,12 +193,12 @@ menu first. A drop-down list that is open, such as the Display list, closes,
 and the capture goes ahead.
 
 From the moment a capture starts until it has read the screen, and for as long
-as a selection is on screen, the application's dialogs, menus, and lists do not
-open, so that none can appear in the image. A click or key press on the main
-window made then, such as on Add Images or Browse just as you pressed the
-shortcut, only beeps. A file or folder picker or a question asked for then is
-refused with a beep too, and a question counts as answered No. Try again once
-the capture has finished.
+as a selection is on screen, the application's dialogs do not open, and neither
+do the main window's menus and lists, so that none can appear in the image. A
+click or key press on the main window made then, such as on Add Images or
+Browse just as you pressed the shortcut, only beeps. A file or folder picker or
+a question asked for then is refused with a beep too, and a question counts as
+answered No. Try again once the capture has finished.
 
 
 5. Image Resizer
@@ -471,9 +471,9 @@ The global shortcut does nothing.
 
 A click, Add Images, Browse, or a question only beeped.
   A capture was starting or a selection was on screen, which keeps the
-  application's dialogs and menus closed so that none can appear in the image.
-  Finish or cancel the selection, or wait for the capture to finish, and try
-  again.
+  application's dialogs and the main window's menus closed so that none can
+  appear in the image. Finish or cancel the selection, or wait for the capture
+  to finish, and try again.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is

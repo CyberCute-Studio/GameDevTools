@@ -748,3 +748,36 @@ func TestSessionHoldsDialogsUntilTheWindowIsRestored(t *testing.T) {
 		}
 	}
 }
+
+// TestOnStartRunsOnlyForAnAcceptedSession pins when Events.OnStart runs: once
+// Begin has accepted the session, before the main window hides, and never for
+// a session Begin refuses, so the view's shortcut leaves a drop-down list or a
+// menu mode as it is when nothing starts.
+func TestOnStartRunsOnlyForAnAcceptedSession(t *testing.T) {
+	controller, fixture := newFixtureController()
+	starts := 0
+	events := Events{OnStart: func() {
+		starts++
+		fixture.log = append(fixture.log, "start")
+	}}
+	tooLarge := display.Point{X: testDesktop.Width() + 1, Y: 10}
+	if err := controller.Begin(42, 0, ModePresetRectangle, tooLarge, events); !errors.Is(err, ErrPresetTooLarge) {
+		t.Fatalf("Begin with a preset larger than the desktop = %v, want ErrPresetTooLarge", err)
+	}
+	if starts != 0 {
+		t.Fatal("OnStart ran for a preset larger than the desktop")
+	}
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"start", "hide", "create"}; !reflect.DeepEqual(fixture.log, want) {
+		t.Fatalf("log = %v, want %v", fixture.log, want)
+	}
+	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, events); !errors.Is(err, ErrSessionActive) {
+		t.Fatalf("a second Begin = %v, want ErrSessionActive", err)
+	}
+	if starts != 1 {
+		t.Fatalf("OnStart ran %d times, want once, for the accepted session", starts)
+	}
+	controller.Cancel()
+}

@@ -49,10 +49,13 @@ const (
 	ModePresetRectangle
 )
 
-// Events reports how a session ended. The callbacks run on the GUI thread
-// after the overlay windows are destroyed, so they can present results in
-// the main window immediately.
+// Events reports that a session starts and how it ended. The callbacks that
+// report its end run on the GUI thread after the overlay windows are
+// destroyed, so they can present results in the main window immediately.
 type Events struct {
+	// OnStart, when set, runs once Begin has accepted the session, just
+	// before it hides the main window, and not for a session Begin refuses.
+	OnStart func()
 	// OnCapture receives the selected rectangle and the function that
 	// restores the hidden main window. The handler owns restore from that
 	// point: it must run it once the rectangle's pixels have been read —
@@ -391,6 +394,9 @@ func (c *Controller) Begin(window uintptr, font uintptr, mode Mode, size display
 	hold := c.HoldDialogs
 	if hold == nil {
 		hold = ui.HoldDialogs
+	}
+	if events.OnStart != nil {
+		events.OnStart()
 	}
 	release := hold()
 	hidden, err := c.Hide(window)

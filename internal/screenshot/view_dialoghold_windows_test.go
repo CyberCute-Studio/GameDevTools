@@ -120,7 +120,8 @@ func (c *onceCloser) close() { c.once.Do(func() { close(c.done) }) }
 // a drop-down list, a move, or an Explorer window that the image would show
 // (SCR-044). While the dialogs are held, key and mouse-button input for the
 // main window and its controls is dropped, a press with a beep, but for a
-// modifier key or a repeat; other messages and other windows' input pass, and
+// modifier key or a repeat, and so are the system menu, a move, and a size
+// that the taskbar posts; other messages and other windows' input pass, and
 // nothing is dropped once the hold is released.
 func TestInputForTheMainWindowIsDroppedWhileDialogsAreHeld(t *testing.T) {
 	requireNoHold(t)
@@ -146,6 +147,10 @@ func TestInputForTheMainWindowIsDroppedWhileDialogsAreHeld(t *testing.T) {
 		wmLButtonDblClk, wmMouseWheel               = 0x0203, 0x020a
 		wmXButtonDown, wmXButtonUp                  = 0x020b, 0x020c
 		wmPaint, wmHotkey                           = 0x000f, 0x0312
+		wmContextMenu, wmSysCommand                 = 0x007b, 0x0112
+		wmPopupSystemMenu                           = 0x0313
+		scSizeLeft, scMove, scKeyMenu, scMouseMenu  = 0xf001, 0xf010, 0xf100, 0xf090
+		scRestore, scMinimize, scClose              = 0xf120, 0xf020, 0xf060
 		vkControl, vkSpace, vkApps, vkA             = 0x11, 0x20, 0x5d, 0x41
 		repeat                                      = 1 << 30
 	)
@@ -177,6 +182,12 @@ func TestInputForTheMainWindowIsDroppedWhileDialogsAreHeld(t *testing.T) {
 		{"a key's release", control, wmKeyUp, vkA, 0, false},
 		{"a modifier the shortcut left queued", control, wmKeyDown, vkControl, 0, false},
 		{"a held key's repeat", control, wmKeyDown, vkA, repeat, false},
+		{"the system menu the taskbar opens", uintptr(view.parent), wmPopupSystemMenu, 0, 0, true},
+		{"a move the taskbar asks for", uintptr(view.parent), wmSysCommand, scMove, 0, true},
+		{"a size from the left edge", uintptr(view.parent), wmSysCommand, scSizeLeft, 0, true},
+		{"the system menu by the keyboard", uintptr(view.parent), wmSysCommand, scKeyMenu, 0, true},
+		{"the system menu by the mouse", uintptr(view.parent), wmSysCommand, scMouseMenu, 0, true},
+		{"a posted shortcut menu", control, wmContextMenu, 0, 0, true},
 	} {
 		before := beeps
 		if !filter(c.hwnd, c.message, c.wParam, c.lParam) {
@@ -190,22 +201,31 @@ func TestInputForTheMainWindowIsDroppedWhileDialogsAreHeld(t *testing.T) {
 		name    string
 		hwnd    uintptr
 		message uint32
+		wParam  uintptr
 	}{
-		{"a pointer move", control, wmMouseMove},
-		{"the wheel", control, wmMouseWheel},
-		{"a paint", control, wmPaint},
-		{"the shortcut", uintptr(view.parent), wmHotkey},
-		{"another window's input", uintptr(other), wmRButtonUp},
-		{"a thread message", 0, wmKeyDown},
+		{"a pointer move", control, wmMouseMove, 0},
+		{"the wheel", control, wmMouseWheel, 0},
+		{"a paint", control, wmPaint, 0},
+		{"the shortcut", uintptr(view.parent), wmHotkey, 0},
+		{"another window's input", uintptr(other), wmRButtonUp, 0},
+		{"another window's system menu", uintptr(other), wmPopupSystemMenu, 0},
+		{"a thread message", 0, wmKeyDown, 0},
+		{"a restore", uintptr(view.parent), wmSysCommand, scRestore},
+		{"a minimize", uintptr(view.parent), wmSysCommand, scMinimize},
+		{"a close", uintptr(view.parent), wmSysCommand, scClose},
 	} {
-		if filter(c.hwnd, c.message, 0, 0) {
+		before := beeps
+		if filter(c.hwnd, c.message, c.wParam, 0) {
 			t.Errorf("%s was dropped while the dialogs were held", c.name)
+		}
+		if beeps != before {
+			t.Errorf("%s beeped", c.name)
 		}
 	}
 
 	release()
 	beeps = 0
-	if filter(control, wmRButtonUp, 0, 0) || filter(control, wmKeyDown, vkApps, 0) || beeps != 0 {
+	if filter(control, wmRButtonUp, 0, 0) || filter(control, wmKeyDown, vkApps, 0) || filter(uintptr(view.parent), wmPopupSystemMenu, 0, 0) || beeps != 0 {
 		t.Fatal("input was dropped once the hold was released")
 	}
 }
