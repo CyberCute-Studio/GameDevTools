@@ -20,8 +20,6 @@ var (
 	procViewTestKillTimer        = testUser32.NewProc("KillTimer")
 	procViewTestSendMessageW     = testUser32.NewProc("SendMessageW")
 	procViewTestPostMessageW     = testUser32.NewProc("PostMessageW")
-	procViewTestSetForeground    = testUser32.NewProc("SetForegroundWindow")
-	procViewTestGetForeground    = testUser32.NewProc("GetForegroundWindow")
 	procViewTestGetGUIThreadInfo = testUser32.NewProc("GetGUIThreadInfo")
 )
 
@@ -126,7 +124,11 @@ func TestShortcutCapturesNothingWithAMenuOpen(t *testing.T) {
 // the main window is moved or sized, with the keyboard after Alt+Space or by
 // a drag: the move's own loop delivers WM_HOTKEY, and hiding the window it is
 // moving from under it, or opening a selection whose Escape that loop would
-// take, is refused as with a menu.
+// take, is refused as with a menu. The move is reported by a stand-in: a real
+// keyboard move puts the pointer on the window and leaves it there, which a
+// test must not do to the desktop it runs on. GetGUIThreadInfo reported a
+// real one as GUI_INMOVESIZE when it was confirmed, and the menu test reads
+// the same flags through the real inMoveOrMenu.
 func TestShortcutCapturesNothingDuringAMoveOrSize(t *testing.T) {
 	view, card, dispatcher := newCardTestView(t)
 	view.NativeCommand(optionsCommandBase+modeFullCommand, 0)
@@ -150,37 +152,6 @@ func TestShortcutCapturesNothingDuringAMoveOrSize(t *testing.T) {
 	dispatcher.runNext(t)
 	if captures != 1 || beeps != 1 {
 		t.Fatalf("once the move ended: %d captures, %d beeps, want 1 and 1", captures, beeps)
-	}
-}
-
-// TestInMoveOrMenuReadsAKeyboardMove is the real keyboard move Alt+Space, M
-// starts, which Windows reports for the window's thread as GUI_INMOVESIZE.
-func TestInMoveOrMenuReadsAKeyboardMove(t *testing.T) {
-	view, _, _ := newCardTestView(t)
-	showViewOffScreen(t, view)
-	if view.inMoveOrMenu() {
-		t.Fatal("a window neither moving nor showing a menu was reported busy")
-	}
-	procViewTestSetForeground.Call(uintptr(view.parent))
-	if foreground, _, _ := procViewTestGetForeground.Call(); windows.Handle(foreground) != view.parent {
-		t.Skip("the test window could not take the foreground, which a keyboard move needs")
-	}
-	busy := false
-	ran := runInsideModalLoop(t, view.parent, func() {
-		const wmSysCommand, scMove = 0x0112, 0xf010
-		procViewTestSendMessageW.Call(uintptr(view.parent), wmSysCommand, scMove, 0)
-	}, func() { busy = view.inMoveOrMenu() }, func() {
-		const wmKeyDown, vkEscape = 0x0100, 0x1b
-		procViewTestPostMessageW.Call(uintptr(view.parent), wmKeyDown, vkEscape, 0)
-	})
-	if !ran {
-		t.Skip("the move loop did not start on this desktop")
-	}
-	if !busy {
-		t.Fatal("a keyboard move was not reported")
-	}
-	if view.inMoveOrMenu() {
-		t.Fatal("the move was still reported once it ended")
 	}
 }
 
