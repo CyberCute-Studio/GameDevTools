@@ -129,6 +129,11 @@ These were on `main` and outside the fixes REL-03 made. REL-02C fixed each of th
 - A real press on the Free Rectangle overlay makes it the active window. Enter and Tab then do nothing in the toolbar until it is clicked, although the user guide's keyboard reference says Enter captures after you draw a rectangle. The press also applies a size typed in a field but not yet applied, as the field loses the focus before any drag starts. REL-02C: a press on the overlay or the preset frame no longer activates it, so the toolbar keeps the keyboard and the field keeps its typed size.
 - The press that activates the Free Rectangle overlay raises it above the toolbar until the button is released, so during the first draw the live size shows through the overlay's tint. REL-02C: the press no longer activates the overlay, and every press puts the toolbar back in front as it arrives, without moving it.
 
+REL-02C's review found two more on `main`, which this candidate also has, and REL-02D fixed them:
+
+- An Open Folder or Open Output Folder pressed just before a capture can open File Explorer during the screen read, as each looks at the file or folder on a goroutine of its own before it calls the shell. REL-02D: Explorer is started only once the capture's hold on the dialogs has ended. A window the shell had already been asked for can still open during the read, as Explorer opens it on its own time.
+- A restore from the taskbar arriving in the instant after a capture hid the main window can show it before the screen is read. REL-02D: while a capture keeps the window hidden, a restore or maximize is refused with a beep and nothing else can show it, until the capture's own restore.
+
 ## Plan status
 
 No earlier plan item is marked Done by REL-03. Rule 6 requires each item's verification to pass. FND-01's mixed-DPI verification waits on QLT-04A's hardware, and every other item depends on FND-01. FND-01's own pull request, #1, ran before CI existed. How to break that cycle is the project owner's decision, for example by moving FND-01's mixed-DPI check into QLT-04A.

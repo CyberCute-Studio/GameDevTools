@@ -198,7 +198,11 @@ do the main window's menus and lists, so that none can appear in the image. A
 click or key press on the main window made then, such as on Add Images or
 Browse just as you pressed the shortcut, only beeps. A file or folder picker or
 a question asked for then is refused with a beep too, and a question counts as
-answered No. Try again once the capture has finished.
+answered No. Try again once the capture has finished. Open Folder or Open
+Output Folder pressed just before waits, and File Explorer opens once the
+screen has been read or the selection has ended. A click on the application's
+taskbar button in that instant beeps too and leaves the window as it was: click
+it again once the capture has finished.
 
 
 5. Image Resizer
@@ -469,11 +473,11 @@ The global shortcut does nothing.
   capture could not start, such as a preset larger than the desktop or an
   invalid JPEG quality.
 
-A click, Add Images, Browse, or a question only beeped.
+A click, Add Images, Browse, a question, or the taskbar button only beeped.
   A capture was starting or a selection was on screen, which keeps the
-  application's dialogs and the main window's menus closed so that none can
-  appear in the image. Finish or cancel the selection, or wait for the capture
-  to finish, and try again.
+  application's dialogs and the main window's menus closed, and the window
+  hidden, so that none can appear in the image. Finish or cancel the selection,
+  or wait for the capture to finish, and try again.
 
 A screenshot is black.
   The content is probably protected, or a full-screen exclusive application is
