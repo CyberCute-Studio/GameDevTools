@@ -2,6 +2,7 @@
 // built executable as the portable ZIP. scripts/package.ps1 runs it.
 //
 //	release resources -icon assets/icon.ico -out cmd/gamedevtools
+//	release manifest -out internal/ui/visualstyles
 //	release package -exe <executable> -packaging packaging -out <folder>
 package main
 
@@ -29,6 +30,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "resources":
 		return resources(args[1:])
+	case "manifest":
+		return manifest(args[1:])
 	case "package":
 		return archive(args[1:])
 	}
@@ -56,6 +59,30 @@ func resources(args []string) error {
 			return err
 		}
 		path := filepath.Join(*out, "resource_windows_"+architecture+".syso")
+		if err := os.WriteFile(path, object, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// manifest writes the manifest-only resource object, which test binaries take
+// from internal/ui/visualstyles, for every supported architecture.
+func manifest(args []string) error {
+	flags := flag.NewFlagSet("manifest", flag.ContinueOnError)
+	out := flags.String("out", "", "package folder")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return errors.New("manifest needs -out")
+	}
+	for _, architecture := range []string{"amd64", "arm64"} {
+		object, err := release.BuildManifestResources(architecture)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(*out, "manifest_windows_"+architecture+".syso")
 		if err := os.WriteFile(path, object, 0o644); err != nil {
 			return err
 		}
