@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -1335,7 +1336,10 @@ func (s *nativeShell) paintSidebar(plan shellLayout, client rect) {
 	var regions []ui.SurfaceRegion
 	var brand rect
 	if !plan.compact {
-		regions = []ui.SurfaceRegion{{Right: plan.sidebarWidth, Bottom: client.Bottom, Surface: ui.SurfaceSidebar}}
+		// The sidebar spans the window's height, whatever that becomes, so a
+		// resize that keeps the layout does not change the region, which
+		// would repaint the whole window.
+		regions = []ui.SurfaceRegion{{Right: plan.sidebarWidth, Bottom: math.MaxInt32, Surface: ui.SurfaceSidebar}}
 		top := s.scale(30) - s.scrollY
 		brand = rect{Left: plan.navX + s.scale(10), Top: top, Right: plan.sidebarWidth - s.scale(12), Bottom: top + s.scale(28)}
 	}

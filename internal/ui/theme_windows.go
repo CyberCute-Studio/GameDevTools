@@ -153,6 +153,7 @@ var (
 	procThemeGetSysColor           = user32.NewProc("GetSysColor")
 	procThemeIsWindowEnabled       = user32.NewProc("IsWindowEnabled")
 	procThemeIsWindowVisible       = user32.NewProc("IsWindowVisible")
+	procThemeIsChild               = user32.NewProc("IsChild")
 
 	procThemeCreateCompatibleDC  = themeGDI32.NewProc("CreateCompatibleDC")
 	procThemeCreateDIBSection    = themeGDI32.NewProc("CreateDIBSection")
@@ -270,16 +271,16 @@ type themeLogFont struct {
 	Face [32]uint16
 }
 
+// themeComboBoxInfo is COMBOBOXINFO, which ends at its list's handle:
+// CB_GETCOMBOBOXINFO refuses a size other than the structure's own.
 type themeComboBoxInfo struct {
-	size       uint32
-	item       themeRect
-	button     themeRect
-	state      uint32
-	hwndCombo  uintptr
-	hwndItem   uintptr
-	hwndList   uintptr
-	reserved   uint32
-	reserved64 uint32
+	size      uint32
+	item      themeRect
+	button    themeRect
+	state     uint32
+	hwndCombo uintptr
+	hwndItem  uintptr
+	hwndList  uintptr
 }
 
 // controlRole is what a themed control is drawn as.
@@ -321,7 +322,9 @@ const (
 )
 
 // SurfaceRegion is a rectangle of a window's client area, in client
-// coordinates, painted in another surface than the window's own.
+// coordinates, painted in another surface than the window's own. It may run
+// past the client area, as the main window's sidebar does to span the
+// window's height whatever that becomes; only the part inside is painted.
 type SurfaceRegion struct {
 	Left, Top, Right, Bottom int32
 	Surface                  Surface
@@ -442,6 +445,7 @@ func refreshWindow(hwnd windows.Handle) {
 	themeMutex.Unlock()
 	if stale {
 		applyWindowFrame(hwnd, window.kind)
+		refreshListScrollBars(hwnd)
 		procThemeRedrawWindow.Call(uintptr(hwnd), 0, 0, rdwInvalidate|rdwErase|rdwFrame|rdwAllChildren)
 	}
 }
@@ -567,19 +571,24 @@ func surfaceAt(hwnd windows.Handle, x, y int32) Surface {
 }
 
 // backgroundBehind returns the color of the surface a control sits on: its
-// parent's at the control's top left corner.
+// parent's at the control's top left corner, or, for a control partly
+// scrolled out of the parent's client area, at the corner of the part that
+// shows, which is the only part drawn.
 func backgroundBehind(control windows.Handle) Color {
 	p := CurrentPalette()
 	parent, _, _ := procThemeGetParent.Call(uintptr(control))
 	if parent == 0 {
 		return p.Window
 	}
-	var bounds themeRect
+	var bounds, client themeRect
 	if r, _, _ := procThemeGetWindowRect.Call(uintptr(control), uintptr(unsafe.Pointer(&bounds))); r == 0 {
 		return p.Window
 	}
 	procThemeMapWindowPoints.Call(0, parent, uintptr(unsafe.Pointer(&bounds)), 2)
-	return p.surfaceColor(surfaceAt(windows.Handle(parent), bounds.Left, bounds.Top))
+	procThemeGetClientRect.Call(parent, uintptr(unsafe.Pointer(&client)))
+	x := max(min(bounds.Left, client.Right-1), 0)
+	y := max(min(bounds.Top, client.Bottom-1), 0)
+	return p.surfaceColor(surfaceAt(windows.Handle(parent), x, y))
 }
 
 // themeControl records how a control the package created is drawn and
@@ -595,16 +604,50 @@ func themeControl(hwnd windows.Handle, control *themedControl) {
 	control.previous = previous
 	themeMutex.Unlock()
 	switch control.role {
-	case roleListBox:
-		setScrollBarTheme(hwnd)
-	case roleComboBox:
-		info := themeComboBoxInfo{size: uint32(unsafe.Sizeof(themeComboBoxInfo{}))}
-		if r, _, _ := procSendMessageW.Call(uintptr(hwnd), cbGetComboBoxInfo, 0, uintptr(unsafe.Pointer(&info))); r != 0 && info.hwndList != 0 {
-			setScrollBarTheme(windows.Handle(info.hwndList))
-		}
+	case roleListBox, roleComboBox:
+		themeListScrollBar(hwnd, control.role)
 	case roleEdit, roleReadOnly:
 		// The frame takes the padding the subclass now measures.
 		procThemeSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate|swpFrameChanged)
+	}
+}
+
+// themeListScrollBar draws the scroll bar of a list box, or of a drop-down
+// list's list, which Windows creates with the drop-down list, in the palette.
+func themeListScrollBar(hwnd windows.Handle, role controlRole) {
+	if role == roleListBox {
+		setScrollBarTheme(hwnd)
+		return
+	}
+	info := themeComboBoxInfo{size: uint32(unsafe.Sizeof(themeComboBoxInfo{}))}
+	if r, _, _ := procSendMessageW.Call(uintptr(hwnd), cbGetComboBoxInfo, 0, uintptr(unsafe.Pointer(&info))); r != 0 && info.hwndList != 0 {
+		setScrollBarTheme(windows.Handle(info.hwndList))
+	}
+}
+
+// refreshListScrollBars draws the scroll bars of the window's list boxes and
+// drop-down lists in the palette again. A control keeps the theme class it
+// was given until it is given another, so a scroll bar themed under one
+// palette would otherwise keep that palette's look. Only the window's own
+// controls are themed again: they belong to the thread that is refreshing
+// the window.
+func refreshListScrollBars(hwnd windows.Handle) {
+	type list struct {
+		hwnd windows.Handle
+		role controlRole
+	}
+	var lists []list
+	themeMutex.Lock()
+	for control, c := range themedControls {
+		if c.role == roleListBox || c.role == roleComboBox {
+			lists = append(lists, list{control, c.role})
+		}
+	}
+	themeMutex.Unlock()
+	for _, l := range lists {
+		if child, _, _ := procThemeIsChild.Call(uintptr(hwnd), uintptr(l.hwnd)); child != 0 {
+			themeListScrollBar(l.hwnd, l.role)
+		}
 	}
 }
 
@@ -700,10 +743,18 @@ func paintBackground(hwnd windows.Handle, dc uintptr) {
 	regions := append([]SurfaceRegion(nil), windowSurfaces[hwnd]...)
 	themeMutex.Unlock()
 	for _, region := range regions {
-		area := themeRect{Left: region.Left, Top: region.Top, Right: region.Right, Bottom: region.Bottom}
+		// A region may run past the client area; only the part inside it is
+		// painted.
+		area := themeRect{
+			Left: max(region.Left, client.Left), Top: max(region.Top, client.Top),
+			Right: min(region.Right, client.Right), Bottom: min(region.Bottom, client.Bottom),
+		}
+		if area.Left >= area.Right || area.Top >= area.Bottom {
+			continue
+		}
 		procThemeFillRect.Call(dc, uintptr(unsafe.Pointer(&area)), brush(p.surfaceColor(region.Surface)))
 		if region.Surface == SurfaceSidebar {
-			divider := themeRect{Left: region.Right - 1, Top: region.Top, Right: region.Right, Bottom: region.Bottom}
+			divider := themeRect{Left: region.Right - 1, Top: area.Top, Right: region.Right, Bottom: area.Bottom}
 			procThemeFillRect.Call(dc, uintptr(unsafe.Pointer(&divider)), brush(p.Divider))
 		}
 	}
@@ -1048,7 +1099,8 @@ func drawListItem(item *themeDrawItem) {
 	}
 	defer buffer.release()
 	c := buffer.canvas
-	c.fill(p.Field)
+	// A disabled list's rows sit on the fill its frame and empty area take.
+	c.fill(fieldFill(hwnd, p))
 	row := shape{x: scaleFloat(hwnd, 3), y: 1, width: float64(c.width) - scaleFloat(hwnd, 6), height: float64(c.height) - 2, radius: scaleFloat(hwnd, 4)}
 	textColor := p.Text
 	if item.itemState&odsSelected != 0 {

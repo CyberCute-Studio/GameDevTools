@@ -3,6 +3,7 @@
 package ui
 
 import (
+	"sync"
 	"testing"
 	"unsafe"
 
@@ -131,7 +132,7 @@ func TestLabelsTakeTheirStylesColor(t *testing.T) {
 
 // TestFieldsAndListsTakeTheFieldFill pins that a text field, a read-only
 // field, and a list draw their text on the field fill, and a disabled field
-// on the fill its frame is painted in too.
+// on the fill its frame is painted in too, as a disabled list's rows are.
 func TestFieldsAndListsTakeTheFieldFill(t *testing.T) {
 	withPalette(t, false)
 	parent := newTestParent(t)
@@ -170,11 +171,29 @@ func TestFieldsAndListsTakeTheFieldFill(t *testing.T) {
 	if fill, _, _ := fieldColors(edit.Handle(), false, false); fill != background {
 		t.Errorf("disabled field: frame fill %06x, text area %06x", fill, background)
 	}
+	// A disabled list's rows sit on that fill too, as its empty area does.
+	list.Add("cover.png")
+	list.Enable(false)
+	screen, _, _ := procThemeGetDC.Call(0)
+	defer procThemeReleaseDC.Call(0, screen)
+	target, ok := newPaintBuffer(screen, 200, 28)
+	if !ok {
+		t.Fatal("the row's target could not be created")
+	}
+	defer target.release()
+	drawListItem(&themeDrawItem{
+		ctlType: odtListBox, itemState: odsDisabled,
+		hwndItem: uintptr(list.Handle()), hdc: target.dc, rcItem: themeRect{Right: 200, Bottom: 28},
+	})
+	if row := target.canvas.pixels[0] & 0xffffff; row != background {
+		t.Errorf("disabled list: row fill %06x, list fill %06x", row, background)
+	}
 }
 
 // TestSurfacesChooseTheBackgroundBehindAControl pins that a control in a
 // region of another surface, such as the navigation's heading in the
-// sidebar, is drawn over that surface.
+// sidebar, is drawn over that surface, also once it is scrolled partly above
+// the client area.
 func TestSurfacesChooseTheBackgroundBehindAControl(t *testing.T) {
 	withPalette(t, false)
 	parent := newTestParent(t)
@@ -195,6 +214,10 @@ func TestSurfacesChooseTheBackgroundBehindAControl(t *testing.T) {
 	}
 	if _, background, _ := colorsOf(t, parent, outside.Handle(), wmCtlColorStatic); background != p.Window {
 		t.Errorf("beside the sidebar: background %06x, want %06x", background, p.Window)
+	}
+	inside.Move(10, -10, 80, 20)
+	if _, background, _ := colorsOf(t, parent, inside.Handle(), wmCtlColorStatic); background != p.Sidebar {
+		t.Errorf("scrolled partly above the sidebar: background %06x, want %06x", background, p.Sidebar)
 	}
 }
 
@@ -295,6 +318,76 @@ func TestAWindowRedrawsItselfWhenThePaletteChanges(t *testing.T) {
 	themeMutex.Unlock()
 	if kept {
 		t.Error("the window was kept once destroyed")
+	}
+}
+
+var (
+	// themeChanges counts the WM_THEMECHANGED each window countThemeChanges
+	// watches receives; SetWindowTheme sends one to the window it themes.
+	themeChanges     = map[windows.Handle]int{}
+	themeChangesNext = map[windows.Handle]uintptr{}
+	themeChangesCB   = sync.OnceValue(func() uintptr { return windows.NewCallback(themeChangesProc) })
+)
+
+func themeChangesProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintptr {
+	if message == wmThemeChanged {
+		themeChanges[hwnd]++
+	}
+	r, _, _ := procThemeCallWindowProcW.Call(themeChangesNext[hwnd], uintptr(hwnd), uintptr(message), wParam, lParam)
+	return r
+}
+
+// countThemeChanges subclasses the windows to count the theme changes they
+// receive, which themeChanges then holds, until the test ends.
+func countThemeChanges(t *testing.T, hwnds ...windows.Handle) {
+	t.Helper()
+	for _, hwnd := range hwnds {
+		themeChanges[hwnd] = 0
+		themeChangesNext[hwnd], _, _ = procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themeChangesCB())
+	}
+	t.Cleanup(func() {
+		for _, hwnd := range hwnds {
+			procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themeChangesNext[hwnd])
+			delete(themeChanges, hwnd)
+			delete(themeChangesNext, hwnd)
+		}
+	})
+}
+
+// TestAPaletteChangeThemesTheListsScrollBarsAgain pins that a window moved to
+// a new palette gives the scroll bars of its list boxes and of its drop-down
+// lists' lists that palette's theme class, as each would otherwise keep the
+// one it was created with, and that Windows hands the theme a drop-down
+// list's list at all.
+func TestAPaletteChangeThemesTheListsScrollBarsAgain(t *testing.T) {
+	withPalette(t, false)
+	window := newTestParent(t)
+	ThemeWindow(window, WindowMain)
+	t.Cleanup(func() { ThemeMessage(window, wmNCDestroy, 0, 0) })
+	list, err := NewListBox(window, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo, err := NewComboBox(window, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := themeComboBoxInfo{size: uint32(unsafe.Sizeof(themeComboBoxInfo{}))}
+	if r, _, _ := procSendMessageW.Call(uintptr(combo.Handle()), cbGetComboBoxInfo, 0, uintptr(unsafe.Pointer(&info))); r == 0 || info.hwndList == 0 {
+		t.Fatalf("CB_GETCOMBOBOXINFO refused a structure of %d bytes", info.size)
+	}
+	dropDown := windows.Handle(info.hwndList)
+	countThemeChanges(t, list.Handle(), dropDown)
+	highContrastActive = func() bool { return true }
+	ThemeMessage(window, wmThemeChanged, 0, 0)
+	if !CurrentPalette().HighContrast {
+		t.Fatal("the palette did not change")
+	}
+	if themeChanges[list.Handle()] == 0 {
+		t.Error("the list box's scroll bar kept the dark palette's theme")
+	}
+	if themeChanges[dropDown] == 0 {
+		t.Error("the drop-down list's list's scroll bar kept the dark palette's theme")
 	}
 }
 

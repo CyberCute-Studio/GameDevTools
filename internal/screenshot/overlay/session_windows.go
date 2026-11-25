@@ -1586,18 +1586,21 @@ func (s *windowsSession) typedFreeSelection() (display.Rect, string) {
 	return selection, ""
 }
 
-// report shows a message in the toolbar in place of the instructions and
+// report shows why an edit was refused in the toolbar, in place of the
+// instructions and styled as an error, as every validation message is, and
 // announces it to a screen reader, even when it repeats the message shown,
 // as a refused edit is news each time the user commits it.
 func (s *windowsSession) report(text string) {
+	s.message.SetStyle(ui.TextError)
 	s.message.SetTextQuietly(text)
 	s.message.Announce()
 }
 
-// restoreInstructions shows the instructions again without announcing them:
-// the session announced them when it started, and they return while the
-// user types or once an edit is accepted.
+// restoreInstructions shows the instructions again, as content, without
+// announcing them: the session announced them when it started, and they
+// return while the user types or once an edit is accepted.
 func (s *windowsSession) restoreInstructions() {
+	s.message.SetStyle(ui.TextBody)
 	s.message.SetTextQuietly(s.instructions())
 }
 
