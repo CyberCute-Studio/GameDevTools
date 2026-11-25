@@ -58,6 +58,27 @@ var (
 	procViewGetLastActivePopup  = viewUser32.NewProc("GetLastActivePopup")
 	procViewFlashWindowEx       = viewUser32.NewProc("FlashWindowEx")
 	procViewMessageBeep         = viewUser32.NewProc("MessageBeep")
+	procViewGetWindowThread     = viewUser32.NewProc("GetWindowThreadProcessId")
+	procViewGetGUIThreadInfo    = viewUser32.NewProc("GetGUIThreadInfo")
+)
+
+// guiThreadInfo is the GUITHREADINFO structure GetGUIThreadInfo fills: its
+// size and flags, then the active, focus, capture, menu-owner, move-size, and
+// caret windows, and the caret's rectangle.
+type guiThreadInfo struct {
+	size    uint32
+	flags   uint32
+	handles [6]windows.Handle
+	caret   viewRect
+}
+
+const (
+	// guiInMoveSize is GUI_INMOVESIZE: the thread is in a window's move or
+	// size loop, with the keyboard after Alt+Space or by a drag.
+	guiInMoveSize = 0x2
+	// guiInMenuMode is GUI_INMENUMODE: a menu of the thread is open, such as
+	// a window's system menu or a field's shortcut menu.
+	guiInMenuMode = 0x4
 )
 
 // flashWindowInfo is the FLASHWINFO structure FlashWindowEx takes.
@@ -187,6 +208,11 @@ type NativeView struct {
 	// flashDialog draws attention to the modal dialog that suspends the
 	// shortcut; tests replace it.
 	flashDialog func()
+	// inMoveOrMenu reports whether the main window's thread is in a move or
+	// size loop or has a menu open, which also suspends the shortcut, and
+	// beep is how a press then refuses; tests replace both.
+	inMoveOrMenu func() bool
+	beep         func()
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -241,7 +267,26 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		return alive != 0
 	}
 	view.flashDialog = func() { flashOpenDialog(view.parent) }
+	view.inMoveOrMenu = func() bool { return threadInMoveOrMenu(view.parent) }
+	view.beep = func() { procViewMessageBeep.Call(0) }
 	return view
+}
+
+// threadInMoveOrMenu reports whether the thread that owns window is in a move
+// or size loop or has a menu open, as GetGUIThreadInfo tells. A thread whose
+// state cannot be read is taken to be in neither, so the shortcut is not lost
+// to a failed query.
+func threadInMoveOrMenu(window windows.Handle) bool {
+	thread, _, _ := procViewGetWindowThread.Call(uintptr(window), 0)
+	if thread == 0 {
+		return false
+	}
+	info := guiThreadInfo{}
+	info.size = uint32(unsafe.Sizeof(info))
+	if ok, _, _ := procViewGetGUIThreadInfo.Call(thread, uintptr(unsafe.Pointer(&info))); ok == 0 {
+		return false
+	}
+	return info.flags&(guiInMoveSize|guiInMenuMode) != 0
 }
 
 // flashOpenDialog does what Windows does for a click on a window a modal
@@ -906,9 +951,12 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 // suspended and flashes that dialog: the dialog's message loop still delivers
 // it, but hiding the main window would leave the dialog in the image (SCR-044),
 // and that loop does not run the overlay's keyboard handling, so Escape could
-// not cancel a selection (SCR-052). A capture already running keeps
-// startCapture's refusal, as a dialog can open while its file is written.
-// The shell routes WM_HOTKEY here; unknown identifiers are not consumed.
+// not cancel a selection (SCR-052). The same holds while the main window is
+// being moved or sized, or a menu of the application is open, such as its
+// system menu: the shortcut then only beeps, as the window is in front. A
+// capture already running keeps startCapture's refusal, as a dialog can open
+// while its file is written. The shell routes WM_HOTKEY here; unknown
+// identifiers are not consumed.
 func (n *NativeView) NativeHotkey(id int32) bool {
 	if id != globalShortcutHotkeyID || n.hotkeys == nil {
 		return false
@@ -917,9 +965,15 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 		n.sessions.Attention()
 		return true
 	}
-	if enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent)); !n.inProgress && enabled == 0 {
-		n.flashDialog()
-		return true
+	if !n.inProgress {
+		if enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent)); enabled == 0 {
+			n.flashDialog()
+			return true
+		}
+		if n.inMoveOrMenu() {
+			n.beep()
+			return true
+		}
 	}
 	n.startCapture(true)
 	return true
