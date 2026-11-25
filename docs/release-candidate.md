@@ -2,7 +2,7 @@
 
 This is REL-03's record of the 1.0.0 release candidate: what was built, the checklist it was held to, each result, the defects the validation found, and the explicit list of what still blocks a release. [Requirement traceability](traceability.md) holds the per-requirement status, and [the test guide](testing.md#recorded-runs) holds the recorded runs.
 
-**Result: the candidate is not releasable yet.** It passes every automated gate that has run. The pull request's CI has not run yet. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The packaged user guide does not match the candidate in three places, and its known limitations leave out the other defects found and left for later. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open, and every run recorded here counts for this candidate only.
+**Result: the candidate is not releasable yet.** It passes every automated gate that has run, the pull request's CI included. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M17, M18, and M19 passed, M12 failed in one of its three drags, M16 held apart from its Open Folder condition, and M8's Paint half passed while its Office half could not run. The packaged user guide does not match the candidate in three places, and its known limitations leave out the other defects found and left for later. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open, and every run recorded here counts for this candidate only.
 
 ## The candidate
 
@@ -31,7 +31,7 @@ Later commits on the REL-03 branch change the records, the PRD's list of open de
 | Documentation matches the candidate | **Fail** | The documentation tests in the suite pass. The user guide's keyboard reference and known limitations do not match the candidate in the three ways [blocker 8](#release-blockers) lists, the known limitations leave out the other defects that blocker names, and the release notes do not give M12's result. M1, which follows the guide on a clean machine, was not run |
 | M13, vulnerability scan | Pass | govulncheck v1.10.0 on the packaged executable found no vulnerabilities, scanning on 2026-11-24. The run did not record the vulnerability database's date |
 | M14, `Validation matrix` workflow | Pass | [Run 45341616501](https://github.com/CyberCute-Studio/GameDevTools/actions/runs/45341616501) on windows-2025 and windows-2022. On both, the Preset Rectangle overlay benchmark skipped, as the runner's 1024 × 768 desktop cannot hold a 1280 × 720 frame, so NFR-011's Preset Rectangle figures come only from the x64 validation above |
-| CI on the pull request | Required | The pull request's own CI run |
+| CI on the pull request | Pass | [Run 45446606332](https://github.com/CyberCute-Studio/GameDevTools/actions/runs/45446606332) on the branch head `1b42414`, whose commits after `c646471` change only the records and the documentation test |
 
 Performance in the x64 validation, under emulation:
 
@@ -136,4 +136,6 @@ REL-02C's review found two more on `main`, which this candidate also has, and RE
 
 ## Plan status
 
-No earlier plan item is marked Done by REL-03. Rule 6 requires each item's verification to pass. FND-01's mixed-DPI verification waits on QLT-04A's hardware, and every other item depends on FND-01. FND-01's own pull request, #1, ran before CI existed. How to break that cycle is the project owner's decision, for example by moving FND-01's mixed-DPI check into QLT-04A.
+REL-03 marked no earlier plan item Done. Rule 6 requires each item's verification to pass. FND-01's mixed-DPI verification waited on QLT-04A's hardware, and every other item depends on FND-01. FND-01's own pull request, #1, ran before CI existed.
+
+The project owner broke that cycle in plan 1.11. FND-01's mixed-DPI check moved to QLT-04A, which now owns the blocker in [ADR-0001](adr/0001-native-windows-stack.md), and rule 6 judges each item on its own, whatever its dependencies' status. 35 of the plan's 43 items are Done. FND-05 and QLT-01 wait on M2, QLT-01 also on M3, RSZ-09 and QLT-04 on M12, and REL-01 and REL-02 on M1. QLT-04A is Pending, and REL-03 stays Blocked by the list above.
