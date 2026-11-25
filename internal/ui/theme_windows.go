@@ -90,6 +90,7 @@ const (
 	dtHidePrefix  = 0x00100000
 
 	themeTransparent = 1
+	themeOpaque      = 2
 	srcCopy          = 0x00cc0020
 	dibRGBColors     = 0
 
@@ -765,12 +766,18 @@ func paintBackground(hwnd windows.Handle, dc uintptr) {
 func controlColors(message uint32, dc uintptr, control windows.Handle) uintptr {
 	p := CurrentPalette()
 	text, background := p.Text, backgroundBehind(control)
+	// A label's text is drawn over the surface behind it. A field's text is
+	// drawn opaque, on the field fill: a field draws text again over the
+	// glyphs already there as it scrolls a line or its selection changes, and
+	// transparent text would thicken them. A read-only or disabled field asks
+	// for its colors as a label does, with WM_CTLCOLORSTATIC.
+	transparent := message == wmCtlColorStatic
 	if c := themed(control); c != nil {
 		switch c.role {
 		case roleLabel:
 			text = p.textColor(c.style)
 		case roleEdit, roleReadOnly, roleListBox, roleComboBox:
-			background = fieldFill(control, p)
+			background, transparent = fieldFill(control, p), false
 		}
 	} else if message == wmCtlColorListBox || message == wmCtlColorEdit {
 		// A drop-down list's list, which Windows creates itself.
@@ -778,9 +785,11 @@ func controlColors(message uint32, dc uintptr, control windows.Handle) uintptr {
 	}
 	procThemeSetTextColor.Call(dc, text.colorRef())
 	procThemeSetBkColor.Call(dc, background.colorRef())
-	if message == wmCtlColorStatic {
-		procThemeSetBkMode.Call(dc, themeTransparent)
+	mode := uintptr(themeOpaque)
+	if transparent {
+		mode = themeTransparent
 	}
+	procThemeSetBkMode.Call(dc, mode)
 	return brush(background)
 }
 
@@ -1088,7 +1097,14 @@ func (l buttonLook) navigationItem(b *paintBuffer, state buttonState, icon rune)
 // drawListItem paints a row of a themed list box or of a drop-down list's
 // list.
 func drawListItem(item *themeDrawItem) {
-	if int32(item.itemID) < 0 || item.itemState&odsComboBoxEdit != 0 {
+	if item.ctlType == odtComboBox && item.itemState&odsComboBoxEdit != 0 {
+		// A drop-down list draws its face itself, without a repaint, when its
+		// selection or its items change, as a view's Select or Reset does. The
+		// face is the subclass's to paint, whole, so it is repainted instead.
+		procInvalidateRect.Call(item.hwndItem, 0, 0)
+		return
+	}
+	if int32(item.itemID) < 0 {
 		return
 	}
 	hwnd := windows.Handle(item.hwndItem)
@@ -1203,13 +1219,17 @@ func padField(hwnd windows.Handle, client *themeRect) {
 		client.Left += side
 		client.Right -= side
 	}
-	if spare := client.height() - lineHeight(hwnd); spare > 0 {
+	// A line that cannot be measured leaves the height as Windows proposed
+	// it, rather than counting all of it spare and leaving no room for text.
+	line := lineHeight(hwnd)
+	if spare := client.height() - line; line > 0 && spare > 0 {
 		client.Top += spare / 2
 		client.Bottom -= spare - spare/2
 	}
 }
 
-// lineHeight returns the height of a line of the control's font.
+// lineHeight returns the height of a line of the control's font, or 0 when
+// it cannot be measured.
 func lineHeight(hwnd windows.Handle) int32 {
 	dc, _, _ := procThemeGetDC.Call(uintptr(hwnd))
 	if dc == 0 {

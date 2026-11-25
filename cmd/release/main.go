@@ -25,7 +25,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: release resources|package [flags]")
+		return errors.New("usage: release resources|manifest|package [flags]")
 	}
 	switch args[0] {
 	case "resources":

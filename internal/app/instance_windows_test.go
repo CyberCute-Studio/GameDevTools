@@ -94,8 +94,9 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 	// The window belongs to the thread that creates it, and this thread pumps
 	// no messages, so ShowWindow from any other thread would wait forever.
+	// The window's cleanup runs on this thread too, which owns it.
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 	if activateExistingInstance("GameDevToolsNoSuchWindowClass", 0) {
 		t.Fatal("activation reported a window that does not exist")
 	}

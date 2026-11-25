@@ -1153,7 +1153,10 @@ func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 		return r
 	}
 	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, lParam)
-	if message == wmDestroy {
+	// The original procedure is kept until the child's last message, which
+	// the theme's subclass beneath this one needs to forget the control and
+	// the control's own procedure to free what it holds.
+	if message == wmNCDestroy {
 		delete(dropForwardOriginals, hwnd)
 	}
 	return r

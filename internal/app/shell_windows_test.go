@@ -651,6 +651,50 @@ func TestChildDropForwardsToShellHandler(t *testing.T) {
 	}
 }
 
+var (
+	// lastMessageSeen records the windows lastMessageProc watches that
+	// received WM_NCDESTROY; lastMessageNext holds the procedure beneath it.
+	lastMessageSeen = map[windows.Handle]bool{}
+	lastMessageNext = map[windows.Handle]uintptr{}
+	lastMessageCB   = sync.OnceValue(func() uintptr { return windows.NewCallback(lastMessageProc) })
+)
+
+func lastMessageProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintptr {
+	next := lastMessageNext[hwnd]
+	if message == wmNCDestroy {
+		lastMessageSeen[hwnd] = true
+		delete(lastMessageNext, hwnd)
+	}
+	r, _, _ := procCallWindowProcW.Call(next, uintptr(hwnd), uintptr(message), wParam, lParam)
+	return r
+}
+
+// TestChildDropHandsOnAChildsLastMessage pins that the drop subclass passes a
+// child's WM_NCDESTROY to the procedure beneath it, where the theme's
+// subclass forgets the control before Windows can give its handle to another
+// window, and the control's own procedure frees what it holds.
+func TestChildDropHandsOnAChildsLastMessage(t *testing.T) {
+	shell := newCommandTestShell(t, &dropRecordingView{})
+	field, err := ui.NewEdit(shell.hwnd, 212)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hwnd := field.Handle()
+	lastMessageNext[hwnd], _, _ = procSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, lastMessageCB())
+	shell.updateDropAcceptance()
+	if _, subclassed := dropForwardOriginals[hwnd]; !subclassed {
+		t.Fatal("the child was not subclassed for drops")
+	}
+	procDestroyWindow.Call(uintptr(hwnd))
+	if !lastMessageSeen[hwnd] {
+		t.Error("the child's WM_NCDESTROY did not reach the procedure beneath the drop subclass")
+	}
+	delete(lastMessageSeen, hwnd)
+	if _, kept := dropForwardOriginals[hwnd]; kept {
+		t.Error("the drop subclass kept the destroyed child's procedure")
+	}
+}
+
 // TestShellWindowProcScrollsFocusedListIntoView covers the source list
 // (RSZ-005): a list box reports LBN_SETFOCUS rather than the button, edit,
 // or combo notification, and tabbing to it must scroll it into view like

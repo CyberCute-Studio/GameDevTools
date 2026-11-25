@@ -17,6 +17,7 @@ var (
 	procTestGetBkColor    = themeGDI32.NewProc("GetBkColor")
 	procTestGetBkMode     = themeGDI32.NewProc("GetBkMode")
 	procTestGetSysColorUI = user32.NewProc("GetSysColor")
+	procTestGetUpdateRect = user32.NewProc("GetUpdateRect")
 )
 
 const bcmGetIdealSize = 0x1601
@@ -131,8 +132,9 @@ func TestLabelsTakeTheirStylesColor(t *testing.T) {
 }
 
 // TestFieldsAndListsTakeTheFieldFill pins that a text field, a read-only
-// field, and a list draw their text on the field fill, and a disabled field
-// on the fill its frame is painted in too, as a disabled list's rows are.
+// field, and a list draw their text opaque on the field fill, and a disabled
+// field on the fill its frame is painted in too, as a disabled list's rows
+// are.
 func TestFieldsAndListsTakeTheFieldFill(t *testing.T) {
 	withPalette(t, false)
 	parent := newTestParent(t)
@@ -158,15 +160,21 @@ func TestFieldsAndListsTakeTheFieldFill(t *testing.T) {
 		{"read-only field", path.Handle(), wmCtlColorStatic},
 		{"list", list.Handle(), wmCtlColorListBox},
 	} {
-		text, background, _ := colorsOf(t, parent, test.control, test.message)
+		text, background, mode := colorsOf(t, parent, test.control, test.message)
 		if text != p.Text || background != p.Field {
 			t.Errorf("%s: %06x on %06x, want %06x on %06x", test.name, text, background, p.Text, p.Field)
 		}
+		// A field redraws its text over the glyphs already there, as it
+		// scrolls a line or its selection changes; transparent text would
+		// thicken them.
+		if mode != themeOpaque {
+			t.Errorf("%s: background mode %d, want opaque", test.name, mode)
+		}
 	}
 	edit.Enable(false)
-	_, background, _ := colorsOf(t, parent, edit.Handle(), wmCtlColorStatic)
-	if want := p.Window.blend(p.Field, 0.5); background != want {
-		t.Errorf("disabled field: background %06x, want %06x", background, want)
+	_, background, mode := colorsOf(t, parent, edit.Handle(), wmCtlColorStatic)
+	if want := p.Window.blend(p.Field, 0.5); background != want || mode != themeOpaque {
+		t.Errorf("disabled field: background %06x mode %d, want %06x opaque", background, mode, want)
 	}
 	if fill, _, _ := fieldColors(edit.Handle(), false, false); fill != background {
 		t.Errorf("disabled field: frame fill %06x, text area %06x", fill, background)
@@ -423,6 +431,88 @@ func TestFieldTextIsPaddedAndCentered(t *testing.T) {
 	}
 	if above, below := client.Top, window.Bottom-client.Bottom; above-below > 1 || below-above > 1 {
 		t.Errorf("the line is %d from the top and %d from the bottom", above, below)
+	}
+}
+
+// TestFieldKeepsItsHeightWhenItsLineCannotBeMeasured pins that a field whose
+// line height cannot be measured, as when Windows cannot give it a device
+// context, keeps the height Windows proposed rather than none.
+func TestFieldKeepsItsHeightWhenItsLineCannotBeMeasured(t *testing.T) {
+	parent := newTestParent(t)
+	edit, err := NewEdit(parent, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := edit.Handle()
+	procDestroyWindow.Call(uintptr(gone))
+	if line := lineHeight(gone); line != 0 {
+		t.Fatalf("a destroyed field's line measured %d", line)
+	}
+	client := themeRect{Right: 200, Bottom: 32}
+	padField(gone, &client)
+	if client.Top != 0 || client.Bottom != 32 {
+		t.Errorf("client %+v: the height was taken from a line that could not be measured", client)
+	}
+}
+
+var (
+	// themedParentNext holds the procedure of each window routeThroughTheme
+	// routes, beneath the routing.
+	themedParentNext = map[windows.Handle]uintptr{}
+	themedParentCB   = sync.OnceValue(func() uintptr { return windows.NewCallback(themedParentProc) })
+)
+
+func themedParentProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintptr {
+	if r, handled := ThemeMessage(hwnd, message, wParam, lParam); handled {
+		return r
+	}
+	r, _, _ := procThemeCallWindowProcW.Call(themedParentNext[hwnd], uintptr(hwnd), uintptr(message), wParam, lParam)
+	return r
+}
+
+// routeThroughTheme passes the window's messages to ThemeMessage first, as
+// the application's windows do, until the test ends.
+func routeThroughTheme(t *testing.T, hwnd windows.Handle) {
+	t.Helper()
+	themedParentNext[hwnd], _, _ = procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themedParentCB())
+	t.Cleanup(func() {
+		procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themedParentNext[hwnd])
+		delete(themedParentNext, hwnd)
+	})
+}
+
+// TestADropDownListRepaintsItsFaceAsItsSelectionChanges pins that a
+// drop-down list's face shows the item the code selects: Windows redraws the
+// face of an owner-drawn drop-down list through WM_DRAWITEM, not a repaint,
+// as its selection or items change, and the theme paints the face whole only
+// on a repaint.
+func TestADropDownListRepaintsItsFaceAsItsSelectionChanges(t *testing.T) {
+	const rdwUpdateNow = 0x0100
+	parent := newTestParent(t)
+	routeThroughTheme(t, parent)
+	// Windows keeps no repaint pending for a window that is not shown.
+	procShowWindowTest.Call(uintptr(parent), swShowNoActivate)
+	combo, err := NewComboBox(parent, 18)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo.Move(10, 10, 200, 32)
+	combo.Add("PNG")
+	combo.Add("JPEG")
+	combo.Select(0)
+	for _, step := range []struct {
+		name   string
+		change func()
+	}{
+		{"selecting another item", func() { combo.Select(1) }},
+		{"emptying the list", combo.Reset},
+		{"filling it again and selecting", func() { combo.Add("WebP"); combo.Select(0) }},
+	} {
+		procThemeRedrawWindow.Call(uintptr(parent), 0, 0, rdwUpdateNow|rdwAllChildren)
+		step.change()
+		if pending, _, _ := procTestGetUpdateRect.Call(uintptr(combo.Handle()), 0, 0); pending == 0 {
+			t.Errorf("%s: the face was not repainted", step.name)
+		}
 	}
 }
 

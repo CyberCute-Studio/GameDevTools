@@ -15,6 +15,7 @@ const (
 	wmActivate        = 0x0006
 	wmSetFocus        = 0x0007
 	wmGetDlgCode      = 0x0087
+	wmNCDestroy       = 0x0082
 	wmClose           = 0x0010
 	wmQueryEndSession = 0x0011
 	wmEndSession      = 0x0016
