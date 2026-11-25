@@ -156,3 +156,51 @@ func TestFullDisplayReportsIndependentDeliveryOutcomes(t *testing.T) {
 		t.Fatalf("result path = %q", result.Path)
 	}
 }
+
+// TestFullDisplayRunsCapturedOnceTheScreenIsRead pins when the request's
+// Captured runs, which ends the view's hold on the application's dialogs: once
+// the display is read and the window restored, before delivery, so a dialog
+// may open while the file is written but not while the screen is read; and
+// once on a failed hide or capture, so a failure cannot keep the dialogs
+// closed.
+func TestFullDisplayRunsCapturedOnceTheScreenIsRead(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		hideErr    error
+		captureErr error
+		want       []string
+	}{
+		{"read", nil, nil, []string{"hide", "capture", "restore", "captured", "deliver"}},
+		{"capture failed", nil, errors.New("BitBlt failed"), []string{"hide", "capture", "restore", "captured"}},
+		{"hide failed", errors.New("compositor flush failed"), nil, []string{"hide", "captured"}},
+	} {
+		var events []string
+		request := testRequest()
+		request.Captured = func() { events = append(events, "captured") }
+		service := &Service{
+			Monitor: display.NewMonitor(),
+			Hide: func(...uintptr) (func(), error) {
+				events = append(events, "hide")
+				if test.hideErr != nil {
+					return nil, test.hideErr
+				}
+				return func() { events = append(events, "restore") }, nil
+			},
+			Capture: func(*display.Monitor, string) (*image.RGBA, error) {
+				events = append(events, "capture")
+				if test.captureErr != nil {
+					return nil, test.captureErr
+				}
+				return image.NewRGBA(image.Rect(0, 0, 2, 2)), nil
+			},
+			Deliver: func(*image.RGBA, screenshot.CaptureOptions) output.Result {
+				events = append(events, "deliver")
+				return output.Result{Path: `C:\Screenshots\Screenshot_1.png`}
+			},
+		}
+		service.FullDisplay(request)
+		if !reflect.DeepEqual(events, test.want) {
+			t.Fatalf("%s: events = %v, want %v", test.name, events, test.want)
+		}
+	}
+}

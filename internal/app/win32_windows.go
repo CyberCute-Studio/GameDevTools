@@ -174,6 +174,7 @@ var (
 	procCreateMutexW                  = kernel32.NewProc("CreateMutexW")
 	procCloseHandle                   = kernel32.NewProc("CloseHandle")
 	procFindWindowW                   = user32.NewProc("FindWindowW")
+	procGetLastActivePopup            = user32.NewProc("GetLastActivePopup")
 	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
 	procIsIconic                      = user32.NewProc("IsIconic")
 	procCreateFontIndirectW           = gdi32.NewProc("CreateFontIndirectW")

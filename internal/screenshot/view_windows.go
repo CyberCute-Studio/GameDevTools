@@ -58,6 +58,42 @@ var (
 	procViewGetLastActivePopup  = viewUser32.NewProc("GetLastActivePopup")
 	procViewFlashWindowEx       = viewUser32.NewProc("FlashWindowEx")
 	procViewMessageBeep         = viewUser32.NewProc("MessageBeep")
+	procViewGetWindowThread     = viewUser32.NewProc("GetWindowThreadProcessId")
+	procViewGetGUIThreadInfo    = viewUser32.NewProc("GetGUIThreadInfo")
+	procViewFindWindowExW       = viewUser32.NewProc("FindWindowExW")
+	procViewEndMenu             = viewUser32.NewProc("EndMenu")
+	procViewSendMessageW        = viewUser32.NewProc("SendMessageW")
+)
+
+// guiThreadInfo is the GUITHREADINFO structure GetGUIThreadInfo fills: its
+// size and flags, then the active, focus, capture, menu-owner, move-size, and
+// caret windows, and the caret's rectangle.
+type guiThreadInfo struct {
+	size    uint32
+	flags   uint32
+	handles [6]windows.Handle
+	caret   viewRect
+}
+
+const (
+	// guiInMoveSize is GUI_INMOVESIZE: the thread is in a window's move or
+	// size loop, with the keyboard after Alt+Space or by a drag.
+	guiInMoveSize = 0x2
+	// guiInMenuMode is GUI_INMENUMODE: the thread is in menu mode, with a
+	// menu open, such as a window's system menu or a field's shortcut menu,
+	// or with none shown, as Alt pressed alone leaves a window without a menu
+	// bar.
+	guiInMenuMode = 0x4
+	// guiCaptureHandle indexes guiThreadInfo's handles at hwndCapture, the
+	// window with the mouse capture.
+	guiCaptureHandle = 2
+	// menuWindowClass is the class of the windows Windows shows menus in.
+	menuWindowClass = "#32768"
+	// menuWindowLimit bounds the menu windows threadShowsMenu looks through.
+	menuWindowLimit = 64
+	// viewWMCancelMode is WM_CANCELMODE, which ends what a window holds the
+	// mouse for: an open drop-down list closes once it loses the mouse.
+	viewWMCancelMode = 0x001f
 )
 
 // flashWindowInfo is the FLASHWINFO structure FlashWindowEx takes.
@@ -187,6 +223,12 @@ type NativeView struct {
 	// flashDialog draws attention to the modal dialog that suspends the
 	// shortcut; tests replace it.
 	flashDialog func()
+	// inMoveOrMenu reports whether the main window's thread is in a move or
+	// size loop or shows a menu, which also suspends the shortcut, and changes
+	// nothing; beep is how a press then refuses, as is a press dropped while
+	// the dialogs are held; tests replace both.
+	inMoveOrMenu func() bool
+	beep         func()
 
 	modeLabel    *ui.Label
 	modeFree     *ui.Button
@@ -241,7 +283,100 @@ func NewNativeView(manager *preset.Manager, options *OptionsManager, displays *d
 		return alive != 0
 	}
 	view.flashDialog = func() { flashOpenDialog(view.parent) }
+	view.inMoveOrMenu = func() bool { return threadInMoveOrMenu(view.parent) }
+	view.beep = func() { procViewMessageBeep.Call(0) }
 	return view
+}
+
+// threadInMoveOrMenu reports whether the thread that owns window, the GUI
+// thread this runs on, is in a move or size loop or shows one of its menus,
+// as GetGUIThreadInfo and the menu windows on screen tell. It changes
+// nothing: menu mode that shows no menu, which Alt pressed and released on
+// its own leaves a window without a menu bar in until another key ends it,
+// counts as neither, and endThreadModes ends it once a capture is decided on.
+// A thread whose state cannot be read is taken to be in neither, so the
+// shortcut is not lost to a failed query.
+func threadInMoveOrMenu(window windows.Handle) bool {
+	thread, info, ok := readGUIThread(window)
+	if !ok {
+		return false
+	}
+	return moveOrMenu(info.flags, func() bool { return threadShowsMenu(thread) })
+}
+
+// moveOrMenu reports whether GetGUIThreadInfo's flags say a move or size loop
+// is running, or menu mode with a menu that showsMenu finds on screen. The
+// flags cannot tell the system menu Alt+Space opens from the menu mode Alt
+// alone leaves, as both report menu mode and the system menu.
+func moveOrMenu(flags uint32, showsMenu func() bool) bool {
+	if flags&guiInMoveSize != 0 {
+		return true
+	}
+	return flags&guiInMenuMode != 0 && showsMenu()
+}
+
+// readGUIThread reads GetGUIThreadInfo for the thread that owns window, and
+// reports that thread.
+func readGUIThread(window windows.Handle) (uintptr, guiThreadInfo, bool) {
+	info := guiThreadInfo{}
+	thread, _, _ := procViewGetWindowThread.Call(uintptr(window), 0)
+	if thread == 0 {
+		return 0, info, false
+	}
+	info.size = uint32(unsafe.Sizeof(info))
+	if ok, _, _ := procViewGetGUIThreadInfo.Call(thread, uintptr(unsafe.Pointer(&info))); ok == 0 {
+		return 0, info, false
+	}
+	return thread, info, true
+}
+
+// threadShowsMenu reports whether a menu window of thread is on screen. One
+// that may be beyond the menuWindowLimit windows it looks through counts as
+// shown, so the shortcut beeps rather than capture a menu.
+func threadShowsMenu(thread uintptr) bool {
+	class, err := windows.UTF16PtrFromString(menuWindowClass)
+	if err != nil {
+		return true
+	}
+	menu := uintptr(0)
+	for range menuWindowLimit {
+		menu, _, _ = procViewFindWindowExW.Call(0, menu, uintptr(unsafe.Pointer(class)), 0)
+		if menu == 0 {
+			return false
+		}
+		if owner, _, _ := procViewGetWindowThread.Call(menu, 0); owner != thread {
+			continue
+		}
+		if visible, _, _ := procViewIsWindowVisible.Call(menu); visible != 0 {
+			return true
+		}
+	}
+	return true
+}
+
+// endThreadModes ends what the thread that owns window is in that a capture
+// would leave on screen or that would take a selection's keys, once the
+// shortcut's capture is decided on, so a shortcut refused for another reason
+// leaves them as they are. Menu mode, which threadInMoveOrMenu let through
+// only with no menu shown, as Alt alone leaves it, is ended with EndMenu, so
+// that its loop cannot take a selection's keys (SCR-052). What the thread
+// holds the mouse for, such as a drop-down list that is open or a scroll bar
+// being dragged, is ended by sending WM_CANCELMODE to its window with the
+// mouse capture, as Windows does before a dialog opens. Hiding the main window
+// leaves an open drop-down list on screen, where a Full Display image would
+// show it (SCR-044), and over a selection it would take the first press; an
+// open list always holds the mouse, as it closes once it loses it.
+func endThreadModes(window windows.Handle) {
+	_, info, ok := readGUIThread(window)
+	if !ok {
+		return
+	}
+	if info.flags&guiInMenuMode != 0 {
+		procViewEndMenu.Call()
+	}
+	if capture := info.handles[guiCaptureHandle]; capture != 0 {
+		procViewSendMessageW.Call(uintptr(capture), viewWMCancelMode, 0, 0)
+	}
 }
 
 // flashOpenDialog does what Windows does for a click on a window a modal
@@ -869,7 +1004,7 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 		return
 	}
 	if options.Mode != ModeFullDisplay {
-		n.beginOverlay()
+		n.beginOverlay(fromShortcut)
 		return
 	}
 	// A stale enumeration failure must not wedge capture: retry it here,
@@ -886,14 +1021,26 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: ui.DisplayRequired}, "")
 		return
 	}
+	if fromShortcut {
+		endThreadModes(n.parent)
+	}
 	n.inProgress = true
-	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options}
+	// The dialogs stay closed until the display is read: the GUI thread goes
+	// on dispatching messages while the worker hides the window, so a click
+	// already queued, on Add Images or Browse, could open a dialog the image
+	// would show (SCR-044). The hold is taken here, on the GUI thread, before
+	// the worker starts, and released as soon as the pixels are read, so a
+	// dialog may open while the file is written; the worker releases it too,
+	// for a capture whose pipeline does not run Captured.
+	release := ui.HoldDialogs()
+	request := CaptureRequest{Window: uintptr(n.parent), DeviceName: deviceName, Options: options, Captured: release}
 	// The card is hidden first so that it cannot appear in the image.
 	n.card.Suspend()
 	n.pending.Add(1)
 	go func() {
 		defer n.pending.Done()
 		result := n.capture(request)
+		release()
 		n.postCompletion(func() { n.finishCapture(result, displayCaptureMessages) })
 	}()
 }
@@ -906,9 +1053,15 @@ func (n *NativeView) startCapture(fromShortcut bool) {
 // suspended and flashes that dialog: the dialog's message loop still delivers
 // it, but hiding the main window would leave the dialog in the image (SCR-044),
 // and that loop does not run the overlay's keyboard handling, so Escape could
-// not cancel a selection (SCR-052). A capture already running keeps
-// startCapture's refusal, as a dialog can open while its file is written.
-// The shell routes WM_HOTKEY here; unknown identifiers are not consumed.
+// not cancel a selection (SCR-052). The same holds while the main window is
+// being moved or sized, or a menu of the application is open, such as its
+// system menu: the shortcut then only beeps, as the window is in front. Menu
+// mode with no menu shown, as after Alt alone, is ended and the capture
+// starts, and so does a capture with a drop-down list open, which is closed
+// first, once startCapture has decided to capture (endThreadModes). A capture
+// already running keeps startCapture's refusal, as a dialog can open while its
+// file is written. The shell routes WM_HOTKEY here; unknown identifiers are
+// not consumed.
 func (n *NativeView) NativeHotkey(id int32) bool {
 	if id != globalShortcutHotkeyID || n.hotkeys == nil {
 		return false
@@ -917,9 +1070,15 @@ func (n *NativeView) NativeHotkey(id int32) bool {
 		n.sessions.Attention()
 		return true
 	}
-	if enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent)); !n.inProgress && enabled == 0 {
-		n.flashDialog()
-		return true
+	if !n.inProgress {
+		if enabled, _, _ := procViewIsWindowEnabled.Call(uintptr(n.parent)); enabled == 0 {
+			n.flashDialog()
+			return true
+		}
+		if n.inMoveOrMenu() {
+			n.beep()
+			return true
+		}
 	}
 	n.startCapture(true)
 	return true
@@ -947,8 +1106,10 @@ func (n *NativeView) NativeShutdown() {
 // anything hides (SCR-031). A cancelled session only reports that nothing
 // was captured (SCR-051); a session a display change invalidates ends with
 // the reason as a warning (SCR-054); a completed one hands the selected
-// rectangle and the main-window restore to startRectangleCapture.
-func (n *NativeView) beginOverlay() {
+// rectangle and the main-window restore to startRectangleCapture. A session
+// the shortcut opens ends the modes endThreadModes ends once the session is
+// accepted, just before the main window hides.
+func (n *NativeView) beginOverlay(fromShortcut bool) {
 	if n.sessions == nil {
 		n.reportOutcome(ui.Notice{Kind: ui.NoticeError, Message: fmt.Sprintf(ui.CaptureOverlayFailed, errors.New(ui.OverlayServiceUnavailable))}, "")
 		return
@@ -967,7 +1128,12 @@ func (n *NativeView) beginOverlay() {
 	// The card stays hidden for the whole session, so that it cannot appear
 	// in the image, and returns when the session or its capture has ended.
 	n.card.Suspend()
+	var starting func()
+	if fromShortcut {
+		starting = func() { endThreadModes(n.parent) }
+	}
 	err := n.sessions.Begin(uintptr(n.parent), uintptr(n.font), mode, size, overlay.Events{
+		OnStart:   starting,
 		OnCapture: n.startRectangleCapture,
 		OnCancel: func() {
 			_ = n.status.Show(ui.Notice{Kind: ui.NoticeInfo, Message: ui.CaptureSelectionEnded}, 0)
@@ -1017,13 +1183,140 @@ func (n *NativeView) startRectangleCapture(region display.Rect, restore func()) 
 }
 
 // NativeFilterMessage lets the shell's message loop pre-handle queued
-// messages for the overlay session's windows: Escape cancels the session,
-// and toolbar messages receive dialog navigation.
+// messages: those for the overlay session's windows, where Escape cancels the
+// session and toolbar messages receive dialog navigation, and the input that
+// dropHeldInput drops.
 func (n *NativeView) NativeFilterMessage(message unsafe.Pointer) bool {
-	if n.sessions == nil {
+	if n.sessions != nil && n.sessions.FilterMessage(message) {
+		return true
+	}
+	return n.dropHeldInput((*queuedMessage)(message))
+}
+
+// queuedMessage is the start of the MSG structure that the shell's message
+// loop hands NativeFilterMessage.
+type queuedMessage struct {
+	hwnd    uintptr
+	message uint32
+	wParam  uintptr
+	lParam  uintptr
+}
+
+// The key and mouse-button messages dropHeldInput drops, and the requests for
+// a menu or a move or size loop that the taskbar posts.
+const (
+	viewWMKeyFirst      = 0x0100
+	viewWMKeyDown       = 0x0100
+	viewWMSysKeyDown    = 0x0104
+	viewWMKeyLast       = 0x0109
+	viewWMNCButtonFirst = 0x00a1 // WM_NCLBUTTONDOWN
+	viewWMNCUnused      = 0x00aa // between the middle and the X buttons'
+	viewWMNCButtonLast  = 0x00ad // WM_NCXBUTTONDBLCLK
+	viewWMButtonFirst   = 0x0201 // WM_LBUTTONDOWN
+	viewWMMouseWheel    = 0x020a
+	viewWMButtonLast    = 0x020d // WM_XBUTTONDBLCLK
+	viewWMContextMenu   = 0x007b
+	viewWMSysCommand    = 0x0112
+	// viewWMPopupSystemMenu is the message the taskbar posts to open a
+	// window's system menu, for a Shift+right-click on its button.
+	viewWMPopupSystemMenu = 0x0313
+	// viewKeyRepeat is the bit of a key message's lParam that marks a repeat.
+	viewKeyRepeat = 1 << 30
+	// viewSCMask keeps the bits of a WM_SYSCOMMAND's wParam that name the
+	// command; Windows uses the four low bits itself.
+	viewSCMask = 0xfff0
+	// The system commands that open a loop on the GUI thread: a size, a move,
+	// the system menu by the mouse or the keyboard, and the help mode.
+	viewSCSize        = 0xf000
+	viewSCMove        = 0xf010
+	viewSCMouseMenu   = 0xf090
+	viewSCKeyMenu     = 0xf100
+	viewSCContextHelp = 0xf180
+)
+
+// dropHeldInput drops a key or mouse-button message queued for the main window
+// or a control in it while ui.HoldDialogs keeps the dialogs closed: from a
+// capture's start until it has read the screen, and while a selection is on
+// screen. The shortcut's WM_HOTKEY is a posted message, which GetMessage
+// returns before input already queued, so a click or key press made just
+// before it would otherwise reach the window as it hides and open what the
+// image would show (SCR-044), or a loop that would take a selection's Escape
+// (SCR-052): a field's shortcut menu, the system menu, a drop-down list, a move
+// of the window, or Open Folder's Explorer window. The requests the taskbar
+// posts for the window's system menu, a move, or a size are dropped too. A
+// dropped press beeps, as a refused dialog does, but for a modifier key's,
+// which the shortcut itself can leave queued. The selection's toolbar is not
+// the main window, so its fields keep their own shortcut menu.
+func (n *NativeView) dropHeldInput(message *queuedMessage) bool {
+	if !ui.DialogsHeld() {
 		return false
 	}
-	return n.sessions.FilterMessage(message)
+	input, press := classifyInput(message)
+	if !input {
+		return false
+	}
+	if root, _, _ := procViewGetAncestor.Call(message.hwnd, viewGARoot); windows.Handle(root) != n.parent {
+		return false
+	}
+	if press {
+		n.beep()
+	}
+	return true
+}
+
+// classifyInput reports whether a queued message is input that dropHeldInput
+// drops, and whether it is a press: key or mouse-button input, of which a
+// mouse button going down, or a key other than a modifier going down for the
+// first time, is a press; or a request posted from outside, as the taskbar
+// posts, for a shortcut menu, the system menu, or a system command that opens
+// a loop, which is a press.
+func classifyInput(message *queuedMessage) (input, press bool) {
+	switch m := message.message; {
+	case m == viewWMContextMenu || m == viewWMPopupSystemMenu:
+		return true, true
+	case m == viewWMSysCommand:
+		loop := opensLoop(message.wParam)
+		return loop, loop
+	case m == viewWMKeyDown || m == viewWMSysKeyDown:
+		return true, message.lParam&viewKeyRepeat == 0 && !modifierKey(message.wParam)
+	case m >= viewWMKeyFirst && m <= viewWMKeyLast:
+		return true, false
+	case m >= viewWMNCButtonFirst && m <= viewWMNCButtonLast && m != viewWMNCUnused:
+		return true, buttonPress(m, viewWMNCButtonFirst, viewWMNCUnused)
+	case m >= viewWMButtonFirst && m <= viewWMButtonLast && m != viewWMMouseWheel:
+		return true, buttonPress(m, viewWMButtonFirst, viewWMMouseWheel)
+	}
+	return false, false
+}
+
+// buttonPress reports whether m, a mouse-button message from first on, is a
+// button going down or a double click. Each button's down, up, and double
+// click follow one another, and the X buttons' come after gap.
+func buttonPress(m, first, gap uint32) bool {
+	if m > gap {
+		first = gap + 1
+	}
+	return (m-first)%3 != 1
+}
+
+// opensLoop reports whether a WM_SYSCOMMAND's wParam asks for a command that
+// opens a loop on the GUI thread, as a move, a size, or the system menu does.
+func opensLoop(command uintptr) bool {
+	switch command & viewSCMask {
+	case viewSCSize, viewSCMove, viewSCMouseMenu, viewSCKeyMenu, viewSCContextHelp:
+		return true
+	}
+	return false
+}
+
+// modifierKey reports whether a virtual-key code is Shift, Ctrl, Alt, or a
+// Windows key, on either side.
+func modifierKey(key uintptr) bool {
+	switch key {
+	case 0x10, 0x11, 0x12, 0x5b, 0x5c, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5:
+		return true
+	}
+	return false
 }
 
 // captureMessages carries the user-facing result wording of one capture

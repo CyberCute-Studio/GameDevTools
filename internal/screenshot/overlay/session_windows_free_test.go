@@ -126,9 +126,10 @@ func windowAbove(a, b windows.Handle) bool {
 }
 
 // TestToolbarReturnsAboveTheOverlayAfterADrag is a real press on the overlay,
-// which raises it above the toolbar within the topmost band. Once the drag
-// ends the toolbar must be in front again, or the overlay covers its fields
-// and Capture, and a click meant for them starts a new selection.
+// which raised it above the toolbar within the topmost band while it activated
+// the overlay, and could again. Once the drag ends the toolbar must be in
+// front, or the overlay covers its fields and Capture, and a click meant for
+// them starts a new selection.
 func TestToolbarReturnsAboveTheOverlayAfterADrag(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {
@@ -160,8 +161,9 @@ func TestToolbarReturnsAboveTheOverlayAfterADrag(t *testing.T) {
 }
 
 // TestToolbarReturnsAboveTheOverlayAfterAnotherButton is a real right, middle,
-// or X-button press on the overlay, which raises it as a left press does
-// before the press reaches it, but starts no drag whose end places the toolbar.
+// or X-button press on the overlay, which could raise it as a left press
+// could before the press reaches it, but starts no drag whose end places the
+// toolbar.
 func TestToolbarReturnsAboveTheOverlayAfterAnotherButton(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	if err := controller.Begin(42, 0, ModeFreeRectangle, display.Point{}, Events{}); err != nil {

@@ -6,10 +6,14 @@ import "github.com/CyberCute-Studio/GameDevTools/internal/display"
 // the app-owned window hidden for the duration of the capture (SCR-044);
 // DeviceName selects the display to capture (SCR-040); Options carries the
 // persisted output settings applied to the clipboard and file delivery.
+// Captured, when set, runs once the display's pixels have been read and the
+// window restored, before delivery, or once the capture has failed: the view
+// keeps the application's dialogs closed until then (ui.HoldDialogs).
 type CaptureRequest struct {
 	Window     uintptr
 	DeviceName string
 	Options    CaptureOptions
+	Captured   func()
 }
 
 // CaptureResult reports the outcome of one capture. Err is set when the

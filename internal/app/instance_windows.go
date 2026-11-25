@@ -96,7 +96,9 @@ func acquireInstance(name string) (handle uintptr, already bool, err error) {
 
 // activateExistingInstance brings the running instance's window back to the
 // user (APP-005): a minimized window is restored first, then the window is
-// moved to the foreground. It reports whether the window was found. The
+// moved to the foreground, or, while one of its modal dialogs has disabled it,
+// that dialog is, as the window would refuse the keyboard the dialog needs. It
+// reports whether the window was found. The
 // running instance takes the instance mutex before its window exists, so a
 // second launch that lands in that startup gap retries for up to wait
 // instead of exiting without showing anything. While the existing instance
@@ -128,12 +130,38 @@ func activateExistingInstance(className string, wait time.Duration) bool {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// Restoring activates the window, which then counts as its own last
+	// active popup, so the dialog is read first; restoring shows the dialog
+	// that minimizing hid with it.
+	popup, _, _ := procGetLastActivePopup.Call(hwnd)
 	if iconic, _, _ := procIsIconic.Call(hwnd); iconic != 0 {
 		procShowWindow.Call(hwnd, swRestore)
 	}
-	procSetForegroundWindow.Call(hwnd)
+	bringForward(activationTarget(hwnd, popup))
 	return true
 }
+
+// activationTarget is the window a launch brings forward: the main window, or,
+// while it is disabled, popup, the window it last activated, which is the
+// modal dialog that disabled it, as Windows does for a click on the disabled
+// window. A popup that is not showing is no place for the keyboard, so the
+// main window is brought forward then, as it is when no popup was active.
+func activationTarget(hwnd, popup uintptr) uintptr {
+	if enabled, _, _ := procIsWindowEnabled.Call(hwnd); enabled != 0 {
+		return hwnd
+	}
+	if popup == 0 || popup == hwnd {
+		return hwnd
+	}
+	if visible, _, _ := procIsWindowVisible.Call(popup); visible == 0 {
+		return hwnd
+	}
+	return popup
+}
+
+// bringForward moves a window to the foreground; tests replace it to see which
+// window a launch brings forward, as a test process may not be allowed to.
+var bringForward = func(hwnd uintptr) { procSetForegroundWindow.Call(hwnd) }
 
 // findInstanceWindow resolves the running instance's top-level window by its
 // class name, or zero while that window does not exist yet.

@@ -645,7 +645,10 @@ func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 			notification := wParam >> 16
 			switch wParam & 0xffff {
 			case cardOpenCommand:
-				if notification == cardBNClicked && card.path != "" && card.open != nil {
+				// A click queued just before a capture hid the card can still
+				// reach it; the Explorer window it would open could be in the
+				// image (SCR-044).
+				if notification == cardBNClicked && !card.suspended && card.path != "" && card.open != nil {
 					card.open(card.path)
 				}
 				return 0
