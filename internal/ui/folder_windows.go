@@ -193,7 +193,10 @@ func checkShellName(folder string) error {
 // that goroutine on one thread while it holds the COM apartment it
 // initializes, and returns only once the shell has finished opening the
 // folder, as shellExecute describes, since the thread, which runs no message
-// loop, is released then.
+// loop, is released then. While HoldDialogs holds the dialogs for a capture,
+// File Explorer is not started until the hold ends, as a window it opens
+// during the capture's screen read would be in the image (SCR-044), so it
+// must never run on the GUI thread, which releases the hold.
 func OpenFolder(folder string) error {
 	info, err := os.Stat(folder)
 	if err != nil {
@@ -211,7 +214,8 @@ func OpenFolder(folder string) error {
 	// As for the folder picker, shell extensions the verb may load expect an
 	// initialized COM apartment.
 	defer initializeCOM()()
-	return shellExecute("explore", utf16("explore"), utf16(target), nil)
+	waitWhileDialogsHeld()
+	return startShell("explore", utf16("explore"), utf16(target), nil)
 }
 
 // RevealInFolder opens File Explorer with the given file selected. It runs
@@ -226,7 +230,8 @@ func OpenFolder(folder string) error {
 // reports success. Looking at the file and the shell's call each
 // block for as long as its drive does not respond, so the GUI thread calls it
 // on a goroutine of its own, which it keeps on one thread while it holds the
-// COM apartment it initializes, as OpenFolder does.
+// COM apartment it initializes, and File Explorer waits for a capture's hold
+// on the dialogs to end, as OpenFolder does.
 func RevealInFolder(path string) error {
 	target, err := shellPath(path)
 	if err != nil {
@@ -249,8 +254,13 @@ func RevealInFolder(path string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	defer initializeCOM()()
-	return shellExecute("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
+	waitWhileDialogsHeld()
+	return startShell("explorer.exe", nil, utf16(explorer), utf16(`/select,"`+target+`"`))
 }
+
+// startShell hands a request to the shell; tests replace it to see when
+// File Explorer would start without starting it.
+var startShell = shellExecute
 
 var (
 	// errShellNameUnconfirmed is BrowseForFolder's failure for a folder whose
