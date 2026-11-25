@@ -28,6 +28,15 @@ const (
 	wmDisplayChange   = 0x007e
 	wmDPIChanged      = 0x02e0
 	wmDropFiles       = 0x0233
+	wmSysCommand      = 0x0112
+	// wmWindowPosChanging is WM_WINDOWPOSCHANGING, sent before a window's
+	// position, size, or visibility changes, with the change it may alter.
+	wmWindowPosChanging = 0x0046
+	// scRestore and scMaximize are the WM_SYSCOMMAND commands, after the
+	// low four bits Windows uses, that the taskbar and the window menu send
+	// to restore or maximize a window.
+	scRestore  = 0xf120
+	scMaximize = 0xf030
 	// The shell's own messages are in the WM_APP range, as the capture
 	// toolbar's are. The dialog manager, which the shell's message loop runs,
 	// sends the window DM_GETDEFID (WM_USER) as it handles Tab, Enter, the
@@ -86,6 +95,8 @@ const (
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
+	// swpShowWindow is SWP_SHOWWINDOW, a change that shows the window.
+	swpShowWindow = 0x0040
 
 	monitorDefaultToNearest = 2
 
@@ -156,6 +167,7 @@ var (
 	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
 	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procSendMessageW                  = user32.NewProc("SendMessageW")
+	procMessageBeep                   = user32.NewProc("MessageBeep")
 	procSetFocus                      = user32.NewProc("SetFocus")
 	procGetFocus                      = user32.NewProc("GetFocus")
 	procIsChild                       = user32.NewProc("IsChild")
@@ -190,6 +202,14 @@ var (
 	procCallWindowProcW               = user32.NewProc("CallWindowProcW")
 	procGetAncestor                   = user32.NewProc("GetAncestor")
 )
+
+// windowPos is the WINDOWPOS structure WM_WINDOWPOSCHANGING points to.
+type windowPos struct {
+	hwnd            windows.Handle
+	hwndInsertAfter windows.Handle
+	x, y, cx, cy    int32
+	flags           uint32
+}
 
 type rect struct {
 	Left   int32

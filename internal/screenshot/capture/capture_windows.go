@@ -68,6 +68,39 @@ type bitmapInfo struct {
 	Masks  [3]uint32
 }
 
+// keptHidden counts, for each window, the exclusions that keep it hidden for
+// a capture, under keptHiddenMu: from just before Hide hides it until just
+// before Restore shows it again.
+var (
+	keptHiddenMu sync.Mutex
+	keptHidden   = map[uintptr]int{}
+)
+
+// KeptHidden reports whether a capture keeps window hidden: Hide has hidden
+// it and its Exclusion has not restored it yet. The application's window
+// procedure refuses to show such a window, as a restore from the taskbar
+// arriving just after it hid would show it before the screen is read
+// (SCR-044), or under a selection.
+func KeptHidden(window uintptr) bool {
+	keptHiddenMu.Lock()
+	defer keptHiddenMu.Unlock()
+	return keptHidden[window] > 0
+}
+
+func keepHidden(window uintptr) {
+	keptHiddenMu.Lock()
+	defer keptHiddenMu.Unlock()
+	keptHidden[window]++
+}
+
+func releaseHidden(window uintptr) {
+	keptHiddenMu.Lock()
+	defer keptHiddenMu.Unlock()
+	if keptHidden[window]--; keptHidden[window] <= 0 {
+		delete(keptHidden, window)
+	}
+}
+
 // captureMu serializes native captures. Every call builds its own device
 // contexts and bitmap, but all calls read the shared screen device context;
 // serializing keeps concurrent callers from racing that surface and bounds
@@ -162,6 +195,9 @@ func FlushCompositor() error {
 // that cannot be hidden reports itself as previously hidden, so Restore
 // leaves it alone rather than forcing it visible.
 //
+// Until Restore, each window counts as KeptHidden, which the application's
+// window procedure reads to refuse showing it.
+//
 // ShowWindow acts through each window's owner thread, so that thread must
 // keep pumping messages while Hide runs. Calling Hide while the GUI
 // thread is blocked — for example synchronously waiting for the capture
@@ -169,6 +205,7 @@ func FlushCompositor() error {
 func Hide(hwnd ...uintptr) (*Exclusion, error) {
 	exclusion := &Exclusion{windows: make([]hiddenWindow, 0, len(hwnd))}
 	for _, window := range hwnd {
+		keepHidden(window)
 		minimized, _, _ := procIsIconic.Call(window)
 		shown, _, _ := procShowWindow.Call(window, swHide)
 		exclusion.windows = append(exclusion.windows, hiddenWindow{
@@ -189,7 +226,8 @@ func Hide(hwnd ...uintptr) (*Exclusion, error) {
 // windows are shown minimized again, and windows that were already hidden
 // stay hidden, so Restore
 // never resurrects a window another flow hid or pops open one the user
-// minimized. Nothing is activated, so restoring after capture never moves
+// minimized. Each window stops counting as KeptHidden just before it is
+// shown, so that its own restore is not refused. Nothing is activated, so restoring after capture never moves
 // input focus. Restore is idempotent and safe for concurrent use, so a
 // deferred Restore is harmless after an earlier explicit call. Like Hide,
 // Restore acts through each window's owner thread, which must keep
@@ -199,6 +237,7 @@ func (e *Exclusion) Restore() {
 		return
 	}
 	for _, window := range e.windows {
+		releaseHidden(window.hwnd)
 		switch {
 		case !window.wasVisible:
 			// Already hidden before Hide; leave it hidden.

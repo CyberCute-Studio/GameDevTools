@@ -802,3 +802,38 @@ func TestConvertDIB(t *testing.T) {
 		}
 	}
 }
+
+// TestKeptHiddenLastsFromHideToRestore pins the record the application's
+// window procedure reads to refuse showing a window a capture hides: it starts
+// as Hide hides the window and ends as its Exclusion restores it, once however
+// often Restore runs, and two exclusions of one window keep it until both have
+// restored it.
+func TestKeptHiddenLastsFromHideToRestore(t *testing.T) {
+	region := display.Rect{Left: -22000, Top: -22000, Right: -21760, Bottom: -21820}
+	hwnd := uintptr(showSolidWindow(t, region, color.RGBA{R: 0x20, G: 0x40, B: 0x60, A: 0xFF}))
+	if KeptHidden(hwnd) {
+		t.Fatal("a window no capture hid counts as kept hidden")
+	}
+	first, err := Hide(hwnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !KeptHidden(hwnd) {
+		t.Fatal("Hide did not record the window it hid")
+	}
+	second, err := Hide(hwnd)
+	if err != nil {
+		first.Restore()
+		t.Fatal(err)
+	}
+	first.Restore()
+	first.Restore()
+	if !KeptHidden(hwnd) {
+		second.Restore()
+		t.Fatal("restoring one exclusion twice released the other's record")
+	}
+	second.Restore()
+	if KeptHidden(hwnd) {
+		t.Fatal("the record outlived every exclusion")
+	}
+}
