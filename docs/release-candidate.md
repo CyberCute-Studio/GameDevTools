@@ -4,7 +4,7 @@ This is REL-03's record of the 1.0.0 release candidate: what was built, the chec
 
 **Result: the candidate is not releasable yet.** It passes every automated gate that has run, the pull request's CI included. Of the manual checks this environment can run, M9, M10, M13, M14, M15, M16, M17, M18, and M19 passed, M16 once the project owner decided after the run that its Open Folder condition holds (PRD 1.10), M12 failed in one of its three drags, and M8's Paint half passed while its Office half could not run. The packaged user guide does not match the candidate in three places, and its known limitations leave out the other defects found and left for later. The P0 requirements and acceptance scenarios listed under [Release blockers](#release-blockers) are still open, and every run recorded here counts for this candidate only.
 
-The project owner decided to publish 1.0.0 as a GitHub pre-release for Windows on Arm alone while these blockers remain, which REL-04 does (PRD 1.12). That arm64 ZIP is built from a later commit than this candidate, so no run recorded here counts for it, and the blockers below still hold for a full release.
+The project owner decided to publish 1.0.0 as a GitHub pre-release for Windows on Arm alone while these blockers remain (PRD 1.12). REL-04 published it as [v1.0.0](https://github.com/CyberCute-Studio/GameDevTools/releases/tag/v1.0.0), built from `c712f2e`, whose ZIP is `cybercute-dev-tools-1.0.0-windows-arm64.zip`, SHA-256 `5387da716f904da2cdc148f57a28d4c3ed7bc635170b2cd346c0715e90a9d408`. That commit is later than this candidate, so no run recorded here counts for that ZIP, and the blockers below still hold for a full release.
 
 ## The candidate
 
