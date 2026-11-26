@@ -242,12 +242,22 @@ func set(names ...string) map[string]bool {
 	return result
 }
 
-// goTool runs the go command for the release target, windows/amd64 without
-// cgo, whatever machine the test runs on.
-func goTool(t *testing.T, args ...string) []byte {
+// releaseArchitectures are the Go architectures a release ships an executable
+// for (NFR-004). The checks cover the code each of them compiles, so a file
+// only one of them builds is audited too.
+var releaseArchitectures = []string{"amd64", "arm64"}
+
+// releaseEnvironment is the go command's environment for the release target
+// windows/<architecture> without cgo, whatever machine the test runs on.
+func releaseEnvironment(architecture string) []string {
+	return append(os.Environ(), "GOOS=windows", "GOARCH="+architecture, "CGO_ENABLED=0")
+}
+
+// goTool runs the go command for the release target of an architecture.
+func goTool(t *testing.T, architecture string, args ...string) []byte {
 	t.Helper()
 	command := exec.Command("go", args...)
-	command.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
+	command.Env = releaseEnvironment(architecture)
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()
@@ -283,29 +293,43 @@ var (
 	listErr  error
 )
 
-// applicationPackages lists every package linked into the application.
+// applicationPackages lists every package linked into the application for
+// any release architecture. A package linked for more than one is listed
+// once, with the files and imports of each.
 func applicationPackages(t *testing.T) []listedPackage {
 	t.Helper()
 	listOnce.Do(func() {
-		command := exec.Command("go", "list", "-deps", "-json", "github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
-		command.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
-		var stderr bytes.Buffer
-		command.Stderr = &stderr
-		output, err := command.Output()
-		if err != nil {
-			listErr = fmt.Errorf("go list: %w\n%s", err, stderr.String())
-			return
-		}
-		decoder := json.NewDecoder(bytes.NewReader(output))
-		for {
-			var item listedPackage
-			if err := decoder.Decode(&item); err == io.EOF {
-				return
-			} else if err != nil {
-				listErr = err
+		index := map[string]int{}
+		for _, architecture := range releaseArchitectures {
+			command := exec.Command("go", "list", "-deps", "-json", "github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
+			command.Env = releaseEnvironment(architecture)
+			var stderr bytes.Buffer
+			command.Stderr = &stderr
+			output, err := command.Output()
+			if err != nil {
+				listErr = fmt.Errorf("go list for %s: %w\n%s", architecture, err, stderr.String())
 				return
 			}
-			listed = append(listed, item)
+			decoder := json.NewDecoder(bytes.NewReader(output))
+			for {
+				var item listedPackage
+				if err := decoder.Decode(&item); err == io.EOF {
+					break
+				} else if err != nil {
+					listErr = err
+					return
+				}
+				at, seen := index[item.ImportPath]
+				if !seen {
+					index[item.ImportPath] = len(listed)
+					listed = append(listed, item)
+					continue
+				}
+				merged := &listed[at]
+				merged.GoFiles = union(merged.GoFiles, item.GoFiles)
+				merged.CgoFiles = union(merged.CgoFiles, item.CgoFiles)
+				merged.Imports = union(merged.Imports, item.Imports)
+			}
 		}
 	})
 	if listErr != nil {
@@ -323,11 +347,22 @@ type sourceFile struct {
 	file *ast.File
 }
 
+// union returns the names in either list, each once, in the order first seen.
+func union(first, second []string) []string {
+	result := slices.Clone(first)
+	for _, name := range second {
+		if !slices.Contains(result, name) {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
 // applicationSources parses every file of the application's own packages
-// that the release target compiles.
+// that a release target compiles.
 func applicationSources(t *testing.T) []sourceFile {
 	t.Helper()
-	root := strings.TrimSpace(string(goTool(t, "list", "-m", "-f", "{{.Dir}}")))
+	root := strings.TrimSpace(string(goTool(t, releaseArchitectures[0], "list", "-m", "-f", "{{.Dir}}")))
 	fileSet := token.NewFileSet()
 	var sources []sourceFile
 	for _, item := range applicationPackages(t) {
@@ -445,7 +480,7 @@ func TestDependenciesAreInventoried(t *testing.T) {
 			t.Errorf("module %s is in the inventory but no longer linked", path)
 		}
 	}
-	required := strings.Fields(string(goTool(t, "list", "-m", "-f", "{{if not .Main}}{{.Path}}{{end}}", "all")))
+	required := strings.Fields(string(goTool(t, releaseArchitectures[0], "list", "-m", "-f", "{{if not .Main}}{{.Path}}{{end}}", "all")))
 	for _, path := range required {
 		if _, known := reviewedModules[path]; !known {
 			t.Errorf("go.mod requires %s, which is not in the inventory", path)
@@ -469,28 +504,31 @@ func TestApplicationLinksNoNetworkPackages(t *testing.T) {
 }
 
 // TestExecutableContainsNoNetworkCode pins NFR-030 and NFR-031 in the built
-// executable: of net, which golang.org/x/sys/windows imports for its types,
-// the linker keeps nothing that could connect, listen, or resolve a name.
+// executable of each release architecture: of net, which
+// golang.org/x/sys/windows imports for its types, the linker keeps nothing
+// that could connect, listen, or resolve a name.
 func TestExecutableContainsNoNetworkCode(t *testing.T) {
-	executable := filepath.Join(t.TempDir(), "gamedevtools.exe")
-	goTool(t, "build", "-o", executable, "github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
-	output := goTool(t, "tool", "nm", executable)
-	symbols := 0
-	foundMain := false
-	for line := range strings.SplitSeq(string(output), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
+	for _, architecture := range releaseArchitectures {
+		executable := filepath.Join(t.TempDir(), "gamedevtools-"+architecture+".exe")
+		goTool(t, architecture, "build", "-o", executable, "github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
+		output := goTool(t, architecture, "tool", "nm", executable)
+		symbols := 0
+		foundMain := false
+		for line := range strings.SplitSeq(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 3 {
+				continue
+			}
+			symbols++
+			name := fields[2]
+			foundMain = foundMain || name == "main.main"
+			if networkSymbols.MatchString(name) {
+				t.Errorf("the %s executable contains network code: %s", architecture, name)
+			}
 		}
-		symbols++
-		name := fields[2]
-		foundMain = foundMain || name == "main.main"
-		if networkSymbols.MatchString(name) {
-			t.Errorf("the executable contains network code: %s", name)
+		if !foundMain || symbols < 1000 {
+			t.Fatalf("read %d symbols of the %s executable, main.main found = %v; the symbol table was not read", symbols, architecture, foundMain)
 		}
-	}
-	if !foundMain || symbols < 1000 {
-		t.Fatalf("read %d symbols, main.main found = %v; the symbol table was not read", symbols, foundMain)
 	}
 }
 

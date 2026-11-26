@@ -12,6 +12,10 @@ includes.
 
 Run it
 ------
+Each ZIP is built for one kind of PC: the arm64 ZIP for Windows on Arm, and
+the x64 ZIP for 64-bit Intel or AMD. Settings > System > About shows which
+yours is, under System type.
+
 Extract the whole ZIP to a folder you can write to, such as Documents. It
 creates a CyberCute Dev Tools folder there; open cybercute-dev-tools.exe inside
 it. Nothing is installed. Pin it to Start or the taskbar if you want a shortcut.
@@ -22,11 +26,12 @@ More info > Run anyway.
 
 Check the download
 ------------------
-Each release publishes a .sha256 file beside the ZIP. In PowerShell:
+Each release publishes a .sha256 file beside each ZIP. In PowerShell, with
+<arch> being arm64 or x64, as in the name of the ZIP you downloaded:
 
-    (Get-FileHash .\cybercute-dev-tools-<version>-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+    (Get-FileHash .\cybercute-dev-tools-<version>-windows-<arch>.zip -Algorithm SHA256).Hash.ToLower()
 
-The result must match the first value in the .sha256 file.
+The result must match the first value in that ZIP's .sha256 file.
 
 Your files
 ----------

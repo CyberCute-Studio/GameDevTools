@@ -3,10 +3,13 @@
 Checks a portable ZIP the way a user receives it.
 
 .DESCRIPTION
-Confirms the checksum, contents, x64 architecture, version metadata, icon, and signing state, then
-extracts the ZIP and runs the executable with no Go on its PATH and its per-user
-folders in a temporary workspace: once as a first run and once as an upgrade
-from a GameDevTools settings file. Close the application first.
+Confirms the checksum, contents, the architecture the ZIP is named for (x64 or
+arm64), version metadata, icon, and signing state, then extracts the ZIP and
+runs the executable with no Go on its PATH and its per-user folders in a
+temporary workspace: once as a first run and once as an upgrade from a
+GameDevTools settings file. Close the application first. An x64 ZIP can be
+checked on x64 Windows or Windows on Arm, and an arm64 ZIP only on Windows on
+Arm, as only there can its executable run.
 #>
 [CmdletBinding()]
 param(
@@ -144,6 +147,11 @@ function Invoke-App([string]$Executable, [string]$Workspace) {
 }
 
 $Package = (Resolve-Path -LiteralPath $Package).Path
+# The name says which architecture the executable must be built for.
+$named = [regex]::Match((Split-Path -Leaf $Package), '-windows-(x64|arm64)\.zip$')
+if (-not $named.Success) { throw "The ZIP's name does not end in -windows-x64.zip or -windows-arm64.zip." }
+$architecture = $named.Groups[1].Value
+$expectedMachine = @{ "x64" = 0x8664; "arm64" = 0xAA64 }[$architecture]
 if (Test-InstanceRunning) { throw "$productName is running. Close it and run this again." }
 
 $checksumFile = "$Package.sha256"
@@ -175,7 +183,8 @@ try {
 
     $executable = Join-Path $folder $executableName
     # The launch checks below pass for any build this machine can run, so an
-    # arm64 executable in a ZIP named x64 needs its PE header read.
+    # arm64 executable in a ZIP named x64, or the reverse, needs its PE header
+    # read.
     $image = [System.IO.File]::ReadAllBytes($executable)
     if ($image.Length -lt 64 -or $image[0] -ne 0x4D -or $image[1] -ne 0x5A) { throw "The executable has no DOS header." }
     $header = [BitConverter]::ToInt32($image, 0x3C)
@@ -184,20 +193,20 @@ try {
         throw "The executable has no PE header."
     }
     $machine = [BitConverter]::ToUInt16($image, $header + 4)
-    if ($machine -ne 0x8664) { throw ("The executable's machine type is 0x{0:X4}, not x64 (0x8664)." -f $machine) }
-    Write-Check "x64 executable"
+    if ($machine -ne $expectedMachine) { throw ("The executable's machine type is 0x{0:X4}, not {1} (0x{2:X4})." -f $machine, $architecture, $expectedMachine) }
+    Write-Check "$architecture executable"
 
     $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
     if ($info.ProductName -cne $productName) { throw "ProductName is '$($info.ProductName)'." }
     if ($info.OriginalFilename -cne $executableName) { throw "OriginalFilename is '$($info.OriginalFilename)'." }
-    if ((Split-Path -Leaf $Package) -notmatch "-$([regex]::Escape($info.ProductVersion))-windows-x64\.zip$") {
+    if ((Split-Path -Leaf $Package) -notmatch "-$([regex]::Escape($info.ProductVersion))-windows-$architecture\.zip$") {
         throw "The executable's version $($info.ProductVersion) is not the one the ZIP is named for."
     }
     Write-Check "version metadata ($($info.ProductVersion))"
 
     # The shell gives a generic icon for a file with none, so the check reads
-    # the resource: RT_GROUP_ICON (14), ID 1, loaded as data so an x64 file can
-    # be inspected from any architecture.
+    # the resource: RT_GROUP_ICON (14), ID 1, loaded as data so an executable
+    # of either architecture can be inspected from any architecture.
     $module = [PackageCheck.Native]::LoadLibraryExW($executable, [IntPtr]::Zero, 0x22)
     if ($module -eq [IntPtr]::Zero) { throw "The executable could not be opened to read its icon." }
     try {

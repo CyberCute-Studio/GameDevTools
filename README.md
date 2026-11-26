@@ -89,20 +89,22 @@ $env:CGO_ENABLED = "0"
 ./scripts/build.ps1 -Configuration Release -OutputPath bin/cybercute-dev-tools-windows-amd64.exe
 ```
 
-Windows CI runs the same formatting, static-analysis, and test checks, builds and verifies the portable package, and uploads it as an artifact.
+Windows CI runs the same formatting, static-analysis, and test checks, builds and verifies the x64 portable package, builds the arm64 one, and uploads both as artifacts.
 
 ## Release package
 
-CyberCute Dev Tools ships as a portable ZIP for 64-bit Intel/AMD Windows, unsigned and with a SHA-256 checksum file. It has no installer and no update check. It is released under the [MIT License](LICENSE). Beside the executable, the ZIP carries the license, a short README, the [user guide](packaging/USER-GUIDE.txt), the [release notes](packaging/RELEASE-NOTES.txt), and the third-party notices. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
+CyberCute Dev Tools ships as a portable ZIP for each 64-bit Windows architecture, x64 for Intel/AMD and arm64 for Windows on Arm, unsigned and with a SHA-256 checksum file. The first release, 1.0.0, publishes the arm64 ZIP alone, as a GitHub pre-release, since no x64 hardware has run it yet (PRD 1.12). It has no installer and no update check. It is released under the [MIT License](LICENSE). Beside the executable, the ZIP carries the license, a short README, the [user guide](packaging/USER-GUIDE.txt), the [release notes](packaging/RELEASE-NOTES.txt), and the third-party notices. [ADR-0002](docs/adr/0002-product-identity-and-distribution.md) records these decisions and the rename from GameDevTools, whose settings the first launch takes over. Build the ZIP with the toolchain `go.mod` pins:
 
 ```powershell
 ./scripts/package.ps1
+./scripts/package.ps1 -Architecture arm64 -OutputDirectory bin/release-arm64
 ```
 
-The ZIP and its `.sha256` file are written to `bin/release`, and the same commit gives the same bytes from any checkout path and Go configuration. To check a package as a user receives it, with the application closed, run the command below. It confirms the checksum, contents, x64 architecture, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade from a GameDevTools settings file:
+The first builds the x64 ZIP, the second the arm64 ZIP. Each ZIP and its `.sha256` file are written to the output folder, `bin/release` by default, and the same commit and architecture give the same bytes from any checkout path and Go configuration. To check a package as a user receives it, with the application closed, run the command below. It confirms the checksum, contents, the architecture the ZIP is named for, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade from a GameDevTools settings file. An arm64 ZIP can only be checked on Windows on Arm, where its executable runs:
 
 ```powershell
 ./scripts/verify-package.ps1 -Package bin/release/cybercute-dev-tools-1.0.0-windows-x64.zip
+./scripts/verify-package.ps1 -Package bin/release-arm64/cybercute-dev-tools-1.0.0-windows-arm64.zip
 ```
 
 The version and the date stamped on the ZIP's files are in `internal/release/release.go`, and the icon is in `assets/icon.ico`. Change the date whenever the version changes. After changing the version or the icon, regenerate the linked Windows resources:

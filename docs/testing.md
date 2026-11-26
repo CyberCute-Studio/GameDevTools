@@ -20,7 +20,7 @@ go test -count=1 -p 1 ./...
 ./scripts/verify-package.ps1 -Package (Get-ChildItem bin/release/*.zip).FullName
 ```
 
-`go fmt` must change nothing. The last command expects one ZIP in `bin/release`, so delete any from an earlier version first. `verify-package.ps1` needs the application closed. It checks the ZIP's checksum, contents, x64 architecture, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade. CI also fails a release executable built with any toolchain other than the one `go.mod` pins.
+`go fmt` must change nothing. The last command expects one ZIP in `bin/release`, so delete any from an earlier version first. `verify-package.ps1` needs the application closed. It checks the ZIP's checksum, contents, the architecture it is named for, version metadata, and icon, then runs the extracted executable with no Go on its `PATH`, as a first run and as an upgrade. CI also builds the arm64 ZIP with `./scripts/package.ps1 -Architecture arm64`, which its x64 runner cannot run, so `verify-package.ps1` checks that one on Windows on Arm. CI fails a release executable of either architecture built with any toolchain other than the one `go.mod` pins.
 
 `go test -race` is not available on Windows on Arm, the development machine's platform.
 

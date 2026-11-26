@@ -73,6 +73,20 @@ func TestBuildResourcesIsACOFFObjectForEachArchitecture(t *testing.T) {
 // TestCommittedManifestResourcesAreCurrent fails when the manifest changed
 // without running go generate ./internal/ui/visualstyles, which would leave
 // the tests driving other controls than the application's.
+func TestArchitectureLabelNamesEachSupportedMachine(t *testing.T) {
+	for machine, want := range map[uint16]string{pe.IMAGE_FILE_MACHINE_AMD64: "x64", pe.IMAGE_FILE_MACHINE_ARM64: "arm64"} {
+		got, err := ArchitectureLabel(machine)
+		if err != nil || got != want {
+			t.Errorf("ArchitectureLabel(%#x) = %q, %v; want %q", machine, got, err, want)
+		}
+	}
+	for _, machine := range []uint16{pe.IMAGE_FILE_MACHINE_I386, pe.IMAGE_FILE_MACHINE_ARMNT, 0} {
+		if got, err := ArchitectureLabel(machine); err == nil {
+			t.Errorf("ArchitectureLabel(%#x) = %q, want an error", machine, got)
+		}
+	}
+}
+
 func TestCommittedManifestResourcesAreCurrent(t *testing.T) {
 	for _, architecture := range []string{"amd64", "arm64"} {
 		want, err := BuildManifestResources(architecture)

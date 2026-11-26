@@ -1,8 +1,8 @@
 # CyberCute Dev Tools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.13\
-**Last updated:** 2026-11-25\
+**Version:** 1.14\
+**Last updated:** 2026-11-26\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
 
@@ -33,9 +33,9 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M1 — Screenshot module | 8–18 | Blocked |
 | M2 — Image Resizer module | 19–27 | In Progress |
 | M3 — Cross-cutting quality and hardening | 28–36 | In Progress |
-| M4 — Distribution and release | 37–44 | In Progress |
+| M4 — Distribution and release | 37–45 | In Progress |
 
-35 of the 44 items are Done. The nine still open, and what each waits on:
+35 of the 45 items are Done. The ten still open, and what each waits on:
 
 | Item | Status | Waits on |
 |---|---|---|
@@ -48,6 +48,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | REL-02 | In Progress | Manual check M1, the clean-machine walkthrough of the documentation |
 | UX-01 | In Progress | Its pull request's review and merge |
 | REL-03 | Blocked | The blockers its Notes list |
+| REL-04 | In Progress | Its pull request's merge and the published pre-release |
 
 The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-release-checks), and REL-03 runs them.
 
@@ -333,7 +334,7 @@ The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-rel
 
 ## 8. Milestone M4 — Distribution and release
 
-**Milestone status:** In Progress — REL-01 and REL-02 wait on manual check M1, UX-01 is In Progress, and REL-03 is Blocked\
+**Milestone status:** In Progress — REL-01 and REL-02 wait on manual check M1, UX-01 and REL-04 are In Progress, and REL-03 is Blocked\
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
 37. **REL-01 — Finalize product identity, packaging, and distribution**
@@ -392,6 +393,13 @@ The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-rel
     - **Verify:** Test the exact artifact produced by REL-01, not a development build. Complete all P0 acceptance scenarios or record an explicit release blocker. Confirm CI, package integrity, documentation, offline operation, and clean exit.
     - **Notes:** Completion of this item establishes the initial implemented baseline; subsequent features are added as new plan items under new milestones. Started by explicit request while REL-02B and the items before it are not Done. **Blocked** by QLT-04A's hardware runs, by manual checks M1, M2, M12, and M8's Office half, by a candidate with REL-02C's fix for the defect that can put a dialog in a Full Display image (SCR-044), by packaged documentation that must match the next candidate, and by repeating every recorded run on that candidate, as the [release candidate record](docs/release-candidate.md#release-blockers) lists. The project owner chose the MIT License (PRD 1.7) and decided that a scripted run driving the release build with real input counts as a manual check, which [the test guide](docs/testing.md#manual-pre-release-checks) states. The candidate is commit `c646471`, ZIP SHA-256 `bbcbdc13161d52c1cae16f58aed17dee32300aecef4891fb2cdeb307d271fe02`. It passed every automated gate that has run, the x64 validation, M13, M14, M9, M10, M15, M17, M18, and M19; the pull request's CI then passed on the branch head, whose commits after the candidate change only the records and the documentation test. M12 failed in one of three drags, under emulation. M16 held except for Open Folder highlighting the saved file, which the project owner then decided meets it (PRD 1.10). Driving the earlier candidates found three release-blocking defects, now fixed: a Free Rectangle selection let presses through to the application beneath; Add Images could not open its picker; and the overlay covered the toolbar after a real press. The global shortcut now captures nothing while a modal dialog of the application is open, an exception PRD 1.7 recorded and the project owner confirmed (PRD 1.10). It could already fire behind the Browse folder pickers and the application's questions on `main`, and the working picker added one more such dialog. The traceability matrix was then 152 Pass and 24 Partial, with 17 P0 requirements or acceptance scenarios Partial; with REL-02C's fixes it was 153 Pass and 23 Partial, with 16, and with the Open Folder decision it is 154 Pass and 22 Partial, still with 16. The defects on `main` that the record [leaves for later](docs/release-candidate.md#found-and-left-for-later) are REL-02C's, and the two races REL-02C's review found there are REL-02D's. No earlier item was marked Done here, as FND-01's mixed-DPI verification waited on QLT-04A, every item depends on FND-01, and FND-01's PR #1 ran before CI existed. The project owner broke that cycle in plan 1.11: FND-01's mixed-DPI check moved to QLT-04A, and each item is judged Done on its own, so 35 items are Done and the status summary lists what the other eight wait on.
 
+45. **REL-04 — Publish the first release for Windows on Arm**
+    - **Status:** In Progress | **PR:** [#46](https://github.com/CyberCute-Studio/GameDevTools/pull/46) | **Depends on:** UX-01
+    - **Requirements:** NFR-004, TECH-010.
+    - **Deliver:** The arm64 portable ZIP, built by `scripts/package.ps1 -Architecture arm64` and named from its executable's machine type; the package check, the privacy audit, and CI extended to it; the packaged documentation, the PRD, and ADR-0002 naming Windows on Arm as a target and the first release's only platform; and the 1.0.0 GitHub pre-release, tagged on the merged commit, carrying the arm64 ZIP and its checksum file.
+    - **Verify:** Build the arm64 ZIP from the merged commit twice with identical bytes, pass `scripts/verify-package.ps1` on it on Windows on Arm, scan its executable with govulncheck, and confirm that the published ZIP and checksum file are the ones built.
+    - **Notes:** Started by explicit request while REL-03 is Blocked and UX-01 In Progress: the project owner decided to publish 1.0.0 for Windows on Arm alone, as a GitHub pre-release, while REL-03's release blockers remain (PRD 1.12). It has no x64 ZIP, as no x64 hardware has run it (QLT-04A). REL-03's blockers still hold for a full release, and the runs REL-03 recorded were made on earlier candidates, so none of them counts for this ZIP.
+
 **M4 exit criteria:** The exact distributable artifact passes all release-blocking acceptance criteria, documentation matches behavior, every prior item is Done, and no unresolved P0 gap remains.
 
 ## 9. Requirement coverage map
@@ -406,7 +414,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 | RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08; output-folder fix in QLT-03C; Open Output Folder race in REL-02D | RSZ-09, QLT-04, REL-03 |
 | SET-001 through SET-007 | FND-04, FND-06, module settings items, QLT-02, QLT-03; maximized-window fix in REL-02A | QLT-04, REL-03 |
 | UX-001 through UX-010 | FND-05 and all feature UI items; the dark theme in UX-01 | QLT-01, QLT-04 |
-| NFR-001 through NFR-004 | SCR-02, REL-01 | QLT-04, QLT-04A, REL-03 |
+| NFR-001 through NFR-004 | SCR-02, REL-01; the arm64 target in REL-04 | QLT-04, QLT-04A, REL-03 |
 | NFR-010 through NFR-014 | SCR-11, RSZ-07, RSZ-09 | QLT-04, QLT-04A, REL-03 |
 | NFR-020 through NFR-024 | FND-04, SCR-10, RSZ-05 through RSZ-07, QLT-02 | QLT-04, REL-03 |
 | NFR-030 through NFR-033 | FND-04 and feature implementations | QLT-03, QLT-04 |
@@ -433,3 +441,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.11 | 2026-11-25 | The project owner moved FND-01's mixed-DPI check, and the blocker it gates in the Screenshot items, to QLT-04A, whose requirements now list every hardware-gated requirement, and decided that rule 6 judges each item on its own. Marked the 35 items that meet rule 6 Done, set the milestone statuses, listed what the eight open items wait on, and recorded that REL-03's pull request CI passed. |
 | 1.12 | 2026-11-25 | REL-03: recorded the project owner's two decisions (PRD 1.10), confirming the global shortcut's dialog exception and accepting Open Folder's first-open behavior as meeting SCR-069, which is now Pass; REL-03 no longer waits on them. |
 | 1.13 | 2026-11-25 | Inserted UX-01 for the dark redesign the project owner asked for (PRD 1.11); REL-03 now depends on UX-01 and is renumbered. |
+| 1.14 | 2026-11-26 | Inserted REL-04 for the first release, which the project owner decided to publish for Windows on Arm alone, as a GitHub pre-release, while REL-03 is Blocked (PRD 1.12). |

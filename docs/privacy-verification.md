@@ -38,7 +38,7 @@ Results below were recorded on 2026-11-21:
 |---|---|
 | OS | Windows 11 Home 26H2, build 26300 (ARM64) |
 | Device | HP OmniBook 5 Laptop 14-he0xxx, Snapdragon X Plus X1P42100, 32 GB RAM |
-| Go | go1.27.4 windows/arm64, the toolchain `go.mod` pins; the audit's package and symbol checks examine the windows/amd64 release target |
+| Go | go1.27.4 windows/arm64, the toolchain `go.mod` pins; the audit's package and symbol checks examined the windows/amd64 release target, and since REL-04 examine windows/arm64 as well |
 | Vulnerability scanner | govulncheck v1.10.0, database updated 2026-11-11 |
 
 ## Offline operation

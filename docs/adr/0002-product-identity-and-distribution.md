@@ -1,8 +1,8 @@
 # ADR-0002: Product identity and portable distribution
 
 - **Date:** 2026-11-22
-- **Status:** Accepted
-- **Requirements:** TECH-010, NFR-033, PRD section 19 (resolved in PRD 1.5, section 20)
+- **Status:** Accepted. Amended 2026-11-26 by REL-04, which added the arm64 ZIP (PRD 1.12)
+- **Requirements:** TECH-010, NFR-033, NFR-004, PRD section 19 (resolved in PRD 1.5, section 20)
 
 ## Context
 
@@ -16,7 +16,7 @@ PRD section 19 left four decisions open until public distribution: the final nam
 | Executable | `cybercute-dev-tools.exe` |
 | First version | 1.0.0, in `internal/release` |
 | Publisher in the version resource | CyberCute Studio |
-| Package | Portable ZIP for 64-bit Intel/AMD Windows; no installer |
+| Package | Portable ZIP for each 64-bit Windows architecture, x64 and arm64; no installer. The first release, 1.0.0, publishes the arm64 ZIP alone, as a GitHub pre-release (PRD 1.12) |
 | Code signing | None. Each ZIP has a published SHA-256 checksum |
 | Updates | Manual. The application makes no network access to look for one |
 | License | MIT, chosen by the project owner in REL-03 (PRD 1.7), in `LICENSE` and as `LICENSE.txt` in the ZIP |
@@ -39,7 +39,11 @@ The icon and version resource are linked from `cmd/gamedevtools/resource_windows
 
 ### Reproducible builds
 
-The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, and `scripts/package.ps1` pins the toolchain from `go.mod`, turns off the user's `go env -w` file and Go workspace mode, forces module mode, keeping from it only where modules come from and where they and the build's temporary files are kept, which cannot change the bytes, and fixes `GOAMD64` at `v1` with no `GOEXPERIMENT` or `GOFLAGS`. ZIP entries are sorted and carry a fixed date. The same commit gives the same executable and ZIP bytes from any checkout path and Go configuration.
+The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, and `scripts/package.ps1` pins the toolchain from `go.mod`, turns off the user's `go env -w` file and Go workspace mode, forces module mode, keeping from it only where modules come from and where they and the build's temporary files are kept, which cannot change the bytes, and fixes `GOAMD64` at `v1` and `GOARM64` at `v8.0` with no `GOEXPERIMENT` or `GOFLAGS`. ZIP entries are sorted and carry a fixed date. The same commit and architecture give the same executable and ZIP bytes from any checkout path and Go configuration.
+
+### One ZIP per architecture
+
+`scripts/package.ps1 -Architecture amd64` builds the x64 ZIP, the default, and `-Architecture arm64` the arm64 ZIP; both carry the same documents. `cmd/release` names the ZIP from the machine type in its executable's PE header, so the name cannot disagree with what it holds, and `scripts/verify-package.ps1` checks that the executable is built for the architecture the ZIP is named for. An arm64 executable runs only on Windows on Arm, so the package check of an arm64 ZIP runs there; CI, on an x64 runner, builds the arm64 ZIP and checks its toolchain without running it.
 
 ## Alternatives considered
 
