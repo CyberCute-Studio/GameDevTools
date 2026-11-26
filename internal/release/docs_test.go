@@ -473,6 +473,7 @@ func TestUserGuideNamesTheApplicationsControls(t *testing.T) {
 		ui.PresetLibraryLabel, ui.PresetCreateAction, ui.PresetRenameAction,
 		ui.PresetDuplicateAction, ui.PresetDeleteAction,
 		ui.RestoreDefaultsAction, ui.CardDismissAction, ui.CardDismissProblemAction, ui.ResizeModeSummaryLabel,
+		ui.UpdateSkipAction,
 		ui.ErrorWriteEncodeLabel, ui.ErrorShortcutRegistrationLabel,
 		// The troubleshooting section quotes these messages by how they begin.
 		strings.Split(ui.CaptureGraphicsFailed, ":")[0],

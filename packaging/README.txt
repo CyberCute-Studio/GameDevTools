@@ -55,7 +55,21 @@ Images you already saved stay where they are.
 
 Update
 ------
-The app does not check for updates. To update, close it and extract the new ZIP
+The app updates itself. Each time it starts, it asks GitHub whether a newer
+version has been published for your PC. If one has, a small window shows the
+download; the app then checks it against its published SHA-256 checksum,
+replaces the files in this folder with the new version's, and starts the new
+version. Your settings and any other files in this folder are kept. Press Skip
+Update to start this version instead; the next start offers the update again.
+Without an internet connection, or if GitHub does not answer within five
+seconds, the app starts at once as it is. It sends GitHub nothing but the
+request itself and the version you run.
+
+The update writes to this folder. If the folder cannot be written, as under
+Program Files, the app says so in its main window and keeps running this
+version: move the folder somewhere you can write to, such as Documents.
+
+To update by hand, as version 1.0.0 needs, close the app and extract the new ZIP
 to the folder that holds your CyberCute Dev Tools folder, such as Documents, not
 into that folder itself. Windows' Extract All suggests a new folder named after
 the ZIP, so change the destination. Replace the existing files when asked, so

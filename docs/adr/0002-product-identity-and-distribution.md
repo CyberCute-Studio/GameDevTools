@@ -1,7 +1,7 @@
 # ADR-0002: Product identity and portable distribution
 
 - **Date:** 2026-11-22
-- **Status:** Accepted. Amended 2026-11-26 by REL-04, which added the arm64 ZIP (PRD 1.12)
+- **Status:** Accepted. Amended 2026-11-26 by REL-04, which added the arm64 ZIP (PRD 1.12). Its Updates row is replaced by [ADR-0003](0003-automatic-updates.md) (PRD 1.13)
 - **Requirements:** TECH-010, NFR-033, NFR-004, PRD section 19 (resolved in PRD 1.5, section 20)
 
 ## Context
@@ -18,7 +18,7 @@ PRD section 19 left four decisions open until public distribution: the final nam
 | Publisher in the version resource | CyberCute Studio |
 | Package | Portable ZIP for each 64-bit Windows architecture, x64 and arm64; no installer. The first release, 1.0.0, publishes the arm64 ZIP alone, as a GitHub pre-release (PRD 1.12) |
 | Code signing | None. Each ZIP has a published SHA-256 checksum |
-| Updates | Manual. The application makes no network access to look for one |
+| Updates | Manual, until REL-05: the application now updates itself at startup from GitHub releases ([ADR-0003](0003-automatic-updates.md)) |
 | License | MIT, chosen by the project owner in REL-03 (PRD 1.7), in `LICENSE` and as `LICENSE.txt` in the ZIP |
 
 ### The rename
@@ -49,12 +49,12 @@ The release build uses `-trimpath`, `-buildvcs=false`, and an empty build ID, an
 
 - **Installer.** Adds a Start menu entry and an uninstall record, but also a build tool, an upgrade path, and an uninstaller to verify, for an application with nothing to install.
 - **Code signing.** Removes the SmartScreen warning, but needs a verified publisher identity, CI secrets, and a recurring cost. It can be added later without changing the package.
-- **Update check.** Would be the application's first network access, against its offline design (NFR-030 through NFR-032).
+- **Update check.** Would be the application's first network access, against its offline design (NFR-030 through NFR-032). REL-05 added one at the project owner's request (ADR-0003).
 - **`go-winres` or `rsrc`.** Established tools, but each adds a build dependency and license to review for about 300 lines of format code.
 
 ## Consequences
 
 - SmartScreen may warn on first run. The packaged README explains how to check the download and continue.
-- Users update by replacing the extracted folder's files with those from the new ZIP, and learn of new versions outside the application.
+- Users update by replacing the extracted folder's files with those from the new ZIP, and learn of new versions outside the application. Since REL-05 the application does this itself (ADR-0003).
 - The repository and Go module keep the name `GameDevTools`. Renaming them is a separate decision.
 - The application is released under the MIT License, so the package carries that license beside the third-party notices. A test holds `LICENSE` and the packaged copy to one text, under the copyright line in the executable's version resource.

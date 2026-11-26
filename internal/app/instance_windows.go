@@ -3,6 +3,7 @@
 package app
 
 import (
+	"slices"
 	"time"
 	"unsafe"
 
@@ -41,25 +42,41 @@ const instanceShowWait = 5 * time.Second
 // activated and activated reports true so the caller exits immediately;
 // otherwise the returned release function must run when the process exits.
 // A launch that lands while the other instance is closing waits for it to
-// exit and then runs, as claimInstance describes.
-func enforceSingleInstance() (release func(), activated bool, err error) {
-	handle, activated, err := claimInstance(instanceMutexName, shellClassName, instanceWait)
+// exit and then runs, as claimInstance describes. updated reports that this
+// process is the version an update has just installed (update.Relaunched),
+// as instanceClasses describes.
+func enforceSingleInstance(updated bool) (release func(), activated bool, err error) {
+	handle, activated, err := claimInstance(instanceMutexName, instanceClasses(updated), instanceWait)
 	if err != nil || activated {
 		return nil, activated, err
 	}
 	return func() { procCloseHandle.Call(handle) }, false, nil
 }
 
+// instanceClasses are the classes of the windows a launch brings forward as
+// the running instance's: its main window, and, during the update at its
+// start, its update window, which a launch would otherwise wait behind
+// without showing anything. The version an update has just installed looks
+// for the main window alone, as the update window it finds is that of the
+// process that started it, which is exiting.
+func instanceClasses(updated bool) []string {
+	if updated {
+		return []string{shellClassName}
+	}
+	return []string{shellClassName, updateClassName}
+}
+
 // claimInstance acquires the named single-instance mutex, or activates the
-// window of the instance that holds it and reports activated. While the
-// other instance holds the mutex without a window, the claim tries again
-// every 50 ms for up to wait: a window that appears is activated, and a
-// mutex the other instance released by exiting is acquired, so a launch
-// during its shutdown starts once it is gone rather than exiting without
-// showing anything. A claim still blocked after wait gives up as activated,
-// so a launch never runs beside another instance. When activated is false
-// the caller owns the returned handle and must close it.
-func claimInstance(name, className string, wait time.Duration) (handle uintptr, activated bool, err error) {
+// window of the instance that holds it, the first found of classNames, and
+// reports activated. While the other instance holds the mutex without such a
+// window, the claim tries again every 50 ms for up to wait: a window that
+// appears is activated, and a mutex the other instance released by exiting
+// is acquired, so a launch during its shutdown starts once it is gone rather
+// than exiting without showing anything. A claim still blocked after wait
+// gives up as activated, so a launch never runs beside another instance.
+// When activated is false the caller owns the returned handle and must close
+// it.
+func claimInstance(name string, classNames []string, wait time.Duration) (handle uintptr, activated bool, err error) {
 	deadline := time.Now().Add(wait)
 	for {
 		handle, already, err := acquireInstance(name)
@@ -73,7 +90,7 @@ func claimInstance(name, className string, wait time.Duration) (handle uintptr, 
 		// the next attempt: the other instance's exit frees the name only
 		// once no handle to it remains.
 		procCloseHandle.Call(handle)
-		if activateExistingInstance(className, 0) || !time.Now().Before(deadline) {
+		if slices.ContainsFunc(classNames, func(className string) bool { return activateExistingInstance(className, 0) }) || !time.Now().Before(deadline) {
 			return 0, true, nil
 		}
 		time.Sleep(50 * time.Millisecond)

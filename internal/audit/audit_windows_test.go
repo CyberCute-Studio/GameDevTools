@@ -39,10 +39,20 @@ var reviewedModules = map[string]struct {
 }
 
 // forbiddenPackages are standard packages that would give the application a
-// way to reach a network, run another program, load code, or serve its
-// internals (NFR-030, NFR-031). "net" itself is linked, and is handled
-// separately, as golang.org/x/sys/windows imports it for a few types.
-var forbiddenPackages = regexp.MustCompile(`^(net/(http|rpc|smtp|mail|textproto)(/.*)?|crypto/tls|crypto/x509(/.*)?|os/exec|plugin|expvar|log/syslog|runtime/pprof)$`)
+// way to mail or call out, serve a connection or its internals, run another
+// program, or load code (NFR-030, NFR-031).
+var forbiddenPackages = regexp.MustCompile(`^(net/(rpc|smtp|mail)(/.*)?|net/http/(cgi|fcgi|httptest|httputil|pprof)(/.*)?|os/exec|plugin|expvar|log/syslog|runtime/pprof)$`)
+
+// networkPackages are the standard packages that open a connection, speak
+// HTTP, or check a server's certificate. The update check (APP-006) is the
+// application's one network access, so of its own packages only
+// reviewedNetworkPackage imports them, and of the modules it links only
+// golang.org/x/sys/windows imports net, for a few of its types.
+var networkPackages = regexp.MustCompile(`^(net|net/http(/.*)?|crypto/tls|crypto/x509(/.*)?)$`)
+
+// reviewedNetworkPackage is the application's one package that reaches a
+// network: it asks GitHub for a newer release and downloads it.
+const reviewedNetworkPackage = "github.com/CyberCute-Studio/GameDevTools/internal/update"
 
 // networkFunctions are the functions of syscall and golang.org/x/sys/windows
 // that create, connect, or accept a socket, send to an address, or resolve a
@@ -57,10 +67,18 @@ var networkFunctions = []string{
 	"GetAddrInfoW", "DnsQuery", "GetHostByName", "GetServByName", "GetProtoByName",
 }
 
-// networkSymbols match the code that opens a connection, listens, or
-// resolves a name. The linker drops what nothing can call, so a match means
-// the application can reach it.
-var networkSymbols = regexp.MustCompile(`^(net\.(Dial|Listen|Lookup|Resolve|FileConn)|net\.\(\*(Dialer|Resolver|ListenConfig|TCPConn|UDPConn|IPConn|UnixConn|TCPListener|UnixListener|sysDialer)\)\.|(syscall|golang\.org/x/sys/windows)\.(` + strings.Join(networkFunctions, "|") + `)($|\.)|internal/poll\.\(\*FD\)\.(ConnectEx|AcceptEx|Accept|WriteTo|ReadFrom))`)
+// serverSymbols match the code that listens for, accepts, or serves a
+// connection. The linker drops what nothing can call, so a match means the
+// application can reach it. The update check dials GitHub, which links the
+// code that connects and resolves names, and with it syscall.Listen, which
+// the net package's socket function calls only for a socket that listens:
+// only net's Listen functions, which this matches, ask it for one.
+var serverSymbols = regexp.MustCompile(`^(net\.(Listen|FileListener|FileConn|FilePacketConn)|net\.\(\*(ListenConfig|TCPListener|UnixListener|sysListener)\)\.|net/http\.(ListenAndServe|ListenAndServeTLS|Serve|ServeTLS)$|net/http\.\(\*(Server|conn|response)\)\.|(syscall|golang\.org/x/sys/windows)\.(Accept|AcceptEx|accept)($|\.)|internal/poll\.\(\*FD\)\.(Accept|AcceptEx)($|\.))`)
+
+// dialSymbol is code the update check's connection to GitHub needs, which
+// the executable must contain if serverSymbols is to be checked against the
+// right symbol table.
+const dialSymbol = "net.(*Dialer).DialContext"
 
 // programFunctions are the functions of os, syscall, and
 // golang.org/x/sys/windows that start another program. The list need not
@@ -79,10 +97,16 @@ var programProcedures = set("CreateProcessA", "CreateProcessW", "CreateProcessAs
 // when the user asks, open File Explorer.
 var reviewedProgramSites = []string{"internal/ui/folder_windows.go ShellExecuteExW"}
 
+// reviewedProgramStarts is every use of a programFunctions function, by
+// file, function, and function used. Relaunch starts the version an update
+// has just installed, the executable the user started, in its place.
+var reviewedProgramStarts = []string{"internal/update/relaunch_windows.go Relaunch windows.CreateProcess"}
+
 // reviewedLibraries are the Windows libraries the application's own code
 // binds, none of which is a network, download, or telemetry API. The Go
-// runtime and standard library load others for themselves, among them
-// ws2_32.dll, which net brings in.
+// runtime and standard library load others for themselves: among them
+// ws2_32.dll, for the update check's connection, and crypt32.dll, which checks
+// GitHub's certificate against the Windows certificate store.
 var reviewedLibraries = []string{
 	"comdlg32.dll", "dwmapi.dll", "gdi32.dll", "kernel32.dll", "ole32.dll",
 	"oleacc.dll", "shcore.dll", "shell32.dll", "user32.dll", "uxtheme.dll",
@@ -95,7 +119,7 @@ var reviewedLibraries = []string{
 // the lists of functions that must not be bound do not have to name every
 // one Windows has.
 var reviewedProcedures = []string{
-	"BeginPaint", "BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance",
+	"AllowSetForegroundWindow", "BeginPaint", "BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance",
 	"CoInitializeEx", "CoTaskMemFree", "CoUninitialize", "CommDlgExtendedError", "CreateCompatibleDC",
 	"CreateDIBSection", "CreateFontIndirectW", "CreateMutexW", "CreateSolidBrush", "CreateWindowExW",
 	"DefWindowProcW", "DeleteDC", "DeleteObject", "DestroyWindow", "DispatchMessageW", "DragAcceptFiles",
@@ -131,9 +155,9 @@ var reviewedProcedures = []string{
 // every one.
 var reviewedSystemFunctions = []string{
 	"syscall.SyscallN",
-	"windows.CloseHandle", "windows.CreateFile", "windows.DeleteFile", "windows.FindClose",
+	"windows.CloseHandle", "windows.CreateFile", "windows.CreateProcess", "windows.DeleteFile", "windows.EscapeArg", "windows.FindClose",
 	"windows.FindFirstFile", "windows.FlushFileBuffers", "windows.FullPath",
-	"windows.GetFileInformationByHandle", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
+	"windows.GetFileInformationByHandle", "windows.GetStartupInfo", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
 	"windows.MoveFileEx", "windows.NewCallback", "windows.NewLazySystemDLL", "windows.NtSetInformationFile",
 	"windows.SetFileInformationByHandle", "windows.UTF16FromString", "windows.UTF16PtrFromString",
 	"windows.UTF16ToString", "windows.WriteFile",
@@ -211,15 +235,34 @@ var reviewedFileSites = map[string]string{
 	"internal/imageresizer/output/write_windows.go renameHandle windows.NtSetInformationFile":       resizerFolder,
 	"internal/imageresizer/output/write_windows.go tempFile.Write windows.WriteFile":                resizerFolder,
 	"internal/imageresizer/output/write_windows.go tempFile.discard windows.DeleteFile":             resizerFolder,
+
+	"internal/update/install.go Cleanup os.RemoveAll":      applicationFolder,
+	"internal/update/install.go Discard os.RemoveAll":      applicationFolder,
+	"internal/update/install.go NewStaging os.MkdirTemp":   applicationFolder,
+	"internal/update/install.go Stage os.Mkdir":            applicationFolder,
+	"internal/update/install.go extract os.OpenFile":       applicationFolder,
+	"internal/update/install.go rename os.Rename":          applicationFolder,
+	"internal/update/update.go Client.Download os.Remove":  applicationFolder,
+	"internal/update/update.go Client.receive os.OpenFile": applicationFolder,
+}
+
+// reviewedEndpoints is every address the application names, by file and
+// address (NFR-031): GitHub's list of this repository's releases, and the
+// prefix of a release asset's download, the only places the update check
+// reaches.
+var reviewedEndpoints = []string{
+	"internal/update/update.go https://api.github.com/repos/CyberCute-Studio/GameDevTools/releases?per_page=30",
+	"internal/update/update.go https://github.com/CyberCute-Studio/GameDevTools/releases/download/",
 }
 
 // The places a reviewed file change acts on.
 const (
-	logFolder        = "the per-user log folder"
-	settingsFolder   = "the per-user settings folder"
-	screenshotFolder = "the Screenshot output folder the user chose, or its default"
-	resizerFolder    = "the Image Resizer output folder the user chose, or its default"
-	inspectOnly      = "nothing: it opens a path with no access to its contents, to read its identity"
+	logFolder         = "the per-user log folder"
+	settingsFolder    = "the per-user settings folder"
+	screenshotFolder  = "the Screenshot output folder the user chose, or its default"
+	resizerFolder     = "the Image Resizer output folder the user chose, or its default"
+	inspectOnly       = "nothing: it opens a path with no access to its contents, to read its identity"
+	applicationFolder = "the folder of the running executable, when it is a release ZIP's extracted folder (update.Folder): the staging folder an update creates there, the files it replaces, and what earlier updates left"
 )
 
 // reviewedEvents is the complete catalog of diagnostic events (SET-007):
@@ -232,6 +275,17 @@ var reviewedEvents = []string{
 	"settings.restore/restored",
 	"settings.restore/write-failed",
 	"settings.save/write-failed",
+	"update.check/cancelled",
+	"update.check/failed",
+	"update.download/cancelled",
+	"update.download/failed",
+	"update.install/documents-skipped",
+	"update.install/failed",
+	"update.install/installed",
+	"update.install/not-restored",
+	"update.install/refused",
+	"update.install/unwritable",
+	"update.relaunch/failed",
 }
 
 func set(names ...string) map[string]bool {
@@ -489,31 +543,72 @@ func TestDependenciesAreInventoried(t *testing.T) {
 }
 
 // TestApplicationLinksNoNetworkPackages pins NFR-030 and NFR-031 at the
-// package level: nothing linked is an HTTP, mail, RPC, or TLS client, a way
-// to run another program or load code, or a profiling endpoint, and only
-// golang.org/x/sys/windows imports net.
+// package level: nothing linked is a mail or RPC client, an HTTP server, a
+// way to run another program or load code, or a profiling endpoint; of the
+// application's own packages only the update check's reaches a network, and
+// it does; and of the other modules none imports a network package but
+// golang.org/x/sys/windows, which imports net for a few types.
 func TestApplicationLinksNoNetworkPackages(t *testing.T) {
+	var network []string
 	for _, item := range applicationPackages(t) {
 		if item.Standard && forbiddenPackages.MatchString(item.ImportPath) {
 			t.Errorf("the application links %s", item.ImportPath)
 		}
-		if item.ImportPath != "golang.org/x/sys/windows" && !item.Standard && slices.Contains(item.Imports, "net") {
-			t.Errorf("%s imports net", item.ImportPath)
+		if item.Standard {
+			continue
+		}
+		// golang.org/x/sys/windows imports net for a few types; any other
+		// network package it imported would be as unreviewed as another
+		// module's.
+		imported := slices.ContainsFunc(item.Imports, func(path string) bool {
+			return networkPackages.MatchString(path) && (path != "net" || item.ImportPath != "golang.org/x/sys/windows")
+		})
+		switch {
+		case item.Module != nil && item.Module.Main && imported:
+			network = append(network, item.ImportPath)
+		case imported:
+			t.Errorf("%s imports a network package", item.ImportPath)
+		}
+	}
+	if !slices.Equal(network, []string{reviewedNetworkPackage}) {
+		t.Errorf("the application's packages that reach a network are %v, the review covers %s", network, reviewedNetworkPackage)
+	}
+}
+
+// TestServerSymbolsMatchWhatServes pins what TestExecutableServesNoConnection
+// looks for, as a guard against a pattern that stops matching without saying
+// so, and that the code the update check needs to connect does not match.
+func TestServerSymbolsMatchWhatServes(t *testing.T) {
+	for _, name := range []string{
+		"net.Listen", "net.ListenTCP", "net.ListenPacket", "net.(*ListenConfig).Listen", "net.(*TCPListener).Accept",
+		"net/http.ListenAndServe", "net/http.(*Server).Serve", "net/http.(*conn).serve", "net/http.(*response).Write",
+		"syscall.Accept", "golang.org/x/sys/windows.AcceptEx", "internal/poll.(*FD).AcceptEx",
+	} {
+		if !serverSymbols.MatchString(name) {
+			t.Errorf("serverSymbols does not match %s", name)
+		}
+	}
+	for _, name := range []string{
+		dialSymbol, "net.(*Resolver).lookupIP", "net/http.(*Client).Do", "net/http.(*Transport).RoundTrip",
+		"crypto/tls.(*Conn).Handshake", "syscall.Listen", "net/http.(*persistConn).readLoop",
+	} {
+		if serverSymbols.MatchString(name) {
+			t.Errorf("serverSymbols matches %s, which the update check needs", name)
 		}
 	}
 }
 
-// TestExecutableContainsNoNetworkCode pins NFR-030 and NFR-031 in the built
-// executable of each release architecture: of net, which
-// golang.org/x/sys/windows imports for its types, the linker keeps nothing
-// that could connect, listen, or resolve a name.
-func TestExecutableContainsNoNetworkCode(t *testing.T) {
+// TestExecutableServesNoConnection pins NFR-031 in the built executable of
+// each release architecture: the linker keeps nothing that could listen for,
+// accept, or serve a connection, so the application's one network access is
+// the update check, which connects to GitHub.
+func TestExecutableServesNoConnection(t *testing.T) {
 	for _, architecture := range releaseArchitectures {
 		executable := filepath.Join(t.TempDir(), "gamedevtools-"+architecture+".exe")
 		goTool(t, architecture, "build", "-o", executable, "github.com/CyberCute-Studio/GameDevTools/cmd/gamedevtools")
 		output := goTool(t, architecture, "tool", "nm", executable)
 		symbols := 0
-		foundMain := false
+		foundMain, foundDial := false, false
 		for line := range strings.SplitSeq(string(output), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) < 3 {
@@ -522,24 +617,28 @@ func TestExecutableContainsNoNetworkCode(t *testing.T) {
 			symbols++
 			name := fields[2]
 			foundMain = foundMain || name == "main.main"
-			if networkSymbols.MatchString(name) {
-				t.Errorf("the %s executable contains network code: %s", architecture, name)
+			foundDial = foundDial || name == dialSymbol
+			if serverSymbols.MatchString(name) {
+				t.Errorf("the %s executable contains code that serves a connection: %s", architecture, name)
 			}
 		}
-		if !foundMain || symbols < 1000 {
-			t.Fatalf("read %d symbols of the %s executable, main.main found = %v; the symbol table was not read", symbols, architecture, foundMain)
+		if !foundMain || !foundDial || symbols < 1000 {
+			t.Fatalf("read %d symbols of the %s executable, main.main found = %v, %s found = %v; the symbol table was not read", symbols, architecture, foundMain, dialSymbol, foundDial)
 		}
 	}
 }
 
 // TestApplicationCallsNoNetworkOrProgramFunction pins NFR-030 and NFR-031 in
 // the source, where a call the compiler inlines still shows: no code uses a
-// socket or name-resolution function, none starts a program through os,
-// syscall, or golang.org/x/sys/windows, and the only binding of a Windows
-// function that starts one is the reviewed Explorer call.
+// socket or name-resolution function, which leaves the network to the update
+// check's HTTP client; the one start of a program through os, syscall, or
+// golang.org/x/sys/windows is the reviewed relaunch of an updated version;
+// and the only binding of a Windows function that starts one is the
+// reviewed Explorer call.
 func TestApplicationCallsNoNetworkOrProgramFunction(t *testing.T) {
 	network, program := set(networkFunctions...), set(programFunctions...)
 	sites := map[string]bool{}
+	starts := map[string]bool{}
 	for _, source := range applicationSources(t) {
 		names := importNames(source.file)
 		inspectFunctions(source.file, func(function string, node ast.Node) {
@@ -553,7 +652,7 @@ func TestApplicationCallsNoNetworkOrProgramFunction(t *testing.T) {
 				case (path == "syscall" || path == "golang.org/x/sys/windows") && network[value.Sel.Name]:
 					t.Errorf("%s: %s uses the network function %s.%s", source.name, function, pkg.Name, value.Sel.Name)
 				case (path == "os" || path == "syscall" || path == "golang.org/x/sys/windows") && program[value.Sel.Name]:
-					t.Errorf("%s: %s starts a program through %s.%s", source.name, function, pkg.Name, value.Sel.Name)
+					starts[source.name+" "+function+" "+pkg.Name+"."+value.Sel.Name] = true
 				}
 			case *ast.CallExpr:
 				if name, ok := boundProcedure(t, source, value); ok && programProcedures[name] {
@@ -569,6 +668,14 @@ func TestApplicationCallsNoNetworkOrProgramFunction(t *testing.T) {
 	slices.Sort(found)
 	if !slices.Equal(found, reviewedProgramSites) {
 		t.Errorf("the application binds %v to start a program, the review covers %v", found, reviewedProgramSites)
+	}
+	started := make([]string, 0, len(starts))
+	for site := range starts {
+		started = append(started, site)
+	}
+	slices.Sort(started)
+	if !slices.Equal(started, reviewedProgramStarts) {
+		t.Errorf("the application starts a program at %v, the review covers %v", started, reviewedProgramStarts)
 	}
 }
 
@@ -770,9 +877,11 @@ func TestAuditedPackagesAreNotDotImported(t *testing.T) {
 	}
 }
 
-// TestApplicationNamesNoNetworkEndpoint pins NFR-031: no string in the
-// application is a URL, so there is no address to upload to or fetch from.
-func TestApplicationNamesNoNetworkEndpoint(t *testing.T) {
+// TestApplicationNamesOnlyReviewedEndpoints pins NFR-031: the only strings in
+// the application that are URLs are GitHub's addresses the update check
+// reaches, so there is no other address to upload to or fetch from.
+func TestApplicationNamesOnlyReviewedEndpoints(t *testing.T) {
+	var found []string
 	for _, source := range applicationSources(t) {
 		inspectFunctions(source.file, func(function string, node ast.Node) {
 			literal, ok := node.(*ast.BasicLit)
@@ -780,9 +889,13 @@ func TestApplicationNamesNoNetworkEndpoint(t *testing.T) {
 				return
 			}
 			if value, err := strconv.Unquote(literal.Value); err == nil && strings.Contains(value, "://") {
-				t.Errorf("%s: %s names an endpoint: %q", source.name, function, value)
+				found = append(found, source.name+" "+value)
 			}
 		})
+	}
+	slices.Sort(found)
+	if !slices.Equal(found, reviewedEndpoints) {
+		t.Errorf("the application names the endpoints %v, the review covers %v", found, reviewedEndpoints)
 	}
 }
 

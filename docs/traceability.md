@@ -15,14 +15,14 @@ The evidence column names representative checks, not all of them, as `package.Te
 
 | Kind | Total | Pass | Partial |
 |---|---:|---:|---:|
-| P0 requirements | 124 | 112 | 12 |
+| P0 requirements | 127 | 115 | 12 |
 | P1 requirements | 20 | 14 | 6 |
-| Acceptance scenarios | 32 | 28 | 4 |
-| **All** | **176** | **154** | **22** |
+| Acceptance scenarios | 33 | 28 | 5 |
+| **All** | **180** | **157** | **23** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run, manual check, or fix its Open cell names passes or lands:
 
-SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
+SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04, AC-A06.
 
 The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only, in QLT-04's runs; the release candidate's x64 validation met it.
 
@@ -38,7 +38,10 @@ SCR-069 is Pass on the project owner's decision that Open Folder opens File Expl
 | APP-002 | P0 | Current module and primary action are obvious | FND-03 | `app.TestTabReachesEveryControlInLayoutOrder`, `app.TestShellDisablesAnUnavailablePrimaryAction` | Pass | M1 |
 | APP-003 | P1 | Restores the last module | FND-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
 | APP-004 | P0 | Work keeps unsaved edits and the other module's state | QLT-02 | `app.TestStartingWorkKeepsUnsavedEditsAndTheOtherModule` | Pass |  |
-| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A, REL-02C | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow`, `app.TestActivateExistingInstanceBringsTheOpenDialogForward` | Pass |  |
+| APP-005 | P1 | Single instance; second launch activates the window | SCR-09, REL-02A, REL-02C, REL-05 | `app.TestAcquireInstanceDetectsExisting`, `app.TestActivateExistingInstanceRestoresWindow`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly`, `app.TestActivateExistingInstanceLeavesACaptureHiddenWindow`, `app.TestActivateExistingInstanceBringsTheOpenDialogForward`, `app.TestClaimInstanceBringsTheUpdateWindowForward` | Pass |  |
+| APP-006 | P0 | Startup check for a newer GitHub release, only in a release folder | REL-05 | `update.TestLatestPicksTheNewestReleaseForThisArchitecture`, `update.TestLatestGivesUpPromptlyWithoutANetwork`, `update.TestFolderRecognizesOnlyAnExtractedRelease`, `update.TestRelaunchTellsTheNewVersionItFollowsAnUpdate`, `app.TestUpdateWindowStaysHiddenForAQuickCheck`, `app.TestUpdateWindowAppearsForASlowCheck` | Pass |  |
+| APP-007 | P0 | Verified download replaces the folder's files and starts the new version | REL-05 | `update.TestDownloadRefusesAZIPThatFailsItsCheck`, `update.TestStageRefusesWhatAnUpdateDoesNotInstall`, `update.TestInstallReplacesARunningExecutable`, `update.TestInstallAddsNewDocumentsBeforeTheExecutable`, `update.TestInstallWaitsForAProgramHoldingAStagedFile`, `app.TestRunUpdateStepsInstallsANewerRelease`, `app.TestUpdateWindowShowsTheDownloadAndEscapeSkipsIt`, `app.TestUpdateWindowIgnoresSkipOnceTheUpdateHasReturned` | Pass |  |
+| APP-008 | P0 | A failed update leaves a working version and is reported | REL-05 | `update.TestInstallPutsTheRunningVersionBackWhenTheNewOneCannotBePlaced`, `app.TestRunUpdateStepsLeavesTheFolderAsItWasWhenAnUpdateFails`, `app.TestRunUpdateStepsKeepsTheOnlyCopyOfTheRunningVersion`, `app.TestRunUpdateStepsReportsAFolderItCannotWrite` | Pass |  |
 
 ## Presets
 
@@ -194,9 +197,9 @@ SCR-069 is Pass on the project owner's decision that Open Folder opens File Expl
 | NFR-022 | P0 | Shutdown unregisters, closes, stops work | SCR-10, QLT-02 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestEndSessionSavesAndStopsWithoutAsking` | Pass | M4 |
 | NFR-023 | P0 | No partial files at final paths | RSZ-06, QLT-02, QLT-03A | `screenshot/output.TestSaveEncodeFailureLeavesNoFiles`, `imageresizer/output.TestWriteRemovesTheTemporaryFileWhenEncodingFails` | Pass | M5 |
 | NFR-024 | P1 | Logs rotate | FND-04, QLT-02 | `diagnostics.TestLoggerRotatesStructuredEvents` | Pass |  |
-| NFR-030 | P0 | Works locally and offline | QLT-03 | `app.TestCoreWorkflowsRunOffline`, `audit.TestExecutableContainsNoNetworkCode` | Pass | M6 |
-| NFR-031 | P0 | No account, telemetry, or upload | QLT-03 | `audit.TestApplicationLinksNoNetworkPackages`, `screenshot/output.TestSetClipboardImageOptsOutOfCloudUploadOnly` | Pass | M7 |
-| NFR-032 | P0 | Files only at user-selected and own paths | QLT-03, QLT-03B, QLT-03C | `audit.TestFileChangesStayAtReviewedSites`, `app.TestCoreWorkflowsRunOffline` | Pass |  |
+| NFR-030 | P0 | Works locally and offline | QLT-03, REL-05 | `app.TestCoreWorkflowsRunOffline`, `update.TestLatestGivesUpPromptlyWithoutANetwork` | Pass | M6 |
+| NFR-031 | P0 | No account, telemetry, or upload; the update is the one network access | QLT-03, REL-05 | `audit.TestApplicationLinksNoNetworkPackages`, `audit.TestExecutableServesNoConnection`, `audit.TestApplicationNamesOnlyReviewedEndpoints`, `update.TestLatestPicksTheNewestReleaseForThisArchitecture`, `screenshot/output.TestSetClipboardImageOptsOutOfCloudUploadOnly` | Pass | M7 |
+| NFR-032 | P0 | Files only at user-selected and own paths, and an update's folder | QLT-03, QLT-03B, QLT-03C, REL-05 | `audit.TestFileChangesStayAtReviewedSites`, `app.TestCoreWorkflowsRunOffline` | Pass |  |
 | NFR-033 | P0 | Dependencies inventoried and licenses reviewed | QLT-03 | `audit.TestDependenciesAreInventoried`, `release.TestNoticesCarryTheLinkedLicenses` | Pass |  |
 
 ## Technical guardrails
@@ -256,7 +259,8 @@ SCR-069 is Pass on the project owner's decision that Open Folder opens File Expl
 | ID | Priority | Requirement | Plan items | Evidence | Status | Open |
 |---|---|---|---|---|---|---|
 | AC-A01 | — | Persistence | QLT-02, QLT-04 | `app.TestOpenSessionUpgradesEverySettingsFormat`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass |  |
-| AC-A02 | — | Offline use | QLT-03, QLT-04 | `app.TestCoreWorkflowsRunOffline` | Pass | M6 |
+| AC-A02 | — | Offline use | QLT-03, QLT-04, REL-05 | `app.TestCoreWorkflowsRunOffline` | Pass | M6 |
 | AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | **Partial** | M2: nothing has confirmed that a focus indicator is drawn |
 | AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: on the release candidate, under x64 emulation, 1 of 3 drags lagged up to 153 ms, over the 100 ms the scripted run took as following smoothly |
 | AC-A05 | — | Clean exit | QLT-02, QLT-04 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass | M4 |
+| AC-A06 | — | Update | REL-05 | `update.TestInstallReplacesARunningExecutable`, `app.TestRunUpdateStepsInstallsANewerRelease`, `app.TestUpdateWindowShowsTheDownloadAndEscapeSkipsIt` | **Partial** | REL-05: no release folder has yet updated itself from a published release, which needs a release newer than 1.1.0, the first with the update, or a build stamped older than it |

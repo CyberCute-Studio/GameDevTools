@@ -16,6 +16,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	"github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+	"github.com/CyberCute-Studio/GameDevTools/internal/update"
 )
 
 // The shell finds a module view's optional hooks by interface assertion, so a
@@ -55,7 +56,8 @@ func runNative() error {
 	// One instance per user session (APP-005): a second launch activates
 	// the running instance's window and exits, so global shortcuts and
 	// settings never conflict across instances.
-	releaseInstance, activated, err := enforceSingleInstance()
+	updated := update.Relaunched()
+	releaseInstance, activated, err := enforceSingleInstance(updated)
 	if err != nil {
 		return err
 	}
@@ -65,6 +67,22 @@ func runNative() error {
 	defer releaseInstance()
 
 	paths, pathErr := settings.LocalPaths()
+	logger, loggerErr := diagnostics.Open(paths.LogFile)
+	if loggerErr == nil {
+		defer logger.Close()
+	}
+	// An installation extracted from a release ZIP updates itself before
+	// anything else starts (APP-006): the version it installs then starts
+	// in a new process, and this one exits as it is. It runs before the
+	// settings load, as loading can recover or migrate the settings file,
+	// whose warning would otherwise be shown by neither process. An update
+	// window that appeared stays until the main window has, which
+	// dismissUpdate then closes, or until this start fails before it.
+	relaunched, updateWarnings, dismissUpdate := startupUpdate(logger, updated)
+	defer dismissUpdate()
+	if relaunched {
+		return nil
+	}
 	var folders defaultFolders
 	folders.screenshot, folders.screenshotErr = screenshot.DefaultOutputFolder()
 	folders.resizer, folders.resizerErr = imageresizer.DefaultOutputFolder()
@@ -74,12 +92,10 @@ func runNative() error {
 	}
 	startup := state.startupWarnings()
 	warned := state.recordsRecovery(startup)
-	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
 		startup.other = append(startup.other, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
-	} else {
-		defer logger.Close()
 	}
+	startup.other = append(startup.other, updateWarnings...)
 	if warned && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}
@@ -89,7 +105,7 @@ func runNative() error {
 	if err != nil {
 		return err
 	}
-	return runShell(navigator, state.store, state.value, logger, monitor, startup)
+	return runShell(navigator, state.store, state.value, logger, monitor, startup, dismissUpdate)
 }
 
 // defaultFolders are the output folders the modules select by default, and

@@ -5,6 +5,7 @@ package app
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"github.com/CyberCute-Studio/GameDevTools/internal/settings"
 	core "github.com/CyberCute-Studio/GameDevTools/internal/shell"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
+	"github.com/CyberCute-Studio/GameDevTools/internal/update"
 )
 
 const (
@@ -479,6 +481,7 @@ func TestOfflineWorkflowsInContainer(t *testing.T) {
 		t.Skip("runs only inside TestCoreWorkflowsRunOffline's AppContainer")
 	}
 	checkNetworkDenied(t)
+	checkOfflineUpdate(t)
 	shell, paths := openOfflineShell(t, workspace)
 
 	saved, copied := runOfflineCapture(t, shell, workspace)
@@ -510,6 +513,28 @@ func TestOfflineWorkflowsInContainer(t *testing.T) {
 		fmt.Println(offlineClipboardDenied)
 	}
 	fmt.Println(offlineDone)
+}
+
+// checkOfflineUpdate proves that the update check the start waits for
+// (APP-006) gives up within its bound when there is no network, asking
+// GitHub as a release does, so the start goes on with the running version.
+func checkOfflineUpdate(t *testing.T) {
+	t.Helper()
+	current, _ := update.Current()
+	machine, ok := update.Machine()
+	if !ok {
+		t.Fatalf("no release is built for this architecture")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), update.CheckTimeout)
+	defer cancel()
+	started := time.Now()
+	found, newer, err := update.NewClient().Latest(ctx, current, machine)
+	if err == nil || newer {
+		t.Fatalf("the update check found %+v, %v without a network", found, newer)
+	}
+	if elapsed := time.Since(started); elapsed > update.CheckTimeout+time.Second {
+		t.Fatalf("the update check took %v without a network, longer than its bound", elapsed)
+	}
 }
 
 // checkNetworkDenied proves the process runs in a capability-less

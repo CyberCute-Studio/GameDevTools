@@ -318,8 +318,11 @@ type shellTextHeights struct {
 var shellStates = map[windows.Handle]*nativeShell{}
 
 // runShell runs the main window until it closes, its note showing the
-// startup warnings that apply.
-func runShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, displays *display.Monitor, startup startupWarnings) error {
+// startup warnings that apply. shown is called once the window has appeared,
+// to close the update window that stayed until then: it is in the
+// foreground, which this process would lose to another program's window if
+// it closed first, leaving the main window to open behind it.
+func runShell(navigator *core.Navigator, store *settings.Store, initial *settings.Settings, logger *diagnostics.Logger, displays *display.Monitor, startup startupWarnings, shown func()) error {
 	shell, err := newNativeShell(navigator, store, initial, logger, displays, startup)
 	if err != nil {
 		return err
@@ -331,6 +334,7 @@ func runShell(navigator *core.Navigator, store *settings.Store, initial *setting
 	}
 	procShowWindow.Call(hwnd, showCommand)
 	procUpdateWindow.Call(hwnd)
+	shown()
 	shell.announceNotices()
 	var message msg
 	for {
