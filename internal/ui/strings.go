@@ -440,3 +440,26 @@ const (
 	ResizeHintFolder              = " Check that the output folder still exists and its drive is connected, then run the job again."
 	ResizeSourceUnavailableDetail = "The source list could not use this image."
 )
+
+// The window the application shows while it updates itself at startup, and
+// the notes an update that could not finish leaves in the main window
+// (APP-006 through APP-008).
+const (
+	UpdateWindowTitle = AppName + " Update"
+	UpdateChecking    = "Checking for a newer version of " + AppName + "…"
+	UpdateDownloading = "Downloading version %s: %s of %s."
+	UpdateInstalling  = "Installing version %s. " + AppName + " restarts when it is done."
+	UpdateSkipping    = "Skipping the update…"
+	UpdateSkipAction  = "Skip Update"
+	// UpdateUnwritable names the version, the folder, and why it cannot be
+	// written.
+	UpdateUnwritable = "Version %s of " + AppName + " is available, but it cannot be installed in %s: %v. Move the folder somewhere you can write to, such as Documents, or replace its files with those of the version's ZIP from GitHub."
+	// UpdateFailed names the version, why it failed, and the version running.
+	UpdateFailed = "Updating to version %s failed: %v. This is still version %s, and the update is tried again at the next start."
+	// UpdateNotRestored names the version, why it failed, the executable set
+	// aside, and the name it must have again.
+	UpdateNotRestored = "Updating to version %s failed: %v. Move %s back into the " + AppName + " folder as %s, or extract the version's ZIP from GitHub there, before you start " + AppName + " again."
+	// UpdateRelaunchFailed names the version installed, why it did not
+	// start, and the version running.
+	UpdateRelaunchFailed = "Version %s was installed, but it could not be started: %v. This is still version %s until you close it; the next start runs the new version."
+)

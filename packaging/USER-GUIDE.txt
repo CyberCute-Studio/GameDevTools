@@ -25,7 +25,7 @@ Contents
 
 You need a Windows 11 PC and the ZIP built for its processor: the arm64 ZIP
 for Windows on Arm, or the x64 ZIP for 64-bit Intel or AMD. Settings > System >
-About shows which, under System type. Version 1.0.0 is published as the arm64
+About shows which, under System type. Version 1.1.0 is published as the arm64
 ZIP only. You do not need administrator rights, an internet connection, or any
 other software.
 
@@ -39,6 +39,21 @@ choose More info, then Run anyway.
 
 Nothing is installed. To keep a shortcut, pin the executable to Start or the
 taskbar. README.txt also covers updating and uninstalling.
+
+Updates
+
+Each time it starts, the application asks GitHub whether a newer version has
+been published for your PC. If one has, a window shows the download, the new
+version's files replace those in the CyberCute Dev Tools folder, and the new
+version starts. Your settings, your images, and any other files you keep in
+that folder stay as they are. Press Skip Update, or Esc, to start the version
+you have instead; the next start offers the update again. Once the new version
+is being installed it can no longer be skipped. Without an internet
+connection, or if GitHub does not answer within five seconds, the application
+starts at once as it is. The update is the only thing the application uses the
+internet for, and it sends nothing about you or your files. If the folder
+cannot be written, the main window says so and the application keeps running
+the version you have. README.txt describes updating by hand.
 
 Only one copy runs at a time. Starting it again brings the open window forward,
 or the application's open dialog if one is waiting for an answer. During a
@@ -449,7 +464,7 @@ Image Resizer
 Not included
 
 - Annotation, scrolling or delayed capture, video, cloud upload, an installer,
-  code signing, and automatic updates. The application never checks for updates.
+  and code signing.
 
 
 11. Troubleshooting
@@ -458,6 +473,18 @@ Not included
 Windows says it protected your PC.
   The build is not code-signed. Check the download as README.txt describes, then
   choose More info, then Run anyway.
+
+"Version ... is available, but it cannot be installed"
+  The application cannot write to its folder, as under Program Files, so it
+  keeps running the version you have. Move the CyberCute Dev Tools folder
+  somewhere you can write to, such as Documents, or update by hand as
+  README.txt describes.
+
+"Updating to version ... failed"
+  The download was interrupted, did not match the checksum its release
+  publishes, or could not be put in place. The version you have keeps running,
+  and the next start tries again. If the message asks you to move a file back,
+  do that before you start the application again.
 
 Nothing happens when I start the application again.
   It is already running, and the existing window was brought forward, or the

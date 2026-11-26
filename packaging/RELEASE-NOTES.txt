@@ -1,15 +1,27 @@
 CyberCute Dev Tools - Release Notes
 ===================================
 
-Version 1.0.0 - release candidate
+Version 1.1.0 - release candidate
 ---------------------------------
 
-This is the first version, published for Windows 11 on Arm only. It is a
-release candidate: the final validation is still open, and the checks listed
-under "Not yet verified" have not been run. Checks that drive the application
-with real mouse and keyboard input were run by script on an earlier build of
-this version, as the x64 executable under emulation on Windows 11 on Arm,
-rather than by a person.
+This version adds automatic updates. Like 1.0.0, it is published for Windows
+11 on Arm only, and it is a release candidate: the final validation is still
+open, and the checks listed under "Not yet verified" have not been run. Checks
+that drive the application with real mouse and keyboard input were run by
+script on an earlier build, 1.0.0's release candidate, as the x64 executable
+under emulation on Windows 11 on Arm, rather than by a person.
+
+New in 1.1.0
+
+- The application updates itself. Each time it starts, it asks GitHub whether
+  a newer version has been published and, if so, downloads it, checks it
+  against its published SHA-256 checksum, replaces this folder's files, and
+  starts the new version. A small window shows the download, and Skip Update
+  starts the version you have instead. Without an internet connection the
+  application starts at once as it is. README.txt says more.
+- Version 1.0.0 has no update check, so update from it to 1.1.0 by replacing
+  this folder's files by hand, as README.txt describes. Later versions then
+  install themselves.
 
 What it does
 
@@ -36,7 +48,8 @@ Image Resizer
 Across the application
 - Separate built-in and custom presets for each tool.
 - Settings kept per user, with backups before any recovery or reset.
-- Works offline, with no account, telemetry, or update check.
+- Works offline, with no account or telemetry. The only network access is the
+  update check at startup.
 - A dark theme, with full keyboard access in the main window and support for
   the Windows contrast themes.
 
@@ -66,6 +79,8 @@ These have not been run, so this version makes no claim about them:
   rotated displays, and unplugging a display during a selection. None of these
   has run on real displays. Automated checks cover the calculations for all but
   rotated displays, which have none.
+- A folder updating itself from a published release: this is the first
+  version with the update, and no newer one has been published to update to.
 - A clean machine, a real screen reader, the contrast themes switched on, a real
   sign-out during a job, and a run with network adapters off.
 - A person confirming that the keyboard focus is visible on every control. The
@@ -109,9 +124,10 @@ Distribution
 - Portable ZIP for Windows on Arm (arm64), with a SHA-256 checksum. There is
   no installer.
 - Not code-signed, so Windows SmartScreen may warn on first run.
-- No automatic updates. To update, replace this folder's files with those from
-  the new ZIP, extracting it where README.txt says so that it does not create a
-  second folder inside this one.
+- Updates install themselves at startup from the project's GitHub releases. To
+  update by hand, replace this folder's files with those from the new ZIP,
+  extracting it where README.txt says so that it does not create a second
+  folder inside this one.
 - Released under the MIT License, in LICENSE.txt. THIRD-PARTY-NOTICES.txt covers
   the components it includes.
 

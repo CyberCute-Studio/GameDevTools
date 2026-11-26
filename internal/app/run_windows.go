@@ -65,6 +65,19 @@ func runNative() error {
 	defer releaseInstance()
 
 	paths, pathErr := settings.LocalPaths()
+	logger, loggerErr := diagnostics.Open(paths.LogFile)
+	if loggerErr == nil {
+		defer logger.Close()
+	}
+	// An installation extracted from a release ZIP updates itself before
+	// anything else starts (APP-006): the version it installs then starts
+	// in a new process, and this one exits as it is. It runs before the
+	// settings load, as loading can recover or migrate the settings file,
+	// whose warning would otherwise be shown by neither process.
+	relaunched, updateWarnings := startupUpdate(logger)
+	if relaunched {
+		return nil
+	}
 	var folders defaultFolders
 	folders.screenshot, folders.screenshotErr = screenshot.DefaultOutputFolder()
 	folders.resizer, folders.resizerErr = imageresizer.DefaultOutputFolder()
@@ -74,12 +87,10 @@ func runNative() error {
 	}
 	startup := state.startupWarnings()
 	warned := state.recordsRecovery(startup)
-	logger, loggerErr := diagnostics.Open(paths.LogFile)
 	if loggerErr != nil {
 		startup.other = append(startup.other, fmt.Sprintf(ui.LoggingUnavailable, loggerErr))
-	} else {
-		defer logger.Close()
 	}
+	startup.other = append(startup.other, updateWarnings...)
 	if warned && logger != nil {
 		_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelWarning, Operation: "settings.load", Code: "recovered-with-warnings"})
 	}

@@ -1,6 +1,6 @@
 # Offline, privacy, file access, and dependency verification
 
-This document is the QLT-03 record for SET-007, NFR-030 through NFR-033, TECH-007, and the shared acceptance scenario AC-A02 (offline use) from [PRD section 15.3](../PRD.md#153-shared-acceptance). It records how the checks run, what the application can reach, where it writes, what its logs can hold, what it is built from, what was found and fixed, the result for each requirement, and what remains to check by hand.
+This document is the QLT-03 record for SET-007, NFR-030 through NFR-033, TECH-007, and the shared acceptance scenario AC-A02 (offline use) from [PRD section 15.3](../PRD.md#153-shared-acceptance). REL-05 updated it for the update check, the application's one network access (PRD 1.13). It records how the checks run, what the application can reach, where it writes, what its logs can hold, what it is built from, what was found and fixed, the result for each requirement, and what remains to check by hand.
 
 ## How to run the checks
 
@@ -16,7 +16,8 @@ go test -count=1 -p 1 ./...
 
 ```bash
 go test -count=1 -v ./internal/audit
-go test -count=1 -v -run 'TestCoreWorkflowsRunOffline' ./internal/app
+go test -count=1 -v -run 'TestCoreWorkflowsRunOffline|Update' ./internal/app
+go test -count=1 -v ./internal/update
 go test -count=1 -v -run 'TestSetClipboardImageOptsOutOfCloudUploadOnly' ./internal/screenshot/output
 go test -count=1 -v -run 'TestExplorerPath|TestShellPath' ./internal/ui
 ```
@@ -48,6 +49,7 @@ Results below were recorded on 2026-11-21:
 | Step in the sandbox | Result |
 |---|---|
 | The process token is an AppContainer with zero capabilities | Pass |
+| The update check (APP-006), asking GitHub as a release does, fails within its five-second bound, so a start without a network goes on with the running version | Pass |
 | A TCP connection to `192.0.2.1`, an address reserved for documentation that routes nowhere, fails with the sandbox's access error (the test also accepts a no-route error, which a machine with no network may report first; that case has not been run) | Pass |
 | A TCP connection to a listener the parent test holds on loopback is dropped by the sandbox, which shows as a timed-out connection (the test also accepts an access error), and the listener accepts nothing | Pass |
 | Full Display capture through Start Capture on the real main window saves a complete PNG and reports the clipboard copy as successful. On the hosted CI runner, which refuses the sandbox the clipboard, the test requires the saved PNG and a process outside the sandbox able to open the clipboard | Pass |
@@ -60,21 +62,21 @@ Results below were recorded on 2026-11-21:
 
 ## Network, account, and telemetry audit
 
-The application has no network code, account, sign-in, activation, update check, crash upload, or telemetry. `internal/audit` keeps that true:
+The application has no account, sign-in, activation, crash upload, or telemetry. Its one network access is the update check at startup (APP-006 through APP-008, [ADR-0003](adr/0003-automatic-updates.md)), in `internal/update`: a GET of GitHub's list of the repository's releases and, when a newer one has a ZIP for the running architecture, GETs of that ZIP and its checksum file, over HTTPS checked against the Windows certificate store. The requests carry the running version in their User-Agent, as GitHub's API asks every client to name itself, and nothing else of the user's: no settings, file names, images, or identifier. GitHub sees the address they come from, as it does for any download. `internal/audit` keeps the rest of the application off the network:
 
 | Check | Test | Result |
 |---|---|---|
-| No HTTP, mail, RPC, or TLS client, no package for running another program or loading code, and no profiling endpoint is linked | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
-| `net` is imported only by `golang.org/x/sys/windows`, for a few types | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
-| The built executable holds no function, in `net`, `syscall`, or `x/sys/windows`, that opens, connects, or listens on a socket or resolves a name | `audit.TestExecutableContainsNoNetworkCode` | Pass |
-| No application code calls a socket or name-resolution function, or starts a program through `os`, `syscall`, or `x/sys/windows`. The only program it starts is File Explorer, through one reviewed `ShellExecuteExW` binding, for Open Folder and Reveal in Explorer when the user asks | `audit.TestApplicationCallsNoNetworkOrProgramFunction` | Pass |
+| No mail or RPC client, HTTP server or proxy, package for running another program or loading code, or profiling endpoint is linked | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
+| Of the application's own packages, only `internal/update` imports `net`, `net/http`, `crypto/tls`, or `crypto/x509`, and of the other modules only `golang.org/x/sys/windows` imports `net`, for a few types | `audit.TestApplicationLinksNoNetworkPackages` | Pass |
+| The built executable holds no function that listens for, accepts, or serves a connection; the code that connects and resolves names is the update check's | `audit.TestExecutableServesNoConnection`, `audit.TestServerSymbolsMatchWhatServes` | Pass |
+| No application code calls a socket or name-resolution function, which leaves the network to the update's HTTP client. The only programs it starts are File Explorer, through one reviewed `ShellExecuteExW` binding, for Open Folder and Reveal in Explorer when the user asks, and the version an update has just installed, through one reviewed `CreateProcess` call in `update.Relaunch` | `audit.TestApplicationCallsNoNetworkOrProgramFunction` | Pass |
 | The application's own code loads only ten reviewed Windows libraries, each from the system folder, none of them a network API, and binds no function by address | `audit.TestApplicationLoadsOnlyReviewedLibraries` | Pass |
 | Every Windows function the application's own code binds by name is on a reviewed list, so a new binding fails until it is reviewed | `audit.TestApplicationBindsOnlyReviewedProcedures` | Pass |
 | Every function of `syscall` and `x/sys/windows` the application's own code uses is on a reviewed list, so a new one fails until it is reviewed | `audit.TestApplicationUsesOnlyReviewedSystemFunctions` | Pass |
 | No application file dot-imports `os`, `io/ioutil`, `syscall`, or `x/sys/windows`, which would hide its calls from these source checks | `audit.TestAuditedPackagesAreNotDotImported` | Pass |
-| No string in the application is a URL | `audit.TestApplicationNamesNoNetworkEndpoint` | Pass |
+| The only strings in the application that are URLs are GitHub's two addresses the update reaches: `https://api.github.com/repos/CyberCute-Studio/GameDevTools/releases?per_page=30` and the prefix `https://github.com/CyberCute-Studio/GameDevTools/releases/download/`, to which a release's tag and an asset's name are added. A download follows redirects, to GitHub's storage for release assets, only to HTTPS addresses | `audit.TestApplicationNamesOnlyReviewedEndpoints`, `update.TestDownloadFollowsRedirectsToHTTPSOnly` | Pass |
 
-The ten libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, `user32`, and `uxtheme`, which UX-01's dark theme added for the scroll bars' theme (`SetWindowTheme`). The process also holds libraries the Go runtime and standard library load for themselves, which this check does not list. Among them is the Winsock library `ws2_32.dll`, loaded because `golang.org/x/sys/windows` imports `net`; the checks above show that nothing in the application can open a socket through it.
+The ten libraries are `comdlg32`, `dwmapi`, `gdi32`, `kernel32`, `ole32`, `oleacc`, `shcore`, `shell32`, `user32`, and `uxtheme`, which UX-01's dark theme added for the scroll bars' theme (`SetWindowTheme`). The process also holds libraries the Go runtime and standard library load for themselves, which this check does not list. Among them are the Winsock library `ws2_32.dll`, through which the update check connects to GitHub, and `crypt32.dll`, which checks GitHub's certificate against the Windows certificate store; the checks above show that nothing else in the application can open a socket.
 
 ### What Windows does with a copied screenshot
 
@@ -90,6 +92,7 @@ Windows can sync the clipboard to a user's other devices through their Microsoft
 | `%LOCALAPPDATA%\CyberCute Dev Tools\Logs` | `cybercute-dev-tools.log` and up to three rotated copies | `internal/diagnostics/logger.go` |
 | The Screenshot output folder the user chose, by default `Pictures\CyberCute Dev Tools\Screenshots` (SCR-063) | Captures, through a `.gamedevtools-*.tmp` file in the same folder, given their final name by a hard link or, on a volume without hard links, a rename that never replaces a file | `internal/screenshot/output/output.go`, `internal/screenshot/output/finalize_windows.go` |
 | The Image Resizer output folder the user chose, by default `Pictures\CyberCute Dev Tools\Resized` (RSZ-021) | Results, through a `.gamedevtools-*.tmp` file in the same folder; a confirmed Overwrite briefly renames the file it replaces to `.gamedevtools-replaced-*` | `internal/imageresizer/output` |
+| The folder the running executable is in, only when it is a release ZIP's extracted folder: it holds `cybercute-dev-tools.exe` and the five documents the ZIP carries (`update.Folder`, NFR-032) | An update's `.cybercute-update-*` staging folder, which holds the downloaded ZIP, its extracted files, and the executable it replaces; the renames that put the new files in place of the release's own; and, at the next start, the removal of what earlier updates left. Files the release does not ship are never touched | `internal/update/install.go`, `internal/update/update.go` |
 
 The application reads only the settings file, the images the user added or dropped, and the output folder's entries, which it inspects to plan names. A dropped folder contributes the files directly inside it. Source images are opened read-only. One reviewed `CreateFile` site, `output.open`, requests no access to a file's contents and reads only its identity.
 
@@ -105,6 +108,10 @@ Every diagnostic event is a UTC timestamp, a severity, a fixed operation, and a 
 | `settings.save` | `write-failed` |
 | `settings.restore` | `restored`, `not-restored`, `write-failed` |
 | `app.end-session` | `stopped` |
+| `update.check` | `failed`, `cancelled` |
+| `update.download` | `failed`, `cancelled` |
+| `update.install` | `installed`, `documents-skipped`, `unwritable`, `refused`, `failed`, `not-restored` |
+| `update.relaunch` | `failed` |
 
 The offline test checks a real run's log against this format. User-facing error details may show a path where recovery needs it, as SET-007 allows, and are never copied into the log.
 
@@ -117,7 +124,7 @@ The application also reads `%APPDATA%\GameDevTools\settings.json`, the settings 
 | Component | Version | License | Why it is used |
 |---|---|---|---|
 | `golang.org/x/sys` | v0.47.0 | BSD-3-Clause | Win32 bindings for the native windows, capture, clipboard, and file operations; the stack decision is in [ADR-0001](adr/0001-native-windows-stack.md) |
-| Go standard library and runtime | go1.27.4 | BSD-3-Clause | Linked into the executable; includes the vendored `golang.org/x/net/dns/dnsmessage`, which `net` imports and the same license covers |
+| Go standard library and runtime | go1.27.4 | BSD-3-Clause | Linked into the executable; includes the packages it vendors from `golang.org/x/net`, `golang.org/x/crypto`, and `golang.org/x/text`, which `net`, `net/http`, and `crypto/tls` import for the update check and the same license covers |
 | JPEG test fixtures | Go 1.26.5 distribution | BSD-3-Clause | Test data only, with the license in [`internal/imageresizer/decode/testdata/LICENSE-go`](../internal/imageresizer/decode/testdata/LICENSE-go) |
 
 There is no other module, no cgo, and no unjustified dependency to remove. The BSD-3-Clause license requires its notice to accompany binary distributions, so the REL-01 package carries the Go and `x/sys` notices in `THIRD-PARTY-NOTICES.txt`, and `release.TestNoticesCarryTheLinkedLicenses` fails if the Go license text is missing from it.
@@ -162,18 +169,19 @@ The logs and the dependency set needed no change.
 | Requirement | Result | Evidence |
 |---|---|---|
 | SET-007 | Pass | The fixed event catalog and a real run's log. |
-| NFR-030 | Pass | Both workflows complete in a sandbox with no network, and no network code is linked. |
-| NFR-031 | Pass | No account, telemetry, or upload code exists, and copied screenshots opt out of clipboard sync. |
-| NFR-032 | Pass | Every file-changing site is reviewed, and a real run wrote only to approved folders. |
+| NFR-030 | Pass | Both workflows complete in a sandbox with no network, where the update check gives up within its bound. |
+| NFR-031 | Pass | No account, telemetry, or upload code exists, the update check is the only network access and sends nothing of the user's, and copied screenshots opt out of clipboard sync. |
+| NFR-032 | Pass | Every file-changing site is reviewed, an update writes only in the release folder it updates, and a real run wrote only to approved folders. |
 | NFR-033 | Pass | The inventory above, enforced by version, license text, and the absence of any replacement. |
 | TECH-007 | Pass | `x/sys` is maintained, compatible with Go and Windows, and BSD-3-Clause; the scan is clean. |
-| AC-A02 | Pass | `app.TestCoreWorkflowsRunOffline`. |
+| AC-A02 | Pass | `app.TestCoreWorkflowsRunOffline`, with the update check inside the sandbox. |
 
 ## What these results do not cover
 
 - **A machine with its adapters off.** The offline test denies the network to the application's process, and has not itself been run with the adapters off. Before release, turn on airplane mode and run a capture and a resize job by hand.
 - **The clipboard copy in the sandbox on CI.** The hosted runner refuses the sandboxed process the clipboard, in the runs observed either when opening it or when writing to it, with or without a foreground window, while a process outside the sandbox can open it. CI's offline run therefore covers the save but not the copy, and excuses a failed copy only on that runner. The sandboxed copy was verified on the desktop environment of record, and CI covers clipboard delivery outside the sandbox through the `internal/screenshot/output` tests.
-- **Name resolution inside the sandbox.** Windows resolves names in a system service, so the sandbox is not shown to block a lookup. That path is covered by the executable holding no name-resolution code.
+- **Name resolution inside the sandbox.** Windows resolves names in a system service, so the sandbox is not shown to block a lookup. Only the update check resolves a name, `api.github.com` or `github.com`, and the source checks hold every other package to no network code.
+- **The Windows proxy settings.** The update check uses a proxy named by `HTTPS_PROXY`, as Go's HTTP client does, and not one set in Windows' own proxy settings, so behind a proxy that only those settings name it fails as it does offline.
 - **A write the sandbox refused.** A denied write outside the workspace leaves no trace the test can read, so the review of every file-changing site is what covers it.
 - **Real clipboard sync.** The marker is the documented opt-out, and the test reads it back, but no signed-in account was used to observe that nothing was uploaded. A third-party clipboard manager may ignore the marker.
 - **What Windows itself records.** Windows can keep its own history of dialogs and of folders opened in File Explorer. Those records were not measured.

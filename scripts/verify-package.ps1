@@ -7,7 +7,9 @@ Confirms the checksum, contents, the architecture the ZIP is named for (x64 or
 arm64), version metadata, icon, and signing state, then extracts the ZIP and
 runs the executable with no Go on its PATH and its per-user folders in a
 temporary workspace: once as a first run and once as an upgrade from a
-GameDevTools settings file. Close the application first. An x64 ZIP can be
+GameDevTools settings file. Its update check is pointed at a proxy that is
+not there, so the runs start as they would offline and a newer release on
+GitHub cannot change the folder being checked. Close the application first. An x64 ZIP can be
 checked on x64 Windows or Windows on Arm, and an arm64 ZIP only on Windows on
 Arm, as only there can its executable run.
 #>
@@ -86,6 +88,8 @@ function New-Workspace([string]$Parent, [string]$Name) {
 
 # Runs the executable until its window appears, closes it, and requires a clean
 # exit. The environment holds only what Windows needs, so no Go tool is on PATH.
+# HTTPS_PROXY names a closed port, so the update check fails as it does
+# offline (APP-006) and the run neither updates the folder nor waits on GitHub.
 function Invoke-App([string]$Executable, [string]$Workspace) {
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = $Executable
@@ -101,6 +105,7 @@ function Invoke-App([string]$Executable, [string]$Workspace) {
     $start.EnvironmentVariables["LOCALAPPDATA"] = Join-Path $Workspace "Local"
     $start.EnvironmentVariables["TEMP"] = Join-Path $Workspace "Temp"
     $start.EnvironmentVariables["TMP"] = Join-Path $Workspace "Temp"
+    $start.EnvironmentVariables["HTTPS_PROXY"] = "http://127.0.0.1:9"
 
     $process = [System.Diagnostics.Process]::Start($start)
     try {

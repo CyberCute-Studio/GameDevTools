@@ -1,7 +1,7 @@
 # CyberCute Dev Tools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.15\
+**Version:** 1.16\
 **Last updated:** 2026-11-26\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
@@ -33,9 +33,9 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M1 — Screenshot module | 8–18 | Blocked |
 | M2 — Image Resizer module | 19–27 | In Progress |
 | M3 — Cross-cutting quality and hardening | 28–36 | In Progress |
-| M4 — Distribution and release | 37–45 | In Progress |
+| M4 — Distribution and release | 37–46 | In Progress |
 
-36 of the 45 items are Done. The nine still open, and what each waits on:
+36 of the 46 items are Done. The ten still open, and what each waits on:
 
 | Item | Status | Waits on |
 |---|---|---|
@@ -48,6 +48,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | REL-02 | In Progress | Manual check M1, the clean-machine walkthrough of the documentation |
 | UX-01 | In Progress | Its pull request's review and merge |
 | REL-03 | Blocked | The blockers its Notes list |
+| REL-05 | In Progress | Its pull request's review and merge, the v1.1.0 pre-release, and a release folder updating itself from a published release (AC-A06) |
 
 The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-release-checks), and REL-03 runs them.
 
@@ -333,7 +334,7 @@ The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-rel
 
 ## 8. Milestone M4 — Distribution and release
 
-**Milestone status:** In Progress — REL-01 and REL-02 wait on manual check M1, UX-01 is In Progress, and REL-03 is Blocked\
+**Milestone status:** In Progress — REL-01 and REL-02 wait on manual check M1, UX-01 is In Progress, and REL-03 is Blocked, and REL-05 is In Progress\
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
 37. **REL-01 — Finalize product identity, packaging, and distribution**
@@ -399,6 +400,13 @@ The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-rel
     - **Verify:** Build the arm64 ZIP from the merged commit twice with identical bytes, pass `scripts/verify-package.ps1` on it on Windows on Arm, scan its executable with govulncheck, and confirm that the published ZIP and checksum file are the ones built.
     - **Notes:** Started by explicit request while REL-03 is Blocked and UX-01 In Progress: the project owner decided to publish 1.0.0 for Windows on Arm alone, as a GitHub pre-release, while REL-03's release blockers remain (PRD 1.12). It has no x64 ZIP, as no x64 hardware has run it (QLT-04A). REL-03's blockers still hold for a full release, and the runs REL-03 recorded were made on earlier candidates, so none of them counts for this ZIP. CI passed on the pull request's head, `f5cdecc`, including the arm64 build. Published on 2026-11-26 as the pre-release [v1.0.0](https://github.com/CyberCute-Studio/GameDevTools/releases/tag/v1.0.0), tagged on `c712f2e`, the merge of #46. Verified on Windows 11 Home 26H2, build 26300.9974, on ARM64: two builds from that commit gave the same `cybercute-dev-tools-1.0.0-windows-arm64.zip`, SHA-256 `5387da716f904da2cdc148f57a28d4c3ed7bc635170b2cd346c0715e90a9d408`, and `scripts/verify-package.ps1` passed all nine checks on it. govulncheck v1.10.0 in binary mode found no vulnerabilities in its executable, SHA-256 `81ca0825c71fb3822237120fe2b6ea1f261ea5cc6b8c3b5edd0a696a8e58fcad`, scanned from a build of the pull request's first commit with identical bytes. The ZIP downloaded from the release is byte-identical to the build, and the release's checksum file verifies it.
 
+46. **REL-05 — Update the application automatically from GitHub releases**
+    - **Status:** In Progress | **PR:** — | **Depends on:** REL-04
+    - **Requirements:** APP-006, APP-007, APP-008, NFR-030, NFR-031, NFR-032, AC-A02, AC-A06.
+    - **Deliver:** `internal/update`, the application's one network access: the check of the repository's GitHub releases, pre-releases included, for a newer version with a ZIP for the running architecture; the download, checked against its release's SHA-256 checksum file; the ZIP's check, staging, and installation by replacing the extracted folder's files, the running executable renamed aside; and the relaunch. At startup, before the settings load, a launcher-style window with the download's progress and Skip Update, shown once the check takes 400 ms or an update is found, and notes in the main window for a release found and not installed. The privacy audit narrowed to that package's reviewed addresses, file sites, program start, and events, and to no code that serves a connection; the offline test extended to the check; the package check run with the check pointed at a closed proxy. Version 1.1.0, the PRD (1.13), ADR-0003, the traceability matrix, the privacy record, and the packaged documentation; the repository made public so the application can read its releases without a token; and the 1.1.0 GitHub pre-release, tagged on the merged commit, carrying the arm64 ZIP and its checksum file.
+    - **Verify:** Run the update package's tests, among them an install over a running executable, the startup steps' and the window's tests, the privacy audit, and the offline test in its AppContainer; build the arm64 ZIP from the merged commit twice with identical bytes and pass `scripts/verify-package.ps1` on it on Windows on Arm; publish v1.1.0 and confirm the published ZIP and checksum file are the ones built; then extract a build of the same commit stamped 1.0.99 into a release folder and confirm that its start updates the folder to the published 1.1.0 and starts it (AC-A06).
+    - **Notes:** Started by explicit request: the project owner asked for the application to update itself at startup as a game launcher does, chose an update that is always on, installs without asking, reads the public repository's releases, and trusts the release's checksum file, and asked for a release that carries it (PRD 1.13, ADR-0003). Users of 1.0.0, which has no update check, update to 1.1.0 by hand. REL-03's blockers still hold for a full release, so 1.1.0 is a pre-release, as 1.0.0 is.
+
 **M4 exit criteria:** The exact distributable artifact passes all release-blocking acceptance criteria, documentation matches behavior, every prior item is Done, and no unresolved P0 gap remains.
 
 ## 9. Requirement coverage map
@@ -408,6 +416,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 | PRD area | Primary implementing items | Final validation |
 |---|---|---|
 | APP-001 through APP-005 | FND-03, FND-04, SCR-09, QLT-02; second-launch fixes in REL-02A and REL-02C | QLT-04, REL-03 |
+| APP-006 through APP-008 | REL-05 | REL-05 |
 | PRESET-001 through PRESET-008 | FND-06, FND-07, SCR-01, RSZ-01 | QLT-02, QLT-04 |
 | SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01; output-folder and finalization fixes in QLT-03A and QLT-03B; shared folder rule in QLT-03C; capture-result, startup-conflict, toolbar, second-launch, and display-selection fixes in REL-02A; removed-display, temporary-name, status, shortcut, quality-field, and result-delivery fixes in REL-02B; shortcut, dialog, overlay-activation, and toolbar fixes in REL-02C; Explorer and restore races in REL-02D | SCR-11, QLT-04, QLT-04A, REL-03 |
 | RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08; output-folder fix in QLT-03C; Open Output Folder race in REL-02D | RSZ-09, QLT-04, REL-03 |
@@ -416,11 +425,11 @@ This map is a planning aid, not a replacement for requirement references on indi
 | NFR-001 through NFR-004 | SCR-02, REL-01; the arm64 target in REL-04 | QLT-04, QLT-04A, REL-03 |
 | NFR-010 through NFR-014 | SCR-11, RSZ-07, RSZ-09 | QLT-04, QLT-04A, REL-03 |
 | NFR-020 through NFR-024 | FND-04, SCR-10, RSZ-05 through RSZ-07, QLT-02 | QLT-04, REL-03 |
-| NFR-030 through NFR-033 | FND-04 and feature implementations | QLT-03, QLT-04 |
+| NFR-030 through NFR-033 | FND-04 and feature implementations; the update's network access and folder in REL-05 | QLT-03, QLT-04, REL-05 |
 | TECH-001 through TECH-010 | FND-01 through FND-06, SCR-02 through SCR-04, RSZ-03 through RSZ-07, REL-01 | QLT-03, QLT-04, REL-03 |
 | Screenshot acceptance AC-S01 through AC-S12 | SCR-04 through SCR-10; capture-result and startup-conflict fixes in REL-02A; shortcut-status and removed-display fixes in REL-02B | SCR-11, QLT-04, QLT-04A, REL-03 |
 | Resizer acceptance AC-R01 through AC-R15 | RSZ-03 through RSZ-08 | RSZ-09, QLT-04, REL-03 |
-| Shared acceptance AC-A01 through AC-A05 | FND-04, SCR-09, RSZ-07, RSZ-08, QLT-01 through QLT-03 | QLT-04, REL-03 |
+| Shared acceptance AC-A01 through AC-A06 | FND-04, SCR-09, RSZ-07, RSZ-08, QLT-01 through QLT-03; the update in REL-05 | QLT-04, REL-03, REL-05 |
 
 ## 10. Change log
 
@@ -442,3 +451,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.13 | 2026-11-25 | Inserted UX-01 for the dark redesign the project owner asked for (PRD 1.11); REL-03 now depends on UX-01 and is renumbered. |
 | 1.14 | 2026-11-26 | Inserted REL-04 for the first release, which the project owner decided to publish for Windows on Arm alone, as a GitHub pre-release, while REL-03 is Blocked (PRD 1.12). |
 | 1.15 | 2026-11-26 | REL-04: marked Done, as its pull request merged with CI green and the published v1.0.0 pre-release passed its Verify step; recorded the results. |
+| 1.16 | 2026-11-26 | Inserted REL-05 for the automatic update the project owner asked for (PRD 1.13), with the 1.1.0 pre-release that carries it. |

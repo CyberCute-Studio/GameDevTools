@@ -1,7 +1,7 @@
 # CyberCute Dev Tools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.12\
+**Version:** 1.13\
 **Last updated:** 2026-11-26\
 **Product name:** CyberCute Dev Tools\
 **Platform:** Windows desktop\
@@ -113,6 +113,7 @@ The initial release is successful when:
 - Configurable output directory and output format.
 - Collision handling, progress, cancellation, and per-file errors.
 - Local settings persistence and basic diagnostic logging.
+- Updating itself at startup to the newest release published on GitHub (section 8.3).
 
 ### 7.2 Out of scope for the initial release
 
@@ -127,7 +128,6 @@ The initial release is successful when:
 - Automatic metadata preservation guarantees.
 - macOS or Linux versions.
 - Accounts, cloud synchronization, telemetry, or online activation.
-- Automatic updates (section 20).
 
 ## 8. Application shell and shared behavior
 
@@ -189,6 +189,16 @@ Initial built-in Image Resizer presets, all using **Fit** by default:
 - 1920 × 1080
 
 The exact built-in list can change during implementation without changing the requirement for independent, persistent custom presets.
+
+### 8.3 Updates
+
+The application keeps itself current the way a game launcher does: as it starts, before its main window appears, it looks for a newer release on GitHub and, when it finds one, installs it and starts the new version. The check is always on. It acts only on a folder extracted from a release ZIP, the way the application is distributed, so a build run from anywhere else is never changed.
+
+**APP-006 (P0):** At startup, when the running executable is in a folder extracted from a release ZIP, the application must look for a newer release among the GitHub releases of its repository, pre-releases included and drafts excluded, that publishes a ZIP and its checksum file for the running architecture. Without a network, or when GitHub does not answer within five seconds, it must start as it is, and a check that takes longer than a moment must show a window saying what the start waits for, with a way to skip it.
+
+**APP-007 (P0):** A newer release must be downloaded with its progress shown, checked against the SHA-256 its release publishes, refused unless the ZIP holds only plain files in the release's folder and an executable built for the running architecture, and installed by replacing the folder's files; the application must then start the new version and exit. Files in the folder that the release does not ship must be left alone, and the user must be able to skip the update until it starts to install.
+
+**APP-008 (P0):** An update that cannot finish must leave the folder holding a working version and start the running one. A newer release that was found and could not be installed must be reported in the main window, naming a folder that cannot be written; a failed or skipped check must not be.
 
 ## 9. Module 1 — Screenshot
 
@@ -509,9 +519,9 @@ Performance targets are measured on a reference machine with a 2020-or-newer qua
 
 **NFR-030 (P0):** All core operations must run locally and work offline.
 
-**NFR-031 (P0):** The app must not require an account, collect telemetry, or upload images in the initial release.
+**NFR-031 (P0):** The app must not require an account, collect telemetry, or upload images in the initial release. Its only network access is the update check and download (section 8.3), which send nothing but the requests themselves and the running version.
 
-**NFR-032 (P0):** Files must be read and written only at user-selected paths and the app's own settings/log directories.
+**NFR-032 (P0):** Files must be read and written only at user-selected paths, the app's own settings/log directories, and, for an update, the folder the app was extracted to (APP-007).
 
 **NFR-033 (P0):** Third-party dependencies must be inventoried and their licenses reviewed before release.
 
@@ -631,10 +641,11 @@ Given a custom 640 × 480 Screenshot preset, when Image Resizer presets are view
 ### 15.3 Shared acceptance
 
 **AC-A01 — Persistence:** Custom presets and settings survive a normal restart.\
-**AC-A02 — Offline use:** Both modules complete their core workflows with networking disabled.\
+**AC-A02 — Offline use:** Both modules complete their core workflows with networking disabled, and the update check gives up within its bound.\
 **AC-A03 — Keyboard access:** All main-window actions are reachable by keyboard with visible focus.\
 **AC-A04 — Responsive batch UI:** The window can be moved, inputs reviewed, and the job cancelled while resizing runs.\
-**AC-A05 — Clean exit:** No global hotkey or invisible overlay remains after the app exits.
+**AC-A05 — Clean exit:** No global hotkey or invisible overlay remains after the app exits.\
+**AC-A06 — Update:** Given a folder extracted from a release ZIP and a newer release on GitHub for its architecture, when the application starts, then it downloads and verifies the newer ZIP, replaces the folder's files, and starts the new version, whose main window appears.
 
 ## 16. Release phases and priorities
 
@@ -696,11 +707,11 @@ These are not commitments for the initial release:
 - Additional CyberCute Dev Tools modules using the same shell and settings infrastructure.
 - Localization beyond English.
 - A light theme, following the Windows light app mode.
-- Signed installer, automatic updates, and enterprise deployment controls.
+- Signed installer, signed updates, and enterprise deployment controls.
 
 ## 19. Open decisions
 
-No decision is open. The project owner confirmed that the global shortcut captures nothing while one of the application's own modal dialogs is open, and decided that Open Folder (SCR-069) opens File Explorer at the saved file, as manual check M16 requires, when the first time Explorer shows a folder it focuses the file without highlighting it (PRD 1.10, section 20). REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md).
+No decision is open. The project owner confirmed that the global shortcut captures nothing while one of the application's own modal dialogs is open, and decided that Open Folder (SCR-069) opens File Explorer at the saved file, as manual check M16 requires, when the first time Explorer shows a folder it focuses the file without highlighting it (PRD 1.10, section 20). REL-01 resolved the final name, the package format, code signing, and automatic updates; see section 20 and [ADR-0002](docs/adr/0002-product-identity-and-distribution.md). The project owner replaced the update decision in REL-05 (PRD 1.13); see section 20 and [ADR-0003](docs/adr/0003-automatic-updates.md).
 
 ## 20. Confirmed product decisions
 
@@ -725,7 +736,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - The product is named **CyberCute Dev Tools**, and its executable `cybercute-dev-tools.exe`. It was called GameDevTools until PRD 1.5. The first launch takes over the settings of a GameDevTools build, leaving its file in place, and output folders already selected stay selected.
 - The initial release ships as a portable ZIP, with no installer, one for each architecture (NFR-004). The project owner decided in REL-04 that the first release, 1.0.0, ships the ZIP for Windows on Arm (arm64) alone, published on GitHub as a pre-release while REL-03's release blockers remain. It has no ZIP for 64-bit Intel/AMD Windows (x64), as no x64 hardware has run it (QLT-04A).
 - The initial release is not code-signed. Each ZIP has a published SHA-256 checksum, and the packaged README explains the Windows SmartScreen warning.
-- The application has no automatic update mechanism and does not check for updates. Users update by replacing the extracted folder's files with those from the new ZIP.
+- The application updates itself at startup, as a game launcher does (section 8.3). The project owner decided this in REL-05 (PRD 1.13), replacing REL-01's decision that it never checks for updates, and chose the details: the check is always on, with no setting to turn it off; it reads the GitHub releases of the repository, which the owner made public so that the application can read them without a token, and counts pre-releases, as every release so far is one; a download is trusted when it matches the SHA-256 checksum file its release publishes, the same check a manual download asks of the user, with no signature of its own; and an update installs without asking, though the user can skip it until it starts to install. Only a folder extracted from a release ZIP is updated, and users of 1.0.0, which has no update check, update to 1.1.0 by replacing the extracted folder's files with those from its ZIP.
 - The ZIP carries the user documentation, as a user guide and release notes in plain text, so that it is available offline beside the executable. [docs/traceability.md](docs/traceability.md) records each requirement's implementation, evidence, and status.
 - CyberCute Dev Tools is released under the MIT License. The repository's `LICENSE` and the ZIP's `LICENSE.txt` carry it.
 
@@ -746,3 +757,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.10 | 2026-11-25 | Closed both open decisions: the project owner confirmed that the global shortcut captures nothing while one of the application's own modal dialogs is open, and decided that Open Folder meets SCR-069 when the first time File Explorer shows a folder it focuses the saved file without highlighting it (sections 19 and 20). No numbered requirement changed. |
 | 1.11 | 2026-11-25 | UX-01: recorded the project owner's decision to give the application one dark theme, kept when Windows apps are set to light, with the contrast themes still followed, replacing the light system-color theme of PRD 1.1 (section 20); a light theme is now the future consideration (section 18). No numbered requirement changed. |
 | 1.12 | 2026-11-26 | REL-04: recorded the project owner's decision to publish the first release, 1.0.0, for Windows on Arm alone, as a GitHub pre-release, and made Windows on Arm (arm64) a target beside x64 (NFR-004, section 20). NFR-004's text changed. |
+| 1.13 | 2026-11-26 | REL-05: recorded the project owner's decision that the application updates itself at startup from the repository's GitHub releases, replacing REL-01's decision of no automatic updates (sections 7, 18, 19, and 20); added section 8.3 with APP-006 through APP-008 and the update scenario AC-A06; and named the update in NFR-031, NFR-032, and AC-A02, whose texts changed. |

@@ -135,7 +135,7 @@ func archive(args []string) error {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		return err
 	}
-	name := release.ArchiveName(architecture)
+	name := release.ArchiveName(release.Version, architecture)
 	path := filepath.Join(*out, name)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
