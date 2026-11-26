@@ -62,7 +62,8 @@ func recordForeground(t *testing.T) *[]uintptr {
 // when the main window was minimized, which hid the dialog with it.
 func TestActivateExistingInstanceBringsTheOpenDialogForward(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	for _, minimized := range []bool{false, true} {
 		className, hwnd := newInstanceTestWindow(t)
 		const swShowNAInstanceTest = 8
@@ -91,7 +92,8 @@ func TestActivateExistingInstanceBringsTheOpenDialogForward(t *testing.T) {
 // was active: the main window itself comes forward.
 func TestActivateExistingInstanceBringsAnEnabledWindowForward(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	const swShowNAInstanceTest = 8
 	offScreen := int32(-22000)

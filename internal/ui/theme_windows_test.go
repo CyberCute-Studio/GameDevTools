@@ -1,0 +1,645 @@
+//go:build windows
+
+package ui
+
+import (
+	"sync"
+	"testing"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+
+	"github.com/CyberCute-Studio/GameDevTools/internal/ui/uiatest"
+)
+
+var (
+	procTestGetTextColor  = themeGDI32.NewProc("GetTextColor")
+	procTestGetBkColor    = themeGDI32.NewProc("GetBkColor")
+	procTestGetBkMode     = themeGDI32.NewProc("GetBkMode")
+	procTestGetSysColorUI = user32.NewProc("GetSysColor")
+	procTestGetUpdateRect = user32.NewProc("GetUpdateRect")
+)
+
+const bcmGetIdealSize = 0x1601
+
+// TestControlsUseCommonControls6 pins that the tests drive the Common
+// Controls the application does (internal/ui/visualstyles): version 6, whose
+// buttons answer BCM_GETIDEALSIZE and send the custom-draw notifications the
+// theme paints them through. Version 5 does not know the message.
+func TestControlsUseCommonControls6(t *testing.T) {
+	parent := newTestParent(t)
+	button, err := NewButton(parent, "Start Capture", ButtonOptions{ID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var size struct{ cx, cy int32 }
+	if r, _, _ := procSendMessageW.Call(uintptr(button.Handle()), bcmGetIdealSize, 0, uintptr(unsafe.Pointer(&size))); r == 0 {
+		t.Fatal("the button does not answer BCM_GETIDEALSIZE: the Common Controls are not version 6")
+	}
+}
+
+// withPalette runs the test with the dark palette, or a contrast theme's
+// when highContrast, as if Windows had reported it, and chooses the palette
+// again once the test ends.
+func withPalette(t *testing.T, highContrast bool) {
+	t.Helper()
+	previous := highContrastActive
+	highContrastActive = func() bool { return highContrast }
+	refreshPalette()
+	t.Cleanup(func() {
+		highContrastActive = previous
+		refreshPalette()
+	})
+}
+
+// colorsOf sends the parent's WM_CTLCOLOR* message for the control through
+// ThemeMessage and returns the text and background colors it set and its
+// background mode.
+func colorsOf(t *testing.T, parent, control windows.Handle, message uint32) (text, background Color, mode uintptr) {
+	t.Helper()
+	dc, _, _ := procThemeGetDC.Call(uintptr(parent))
+	if dc == 0 {
+		t.Fatal("GetDC failed")
+	}
+	defer procThemeReleaseDC.Call(uintptr(parent), dc)
+	result, handled := ThemeMessage(parent, message, dc, uintptr(control))
+	if !handled || result == 0 {
+		t.Fatalf("message %#x: handled %v, brush %#x", message, handled, result)
+	}
+	textRef, _, _ := procTestGetTextColor.Call(dc)
+	backgroundRef, _, _ := procTestGetBkColor.Call(dc)
+	mode, _, _ = procTestGetBkMode.Call(dc)
+	return colorFromRef(textRef), colorFromRef(backgroundRef), mode
+}
+
+// TestLabelsTakeTheirStylesColor pins the colors labels are drawn in: content
+// in the text color, a field's label and a hint muted, a validation message
+// as an error, and a status area's notice in its severity's color, all
+// transparent over the surface behind them.
+func TestLabelsTakeTheirStylesColor(t *testing.T) {
+	withPalette(t, false)
+	parent := newTestParent(t)
+	p := CurrentPalette()
+	body, err := NewLabel(parent, "Screenshot_yyyyMMdd.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldLabel, err := NewMnemonicLabel(parent, "&Output folder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint, err := NewLabel(parent, "Drop PNG or JPEG files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint.SetStyle(TextMuted)
+	input, err := NewTextInput(parent, "&JPEG quality", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := NewStatusArea(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.Update(Notice{Kind: NoticeWarning, Message: "The shortcut is held."})
+	for _, test := range []struct {
+		name    string
+		control windows.Handle
+		want    Color
+	}{
+		{"content", body.Handle(), p.Text},
+		{"field label", fieldLabel.Handle(), p.TextMuted},
+		{"hint", hint.Handle(), p.TextMuted},
+		{"validation message", input.Error.Handle(), p.Error},
+		{"warning", status.Handle(), p.Warning},
+	} {
+		text, background, mode := colorsOf(t, parent, test.control, wmCtlColorStatic)
+		if text != test.want {
+			t.Errorf("%s: text %06x, want %06x", test.name, text, test.want)
+		}
+		if background != p.Window || mode != themeTransparent {
+			t.Errorf("%s: background %06x mode %d, want %06x transparent", test.name, background, mode, p.Window)
+		}
+	}
+	status.Update(Notice{Kind: NoticeError, Message: "Could not save."})
+	if text, _, _ := colorsOf(t, parent, status.Handle(), wmCtlColorStatic); text != p.Error {
+		t.Errorf("an error notice's text is %06x, want %06x", text, p.Error)
+	}
+	status.Clear()
+	if text, _, _ := colorsOf(t, parent, status.Handle(), wmCtlColorStatic); text != p.Text {
+		t.Errorf("a cleared notice's text is %06x, want %06x", text, p.Text)
+	}
+}
+
+// TestFieldsAndListsTakeTheFieldFill pins that a text field, a read-only
+// field, and a list draw their text opaque on the field fill, and a disabled
+// field on the fill its frame is painted in too, as a disabled list's rows
+// are.
+func TestFieldsAndListsTakeTheFieldFill(t *testing.T) {
+	withPalette(t, false)
+	parent := newTestParent(t)
+	p := CurrentPalette()
+	edit, err := NewEdit(parent, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := NewReadOnlyText(parent, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := NewListBox(parent, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		control windows.Handle
+		message uint32
+	}{
+		{"field", edit.Handle(), wmCtlColorEdit},
+		{"read-only field", path.Handle(), wmCtlColorStatic},
+		{"list", list.Handle(), wmCtlColorListBox},
+	} {
+		text, background, mode := colorsOf(t, parent, test.control, test.message)
+		if text != p.Text || background != p.Field {
+			t.Errorf("%s: %06x on %06x, want %06x on %06x", test.name, text, background, p.Text, p.Field)
+		}
+		// A field redraws its text over the glyphs already there, as it
+		// scrolls a line or its selection changes; transparent text would
+		// thicken them.
+		if mode != themeOpaque {
+			t.Errorf("%s: background mode %d, want opaque", test.name, mode)
+		}
+	}
+	edit.Enable(false)
+	_, background, mode := colorsOf(t, parent, edit.Handle(), wmCtlColorStatic)
+	if want := p.Window.blend(p.Field, 0.5); background != want || mode != themeOpaque {
+		t.Errorf("disabled field: background %06x mode %d, want %06x opaque", background, mode, want)
+	}
+	if fill, _, _ := fieldColors(edit.Handle(), false, false); fill != background {
+		t.Errorf("disabled field: frame fill %06x, text area %06x", fill, background)
+	}
+	// A disabled list's rows sit on that fill too, as its empty area does.
+	list.Add("cover.png")
+	list.Enable(false)
+	screen, _, _ := procThemeGetDC.Call(0)
+	defer procThemeReleaseDC.Call(0, screen)
+	target, ok := newPaintBuffer(screen, 200, 28)
+	if !ok {
+		t.Fatal("the row's target could not be created")
+	}
+	defer target.release()
+	drawListItem(&themeDrawItem{
+		ctlType: odtListBox, itemState: odsDisabled,
+		hwndItem: uintptr(list.Handle()), hdc: target.dc, rcItem: themeRect{Right: 200, Bottom: 28},
+	})
+	if row := target.canvas.pixels[0] & 0xffffff; row != background {
+		t.Errorf("disabled list: row fill %06x, list fill %06x", row, background)
+	}
+}
+
+// TestSurfacesChooseTheBackgroundBehindAControl pins that a control in a
+// region of another surface, such as the navigation's heading in the
+// sidebar, is drawn over that surface, also once it is scrolled partly above
+// the client area.
+func TestSurfacesChooseTheBackgroundBehindAControl(t *testing.T) {
+	withPalette(t, false)
+	parent := newTestParent(t)
+	p := CurrentPalette()
+	inside, err := NewLabel(parent, "TOOLS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside, err := NewLabel(parent, "Screenshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside.Move(10, 10, 80, 20)
+	outside.Move(150, 10, 80, 20)
+	SetSurfaces(parent, []SurfaceRegion{{Right: 120, Bottom: 300, Surface: SurfaceSidebar}})
+	if _, background, _ := colorsOf(t, parent, inside.Handle(), wmCtlColorStatic); background != p.Sidebar {
+		t.Errorf("in the sidebar: background %06x, want %06x", background, p.Sidebar)
+	}
+	if _, background, _ := colorsOf(t, parent, outside.Handle(), wmCtlColorStatic); background != p.Window {
+		t.Errorf("beside the sidebar: background %06x, want %06x", background, p.Window)
+	}
+	inside.Move(10, -10, 80, 20)
+	if _, background, _ := colorsOf(t, parent, inside.Handle(), wmCtlColorStatic); background != p.Sidebar {
+		t.Errorf("scrolled partly above the sidebar: background %06x, want %06x", background, p.Sidebar)
+	}
+}
+
+// customDraw sends a button's prepaint notification through ThemeMessage
+// with a memory device context and returns the answer.
+func customDraw(t *testing.T, parent windows.Handle, button *Button) uintptr {
+	t.Helper()
+	screen, _, _ := procThemeGetDC.Call(0)
+	defer procThemeReleaseDC.Call(0, screen)
+	dc, _, _ := procThemeCreateCompatibleDC.Call(screen)
+	if dc == 0 {
+		t.Fatal("CreateCompatibleDC failed")
+	}
+	defer procThemeDeleteDC.Call(dc)
+	draw := themeNMCustomDraw{
+		hdr:       themeNMHdr{hwndFrom: uintptr(button.Handle()), code: nmCustomDraw},
+		drawStage: cddsPrePaint,
+		hdc:       dc,
+		rc:        themeRect{Right: 120, Bottom: 32},
+	}
+	result, handled := ThemeMessage(parent, wmNotify, 0, uintptr(unsafe.Pointer(&draw)))
+	if !handled {
+		t.Fatal("the button's custom draw was not handled")
+	}
+	return result
+}
+
+// TestButtonsDrawThemselvesUnderAContrastTheme pins that the theme paints the
+// buttons in the dark palette and leaves them to draw themselves, in the
+// system colors, under a contrast theme, whose colors the palette then
+// holds.
+func TestButtonsDrawThemselvesUnderAContrastTheme(t *testing.T) {
+	parent := newTestParent(t)
+	push, err := NewButton(parent, "&Browse…", ButtonOptions{ID: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	radio, err := NewButton(parent, "Free Rectangle", ButtonOptions{ID: 9, Radio: true, Group: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigation, err := NewButton(parent, "Screenshot", ButtonOptions{ID: 10, Radio: true, Group: true, Navigation: true, Icon: ''})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No subtests: they would run off the thread that owns the windows.
+	withPalette(t, false)
+	for _, button := range []*Button{push, radio, navigation} {
+		if got := customDraw(t, parent, button); got != cdrfSkipDefault {
+			t.Errorf("dark: %s: custom draw answered %#x, want CDRF_SKIPDEFAULT", button.Text(), got)
+		}
+	}
+	highContrastActive = func() bool { return true }
+	refreshPalette()
+	p := CurrentPalette()
+	window, _, _ := procTestGetSysColorUI.Call(colorWindowIndex)
+	text, _, _ := procTestGetSysColorUI.Call(colorWindowTextIndex)
+	if !p.HighContrast || p.Window != colorFromRef(window) || p.Text != colorFromRef(text) || p.Error != p.Text {
+		t.Fatalf("the contrast theme's palette is %+v, want the system colors", p)
+	}
+	for _, button := range []*Button{push, radio, navigation} {
+		if got := customDraw(t, parent, button); got != cdrfDoDefault {
+			t.Errorf("contrast theme: %s: custom draw answered %#x, want CDRF_DODEFAULT", button.Text(), got)
+		}
+	}
+}
+
+// TestAWindowRedrawsItselfWhenThePaletteChanges pins how a contrast theme
+// switched on reaches a window: the system's report of the change to the
+// window chooses the palette again and moves the window to the new palette's
+// generation, and a second report, to the same or another window, finds
+// nothing changed.
+func TestAWindowRedrawsItselfWhenThePaletteChanges(t *testing.T) {
+	withPalette(t, false)
+	window := newTestParent(t)
+	ThemeWindow(window, WindowPopup)
+	generation := func() uint64 {
+		themeMutex.Lock()
+		defer themeMutex.Unlock()
+		return themedWindows[window].generation
+	}
+	before := generation()
+	highContrastActive = func() bool { return true }
+	if _, handled := ThemeMessage(window, wmSysColorChange, 0, 0); handled {
+		t.Error("the change was kept from the window's own handling")
+	}
+	after := generation()
+	if after == before || !CurrentPalette().HighContrast {
+		t.Fatalf("generation %d → %d, high contrast %v: the window did not move to the new palette", before, after, CurrentPalette().HighContrast)
+	}
+	ThemeMessage(window, wmSettingChange, 0, 0)
+	if again := generation(); again != after {
+		t.Errorf("a second report moved the generation from %d to %d", after, again)
+	}
+	ThemeMessage(window, wmNCDestroy, 0, 0)
+	themeMutex.Lock()
+	_, kept := themedWindows[window]
+	themeMutex.Unlock()
+	if kept {
+		t.Error("the window was kept once destroyed")
+	}
+}
+
+var (
+	// themeChanges counts the WM_THEMECHANGED each window countThemeChanges
+	// watches receives; SetWindowTheme sends one to the window it themes.
+	themeChanges     = map[windows.Handle]int{}
+	themeChangesNext = map[windows.Handle]uintptr{}
+	themeChangesCB   = sync.OnceValue(func() uintptr { return windows.NewCallback(themeChangesProc) })
+)
+
+func themeChangesProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintptr {
+	if message == wmThemeChanged {
+		themeChanges[hwnd]++
+	}
+	r, _, _ := procThemeCallWindowProcW.Call(themeChangesNext[hwnd], uintptr(hwnd), uintptr(message), wParam, lParam)
+	return r
+}
+
+// countThemeChanges subclasses the windows to count the theme changes they
+// receive, which themeChanges then holds, until the test ends.
+func countThemeChanges(t *testing.T, hwnds ...windows.Handle) {
+	t.Helper()
+	for _, hwnd := range hwnds {
+		themeChanges[hwnd] = 0
+		themeChangesNext[hwnd], _, _ = procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themeChangesCB())
+	}
+	t.Cleanup(func() {
+		for _, hwnd := range hwnds {
+			procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themeChangesNext[hwnd])
+			delete(themeChanges, hwnd)
+			delete(themeChangesNext, hwnd)
+		}
+	})
+}
+
+// TestAPaletteChangeThemesTheListsScrollBarsAgain pins that a window moved to
+// a new palette gives the scroll bars of its list boxes and of its drop-down
+// lists' lists that palette's theme class, as each would otherwise keep the
+// one it was created with, and that Windows hands the theme a drop-down
+// list's list at all.
+func TestAPaletteChangeThemesTheListsScrollBarsAgain(t *testing.T) {
+	withPalette(t, false)
+	window := newTestParent(t)
+	ThemeWindow(window, WindowMain)
+	t.Cleanup(func() { ThemeMessage(window, wmNCDestroy, 0, 0) })
+	list, err := NewListBox(window, 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo, err := NewComboBox(window, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := themeComboBoxInfo{size: uint32(unsafe.Sizeof(themeComboBoxInfo{}))}
+	if r, _, _ := procSendMessageW.Call(uintptr(combo.Handle()), cbGetComboBoxInfo, 0, uintptr(unsafe.Pointer(&info))); r == 0 || info.hwndList == 0 {
+		t.Fatalf("CB_GETCOMBOBOXINFO refused a structure of %d bytes", info.size)
+	}
+	dropDown := windows.Handle(info.hwndList)
+	countThemeChanges(t, list.Handle(), dropDown)
+	highContrastActive = func() bool { return true }
+	ThemeMessage(window, wmThemeChanged, 0, 0)
+	if !CurrentPalette().HighContrast {
+		t.Fatal("the palette did not change")
+	}
+	if themeChanges[list.Handle()] == 0 {
+		t.Error("the list box's scroll bar kept the dark palette's theme")
+	}
+	if themeChanges[dropDown] == 0 {
+		t.Error("the drop-down list's list's scroll bar kept the dark palette's theme")
+	}
+}
+
+// TestFieldTextIsPaddedAndCentered pins the padding the theme's frame gives a
+// text field: its text keeps clear of the frame at the sides, and its line
+// sits in the middle of the field's height.
+func TestFieldTextIsPaddedAndCentered(t *testing.T) {
+	parent := newTestParent(t)
+	edit, err := NewEdit(parent, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	font, err := NewFont(14, 400, FontText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer procThemeDeleteObject.Call(uintptr(font))
+	edit.SetFont(font)
+	edit.Move(0, 0, 200, 32)
+	window, client, ok := windowAndClient(edit.Handle())
+	if !ok {
+		t.Fatal("the field's rectangles could not be read")
+	}
+	line := lineHeight(edit.Handle())
+	if line <= 0 {
+		t.Fatal("the field's line height could not be measured")
+	}
+	if client.Left < 8 || window.Right-client.Right < 8 {
+		t.Errorf("client %+v in window %+v: the sides are not padded", client, window)
+	}
+	if client.height() != line {
+		t.Errorf("client height %d, want the line's %d", client.height(), line)
+	}
+	if above, below := client.Top, window.Bottom-client.Bottom; above-below > 1 || below-above > 1 {
+		t.Errorf("the line is %d from the top and %d from the bottom", above, below)
+	}
+}
+
+// TestFieldKeepsItsHeightWhenItsLineCannotBeMeasured pins that a field whose
+// line height cannot be measured, as when Windows cannot give it a device
+// context, keeps the height Windows proposed rather than none.
+func TestFieldKeepsItsHeightWhenItsLineCannotBeMeasured(t *testing.T) {
+	parent := newTestParent(t)
+	edit, err := NewEdit(parent, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := edit.Handle()
+	procDestroyWindow.Call(uintptr(gone))
+	if line := lineHeight(gone); line != 0 {
+		t.Fatalf("a destroyed field's line measured %d", line)
+	}
+	client := themeRect{Right: 200, Bottom: 32}
+	padField(gone, &client)
+	if client.Top != 0 || client.Bottom != 32 {
+		t.Errorf("client %+v: the height was taken from a line that could not be measured", client)
+	}
+}
+
+var (
+	// themedParentNext holds the procedure of each window routeThroughTheme
+	// routes, beneath the routing.
+	themedParentNext = map[windows.Handle]uintptr{}
+	themedParentCB   = sync.OnceValue(func() uintptr { return windows.NewCallback(themedParentProc) })
+)
+
+func themedParentProc(hwnd windows.Handle, message uint32, wParam, lParam uintptr) uintptr {
+	if r, handled := ThemeMessage(hwnd, message, wParam, lParam); handled {
+		return r
+	}
+	r, _, _ := procThemeCallWindowProcW.Call(themedParentNext[hwnd], uintptr(hwnd), uintptr(message), wParam, lParam)
+	return r
+}
+
+// routeThroughTheme passes the window's messages to ThemeMessage first, as
+// the application's windows do, until the test ends.
+func routeThroughTheme(t *testing.T, hwnd windows.Handle) {
+	t.Helper()
+	themedParentNext[hwnd], _, _ = procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themedParentCB())
+	t.Cleanup(func() {
+		procThemeSetWindowLongPtrW.Call(uintptr(hwnd), gwlpWndProc, themedParentNext[hwnd])
+		delete(themedParentNext, hwnd)
+	})
+}
+
+// TestADropDownListRepaintsItsFaceAsItsSelectionChanges pins that a
+// drop-down list's face shows the item the code selects: Windows redraws the
+// face of an owner-drawn drop-down list through WM_DRAWITEM, not a repaint,
+// as its selection or items change, and the theme paints the face whole only
+// on a repaint.
+func TestADropDownListRepaintsItsFaceAsItsSelectionChanges(t *testing.T) {
+	const rdwUpdateNow = 0x0100
+	parent := newTestParent(t)
+	routeThroughTheme(t, parent)
+	// Windows keeps no repaint pending for a window that is not shown.
+	procShowWindowTest.Call(uintptr(parent), swShowNoActivate)
+	combo, err := NewComboBox(parent, 18)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo.Move(10, 10, 200, 32)
+	combo.Add("PNG")
+	combo.Add("JPEG")
+	combo.Select(0)
+	for _, step := range []struct {
+		name   string
+		change func()
+	}{
+		{"selecting another item", func() { combo.Select(1) }},
+		{"emptying the list", combo.Reset},
+		{"filling it again and selecting", func() { combo.Add("WebP"); combo.Select(0) }},
+	} {
+		procThemeRedrawWindow.Call(uintptr(parent), 0, 0, rdwUpdateNow|rdwAllChildren)
+		step.change()
+		if pending, _, _ := procTestGetUpdateRect.Call(uintptr(combo.Handle()), 0, 0); pending == 0 {
+			t.Errorf("%s: the face was not repainted", step.name)
+		}
+	}
+}
+
+// TestThemedControlsAreForgottenWhenDestroyed pins that the theme lets go of a
+// control as it is destroyed, before Windows can give its handle to another
+// window.
+func TestThemedControlsAreForgottenWhenDestroyed(t *testing.T) {
+	parent := newTestParent(t)
+	label, err := NewLabel(parent, "Gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, err := NewEdit(parent, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, control := range []windows.Handle{label.Handle(), field.Handle()} {
+		if themed(control) == nil {
+			t.Fatalf("%#x was not themed", control)
+		}
+		procDestroyWindow.Call(uintptr(control))
+		if themed(control) != nil {
+			t.Errorf("%#x is still themed once destroyed", control)
+		}
+	}
+}
+
+// TestOwnerDrawnListsKeepTheirStrings pins that the lists the theme draws
+// keep their items' strings, which a screen reader and the views read back.
+func TestOwnerDrawnListsKeepTheirStrings(t *testing.T) {
+	parent := newTestParent(t)
+	list, err := NewListBox(parent, 13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo, err := NewComboBox(parent, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const gwlStyle = ^uintptr(15)
+	for _, test := range []struct {
+		control windows.Handle
+		want    uintptr
+	}{
+		{list.Handle(), lbsOwnerDrawFixed | lbsHasStrings},
+		{combo.Handle(), cbsOwnerDrawFixed | cbsHasStrings},
+	} {
+		style, _, _ := procGetWindowLongPtrW.Call(uintptr(test.control), gwlStyle)
+		if style&test.want != test.want {
+			t.Errorf("%#x: style %#x lacks %#x", test.control, style, test.want)
+		}
+	}
+	list.Add("cover.png — 1920 × 1080 px — Ready")
+	combo.Add("PNG")
+	if got := list.ItemText(0); got != "cover.png — 1920 × 1080 px — Ready" {
+		t.Errorf("list item = %q", got)
+	}
+	if got := combo.ItemText(0); got != "PNG" {
+		t.Errorf("drop-down item = %q", got)
+	}
+}
+
+func TestFontInstalledTellsAMissingTypeface(t *testing.T) {
+	if !fontInstalled("Segoe UI") {
+		t.Error("Segoe UI is reported missing")
+	}
+	if fontInstalled("No Such Typeface 7f3a") {
+		t.Error("a missing typeface is reported installed")
+	}
+}
+
+// TestThemedControlsKeepTheirRoles pins that drawing a control in the theme
+// leaves it the control a screen reader knows (UX-006, screen-reader
+// metadata): subclassed, custom-drawn, and owner-drawn, each still reports
+// its own UI Automation control type.
+func TestThemedControlsKeepTheirRoles(t *testing.T) {
+	const (
+		buttonType      = 50000 // UIA_ButtonControlTypeId
+		comboBoxType    = 50003 // UIA_ComboBoxControlTypeId
+		editType        = 50004 // UIA_EditControlTypeId
+		listType        = 50008 // UIA_ListControlTypeId
+		radioButtonType = 50013 // UIA_RadioButtonControlTypeId
+		textType        = 50020 // UIA_TextControlTypeId
+	)
+	parent := newTestParent(t)
+	procShowWindowTest.Call(uintptr(parent), swShowNoActivate)
+	label, err := NewLabel(parent, "Filename pattern")
+	if err != nil {
+		t.Fatal(err)
+	}
+	push, err := NewButton(parent, "Browse", ButtonOptions{ID: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	radio, err := NewButton(parent, "Free Rectangle", ButtonOptions{ID: 21, Radio: true, Group: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigation, err := NewButton(parent, "Screenshot", ButtonOptions{ID: 22, Radio: true, Group: true, Navigation: true, Icon: ''})
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, err := NewEdit(parent, 23)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := NewReadOnlyText(parent, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	combo, err := NewComboBox(parent, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := NewListBox(parent, 26)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controls := []windows.Handle{label.Handle(), push.Handle(), radio.Handle(), navigation.Handle(), field.Handle(), path.Handle(), combo.Handle(), list.Handle()}
+	want := []int32{textType, buttonType, radioButtonType, radioButtonType, editType, editType, comboBoxType, listType}
+	got, err := uiatest.ControlTypes(controls...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range controls {
+		if got[i] != want[i] {
+			t.Errorf("control %d: control type %d, want %d", i, got[i], want[i])
+		}
+	}
+}

@@ -190,6 +190,7 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.sourceHint, err = ui.NewLabel(parent, ui.SourceImagesHint); err != nil {
 		return err
 	}
+	n.sourceHint.SetStyle(ui.TextMuted)
 	if n.sourceLabel, err = ui.NewMnemonicLabel(parent, ui.SourceImagesLabel); err != nil {
 		return err
 	}
@@ -220,9 +221,11 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.modeLabel, err = ui.NewLabel(parent, ui.ResizeModeSummaryLabel); err != nil {
 		return err
 	}
+	n.modeLabel.SetStyle(ui.TextLabel)
 	if n.modeDescription, err = ui.NewLabel(parent, ""); err != nil {
 		return err
 	}
+	n.modeDescription.SetStyle(ui.TextMuted)
 	if n.folderLabel, err = ui.NewMnemonicLabel(parent, ui.OutputFolderLabel); err != nil {
 		return err
 	}
@@ -265,12 +268,15 @@ func (n *NativeView) NativeCreate(parent windows.Handle) error {
 	if n.collisionNote, err = ui.NewGroupLabel(parent, ""); err != nil {
 		return err
 	}
+	n.collisionNote.SetStyle(ui.TextMuted)
 	if n.namingLabel, err = ui.NewLabel(parent, ui.ResizeNamingLabel); err != nil {
 		return err
 	}
+	n.namingLabel.SetStyle(ui.TextLabel)
 	if n.naming, err = ui.NewLabel(parent, ui.ResizeNamingBehavior); err != nil {
 		return err
 	}
+	n.naming.SetStyle(ui.TextMuted)
 	if n.status, err = ui.NewStatusArea(parent); err != nil {
 		return err
 	}
@@ -467,15 +473,25 @@ func (n *NativeView) layoutSourcesSection(x, y, width int32, scale func(int32) i
 		}
 		return y - scale(8)
 	}
-	column := max(int32(1), width/3)
 	for index, button := range buttons {
-		right := x + int32(index+1)*column
-		if index == len(buttons)-1 {
-			right = x + width
-		}
-		button.Move(x+int32(index)*column, y, right-x-int32(index)*column, scale(36))
+		left, columnWidth := buttonColumn(x, width, index, scale)
+		button.Move(left, y, columnWidth, scale(36))
 	}
 	return y + scale(36)
+}
+
+// buttonColumn returns the left edge and width of the index'th of a row of
+// three buttons across width, with a gap between neighbours; the last column
+// takes what rounding leaves. The job section's buttons and the source list's
+// share the columns, so they line up.
+func buttonColumn(x, width int32, index int, scale func(int32) int32) (int32, int32) {
+	gap := scale(8)
+	column := max(int32(1), (width-2*gap)/3)
+	left := x + int32(index)*(column+gap)
+	if index == 2 {
+		return left, max(int32(1), x+width-left)
+	}
+	return left, column
 }
 
 func (n *NativeView) NativeCommand(id int32, notification uint16) bool {

@@ -739,8 +739,9 @@ func (n *NativeView) layoutJobSection(x, y, width int32, scale func(int32) int32
 		n.openButton.Move(x, y+scale(36)+scale(8), width, scale(36))
 		return y + 2*scale(36) + scale(8)
 	}
-	column := max(int32(1), width/3)
-	n.cancelButton.Move(x, y, column, scale(36))
-	n.openButton.Move(x+column, y, column, scale(36))
+	cancelLeft, cancelWidth := buttonColumn(x, width, 0, scale)
+	openLeft, openWidth := buttonColumn(x, width, 1, scale)
+	n.cancelButton.Move(cancelLeft, y, cancelWidth, scale(36))
+	n.openButton.Move(openLeft, y, openWidth, scale(36))
 	return y + scale(36)
 }

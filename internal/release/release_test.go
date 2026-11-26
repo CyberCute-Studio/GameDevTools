@@ -61,11 +61,52 @@ func TestBuildResourcesIsACOFFObjectForEachArchitecture(t *testing.T) {
 		if section == nil {
 			t.Fatalf("%s: no .rsrc section", architecture)
 		}
-		// One relocation per resource: each icon image, the group, the version.
+		// One relocation per resource: each icon image, the group, the
+		// version, the manifest.
 		images := int(binary.LittleEndian.Uint16(icon[4:]))
-		if int(section.NumberOfRelocations) != images+2 {
-			t.Errorf("%s: %d relocations, want %d", architecture, section.NumberOfRelocations, images+2)
+		if int(section.NumberOfRelocations) != images+3 {
+			t.Errorf("%s: %d relocations, want %d", architecture, section.NumberOfRelocations, images+3)
 		}
+	}
+}
+
+// TestCommittedManifestResourcesAreCurrent fails when the manifest changed
+// without running go generate ./internal/ui/visualstyles, which would leave
+// the tests driving other controls than the application's.
+func TestCommittedManifestResourcesAreCurrent(t *testing.T) {
+	for _, architecture := range []string{"amd64", "arm64"} {
+		want, err := BuildManifestResources(architecture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := repositoryFile(t, "internal", "ui", "visualstyles", "manifest_windows_"+architecture+".syso")
+		if !bytes.Equal(got, want) {
+			t.Errorf("manifest_windows_%s.syso is stale; run go generate ./internal/ui/visualstyles", architecture)
+		}
+	}
+	if _, err := BuildManifestResources("386"); err == nil {
+		t.Error("an unsupported architecture was accepted")
+	}
+}
+
+// TestManifestAsksForCommonControls6 pins the one thing the manifest is for:
+// version 6 of the Common Controls, whose custom-draw notifications the dark
+// theme paints buttons through, with its public key, which the loader
+// matches.
+func TestManifestAsksForCommonControls6(t *testing.T) {
+	for _, want := range []string{
+		`name="Microsoft.Windows.Common-Controls"`,
+		`version="6.0.0.0"`,
+		`publicKeyToken="6595b64144ccf1df"`,
+	} {
+		if !strings.Contains(ApplicationManifest, want) {
+			t.Errorf("the manifest lacks %s", want)
+		}
+	}
+	// The process sets its DPI awareness itself, which a manifest that
+	// declared one would make fail.
+	if strings.Contains(strings.ToLower(ApplicationManifest), "dpiaware") {
+		t.Error("the manifest declares a DPI awareness")
 	}
 }
 

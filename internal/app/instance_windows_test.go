@@ -94,8 +94,9 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 	// The window belongs to the thread that creates it, and this thread pumps
 	// no messages, so ShowWindow from any other thread would wait forever.
+	// The window's cleanup runs on this thread too, which owns it.
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
 	if activateExistingInstance("GameDevToolsNoSuchWindowClass", 0) {
 		t.Fatal("activation reported a window that does not exist")
 	}
@@ -119,7 +120,8 @@ func TestActivateExistingInstanceRestoresWindow(t *testing.T) {
 // image (SCR-044).
 func TestActivateExistingInstanceLeavesACaptureHiddenWindow(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	procShowWindow.Call(hwnd, swMinimizeInstanceTest)
 	procShowWindow.Call(hwnd, swHide)
@@ -142,7 +144,8 @@ func TestActivateExistingInstanceLeavesACaptureHiddenWindow(t *testing.T) {
 // once it appears, where leaving it would let it open behind other windows.
 func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	const swShowNAInstanceTest = 8
 	offScreen := int32(-22000)
@@ -174,7 +177,8 @@ func TestActivateExistingInstanceWaitsForAWindowStillStarting(t *testing.T) {
 // with nothing left running.
 func TestActivateExistingInstanceSeesAWindowDestroyed(t *testing.T) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	// The windows' cleanups run on this thread, which owns them.
+	t.Cleanup(runtime.UnlockOSThread)
 	className, hwnd := newInstanceTestWindow(t)
 	done := make(chan bool, 1)
 	go func() { done <- activateExistingInstance(className, 0) }()

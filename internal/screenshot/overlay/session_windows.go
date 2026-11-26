@@ -60,7 +60,6 @@ const (
 	wmNCHitTest      = 0x0084
 	wmKeyDown        = 0x0100
 	wmCommand        = 0x0111
-	wmCtlColorStatic = 0x0138
 	wmMouseMove      = 0x0200
 	wmLButtonDown    = 0x0201
 	wmLButtonUp      = 0x0202
@@ -175,8 +174,6 @@ var (
 	procSelectObject                = gdi32.NewProc("SelectObject")
 	procDeleteObject                = gdi32.NewProc("DeleteObject")
 	procDeleteDC                    = gdi32.NewProc("DeleteDC")
-	procSetBkMode                   = gdi32.NewProc("SetBkMode")
-	procSetTextColor                = gdi32.NewProc("SetTextColor")
 
 	registerClassesOnce sync.Once
 	registerClassesErr  error
@@ -652,6 +649,7 @@ func (s *windowsSession) createToolbar(request CreateRequest) error {
 		return callError("CreateWindowExW(toolbar)", err)
 	}
 	s.toolbar = windows.Handle(toolbar)
+	ui.ThemeWindow(s.toolbar, ui.WindowPopup)
 	toolbarStates[s.toolbar] = s
 
 	// The message shows the instructions and, in their place, why a typed
@@ -1588,18 +1586,21 @@ func (s *windowsSession) typedFreeSelection() (display.Rect, string) {
 	return selection, ""
 }
 
-// report shows a message in the toolbar in place of the instructions and
+// report shows why an edit was refused in the toolbar, in place of the
+// instructions and styled as an error, as every validation message is, and
 // announces it to a screen reader, even when it repeats the message shown,
 // as a refused edit is news each time the user commits it.
 func (s *windowsSession) report(text string) {
+	s.message.SetStyle(ui.TextError)
 	s.message.SetTextQuietly(text)
 	s.message.Announce()
 }
 
-// restoreInstructions shows the instructions again without announcing them:
-// the session announced them when it started, and they return while the
-// user types or once an edit is accepted.
+// restoreInstructions shows the instructions again, as content, without
+// announcing them: the session announced them when it started, and they
+// return while the user types or once an edit is accepted.
 func (s *windowsSession) restoreInstructions() {
+	s.message.SetStyle(ui.TextBody)
 	s.message.SetTextQuietly(s.instructions())
 }
 
@@ -1859,6 +1860,10 @@ func (s *windowsSession) zoneCursor() uintptr {
 }
 
 func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	// The theme colors and draws the controls and the background.
+	if result, handled := ui.ThemeMessage(hwnd, message, wParam, lParam); handled {
+		return result
+	}
 	session := toolbarStates[hwnd]
 	switch message {
 	case wmCommand:
@@ -1949,12 +1954,6 @@ func toolbarWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPar
 		// The toolbar background drags the toolbar; child controls still
 		// receive their own hit tests.
 		return htCaption
-	case wmCtlColorStatic:
-		procSetBkMode.Call(wParam, transparent)
-		textColor, _, _ := procGetSysColor.Call(colorWindowText)
-		procSetTextColor.Call(wParam, textColor)
-		brush, _, _ := procGetSysColorBrush.Call(colorWindow)
-		return brush
 	case wmDestroy:
 		delete(toolbarStates, hwnd)
 		return 0

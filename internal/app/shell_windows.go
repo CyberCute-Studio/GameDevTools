@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,13 @@ type nativeShell struct {
 	note        *ui.StatusArea
 	headingFont windows.Handle
 	bodyFont    windows.Handle
+	// captionFont draws the navigation's heading, and brandFont the
+	// application's name above it.
+	captionFont windows.Handle
+	brandFont   windows.Handle
+	// brand is where the application's icon and name are drawn, in client
+	// coordinates; it is empty in the compact layout, which has no sidebar.
+	brand rect
 
 	// acceptingDrops is whether the shell window and its children are
 	// registered for file drops, as updateDropAcceptance last applied it.
@@ -275,11 +283,17 @@ type nativeCloseGuard interface {
 }
 
 type shellLayout struct {
-	compact           bool
-	margin            int32
+	compact bool
+	margin  int32
+	// sidebarWidth is the width of the navigation's sidebar, 0 in the
+	// compact layout, where the navigation sits in the content.
+	sidebarWidth      int32
+	navX              int32
 	navY              int32
 	navWidth          int32
 	navHeight         int32
+	navGap            int32
+	actionHeight      int32
 	contentX          int32
 	contentY          int32
 	contentWidth      int32
@@ -377,6 +391,7 @@ func newNativeShell(navigator *core.Navigator, store *settings.Store, initial *s
 		return nil, callError("CreateWindowExW(main)", err)
 	}
 	shell.hwnd = windows.Handle(hwnd)
+	ui.ThemeWindow(shell.hwnd, ui.WindowMain)
 	shell.dispatcher = core.NewDispatchQueue(func() error {
 		return postShellMessage(hwnd, wmAppDispatch)
 	})
@@ -487,13 +502,16 @@ func (s *nativeShell) createControls() error {
 	if err != nil {
 		return err
 	}
+	heading.SetStyle(ui.TextMuted)
 	s.navHeading = heading.Handle()
 	for i, module := range s.navigator.Modules() {
 		id := uint16(navCommandBase + i)
 		button, err := ui.NewButton(s.hwnd, module.NavigationLabel(), ui.ButtonOptions{
-			ID:    int32(id),
-			Group: i == 0,
-			Radio: true,
+			ID:         int32(id),
+			Group:      i == 0,
+			Radio:      true,
+			Navigation: true,
+			Icon:       navigationIcons[module.ID()],
 		})
 		if err != nil {
 			return err
@@ -513,6 +531,7 @@ func (s *nativeShell) createControls() error {
 	if err != nil {
 		return err
 	}
+	description.SetStyle(ui.TextMuted)
 	s.description = description.Handle()
 	if s.action, err = ui.NewButton(s.hwnd, "", ui.ButtonOptions{ID: actionCommand, Primary: true, Group: true, Disabled: true}); err != nil {
 		return err
@@ -545,28 +564,57 @@ func (s *nativeShell) createControls() error {
 	return nil
 }
 
+// navigationIcons are the glyphs of the Windows icon font the navigation
+// draws before each module's name.
+var navigationIcons = map[core.ModuleID]rune{
+	core.ModuleScreenshot:   '', // Camera
+	core.ModuleImageResizer: '', // Photo
+	core.ModuleSettings:     '', // Setting
+}
+
+// shellFonts are the sizes at 96 DPI, in pixels, weights, and faces of the
+// shell's fonts: the module's title, the body text every view draws in, the
+// navigation's heading, and the application's name in the sidebar.
+var shellFonts = [...]struct {
+	size, weight int32
+	face         ui.FontFace
+}{
+	{28, fwSemiBold, ui.FontDisplay},
+	{14, fwNormal, ui.FontText},
+	{11, fwSemiBold, ui.FontText},
+	{15, fwSemiBold, ui.FontDisplay},
+}
+
+// updateFonts creates the shell's fonts at the window's DPI and gives them to
+// the controls. The fonts are replaced together, so a font that cannot be
+// created keeps every control in the fonts it had.
 func (s *nativeShell) updateFonts() {
-	heading, headingErr := createFont(-s.scale(32), fwSemiBold)
-	body, bodyErr := createFont(-s.scale(18), fwNormal)
-	if headingErr == nil && bodyErr == nil {
-		if s.headingFont != 0 {
-			procDeleteObject.Call(uintptr(s.headingFont))
+	var created [len(shellFonts)]windows.Handle
+	failed := false
+	for i, font := range shellFonts {
+		handle, err := ui.NewFont(s.scale(font.size), font.weight, font.face)
+		if err != nil {
+			failed = true
+			break
 		}
-		if s.bodyFont != 0 {
-			procDeleteObject.Call(uintptr(s.bodyFont))
+		created[i] = handle
+	}
+	current := []*windows.Handle{&s.headingFont, &s.bodyFont, &s.captionFont, &s.brandFont}
+	for i, font := range created {
+		if failed {
+			if font != 0 {
+				procDeleteObject.Call(uintptr(font))
+			}
+			continue
 		}
-		s.headingFont = heading
-		s.bodyFont = body
-	} else {
-		if heading != 0 {
-			procDeleteObject.Call(uintptr(heading))
+		if *current[i] != 0 {
+			procDeleteObject.Call(uintptr(*current[i]))
 		}
-		if body != 0 {
-			procDeleteObject.Call(uintptr(body))
-		}
+		*current[i] = font
 	}
 	setControlFont(s.title, s.headingFont)
-	for _, control := range []windows.Handle{s.navHeading, s.description, s.action.Handle(), s.note.Handle()} {
+	setControlFont(s.navHeading, s.captionFont)
+	for _, control := range []windows.Handle{s.description, s.action.Handle(), s.note.Handle()} {
 		setControlFont(control, s.bodyFont)
 	}
 	for _, button := range s.navButtons {
@@ -604,8 +652,10 @@ func (s *nativeShell) updateView() {
 // the module would otherwise announce it on every visit.
 func (s *nativeShell) showNote() {
 	if s.notice != "" {
+		s.note.SetStyle(ui.TextWarning)
 		s.note.SetText(s.noteText())
 	} else {
+		s.note.SetStyle(ui.TextMuted)
 		s.note.SetTextQuietly(s.noteText())
 	}
 }
@@ -862,28 +912,36 @@ func calculateShellLayout(client rect, dpi uint32, moduleCount int, text shellTe
 		text.note = scale(28)
 	}
 	plan := shellLayout{
-		margin:            scale(32),
-		navY:              scale(80),
-		navWidth:          scale(210),
-		navHeight:         scale(44),
-		contentY:          scale(32),
+		margin:            scale(40),
+		sidebarWidth:      scale(248),
+		navX:              scale(12),
+		navY:              scale(104),
+		navWidth:          scale(224),
+		navHeight:         scale(40),
+		navGap:            scale(4),
+		actionHeight:      scale(36),
+		contentY:          scale(36),
 		titleHeight:       text.title,
 		descriptionHeight: text.description,
 		moduleHeight:      text.moduleHeight,
 		noteHeight:        text.note,
 	}
-	plan.contentX = plan.margin + plan.navWidth + scale(40)
-	plan.compact = client.Right < scale(524) || client.Right-plan.contentX-plan.margin < scale(190)
+	plan.contentX = plan.sidebarWidth + scale(48)
+	plan.compact = client.Right < scale(560) || client.Right-plan.contentX-plan.margin < scale(240)
+	navBottom := func() int32 {
+		return plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*plan.navGap
+	}
 	if plan.compact {
 		plan.margin = scale(16)
+		plan.sidebarWidth = 0
 		plan.contentX = plan.margin
 		plan.contentY = plan.margin
 		plan.contentWidth = max(int32(1), client.Right-2*plan.margin)
+		plan.navX = plan.margin
 		plan.navWidth = plan.contentWidth
 		plan.actionY = plan.contentY + plan.titleHeight + scale(12)
-		plan.navY = plan.actionY + scale(44) + scale(16)
-		navBottom := plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*scale(8)
-		plan.descriptionY = navBottom + scale(16)
+		plan.navY = plan.actionY + plan.actionHeight + scale(16)
+		plan.descriptionY = navBottom() + scale(16)
 		plan.moduleY = plan.descriptionY + plan.descriptionHeight + scale(12)
 		plan.noteY = plan.moduleY + plan.moduleHeight
 		if plan.moduleHeight > 0 {
@@ -891,15 +949,16 @@ func calculateShellLayout(client rect, dpi uint32, moduleCount int, text shellTe
 		}
 		plan.virtualHeight = plan.noteY + plan.noteHeight + plan.margin
 	} else {
-		plan.contentWidth = max(scale(190), client.Right-plan.contentX-plan.margin)
-		plan.descriptionY = plan.contentY + plan.titleHeight + scale(12)
-		plan.actionY = plan.descriptionY + plan.descriptionHeight + scale(16)
-		plan.moduleY = plan.actionY + scale(44)
+		// The content keeps to a readable column however wide the window.
+		plan.contentWidth = min(scale(760), max(scale(240), client.Right-plan.contentX-plan.margin))
+		plan.descriptionY = plan.contentY + plan.titleHeight + scale(6)
+		plan.actionY = plan.descriptionY + plan.descriptionHeight + scale(20)
+		plan.moduleY = plan.actionY + plan.actionHeight
 		if plan.moduleHeight > 0 {
-			plan.moduleY += scale(16)
+			plan.moduleY += scale(28)
 		}
-		plan.noteY = plan.moduleY + plan.moduleHeight + scale(12)
-		navBottom := plan.navY + int32(moduleCount)*plan.navHeight + int32(moduleCount-1)*scale(8)
+		plan.noteY = plan.moduleY + plan.moduleHeight + scale(16)
+		navBottom := navBottom()
 		contentBottom := plan.noteY + plan.noteHeight
 		if client.Bottom >= contentBottom+plan.margin && client.Bottom >= navBottom+plan.margin {
 			plan.noteY = client.Bottom - plan.margin - plan.noteHeight
@@ -942,22 +1001,24 @@ func (s *nativeShell) layout() {
 	}
 	position, _, _ := procSetScrollInfo.Call(uintptr(s.hwnd), sbVert, uintptr(unsafe.Pointer(&info)), 1)
 	s.scrollY = int32(position)
+	s.paintSidebar(plan, client)
 	headingVisibility := int32(swShow)
 	if plan.compact {
 		headingVisibility = swHide
 	}
 	procShowWindow.Call(uintptr(s.navHeading), uintptr(headingVisibility))
-	moveWindow(s.navHeading, plan.margin, plan.margin-s.scrollY, plan.navWidth, s.scale(24))
+	moveWindow(s.navHeading, plan.navX+s.scale(12), plan.navY-s.scale(26)-s.scrollY, plan.navWidth-s.scale(12), s.scale(18))
 	for i, module := range modules {
 		if button, exists := s.navButtons[module.ID()]; exists {
-			y := plan.navY + int32(i)*(plan.navHeight+s.scale(8))
-			moveWindow(button.Handle(), plan.margin, y-s.scrollY, plan.navWidth, plan.navHeight)
+			y := plan.navY + int32(i)*(plan.navHeight+plan.navGap)
+			moveWindow(button.Handle(), plan.navX, y-s.scrollY, plan.navWidth, plan.navHeight)
 		}
 	}
 	contentY := func(y int32) int32 { return y - s.scrollY }
 	moveWindow(s.title, plan.contentX, contentY(plan.contentY), plan.contentWidth, plan.titleHeight)
 	moveWindow(s.description, plan.contentX, contentY(plan.descriptionY), plan.contentWidth, plan.descriptionHeight)
-	moveWindow(s.action.Handle(), plan.contentX, contentY(plan.actionY), min(s.scale(190), plan.contentWidth), s.scale(44))
+	actionWidth := max(s.scale(160), s.measureLine(s.action.Text(), s.bodyFont)+s.scale(48))
+	moveWindow(s.action.Handle(), plan.contentX, contentY(plan.actionY), min(actionWidth, plan.contentWidth), plan.actionHeight)
 	if native, exists := s.nativeViews[s.navigator.Current().ID()]; exists {
 		native.NativeLayout(plan.contentX, contentY(plan.moduleY), plan.contentWidth, s.scale, measureModuleText)
 	}
@@ -1092,7 +1153,10 @@ func forwardChildDrop(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 		return r
 	}
 	r, _, _ := procCallWindowProcW.Call(previous, uintptr(hwnd), uintptr(message), wParam, lParam)
-	if message == wmDestroy {
+	// The original procedure is kept until the child's last message, which
+	// the theme's subclass beneath this one needs to forget the control and
+	// the control's own procedure to free what it holds.
+	if message == wmNCDestroy {
 		delete(dropForwardOriginals, hwnd)
 	}
 	return r
@@ -1241,6 +1305,71 @@ func (s *nativeShell) measureText(text string, width int32, font windows.Handle)
 	}
 	procReleaseDC.Call(uintptr(s.hwnd), dc)
 	return int32(height)
+}
+
+// measureLine returns the width of text on one line in the font.
+func (s *nativeShell) measureLine(text string, font windows.Handle) int32 {
+	if text == "" {
+		return 0
+	}
+	dc, _, _ := procGetDC.Call(uintptr(s.hwnd))
+	if dc == 0 {
+		return 0
+	}
+	defer procReleaseDC.Call(uintptr(s.hwnd), dc)
+	if font != 0 {
+		previous, _, _ := procSelectObject.Call(dc, uintptr(font))
+		defer procSelectObject.Call(dc, previous)
+	}
+	var bounds rect
+	procDrawTextW.Call(dc, uintptr(unsafe.Pointer(utf16(text))), ^uintptr(0), uintptr(unsafe.Pointer(&bounds)), dtCalcRect|dtSingleLine)
+	return bounds.Right - bounds.Left
+}
+
+// paintSidebar records the sidebar's surface, which the compact layout does
+// not have, and where the application's icon and name are drawn above the
+// navigation, scrolling with it, and has the window draw them again where
+// they moved from and to.
+func (s *nativeShell) paintSidebar(plan shellLayout, client rect) {
+	// A minimized window has no client area to draw in; the sidebar is laid
+	// out again as it is restored.
+	if client.Right <= 0 || client.Bottom <= 0 {
+		return
+	}
+	var regions []ui.SurfaceRegion
+	var brand rect
+	if !plan.compact {
+		// The sidebar spans the window's height, whatever that becomes, so a
+		// resize that keeps the layout does not change the region, which
+		// would repaint the whole window.
+		regions = []ui.SurfaceRegion{{Right: plan.sidebarWidth, Bottom: math.MaxInt32, Surface: ui.SurfaceSidebar}}
+		top := s.scale(30) - s.scrollY
+		brand = rect{Left: plan.navX + s.scale(10), Top: top, Right: plan.sidebarWidth - s.scale(12), Bottom: top + s.scale(28)}
+	}
+	ui.SetSurfaces(s.hwnd, regions)
+	if brand == s.brand {
+		return
+	}
+	// A hidden window is drawn whole once it is shown.
+	if visible, _, _ := procIsWindowVisible.Call(uintptr(s.hwnd)); visible != 0 {
+		for _, area := range []rect{s.brand, brand} {
+			if area.Bottom > area.Top {
+				procInvalidateRect.Call(uintptr(s.hwnd), uintptr(unsafe.Pointer(&area)), 1)
+			}
+		}
+	}
+	s.brand = brand
+}
+
+// paintBrand draws the application's icon and name at the top of the
+// sidebar.
+func (s *nativeShell) paintBrand(dc uintptr) {
+	size := s.brand.Bottom - s.brand.Top
+	if size <= 0 {
+		return
+	}
+	instance, _, _ := procGetModuleHandleW.Call(0)
+	ui.PaintBrand(dc, loadAppIcon(instance, uintptr(size)), size, s.brandFont, ui.AppName, s.brand.Left, s.brand.Top)
 }
 
 func (s *nativeShell) scale(value int32) int32 {
@@ -1543,14 +1672,6 @@ func (s *nativeShell) logEvent(level diagnostics.Level, operation, code string) 
 	}
 }
 
-func staticTextBrush(dc uintptr) uintptr {
-	procSetBkMode.Call(dc, transparent)
-	textColor, _, _ := procGetSysColor.Call(colorWindowText)
-	procSetTextColor.Call(dc, textColor)
-	brush, _, _ := procGetSysColorBrush.Call(colorWindow)
-	return brush
-}
-
 // refusedShowBeep is how the shell refuses to show a window a capture keeps
 // hidden; tests replace it.
 var refusedShowBeep = func() { procMessageBeep.Call(0) }
@@ -1561,8 +1682,17 @@ var refusedShowBeep = func() { procMessageBeep.Call(0) }
 // scans this frame. Only WM_DPICHANGED's and WM_WINDOWPOSCHANGING's lParam
 // are pointers, to memory Windows owns.
 func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	// The theme colors and draws the controls and the background.
+	if result, handled := ui.ThemeMessage(hwnd, message, wParam, lParam); handled {
+		return result
+	}
 	shell := shellStates[hwnd]
 	switch message {
+	case wmPaint:
+		if shell != nil {
+			ui.Paint(hwnd, shell.paintBrand)
+			return 0
+		}
 	case wmCommand:
 		notification := highWord(wParam)
 		if shell != nil && reportsFocus(notification, lParam) {
@@ -1766,8 +1896,6 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			shell.layout()
 			return 0
 		}
-	case wmCtlColorStatic:
-		return staticTextBrush(wParam)
 	case wmTimer:
 		if shell != nil && shell.note.HandleTimer(wParam) {
 			shell.updateView()
@@ -1814,8 +1942,10 @@ func shellWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam
 			if shell.headingFont != 0 {
 				procDeleteObject.Call(uintptr(shell.headingFont))
 			}
-			if shell.bodyFont != 0 {
-				procDeleteObject.Call(uintptr(shell.bodyFont))
+			for _, font := range []windows.Handle{shell.bodyFont, shell.captionFont, shell.brandFont} {
+				if font != 0 {
+					procDeleteObject.Call(uintptr(font))
+				}
 			}
 			procPostQuitMessage.Call(0)
 		}

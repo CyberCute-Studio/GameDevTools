@@ -1,7 +1,7 @@
 # CyberCute Dev Tools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.10\
+**Version:** 1.11\
 **Last updated:** 2026-11-25\
 **Product name:** CyberCute Dev Tools\
 **Platform:** Windows desktop\
@@ -695,7 +695,7 @@ These are not commitments for the initial release:
 - Watch folders, command-line batch operation, and automation profiles.
 - Additional CyberCute Dev Tools modules using the same shell and settings infrastructure.
 - Localization beyond English.
-- Following the Windows dark app mode with a dark theme.
+- A light theme, following the Windows light app mode.
 - Signed installer, automatic updates, and enterprise deployment controls.
 
 ## 19. Open decisions
@@ -717,7 +717,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - Screenshots can be started from the main window or a configurable global shortcut. While one of the application's own modal dialogs is open, the shortcut (SCR-002) captures nothing and flashes the dialog with a beep, as the dialog would be in the image (SCR-044) and Escape could not cancel a selection (SCR-052). REL-03's review added this exception, and the project owner confirmed it (PRD 1.10). The project owner decided in REL-02C that the shortcut likewise captures nothing, and beeps, while the main window is being moved or sized or one of its menus is open, such as its system menu, for the same two reasons.
 - From the moment a capture starts until it has read the screen, and for as long as a selection is on screen, the application's own dialogs do not open: one asked for then is refused with a beep, and a question counts as answered No, so that no dialog can appear in the image (SCR-044) or keep Escape from cancelling a selection (SCR-052). The project owner decided this in REL-02C.
 - Open Folder (SCR-069) opens File Explorer at the saved file through Explorer's own select command. The first time Explorer shows a folder, it can leave the file focused rather than highlighted, as that command does without the application, and a second Open Folder highlights it. The project owner decided that this opens Explorer at the saved file, as manual check M16 requires; the user guide and release notes state it as a known limitation.
-- The initial release draws every window in the Windows system colors, so it follows the Windows contrast (high-contrast) themes, and does not follow the Windows dark app mode, which the standard Win32 controls it uses have no documented way to render; the application stays light and legible when Windows apps are set to dark (UX-008).
+- The application has one theme, a dark one in the violet of its icon, and keeps it when Windows apps are set to light (UX-008). Under a Windows contrast (high-contrast) theme it draws every window in that theme's system colors instead. The project owner decided this in UX-01, replacing PRD 1.1's light system-color theme; the dark theme meets WCAG 2.1 AA as the system colors did (UX-007).
 - Restoring the default settings (SET-005) backs the settings file up first and keeps each module's custom presets and its selected preset, the window placement, and the current module; every other setting — the global shortcut, the capture and resize options, and both output folders — returns to its default.
 - Closing the application while a resize job runs asks first, as closing cancels the job. Signing out of, restarting, or shutting down Windows asks nothing: the application saves its settings and stops all work.
 - Screenshots copied to the clipboard are marked so that Windows clipboard sync does not upload them (NFR-031). They stay in the local clipboard history (Win+V). An image that cannot be marked is not placed on the clipboard, which is reported as a clipboard failure while the saved file is kept (SCR-060).
@@ -744,3 +744,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.8 | 2026-11-24 | REL-03: listed the owner's pending confirmation of the shortcut's dialog exception, and the pending decision on whether Open Folder meets SCR-069, as open decisions (section 19). No numbered requirement changed. |
 | 1.9 | 2026-11-25 | REL-02C: recorded the project owner's decisions that the global shortcut captures nothing, and beeps, while the main window is moved or sized or one of its menus is open, and that the application's dialogs are refused with a beep from a capture's start until it has read the screen and during a selection (section 20). No numbered requirement changed. |
 | 1.10 | 2026-11-25 | Closed both open decisions: the project owner confirmed that the global shortcut captures nothing while one of the application's own modal dialogs is open, and decided that Open Folder meets SCR-069 when the first time File Explorer shows a folder it focuses the saved file without highlighting it (sections 19 and 20). No numbered requirement changed. |
+| 1.11 | 2026-11-25 | UX-01: recorded the project owner's decision to give the application one dark theme, kept when Windows apps are set to light, with the contrast themes still followed, replacing the light system-color theme of PRD 1.1 (section 20); a light theme is now the future consideration (section 18). No numbered requirement changed. |

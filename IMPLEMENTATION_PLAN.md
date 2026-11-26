@@ -1,7 +1,7 @@
 # CyberCute Dev Tools — Implementation Plan
 
 **Document status:** Living document\
-**Version:** 1.12\
+**Version:** 1.13\
 **Last updated:** 2026-11-25\
 **Source requirements:** [PRD.md](PRD.md)\
 **Overall status:** In Progress
@@ -33,9 +33,9 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | M1 — Screenshot module | 8–18 | Blocked |
 | M2 — Image Resizer module | 19–27 | In Progress |
 | M3 — Cross-cutting quality and hardening | 28–36 | In Progress |
-| M4 — Distribution and release | 37–43 | In Progress |
+| M4 — Distribution and release | 37–44 | In Progress |
 
-35 of the 43 items are Done. The eight still open, and what each waits on:
+35 of the 44 items are Done. The nine still open, and what each waits on:
 
 | Item | Status | Waits on |
 |---|---|---|
@@ -46,6 +46,7 @@ Each numbered item represents exactly one PR. Items are listed in implementation
 | QLT-04A | Pending | x64 Windows 11 and mixed-DPI hardware |
 | REL-01 | In Progress | Manual check M1, the clean-machine run |
 | REL-02 | In Progress | Manual check M1, the clean-machine walkthrough of the documentation |
+| UX-01 | In Progress | Its pull request's review and merge |
 | REL-03 | Blocked | The blockers its Notes list |
 
 The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-release-checks), and REL-03 runs them.
@@ -332,7 +333,7 @@ The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-rel
 
 ## 8. Milestone M4 — Distribution and release
 
-**Milestone status:** In Progress — REL-01 and REL-02 wait on manual check M1, and REL-03 is Blocked\
+**Milestone status:** In Progress — REL-01 and REL-02 wait on manual check M1, UX-01 is In Progress, and REL-03 is Blocked\
 **Goal:** Produce the chosen Windows distribution, complete user/release documentation, and validate the exact release candidate.
 
 37. **REL-01 — Finalize product identity, packaging, and distribution**
@@ -377,8 +378,15 @@ The manual checks are listed in [docs/testing.md](docs/testing.md#manual-pre-rel
     - **Verify:** Confirm each defect with a failing test first. Test a reveal and a folder opening asked for before a hold and reaching the shell during it, once it ends, and for a path gone by then; and a window a capture hid that is sent and posted a restore and a maximize, sent a minimize, and shown directly, while hidden and minimized, once the capture restores it, and under two exclusions ended in either order. No test sends real input. Update the user guide, traceability rows, and release candidate record where behaviour changes.
     - **Notes:** These are the pre-existing defects REL-02C's review rounds found on `main` and left out of that item's diff: a reveal whose goroutine had not yet reached the shell when a capture started could open Explorer during the screen read, and a taskbar restore arriving in the instant after the main window hid could show it before the read. Started by explicit request while REL-02C is unmerged; this item's branch contains REL-02C's commits and its PR targets `main`, so it lands correctly whichever merges first. Each defect was confirmed by a failing test first. `ui.RevealInFolder` and `ui.OpenFolder` now wait, after their checks and just before the shell call, until no hold remains, and look at the file or folder again once one has ended, so Explorer opens once the screen is read or the selection ends, and not for a path gone meanwhile; an Explorer window the shell had already been, or was being, asked for can still open during a read, as Explorer opens it on its own time. `capture.Hide` records each window it hides until its Exclusion restores it (`capture.KeptHidden`), and while a window is recorded the shell refuses a restore or maximize, sent or posted, with a beep and strips `SWP_SHOWWINDOW` from any other change that would show it; the capture's restore then shows it as it was, so a refused taskbar click is made again. A minimize, as a click on the active window's taskbar button makes, shows nothing and is let through, so the window comes back minimized, without a beep. A window two exclusions hide stays recorded until both have restored it, in either order, and the last shows it as the first found it. The branch's review found that the first of two overlapping exclusions to end had its show refused while the second, which found the window hidden, left it so, for good; that a reveal did not look at its file again after waiting, so a file deleted during a selection opened another folder; and that the guide promised a beep for any taskbar click in that instant, which it now promises only for a minimized window. No test sends real input: the taskbar's command is sent and posted to the real shell window. No numbered requirement or traceability status changed.
 
-43. **REL-03 — Validate the release candidate and close the implementation baseline**
-    - **Status:** Blocked | **PR:** [#40](https://github.com/CyberCute-Studio/GameDevTools/pull/40) | **Depends on:** REL-02D
+43. **UX-01 — Redesign the application in a dark theme**
+    - **Status:** In Progress | **PR:** [#45](https://github.com/CyberCute-Studio/GameDevTools/pull/45) | **Depends on:** REL-02D
+    - **Requirements:** UX-005, UX-006, UX-007, UX-008, TECH-001.
+    - **Deliver:** A dark theme for every window the application draws — the main window, the capture toolbar, and the result card — which the project owner asked for: a sidebar with the application's icon and name and the modules as icon navigation, the content in a column of readable width, a type scale in Segoe UI Variable, an accent primary action, and buttons, radio buttons, text fields, drop-down lists, and lists drawn in the theme, while they stay standard Win32 controls with Windows' own keyboard behavior and accessibility. The contrast themes are still followed, in their own colors.
+    - **Verify:** Pin WCAG 2.1 AA for every pair of colors the palette draws together, the colors each control is drawn in, the fallback to a contrast theme's system colors, the text fields' padding, the owner-drawn lists keeping their strings, and that the tests drive the Common Controls the executable uses. Run the whole suite and the package checks, and look at every view, the capture toolbar, and the result card on screen. Update the PRD, the accessibility record, the user guide, release notes, and traceability rows where the theme changes what they say.
+    - **Notes:** Started by explicit request while REL-03 is Blocked; it replaces the light system-color theme QLT-01 chose, which the project owner reversed (PRD 1.11, section 20), so the application keeps its dark theme when Windows apps are set to light and UX-008 stays Partial as that decision makes it. The executable had no application manifest, so Windows gave it the Common Controls 5, drawn the Windows 2000 way; its resources now carry one that asks for version 6 (`release.ApplicationManifest`), and the tests get the same through `internal/ui/visualstyles`, a package holding a manifest-only resource object that each package whose tests create controls imports. The whole suite passed on version 6 before anything else changed. The theme lives in `internal/ui`: a palette, checked pair by pair against WCAG 2.1 AA (`ui.TestDarkPaletteContrast`), shapes antialiased in Go as GDI cannot antialias them, and `ui.ThemeMessage`, which each window holding the package's controls calls first and which colors and draws them through custom draw, owner draw, `WM_CTLCOLOR*`, and the fields' own frames. [Theme and contrast](docs/ui.md#theme-and-contrast) describes it. Under a contrast theme the palette holds the system colors and the buttons draw themselves. The scroll bars use the undocumented `DarkMode_Explorer` theme class, which a Windows build without it replaces with the light scroll bar; it adds `uxtheme.dll`, the tenth reviewed library. The audit's procedure review lists the new Win32 functions. The sidebar's repaint of a hidden window left a paint pending that the exit tests' message drain could never clear, so a hidden window is no longer asked to repaint, as showing it repaints it whole; and the instance tests now release their thread only after their windows' cleanups, which ran on another thread and could wait forever on the window's owner. Message boxes and the file and folder pickers keep Windows' look. The release candidate REL-03 validated predates this item, so its recorded runs must be repeated on a candidate that includes it.
+
+44. **REL-03 — Validate the release candidate and close the implementation baseline**
+    - **Status:** Blocked | **PR:** [#40](https://github.com/CyberCute-Studio/GameDevTools/pull/40) | **Depends on:** UX-01
     - **Requirements:** All P0 requirements and all acceptance criteria in PRD Section 15.
     - **Deliver:** Release-candidate checklist and results, final clean-machine test, full requirement/status review, versioned release notes, and updates marking all completed plan items and milestones Done. Include only release-blocking fixes found during final validation.
     - **Verify:** Test the exact artifact produced by REL-01, not a development build. Complete all P0 acceptance scenarios or record an explicit release blocker. Confirm CI, package integrity, documentation, offline operation, and clean exit.
@@ -397,7 +405,7 @@ This map is a planning aid, not a replacement for requirement references on indi
 | SCR-001 through SCR-069 | SCR-01 through SCR-10; SCR-015 in QLT-01; output-folder and finalization fixes in QLT-03A and QLT-03B; shared folder rule in QLT-03C; capture-result, startup-conflict, toolbar, second-launch, and display-selection fixes in REL-02A; removed-display, temporary-name, status, shortcut, quality-field, and result-delivery fixes in REL-02B; shortcut, dialog, overlay-activation, and toolbar fixes in REL-02C; Explorer and restore races in REL-02D | SCR-11, QLT-04, QLT-04A, REL-03 |
 | RSZ-001 through RSZ-050 | RSZ-01 through RSZ-08; output-folder fix in QLT-03C; Open Output Folder race in REL-02D | RSZ-09, QLT-04, REL-03 |
 | SET-001 through SET-007 | FND-04, FND-06, module settings items, QLT-02, QLT-03; maximized-window fix in REL-02A | QLT-04, REL-03 |
-| UX-001 through UX-010 | FND-05 and all feature UI items | QLT-01, QLT-04 |
+| UX-001 through UX-010 | FND-05 and all feature UI items; the dark theme in UX-01 | QLT-01, QLT-04 |
 | NFR-001 through NFR-004 | SCR-02, REL-01 | QLT-04, QLT-04A, REL-03 |
 | NFR-010 through NFR-014 | SCR-11, RSZ-07, RSZ-09 | QLT-04, QLT-04A, REL-03 |
 | NFR-020 through NFR-024 | FND-04, SCR-10, RSZ-05 through RSZ-07, QLT-02 | QLT-04, REL-03 |
@@ -424,3 +432,4 @@ This map is a planning aid, not a replacement for requirement references on indi
 | 1.10 | 2026-11-25 | Inserted REL-02D for the capture races REL-02C's review found; REL-03 now depends on REL-02D and is renumbered. |
 | 1.11 | 2026-11-25 | The project owner moved FND-01's mixed-DPI check, and the blocker it gates in the Screenshot items, to QLT-04A, whose requirements now list every hardware-gated requirement, and decided that rule 6 judges each item on its own. Marked the 35 items that meet rule 6 Done, set the milestone statuses, listed what the eight open items wait on, and recorded that REL-03's pull request CI passed. |
 | 1.12 | 2026-11-25 | REL-03: recorded the project owner's two decisions (PRD 1.10), confirming the global shortcut's dialog exception and accepting Open Folder's first-open behavior as meeting SCR-069, which is now Pass; REL-03 no longer waits on them. |
+| 1.13 | 2026-11-25 | Inserted UX-01 for the dark redesign the project owner asked for (PRD 1.11); REL-03 now depends on UX-01 and is renumbered. |

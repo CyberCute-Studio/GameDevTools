@@ -85,7 +85,7 @@ var reviewedProgramSites = []string{"internal/ui/folder_windows.go ShellExecuteE
 // ws2_32.dll, which net brings in.
 var reviewedLibraries = []string{
 	"comdlg32.dll", "dwmapi.dll", "gdi32.dll", "kernel32.dll", "ole32.dll",
-	"oleacc.dll", "shcore.dll", "shell32.dll", "user32.dll",
+	"oleacc.dll", "shcore.dll", "shell32.dll", "user32.dll", "uxtheme.dll",
 }
 
 // reviewedProcedures is every Windows function the application's own code
@@ -95,26 +95,30 @@ var reviewedLibraries = []string{
 // the lists of functions that must not be bound do not have to name every
 // one Windows has.
 var reviewedProcedures = []string{
-	"BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance", "CoInitializeEx",
-	"CoTaskMemFree", "CoUninitialize", "CommDlgExtendedError", "CreateCompatibleDC", "CreateDIBSection",
-	"CreateFontIndirectW", "CreateMutexW", "CreateWindowExW", "DefWindowProcW", "DeleteDC", "DeleteObject",
-	"DestroyWindow", "DispatchMessageW", "DragAcceptFiles", "DragFinish", "DragQueryFileW", "DrawTextW",
-	"DwmFlush", "EmptyClipboard", "EnableWindow", "EndMenu", "EnumChildWindows", "EnumDisplayDevicesW",
-	"EnumDisplayMonitors", "FindWindowExW", "FindWindowW", "FlashWindowEx", "GetAncestor", "GetClientRect", "GetCursorPos", "GetDC",
-	"GetDpiForMonitor", "GetDpiForWindow", "GetFocus", "GetForegroundWindow", "GetGUIThreadInfo", "GetKeyState", "GetLastActivePopup",
-	"GetMessageW", "GetModuleHandleW",
-	"GetMonitorInfoW", "GetNextDlgTabItem", "GetOpenFileNameW", "GetScrollInfo", "GetSysColor",
-	"GetSysColorBrush", "GetSystemMetrics", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW", "GetWindowTextW", "GetWindowThreadProcessId",
-	"GlobalAlloc", "GlobalFree", "GlobalLock", "GlobalUnlock", "InvalidateRect", "IsChild",
-	"IsDialogMessageW", "IsIconic", "IsWindow", "IsWindowEnabled", "IsWindowVisible", "IsZoomed", "KillTimer",
-	"LoadCursorW", "LoadImageW", "MapWindowPoints", "MessageBeep", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
-	"OpenClipboard", "PostMessageW", "PostQuitMessage", "RegisterClassExW", "RegisterClipboardFormatW",
-	"RegisterHotKey", "ReleaseCapture", "ReleaseDC", "RtlMoveMemory", "SHBrowseForFolderW",
-	"SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkMode", "SetCapture", "SetClipboardData",
-	"SetCursor", "SetFocus", "SetForegroundWindow", "SetProcessDpiAwarenessContext", "SetScrollInfo",
-	"SetTextColor", "SetTimer", "SetWindowLongPtrW", "SetWindowPos", "SetWindowTextW", "ShellExecuteExW",
-	"ShowWindow", "TrackMouseEvent", "TranslateMessage", "UnregisterHotKey", "UpdateLayeredWindowIndirect", "UpdateWindow",
-	"WindowFromPoint",
+	"BeginPaint", "BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance",
+	"CoInitializeEx", "CoTaskMemFree", "CoUninitialize", "CommDlgExtendedError", "CreateCompatibleDC",
+	"CreateDIBSection", "CreateFontIndirectW", "CreateMutexW", "CreateSolidBrush", "CreateWindowExW",
+	"DefWindowProcW", "DeleteDC", "DeleteObject", "DestroyWindow", "DispatchMessageW", "DragAcceptFiles",
+	"DragFinish", "DragQueryFileW", "DrawIconEx", "DrawTextW", "DwmFlush", "DwmSetWindowAttribute",
+	"EmptyClipboard", "EnableWindow", "EndMenu", "EndPaint", "EnumChildWindows", "EnumDisplayDevicesW",
+	"EnumDisplayMonitors", "ExcludeClipRect", "FillRect", "FindWindowExW", "FindWindowW", "FlashWindowEx",
+	"GetAncestor", "GetClientRect", "GetCursorPos", "GetDC", "GetDpiForMonitor", "GetDpiForWindow",
+	"GetFocus", "GetForegroundWindow", "GetGUIThreadInfo", "GetKeyState", "GetLastActivePopup",
+	"GetMessageW", "GetModuleHandleW", "GetMonitorInfoW", "GetNextDlgTabItem", "GetOpenFileNameW",
+	"GetParent", "GetScrollInfo", "GetSysColor", "GetSysColorBrush", "GetSystemMetrics", "GetTextFaceW",
+	"GetTextMetricsW", "GetWindowDC", "GetWindowPlacement", "GetWindowRect", "GetWindowTextLengthW",
+	"GetWindowTextW", "GetWindowThreadProcessId", "GlobalAlloc", "GlobalFree", "GlobalLock",
+	"GlobalUnlock", "InvalidateRect", "IsChild", "IsDialogMessageW", "IsIconic", "IsWindow",
+	"IsWindowEnabled", "IsWindowVisible", "IsZoomed", "KillTimer", "LoadCursorW", "LoadImageW",
+	"MapWindowPoints", "MessageBeep", "MessageBoxW", "MonitorFromWindow", "MoveWindow", "NotifyWinEvent",
+	"OpenClipboard", "PostMessageW", "PostQuitMessage", "RedrawWindow", "RegisterClassExW",
+	"RegisterClipboardFormatW", "RegisterHotKey", "ReleaseCapture", "ReleaseDC", "RtlMoveMemory",
+	"SHBrowseForFolderW", "SHGetPathFromIDListW", "SelectObject", "SendMessageW", "SetBkColor",
+	"SetBkMode", "SetCapture", "SetClipboardData", "SetCursor", "SetFocus", "SetForegroundWindow",
+	"SetProcessDpiAwarenessContext", "SetScrollInfo", "SetTextColor", "SetTimer", "SetWindowLongPtrW",
+	"SetWindowPos", "SetWindowTextW", "SetWindowTheme", "ShellExecuteExW", "ShowWindow",
+	"SystemParametersInfoW", "TrackMouseEvent", "TranslateMessage", "UnregisterHotKey",
+	"UpdateLayeredWindowIndirect", "UpdateWindow", "WindowFromPoint",
 }
 
 // reviewedSystemFunctions is every function of syscall and

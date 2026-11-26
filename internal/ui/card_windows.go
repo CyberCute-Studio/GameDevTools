@@ -20,74 +20,65 @@ const (
 	cardLogicalMargin  = 16
 	cardLogicalButtonW = 112
 	cardLogicalButtonH = 28
-	cardLogicalFont    = 18
+	cardLogicalFont    = 14
 
 	cardOpenCommand    = 1
 	cardDismissCommand = 2
 	cardTimerID        = 1
 
-	cardWMDestroy        = 0x0002
-	cardWMClose          = 0x0010
-	cardWMCommand        = 0x0111
-	cardWMTimer          = 0x0113
-	cardWMCtlColorStatic = 0x0138
-	cardWMMouseActivate  = 0x0021
-	cardWMNCDestroy      = 0x0082
-	cardWMLButtonDown    = 0x0201
-	cardWMLButtonUp      = 0x0202
-	cardWMLButtonDblClk  = 0x0203
-	cardWMMouseLeave     = 0x02a3
-	cardTMELeave         = 0x00000002
-	cardBMSetState       = 0x00f3
-	cardMANoActivate     = 3
-	cardBNClicked        = 0
-	cardBNDoubleClicked  = 5
-	cardGWLPWndProc      = ^uintptr(3) // -4 as a uintptr
+	cardWMDestroy       = 0x0002
+	cardWMClose         = 0x0010
+	cardWMCommand       = 0x0111
+	cardWMTimer         = 0x0113
+	cardWMMouseActivate = 0x0021
+	cardWMNCDestroy     = 0x0082
+	cardWMLButtonDown   = 0x0201
+	cardWMLButtonUp     = 0x0202
+	cardWMLButtonDblClk = 0x0203
+	cardWMMouseLeave    = 0x02a3
+	cardTMELeave        = 0x00000002
+	cardBMSetState      = 0x00f3
+	cardMANoActivate    = 3
+	cardBNClicked       = 0
+	cardBNDoubleClicked = 5
+	cardGWLPWndProc     = ^uintptr(3) // -4 as a uintptr
 
-	cardWSPopup          = 0x80000000
-	cardWSBorder         = 0x00800000
-	cardWSExTopmost      = 0x00000008
-	cardWSExToolWindow   = 0x00000080
-	cardWSExNoActivate   = 0x08000000
-	cardSSEditControl    = 0x00002000
-	cardHwndTopmost      = ^uintptr(0)
-	cardSWPNoActivate    = 0x0010
-	cardSWPShowWindow    = 0x0040
-	cardDTWordBreak      = 0x00000010
-	cardDTCalcRect       = 0x00000400
-	cardDTNoPrefix       = 0x00000800
-	cardDTEditControl    = 0x00002000
-	cardColorWindow      = 5
-	cardColorWindowText  = 8
-	cardTransparent      = 1
-	cardIDCArrow         = 32512
-	cardFontNormal       = 400
-	cardDefaultCharset   = 1
-	cardClearTypeQuality = 5
+	cardWSPopup        = 0x80000000
+	cardWSBorder       = 0x00800000
+	cardWSExTopmost    = 0x00000008
+	cardWSExToolWindow = 0x00000080
+	cardWSExNoActivate = 0x08000000
+	cardSSEditControl  = 0x00002000
+	cardHwndTopmost    = ^uintptr(0)
+	cardSWPNoActivate  = 0x0010
+	cardSWPShowWindow  = 0x0040
+	cardDTWordBreak    = 0x00000010
+	cardDTCalcRect     = 0x00000400
+	cardDTNoPrefix     = 0x00000800
+	cardDTEditControl  = 0x00002000
+	cardColorWindow    = 5
+	cardIDCArrow       = 32512
+	cardFontNormal     = 400
 )
 
 var (
 	cardKernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	cardGDI32    = windows.NewLazySystemDLL("gdi32.dll")
 
-	procCardRegisterClassExW    = user32.NewProc("RegisterClassExW")
-	procCardDefWindowProcW      = user32.NewProc("DefWindowProcW")
-	procCardLoadCursorW         = user32.NewProc("LoadCursorW")
-	procCardSetWindowPos        = user32.NewProc("SetWindowPos")
-	procCardGetSysColor         = user32.NewProc("GetSysColor")
-	procCardGetSysColorBrush    = user32.NewProc("GetSysColorBrush")
-	procCardGetDC               = user32.NewProc("GetDC")
-	procCardReleaseDC           = user32.NewProc("ReleaseDC")
-	procCardDrawTextW           = user32.NewProc("DrawTextW")
-	procCardSetWindowLongPtrW   = user32.NewProc("SetWindowLongPtrW")
-	procCardCallWindowProcW     = user32.NewProc("CallWindowProcW")
-	procCardTrackMouseEvent     = user32.NewProc("TrackMouseEvent")
-	procCardGetModuleHandleW    = cardKernel32.NewProc("GetModuleHandleW")
-	procCardCreateFontIndirectW = cardGDI32.NewProc("CreateFontIndirectW")
-	procCardSelectObject        = cardGDI32.NewProc("SelectObject")
-	procCardDeleteObject        = cardGDI32.NewProc("DeleteObject")
-	procCardSetBkMode           = cardGDI32.NewProc("SetBkMode")
-	procCardSetTextColor        = cardGDI32.NewProc("SetTextColor")
+	procCardRegisterClassExW  = user32.NewProc("RegisterClassExW")
+	procCardDefWindowProcW    = user32.NewProc("DefWindowProcW")
+	procCardLoadCursorW       = user32.NewProc("LoadCursorW")
+	procCardSetWindowPos      = user32.NewProc("SetWindowPos")
+	procCardGetSysColorBrush  = user32.NewProc("GetSysColorBrush")
+	procCardGetDC             = user32.NewProc("GetDC")
+	procCardReleaseDC         = user32.NewProc("ReleaseDC")
+	procCardDrawTextW         = user32.NewProc("DrawTextW")
+	procCardSetWindowLongPtrW = user32.NewProc("SetWindowLongPtrW")
+	procCardCallWindowProcW   = user32.NewProc("CallWindowProcW")
+	procCardTrackMouseEvent   = user32.NewProc("TrackMouseEvent")
+	procCardGetModuleHandleW  = cardKernel32.NewProc("GetModuleHandleW")
+	procCardSelectObject      = cardGDI32.NewProc("SelectObject")
+	procCardDeleteObject      = cardGDI32.NewProc("DeleteObject")
 
 	registerCardOnce sync.Once
 	registerCardErr  error
@@ -132,23 +123,6 @@ type cardWindowClass struct {
 	LpszMenuName  *uint16
 	LpszClassName *uint16
 	HIconSm       windows.Handle
-}
-
-type cardLogFont struct {
-	Height         int32
-	Width          int32
-	Escapement     int32
-	Orientation    int32
-	Weight         int32
-	Italic         byte
-	Underline      byte
-	StrikeOut      byte
-	CharSet        byte
-	OutPrecision   byte
-	ClipPrecision  byte
-	Quality        byte
-	PitchAndFamily byte
-	Face           [32]uint16
 }
 
 type cardRect struct {
@@ -381,6 +355,7 @@ func (c *ResultCard) present(announce bool) {
 		countText = fmt.Sprintf(CardEarlierResults, waiting)
 	}
 	c.path = entry.Path
+	c.message.SetStyle(noticeStyle(entry.Notice.Kind))
 	c.message.SetTextQuietly(text)
 	c.count.SetTextQuietly(countText)
 	c.count.Show(countText != "")
@@ -449,6 +424,7 @@ func (c *ResultCard) create() error {
 		return callError("CreateWindowExW(result card)", err)
 	}
 	card := windows.Handle(hwnd)
+	ThemeWindow(card, WindowPopup)
 	fail := func(err error) error {
 		if c.message != nil {
 			c.message.ClearLive()
@@ -496,19 +472,8 @@ func (c *ResultCard) applyFont(dpi uint32) {
 	if c.font != 0 && c.fontDPI == dpi {
 		return
 	}
-	description := cardLogFont{
-		Height:  -int32((int64(cardLogicalFont)*int64(dpi) + 48) / 96),
-		Weight:  cardFontNormal,
-		CharSet: cardDefaultCharset,
-		Quality: cardClearTypeQuality,
-	}
-	face, err := windows.UTF16FromString("Segoe UI")
+	font, err := NewFont(int32((int64(cardLogicalFont)*int64(dpi)+48)/96), cardFontNormal, FontText)
 	if err != nil {
-		return
-	}
-	copy(description.Face[:], face)
-	font, _, _ := procCardCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&description)))
-	if font == 0 {
 		return
 	}
 	for _, control := range []Control{c.message.Control, c.count.Control, c.openBtn.Control, c.dismiss.Control} {
@@ -634,6 +599,10 @@ func registerCardClass() error {
 }
 
 func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam uintptr) uintptr {
+	// The theme colors and draws the controls and the background.
+	if result, handled := ThemeMessage(hwnd, message, wParam, lParam); handled {
+		return result
+	}
 	card := cardStates[hwnd]
 	switch message {
 	case cardWMMouseActivate:
@@ -676,12 +645,6 @@ func cardWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lParam 
 			card.DismissProblem()
 		}
 		return 0
-	case cardWMCtlColorStatic:
-		procCardSetBkMode.Call(wParam, cardTransparent)
-		color, _, _ := procCardGetSysColor.Call(cardColorWindowText)
-		procCardSetTextColor.Call(wParam, color)
-		brush, _, _ := procCardGetSysColorBrush.Call(cardColorWindow)
-		return brush
 	case cardWMDestroy:
 		delete(cardStates, hwnd)
 		return 0

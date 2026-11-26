@@ -16,10 +16,14 @@ const (
 	resourceIcon      = 3
 	resourceGroupIcon = 14
 	resourceVersion   = 16
+	resourceManifest  = 24
 
 	// groupIconID is the ID the application loads its icon by.
 	groupIconID = 1
 	versionID   = 1
+	// manifestID is CREATEPROCESS_MANIFEST_RESOURCE_ID, the manifest the
+	// loader applies to the process an executable starts.
+	manifestID = 1
 	// languageEnUS is U.S. English, and codePageUnicode the code page of the
 	// version strings. translationKey is the two together, as the version
 	// resource spells them.
@@ -46,20 +50,32 @@ type resource struct {
 	data     []byte
 }
 
+// ApplicationManifest is the application manifest every binary that shows the
+// application's windows carries. It asks for version 6 of the Common
+// Controls, which draw the visual styles and send the custom-draw
+// notifications the dark theme paints buttons through (internal/ui); without
+// it Windows gives version 5, whose controls are drawn the Windows 2000 way.
+// It declares nothing else, so the process keeps the DPI awareness and the
+// other behavior the application sets for itself at startup.
+const ApplicationManifest = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>
+`
+
 // BuildResources returns a COFF object for a Go architecture, amd64 or arm64,
-// holding the application icon from an ICO file's bytes and the version
-// resource. Named resource_windows_<arch>.syso in the main package, the Go
-// linker adds it to the executable without a C toolchain. The same input gives
-// the same bytes.
+// holding the application icon from an ICO file's bytes, the version
+// resource, and the application manifest. Named resource_windows_<arch>.syso
+// in the main package, the Go linker adds it to the executable without a C
+// toolchain. The same input gives the same bytes.
 func BuildResources(icon []byte, architecture string) ([]byte, error) {
-	var machine, relocation uint16
-	switch architecture {
-	case "amd64":
-		machine, relocation = machineAMD64, relocAMD64Addr32NB
-	case "arm64":
-		machine, relocation = machineARM64, relocARM64Addr32NB
-	default:
-		return nil, fmt.Errorf("unsupported architecture %q", architecture)
+	machine, relocation, err := coffMachine(architecture)
+	if err != nil {
+		return nil, err
 	}
 	resources, err := iconResources(icon)
 	if err != nil {
@@ -69,9 +85,43 @@ func BuildResources(icon []byte, architecture string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	resources = append(resources, resource{kind: resourceVersion, id: versionID, data: version})
+	resources = append(resources,
+		resource{kind: resourceVersion, id: versionID, data: version},
+		manifestResource(),
+	)
 	section, relocations := resourceSection(resources)
 	return coffObject(machine, relocation, section, relocations), nil
+}
+
+// BuildManifestResources returns a COFF object for a Go architecture holding
+// the application manifest alone. Named manifest_windows_<arch>.syso in
+// internal/ui/visualstyles, it gives a test binary that imports that package
+// the Common Controls the executable has, so the tests drive the controls the
+// user sees. It must not be linked into the executable, whose resources hold
+// the manifest already: a binary keeps one resource section.
+func BuildManifestResources(architecture string) ([]byte, error) {
+	machine, relocation, err := coffMachine(architecture)
+	if err != nil {
+		return nil, err
+	}
+	section, relocations := resourceSection([]resource{manifestResource()})
+	return coffObject(machine, relocation, section, relocations), nil
+}
+
+func manifestResource() resource {
+	return resource{kind: resourceManifest, id: manifestID, data: []byte(ApplicationManifest)}
+}
+
+// coffMachine returns the COFF machine and ADDR32NB relocation type of a Go
+// architecture.
+func coffMachine(architecture string) (machine, relocation uint16, err error) {
+	switch architecture {
+	case "amd64":
+		return machineAMD64, relocAMD64Addr32NB, nil
+	case "arm64":
+		return machineARM64, relocARM64Addr32NB, nil
+	}
+	return 0, 0, fmt.Errorf("unsupported architecture %q", architecture)
 }
 
 // iconResources splits an ICO file into one icon resource per image and the

@@ -2,7 +2,7 @@
 
 CyberCute Dev Tools is a Windows desktop application implemented in Go. The repository contains the production project foundation under `cmd/gamedevtools` and `internal`, plus the separate **FND-01 technical spike** under `cmd/fnd01-spike`.
 
-The production application provides a native Win32 main window with Screenshot, Image Resizer, and Settings navigation. Both feature modules include independent preset management. The Screenshot module configures its capture mode, output format, JPEG quality, and output folder, and captures a selected display, a user-drawn rectangle, or an exact preset-sized rectangle end to end. The Image Resizer module builds a deduplicated, per-file validated source list from a multi-select image picker or drag-and-drop, manages resize presets with their fitting modes, and configures the resize job's output folder, format, collision policy, JPEG quality, and JPEG transparency background; Start Resize then resizes every ready image in the background, with live progress, Cancel Resize, each image's result in its row, a completion summary, and an Open Output Folder action. The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open mixed-DPI validation blocker.
+The production application provides a native Win32 main window, in a dark theme of its own, with Screenshot, Image Resizer, and Settings navigation in a sidebar. Both feature modules include independent preset management. The Screenshot module configures its capture mode, output format, JPEG quality, and output folder, and captures a selected display, a user-drawn rectangle, or an exact preset-sized rectangle end to end. The Image Resizer module builds a deduplicated, per-file validated source list from a multi-select image picker or drag-and-drop, manages resize presets with their fitting modes, and configures the resize job's output folder, format, collision policy, JPEG quality, and JPEG transparency background; Start Resize then resizes every ready image in the background, with live progress, Cancel Resize, each image's result in its row, a completion summary, and an Open Output Folder action. The spike validates native Windows integration for the Screenshot module. See [ADR-0001](docs/adr/0001-native-windows-stack.md) for the stack decision, license inventory, verification results, and open mixed-DPI validation blocker.
 
 ## Production application
 
@@ -111,11 +111,17 @@ The version and the date stamped on the ZIP's files are in `internal/release/rel
 go generate ./cmd/gamedevtools
 ```
 
+The resources include the application manifest, which asks for version 6 of the Common Controls the dark theme draws through. The tests take the same manifest from `internal/ui/visualstyles`; after changing it in `internal/release`, regenerate that copy too:
+
+```powershell
+go generate ./internal/ui/visualstyles
+```
+
 To use the application, read the [user guide](packaging/USER-GUIDE.txt). To check it, start with the [test and verification guide](docs/testing.md), which lists the commands, the records below, and the manual checks still open. The [release candidate record](docs/release-candidate.md) has REL-03's checklist, its results, and what still blocks a release. [Requirement traceability](docs/traceability.md) maps every PRD requirement to its implementation, evidence, and status, including those not yet complete.
 
 The Screenshot module's acceptance and performance verification is recorded in [Screenshot verification and acceptance results](docs/screenshot-verification.md): the repeatable test matrix for every Screenshot acceptance scenario, the NFR-011 overlay-appearance and NFR-012 capture-to-clipboard benchmarks, the environment of record the results were measured on, and the scenarios still gated on mixed-DPI hardware.
 
-Keyboard access, screen-reader support, contrast, theme behavior, and localization readiness across both modules are recorded in [Accessibility, keyboard, contrast, and localization audit](docs/accessibility-verification.md): the keyboard-only workflow tests, the tab order and access keys of every view, the accessible names and live regions screen readers read, the measured contrast under the default and the Windows contrast themes, the theme decision, and the limitations that remain.
+Keyboard access, screen-reader support, contrast, theme behavior, and localization readiness across both modules are recorded in [Accessibility, keyboard, contrast, and localization audit](docs/accessibility-verification.md): the keyboard-only workflow tests, the tab order and access keys of every view, the accessible names and live regions screen readers read, the measured contrast in the dark theme and the Windows contrast themes, the theme decision, and the limitations that remain.
 
 The Image Resizer module's acceptance and performance verification is recorded in [Image Resizer verification and acceptance results](docs/image-resizer-verification.md): the end-to-end acceptance suite for every Image Resizer acceptance scenario and the responsive-batch scenario, the repeatable fixtures it generates, the NFR-013 100-image reference benchmark with its NFR-014 memory observations, and the environment the results were measured on.
 

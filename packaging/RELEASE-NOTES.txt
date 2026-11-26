@@ -36,8 +36,8 @@ Across the application
 - Separate built-in and custom presets for each tool.
 - Settings kept per user, with backups before any recovery or reset.
 - Works offline, with no account, telemetry, or update check.
-- Full keyboard access in the main window, and support for the Windows contrast
-  themes.
+- A dark theme, with full keyboard access in the main window and support for
+  the Windows contrast themes.
 
 Requirements
 
@@ -94,9 +94,10 @@ take.
 
 Deferred from the requirements
 
-- Following the Windows dark app mode (UX-008). The application uses the system
-  colors and stays light when apps are set to dark. A dark theme is a possible
-  future addition.
+- Following the Windows light app mode (UX-008). The application has one dark
+  theme, which it keeps when apps are set to light; under a Windows contrast
+  theme it uses that theme's colors. A light theme is a possible future
+  addition.
 
 Distribution
 

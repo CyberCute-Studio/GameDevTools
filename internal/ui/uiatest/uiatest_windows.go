@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	controlTypePropertyID = 30003 // UIA_ControlTypePropertyId
 	namePropertyID        = 30005 // UIA_NamePropertyId
 	liveSettingPropertyID = 30135 // UIA_LiveSettingPropertyId
 
@@ -119,6 +120,34 @@ func Names(hwnds ...windows.Handle) ([]string, error) {
 		return nil, err
 	}
 	return names, nil
+}
+
+// ControlTypes returns the UI Automation control type ID of each window's
+// element, such as UIA_ButtonControlTypeId (50000), which a screen reader
+// announces as the control's role. Call it as Names describes.
+func ControlTypes(hwnds ...windows.Handle) ([]int32, error) {
+	types := make([]int32, len(hwnds))
+	err := query(func(automation *comObject) error {
+		for i, hwnd := range hwnds {
+			value, err := property(automation, hwnd, controlTypePropertyID)
+			if err != nil {
+				return err
+			}
+			if value.vt != vtI4 {
+				vt := value.vt
+				clearVariant(&value)
+				return fmt.Errorf("the control type of %#x has VARIANT type %d", hwnd, vt)
+			}
+			types[i] = *(*int32)(unsafe.Pointer(&value.value))
+			clearVariant(&value)
+		}
+		return nil
+	})
+	if err != nil {
+		// A query that timed out may still be writing the types.
+		return nil, err
+	}
+	return types, nil
 }
 
 // LiveSetting returns the UI Automation LiveSetting of the window's element:

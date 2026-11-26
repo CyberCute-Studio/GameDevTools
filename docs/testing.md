@@ -62,7 +62,7 @@ No unit test can stand in for these, and REL-03 owns them. Run them on the exact
 |---|---|---|---|
 | M1 | On a clean Windows 11 x64 machine, as a standard user with no Go installed, follow `USER-GUIDE.txt` from the ZIP through the [walkthrough](#user-guide-walkthrough) below | Every step works as written | APP-002, TECH-010 |
 | M2 | Use both modules with the keyboard alone and with Narrator, and NVDA where available | Every control is reachable, shows a visible focus indicator while it has the focus, and is announced sensibly | UX-006, AC-A03 |
-| M3 | Turn on each Windows contrast theme and look at both modules and the capture overlay. Also set Windows apps to dark | Everything stays legible | UX-007, UX-008 |
+| M3 | Turn on each Windows contrast theme and look at both modules, the capture overlay, and the result card. Also set Windows apps to light | Everything stays legible, in the contrast theme's colors while one is on, and dark otherwise | UX-007, UX-008 |
 | M4 | Sign out of Windows with a resize job running, then sign back in | No temporary file in the output folder, and the window opens where it was | NFR-022, AC-A05 |
 | M5 | Save screenshots and resized images to a FAT32 or exFAT drive, a network share, and a OneDrive folder | Files are complete, and nothing is left behind or replaced | SCR-066, RSZ-027, NFR-023 |
 | M6 | Turn on airplane mode, then run a capture and a resize job | Both complete | NFR-030, AC-A02 |

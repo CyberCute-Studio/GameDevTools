@@ -18,6 +18,8 @@ var (
 	procReleaseDC   = user32.NewProc("ReleaseDC")
 	procDrawTextW   = user32.NewProc("DrawTextW")
 
+	procTestGetTextColor = gdi32.NewProc("GetTextColor")
+
 	procPeekMessageW     = user32.NewProc("PeekMessageW")
 	procDispatchMessageW = user32.NewProc("DispatchMessageW")
 )
@@ -28,6 +30,8 @@ const (
 	dtNoPrefix  = 0x0800
 
 	pmRemove = 0x0001
+
+	wmCtlColorStatic = 0x0138
 )
 
 // pressEnter hands Enter in the field to the session's message filter, as
@@ -40,14 +44,31 @@ func pressEnter(t *testing.T, controller *Controller, native *windowsSession, fi
 	}
 }
 
+// messageColor returns the color the toolbar's theme draws its message's
+// text in, as it answers the label's WM_CTLCOLORSTATIC.
+func messageColor(t *testing.T, native *windowsSession) ui.Color {
+	t.Helper()
+	dc, _, _ := procGetDC.Call(uintptr(native.toolbar))
+	if dc == 0 {
+		t.Fatal("GetDC failed")
+	}
+	defer procReleaseDC.Call(uintptr(native.toolbar), dc)
+	if _, handled := ui.ThemeMessage(native.toolbar, wmCtlColorStatic, dc, uintptr(native.message.Handle())); !handled {
+		t.Fatal("the toolbar's theme did not color its message")
+	}
+	ref, _, _ := procTestGetTextColor.Call(dc)
+	return ui.RGB(uint8(ref), uint8(ref>>8), uint8(ref>>16))
+}
+
 // TestFreeRectangleTypedSizeCreatesSelection pins the keyboard path through
 // Free Rectangle (SCR-015): with nothing drawn, typing a width and height
 // and pressing Enter creates a selection of exactly that size, centered on
 // the cursor display, and hands the focus to Capture; moving from one field
 // to the other is no request,
 // with the second field empty or filled; Enter with a field empty, or a
-// size larger than the desktop, explains the problem and keeps the typed
-// text.
+// size larger than the desktop, explains the problem in the error color and
+// keeps the typed text, and the accepted size brings the instructions back
+// in the text color.
 func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	controller, _ := newNativeSessionController(t)
 	selections := 0
@@ -84,6 +105,9 @@ func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	if got := native.message.Text(); got != ui.SelectionTooLarge {
 		t.Fatalf("a size larger than the desktop showed %q, want %q", got, ui.SelectionTooLarge)
 	}
+	if got, want := messageColor(t, native), ui.CurrentPalette().Error; got != want {
+		t.Errorf("the refusal is drawn in %06x, want the error color %06x", got, want)
+	}
 	if !native.selection.Empty() || captureEnabled(native) {
 		t.Fatal("a size larger than the desktop created a selection")
 	}
@@ -111,6 +135,9 @@ func TestFreeRectangleTypedSizeCreatesSelection(t *testing.T) {
 	}
 	if got := native.message.Text(); got != ui.OverlayInstructions {
 		t.Fatalf("an accepted size left %q in the toolbar, want the instructions", got)
+	}
+	if got, want := messageColor(t, native), ui.CurrentPalette().Text; got != want {
+		t.Errorf("the instructions are drawn in %06x, want the text color %06x", got, want)
 	}
 }
 
