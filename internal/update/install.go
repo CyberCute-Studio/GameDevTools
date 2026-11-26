@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/CyberCute-Studio/GameDevTools/internal/release"
 	"github.com/CyberCute-Studio/GameDevTools/internal/ui"
@@ -210,8 +212,9 @@ func checkMachine(path string, machine uint16) error {
 }
 
 // InstallError is an update that could not replace the running executable.
-// The folder is as it was, unless Restored is false: the running executable
-// was set aside at Previous and could not be put back.
+// The folder is as it was, but for a document it added and could not take
+// back (withdraw), unless Restored is false: the running executable was set
+// aside at Previous and could not be put back.
 type InstallError struct {
 	Err      error
 	Previous string
@@ -228,33 +231,82 @@ func (e *InstallError) Error() string {
 func (e *InstallError) Unwrap() error { return e.Err }
 
 // Install moves the staged files of names, the executable's first, into the
-// running executable's folder. The running executable is renamed into the
-// staging folder, which Windows allows while it runs, and the new one takes
-// its name; if that fails, the running one is renamed back and an
-// InstallError returned. Each other file then replaces the one of its name.
-// A document that could not be replaced leaves the old one, and is returned
-// in skipped: the new version is installed, and the next update replaces it.
+// running executable's folder. A file the folder does not hold yet, as a
+// document a newer release adds, is moved first, since the new version takes
+// the folder for a release only when it holds every document that version
+// ships (Folder): if one cannot be moved, those already moved are taken back
+// and an InstallError returned. The running executable is then renamed into
+// the staging folder, which Windows allows while it runs, and the new one
+// takes its name; if that fails, the running one is renamed back, the files
+// added are taken back, and an InstallError returned. Each other file then
+// replaces the one of its name. A document that could not be replaced leaves
+// the old one, and is returned in skipped: the new version is installed, and
+// the next update replaces it. Every rename is tried again for a moment while
+// another program holds the file (rename).
 func Install(executable, staging string, names []string) (skipped []string, err error) {
 	folder := filepath.Dir(executable)
 	staged := filepath.Join(staging, stagedFiles)
 	previous := filepath.Join(staging, previousExecutable)
-	if err := os.Rename(executable, previous); err != nil {
-		return nil, &InstallError{Err: fmt.Errorf("set the running version aside: %w", err), Restored: true}
-	}
-	if err := os.Rename(filepath.Join(staged, release.ExecutableName()), executable); err != nil {
-		failure := &InstallError{Err: fmt.Errorf("put the new version in place: %w", err), Previous: previous, Restored: true}
-		if restoreErr := os.Rename(previous, executable); restoreErr != nil {
-			failure.Restored = false
-		}
-		return nil, failure
-	}
+	var added, replaced []string
 	for _, name := range names {
 		if name == release.ExecutableName() {
 			continue
 		}
-		if err := os.Rename(filepath.Join(staged, name), filepath.Join(folder, name)); err != nil {
+		if _, err := os.Lstat(filepath.Join(folder, name)); !errors.Is(err, fs.ErrNotExist) {
+			replaced = append(replaced, name)
+			continue
+		}
+		if err := rename(filepath.Join(staged, name), filepath.Join(folder, name)); err != nil {
+			withdraw(folder, staged, added)
+			return nil, &InstallError{Err: fmt.Errorf("add %s: %w", name, err), Restored: true}
+		}
+		added = append(added, name)
+	}
+	if err := rename(executable, previous); err != nil {
+		withdraw(folder, staged, added)
+		return nil, &InstallError{Err: fmt.Errorf("set the running version aside: %w", err), Restored: true}
+	}
+	if err := rename(filepath.Join(staged, release.ExecutableName()), executable); err != nil {
+		failure := &InstallError{Err: fmt.Errorf("put the new version in place: %w", err), Previous: previous, Restored: true}
+		if restoreErr := rename(previous, executable); restoreErr != nil {
+			failure.Restored = false
+		}
+		withdraw(folder, staged, added)
+		return nil, failure
+	}
+	for _, name := range replaced {
+		if err := rename(filepath.Join(staged, name), filepath.Join(folder, name)); err != nil {
 			skipped = append(skipped, name)
 		}
 	}
 	return skipped, nil
+}
+
+// withdraw moves the files of names that an install added to folder back to
+// the staging folder's files, staged, when the install fails, as far as it
+// can: a file it cannot move is a document the folder did not have, which
+// changes nothing the running version reads.
+func withdraw(folder, staged string, names []string) {
+	for _, name := range names {
+		_ = rename(filepath.Join(folder, name), filepath.Join(staged, name))
+	}
+}
+
+// renameWait bounds how long rename tries again while another program holds
+// the file. A virus scanner commonly opens a file that has just been written,
+// as every staged file has, and an executable that has just been run, and
+// may hold it for a moment without letting it be renamed.
+const renameWait = 2 * time.Second
+
+// rename is os.Rename, tried again every 50 ms for up to renameWait while it
+// fails as it does when another program holds the file (heldByAnother).
+func rename(from, to string) error {
+	deadline := time.Now().Add(renameWait)
+	for {
+		err := os.Rename(from, to)
+		if err == nil || !heldByAnother(err) || !time.Now().Before(deadline) {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

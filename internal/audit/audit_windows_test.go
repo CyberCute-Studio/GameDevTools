@@ -119,7 +119,7 @@ var reviewedLibraries = []string{
 // the lists of functions that must not be bound do not have to name every
 // one Windows has.
 var reviewedProcedures = []string{
-	"BeginPaint", "BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance",
+	"AllowSetForegroundWindow", "BeginPaint", "BitBlt", "CallWindowProcW", "CloseClipboard", "CloseHandle", "CoCreateInstance",
 	"CoInitializeEx", "CoTaskMemFree", "CoUninitialize", "CommDlgExtendedError", "CreateCompatibleDC",
 	"CreateDIBSection", "CreateFontIndirectW", "CreateMutexW", "CreateSolidBrush", "CreateWindowExW",
 	"DefWindowProcW", "DeleteDC", "DeleteObject", "DestroyWindow", "DispatchMessageW", "DragAcceptFiles",
@@ -157,7 +157,7 @@ var reviewedSystemFunctions = []string{
 	"syscall.SyscallN",
 	"windows.CloseHandle", "windows.CreateFile", "windows.CreateProcess", "windows.DeleteFile", "windows.EscapeArg", "windows.FindClose",
 	"windows.FindFirstFile", "windows.FlushFileBuffers", "windows.FullPath",
-	"windows.GetFileInformationByHandle", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
+	"windows.GetFileInformationByHandle", "windows.GetStartupInfo", "windows.GetSystemWindowsDirectory", "windows.KnownFolderPath",
 	"windows.MoveFileEx", "windows.NewCallback", "windows.NewLazySystemDLL", "windows.NtSetInformationFile",
 	"windows.SetFileInformationByHandle", "windows.UTF16FromString", "windows.UTF16PtrFromString",
 	"windows.UTF16ToString", "windows.WriteFile",
@@ -238,10 +238,10 @@ var reviewedFileSites = map[string]string{
 
 	"internal/update/install.go Cleanup os.RemoveAll":      applicationFolder,
 	"internal/update/install.go Discard os.RemoveAll":      applicationFolder,
-	"internal/update/install.go Install os.Rename":         applicationFolder,
 	"internal/update/install.go NewStaging os.MkdirTemp":   applicationFolder,
 	"internal/update/install.go Stage os.Mkdir":            applicationFolder,
 	"internal/update/install.go extract os.OpenFile":       applicationFolder,
+	"internal/update/install.go rename os.Rename":          applicationFolder,
 	"internal/update/update.go Client.Download os.Remove":  applicationFolder,
 	"internal/update/update.go Client.receive os.OpenFile": applicationFolder,
 }
@@ -546,8 +546,8 @@ func TestDependenciesAreInventoried(t *testing.T) {
 // package level: nothing linked is a mail or RPC client, an HTTP server, a
 // way to run another program or load code, or a profiling endpoint; of the
 // application's own packages only the update check's reaches a network, and
-// it does; and of the other modules only golang.org/x/sys/windows imports
-// net.
+// it does; and of the other modules none imports a network package but
+// golang.org/x/sys/windows, which imports net for a few types.
 func TestApplicationLinksNoNetworkPackages(t *testing.T) {
 	var network []string
 	for _, item := range applicationPackages(t) {
@@ -557,12 +557,17 @@ func TestApplicationLinksNoNetworkPackages(t *testing.T) {
 		if item.Standard {
 			continue
 		}
-		imported := slices.ContainsFunc(item.Imports, networkPackages.MatchString)
+		// golang.org/x/sys/windows imports net for a few types; any other
+		// network package it imported would be as unreviewed as another
+		// module's.
+		imported := slices.ContainsFunc(item.Imports, func(path string) bool {
+			return networkPackages.MatchString(path) && (path != "net" || item.ImportPath != "golang.org/x/sys/windows")
+		})
 		switch {
 		case item.Module != nil && item.Module.Main && imported:
 			network = append(network, item.ImportPath)
-		case item.ImportPath != "golang.org/x/sys/windows" && slices.Contains(item.Imports, "net"):
-			t.Errorf("%s imports net", item.ImportPath)
+		case imported:
+			t.Errorf("%s imports a network package", item.ImportPath)
 		}
 	}
 	if !slices.Equal(network, []string{reviewedNetworkPackage}) {

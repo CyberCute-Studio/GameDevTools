@@ -103,16 +103,19 @@ func TestRunUpdateStepsInstallsANewerRelease(t *testing.T) {
 }
 
 func TestRunUpdateStepsStartsAsItIsWithoutANewerRelease(t *testing.T) {
-	for name, configure := range map[string]func(*fakeUpdate){
-		"no newer release": func(f *fakeUpdate) { f.none = true },
-		"check failed":     func(f *fakeUpdate) { f.checkErr = errors.New("no network") },
+	for name, test := range map[string]struct {
+		configure func(*fakeUpdate)
+		result    updateResult
+	}{
+		"no newer release": {func(f *fakeUpdate) { f.none = true }, updateNone},
+		"check failed":     {func(f *fakeUpdate) { f.checkErr = errors.New("no network") }, updateCheckFailed},
 	} {
 		folder := t.TempDir()
 		fake := newFakeUpdate()
-		configure(fake)
+		test.configure(fake)
 		reported := false
 		outcome := runUpdateSteps(context.Background(), fake.steps(), filepath.Join(folder, release.ExecutableName()), folder, func(updateStatus) { reported = true })
-		if outcome.result != updateNone && outcome.result != updateCheckFailed || reported || !slices.Equal(fake.calls, []string{"latest"}) {
+		if outcome.result != test.result || reported || !slices.Equal(fake.calls, []string{"latest"}) {
 			t.Errorf("%s: outcome = %+v, reported = %v, steps = %v", name, outcome, reported, fake.calls)
 		}
 		if outcome.warning(folder) != "" {
@@ -169,9 +172,12 @@ func TestRunUpdateStepsKeepsTheOnlyCopyOfTheRunningVersion(t *testing.T) {
 func TestRunUpdateStepsReportsAFolderItCannotWrite(t *testing.T) {
 	folder := filepath.Join(t.TempDir(), "gone")
 	fake := newFakeUpdate()
-	outcome := runUpdateSteps(context.Background(), fake.steps(), filepath.Join(folder, release.ExecutableName()), folder, func(updateStatus) {})
-	if outcome.result != updateUnwritable || !slices.Equal(fake.calls, []string{"latest"}) {
-		t.Fatalf("outcome = %+v, steps = %v", outcome, fake.calls)
+	// Nothing is reported, which would show the window for a download that
+	// never starts.
+	reported := false
+	outcome := runUpdateSteps(context.Background(), fake.steps(), filepath.Join(folder, release.ExecutableName()), folder, func(updateStatus) { reported = true })
+	if outcome.result != updateUnwritable || reported || !slices.Equal(fake.calls, []string{"latest"}) {
+		t.Fatalf("outcome = %+v, reported = %v, steps = %v", outcome, reported, fake.calls)
 	}
 	warning := outcome.warning(folder)
 	if !strings.Contains(warning, folder) || strings.Count(warning, folder) != 1 {
@@ -277,13 +283,15 @@ func TestUpdateWindowStaysHiddenForAQuickCheck(t *testing.T) {
 	t.Cleanup(runtime.UnlockOSThread)
 	hwnd, _, _ := watchUpdateWindow(t)
 	everShown := false
-	outcome, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
+	outcome, dismiss, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
 		everShown = isVisible(*hwnd)
 		return updateOutcome{result: updateNone}
 	})
 	if err != nil || outcome.result != updateNone {
 		t.Fatalf("runUpdateWindow = %+v, %v", outcome, err)
 	}
+	// A window that never appeared is gone already; dismissing it does nothing.
+	dismiss()
 	if everShown || isVisible(*hwnd) {
 		t.Error("the window appeared for a check that ended at once")
 	}
@@ -302,7 +310,7 @@ func TestUpdateWindowAppearsForASlowCheck(t *testing.T) {
 	var text string
 	var seen time.Time
 	started := time.Now()
-	outcome, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
+	outcome, dismiss, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
 		if !eventually(func() bool { return isVisible(*hwnd) }) {
 			return updateOutcome{result: updateCheckFailed}
 		}
@@ -315,13 +323,63 @@ func TestUpdateWindowAppearsForASlowCheck(t *testing.T) {
 	}
 	// A check that ends just after the window appears does not flash it.
 	if stayed := time.Since(seen); stayed < updateMinimumShow-50*time.Millisecond {
-		t.Errorf("the window closed %v after it appeared, before %v", stayed, updateMinimumShow)
+		t.Errorf("the window's loop ended %v after it appeared, before %v", stayed, updateMinimumShow)
 	}
 	if err != nil || outcome.result != updateNone {
+		dismiss()
 		t.Fatalf("the window did not appear while the check went on: %+v, %v", outcome, err)
 	}
 	if text != ui.UpdateChecking {
 		t.Errorf("the window said %q while checking", text)
+	}
+	// The window stays in the foreground until the main window has appeared,
+	// which would otherwise open behind the program that took it.
+	if !isVisible(*hwnd) {
+		t.Error("the window closed before it was dismissed")
+	}
+	dismiss()
+	if alive, _, _ := procIsWindow.Call(uintptr(*hwnd)); alive != 0 || len(updateWindows) != 0 {
+		t.Error("dismiss did not close the window")
+	}
+	dismiss()
+}
+
+// TestUpdateWindowIgnoresSkipOnceTheUpdateHasReturned covers Skip Update, or
+// Escape, pressed while the window waits out updateMinimumShow after the
+// update has returned: there is nothing left to skip, so the window does not
+// say that it skips an update that has already installed or ended.
+func TestUpdateWindowIgnoresSkipOnceTheUpdateHasReturned(t *testing.T) {
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+	hwnd, status, skip := watchUpdateWindow(t)
+	want := fmt.Sprintf(ui.UpdateDownloading, "9.1.0", "4.0 MB", "4.0 MB")
+	posted := make(chan struct{})
+	outcome, dismiss, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
+		report(updateStatus{phase: updateDownloading, version: "9.1.0", received: 4 << 20, total: 4 << 20})
+		if !eventually(func() bool { return isVisible(*hwnd) && windowText(*status) == want }) {
+			close(posted)
+			return updateOutcome{result: updateDownloadFailed}
+		}
+		// The window has just appeared, so it stays for most of
+		// updateMinimumShow after this returns, when Escape arrives.
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			procPostMessageW.Call(uintptr(*skip), wmKeyDown, vkEscape, 0)
+			close(posted)
+		}()
+		return updateOutcome{result: updateInstalled, version: "9.1.0"}
+	})
+	t.Cleanup(dismiss)
+	if err != nil || outcome.result != updateInstalled {
+		t.Fatalf("runUpdateWindow = %+v, %v", outcome, err)
+	}
+	select {
+	case <-posted:
+	default:
+		t.Fatal("the window's loop ended before Escape was pressed")
+	}
+	if text := windowText(*status); text != want {
+		t.Errorf("after Escape the window said %q, want %q", text, want)
 	}
 }
 
@@ -332,7 +390,7 @@ func TestUpdateWindowShowsTheDownloadAndEscapeSkipsIt(t *testing.T) {
 	want := fmt.Sprintf(ui.UpdateDownloading, "9.1.0", "1.0 MB", "4.0 MB")
 	var title, shown, after string
 	var skipEnabled bool
-	outcome, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
+	outcome, dismiss, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
 		report(updateStatus{phase: updateDownloading, version: "9.1.0", received: 1 << 20, total: 4 << 20})
 		// The window appears as soon as an update is found, before the
 		// delay a check is given.
@@ -351,6 +409,7 @@ func TestUpdateWindowShowsTheDownloadAndEscapeSkipsIt(t *testing.T) {
 		after = windowText(*status)
 		return updateOutcome{result: updateDownloadCancelled, version: "9.1.0"}
 	})
+	t.Cleanup(dismiss)
 	if err != nil || outcome.result != updateDownloadCancelled {
 		t.Fatalf("Escape did not skip the update: %+v, %v", outcome, err)
 	}
@@ -367,7 +426,7 @@ func TestUpdateWindowFinishesAnInstallItHasStarted(t *testing.T) {
 	t.Cleanup(runtime.UnlockOSThread)
 	hwnd, status, skip := watchUpdateWindow(t)
 	replaced := false
-	outcome, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
+	outcome, dismiss, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
 		report(updateStatus{phase: updateInstalling, version: "9.1.0", received: 1, total: 1})
 		if !eventually(func() bool { return isVisible(*hwnd) && !isEnabled(*skip) }) {
 			return updateOutcome{result: updateInstallFailed}
@@ -383,6 +442,7 @@ func TestUpdateWindowFinishesAnInstallItHasStarted(t *testing.T) {
 		}
 		return updateOutcome{result: updateInstalled, version: "9.1.0"}
 	})
+	t.Cleanup(dismiss)
 	if err != nil || outcome.result != updateInstalled || replaced {
 		t.Errorf("an install was stopped or its text replaced: %+v, %v", outcome, err)
 	}

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/windows"
+
 	"github.com/CyberCute-Studio/GameDevTools/internal/release"
 )
 
@@ -90,10 +92,68 @@ func TestInstallReplacesARunningExecutable(t *testing.T) {
 // TestRelaunchStartsTheExecutable starts a program that exits at once, as
 // Relaunch starts the updated application, and reports one that is missing.
 func TestRelaunchStartsTheExecutable(t *testing.T) {
-	if err := Relaunch(filepath.Join(os.Getenv("SystemRoot"), "System32", "HOSTNAME.EXE")); err != nil {
-		t.Errorf("Relaunch: %v", err)
+	if pid, err := Relaunch(filepath.Join(os.Getenv("SystemRoot"), "System32", "HOSTNAME.EXE")); err != nil || pid == 0 {
+		t.Errorf("Relaunch = %d, %v", pid, err)
 	}
-	if err := Relaunch(filepath.Join(t.TempDir(), release.ExecutableName())); err == nil {
+	if _, err := Relaunch(filepath.Join(t.TempDir(), release.ExecutableName())); err == nil {
 		t.Error("Relaunch of a missing executable reported no error")
+	}
+}
+
+// TestRelaunchTellsTheNewVersionItFollowsAnUpdate pins the argument the
+// installed version is started with, which Relaunched finds, so that its start
+// does not look for a newer release again.
+func TestRelaunchTellsTheNewVersionItFollowsAnUpdate(t *testing.T) {
+	executable := `C:\Users\Someone\CyberCute Dev Tools\cybercute-dev-tools.exe`
+	if got, want := relaunchCommandLine(executable), `"`+executable+`" `+RelaunchArgument; got != want {
+		t.Errorf("command line = %s, want %s", got, want)
+	}
+	arguments := os.Args
+	t.Cleanup(func() { os.Args = arguments })
+	os.Args = []string{executable}
+	if Relaunched() {
+		t.Error("a start without the argument was taken for one after an update")
+	}
+	os.Args = []string{executable, RelaunchArgument}
+	if !Relaunched() {
+		t.Error("the start after an update was not recognized")
+	}
+}
+
+// TestInstallWaitsForAProgramHoldingAStagedFile stands in for a virus scanner
+// that opens a file just written, without letting it be renamed: the install
+// waits for it rather than fail, as it would at every start the scanner did.
+func TestInstallWaitsForAProgramHoldingAStagedFile(t *testing.T) {
+	machine := runningMachine(t)
+	executable := installation(t, releaseFiles(machine, "old"))
+	staging, err := NewStaging(filepath.Dir(executable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newFiles := releaseFiles(machine, "new")
+	names, err := Stage(stagedRelease(t, newFiles), staging, machine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := windows.UTF16PtrFromString(filepath.Join(staging, stagedFiles, release.ExecutableName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := windows.CreateFile(path, windows.GENERIC_READ, windows.FILE_SHARE_READ, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		windows.CloseHandle(scanner)
+		close(released)
+	}()
+	t.Cleanup(func() { <-released })
+	if skipped, err := Install(executable, staging, names); err != nil || len(skipped) != 0 {
+		t.Fatalf("Install while a staged file was held = %v, %v", skipped, err)
+	}
+	if data, _ := os.ReadFile(executable); !bytes.Equal(data, newFiles[release.ExecutableName()]) {
+		t.Error("the new executable was not installed once the file was let go")
 	}
 }

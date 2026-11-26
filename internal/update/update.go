@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -94,6 +95,20 @@ func (v Version) Less(other Version) bool {
 
 func (v Version) String() string {
 	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
+}
+
+// RelaunchArgument is the command-line argument Relaunch starts the version
+// an update has installed with. That start does not look for a newer release,
+// which the process it replaces has just done, so that a release whose
+// executable is not the version its tag names cannot install itself again at
+// every start, in a loop, and it waits for that process to exit rather than
+// take its update window for a running instance's.
+const RelaunchArgument = "--updated"
+
+// Relaunched reports whether this process is the version an update has just
+// installed, started by Relaunch.
+func Relaunched() bool {
+	return slices.Contains(os.Args[1:], RelaunchArgument)
 }
 
 // Current is the running application's version, or false if internal/release

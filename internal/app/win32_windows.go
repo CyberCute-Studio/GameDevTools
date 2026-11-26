@@ -96,6 +96,7 @@ const (
 	// maximized as it is restored.
 	wpfRestoreToMaximized = 0x0002
 
+	swpNoSize     = 0x0001
 	swpNoMove     = 0x0002
 	swpNoZOrder   = 0x0004
 	swpNoActivate = 0x0010
@@ -188,6 +189,7 @@ var (
 	procFindWindowW                   = user32.NewProc("FindWindowW")
 	procGetLastActivePopup            = user32.NewProc("GetLastActivePopup")
 	procSetForegroundWindow           = user32.NewProc("SetForegroundWindow")
+	procAllowSetForegroundWindow      = user32.NewProc("AllowSetForegroundWindow")
 	procIsIconic                      = user32.NewProc("IsIconic")
 	procSelectObject                  = gdi32.NewProc("SelectObject")
 	procDeleteObject                  = gdi32.NewProc("DeleteObject")

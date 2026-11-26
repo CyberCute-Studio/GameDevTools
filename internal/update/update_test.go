@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -565,6 +566,58 @@ func TestInstallPutsTheRunningVersionBackWhenTheNewOneCannotBePlaced(t *testing.
 	}
 	for name, content := range old {
 		if data, err := os.ReadFile(filepath.Join(filepath.Dir(executable), name)); err != nil || !bytes.Equal(data, content) {
+			t.Errorf("%s is not as it was: %v", name, err)
+		}
+	}
+}
+
+// TestInstallAddsNewDocumentsBeforeTheExecutable covers a release that ships a
+// document the folder lacks: one that cannot be added fails the install
+// before the executable is replaced, and those already added are taken back,
+// as the new version would not take a folder without its documents for a
+// release (Folder) and so would never update again.
+func TestInstallAddsNewDocumentsBeforeTheExecutable(t *testing.T) {
+	arm := uint16(pe.IMAGE_FILE_MACHINE_ARM64)
+	old := releaseFiles(arm, "old")
+	executable := installation(t, old)
+	folder := filepath.Dir(executable)
+	staging, err := NewStaging(folder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newFiles := releaseFiles(arm, "new")
+	newFiles["ADDED.txt"] = []byte("a document the new version adds")
+	newFiles["CHANGES.txt"] = []byte("another")
+	names, err := Stage(stagedRelease(t, newFiles), staging, arm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One of the new documents cannot be added, wherever it is in the ZIP.
+	missing := "CHANGES.txt"
+	if slices.Index(names, "CHANGES.txt") < slices.Index(names, "ADDED.txt") {
+		missing = "ADDED.txt"
+	}
+	if err := os.Remove(filepath.Join(staging, stagedFiles, missing)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Install(executable, staging, names)
+	var failure *InstallError
+	if !errors.As(err, &failure) || !failure.Restored || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("Install = %v, want a restored InstallError naming %s", err, missing)
+	}
+	entries, _ := os.ReadDir(folder)
+	var left []string
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(staging) {
+			left = append(left, entry.Name())
+		}
+	}
+	want := slices.Sorted(maps.Keys(old))
+	if !slices.Equal(left, want) {
+		t.Errorf("the folder holds %v, want what it held before, %v", left, want)
+	}
+	for name, content := range old {
+		if data, err := os.ReadFile(filepath.Join(folder, name)); err != nil || !bytes.Equal(data, content) {
 			t.Errorf("%s is not as it was: %v", name, err)
 		}
 	}

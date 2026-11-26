@@ -56,8 +56,9 @@ cannot be written, the main window says so and the application keeps running
 the version you have. README.txt describes updating by hand.
 
 Only one copy runs at a time. Starting it again brings the open window forward,
-or the application's open dialog if one is waiting for an answer. During a
-selection it leaves the selection as it is.
+or the application's open dialog if one is waiting for an answer, or, while it
+updates as it starts, the update window. During a selection it leaves the
+selection as it is.
 
 Closing the window exits the application, because it has no tray icon. The
 global shortcut works only while the application is running, so minimize the

@@ -5,6 +5,7 @@ package app
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 	exit := sync.OnceFunc(func() { procCloseHandle.Call(closing) })
 	t.Cleanup(exit)
 
-	if handle, activated, err := claimInstance(name, noWindow, 100*time.Millisecond); err != nil || !activated || handle != 0 {
+	if handle, activated, err := claimInstance(name, []string{noWindow}, 100*time.Millisecond); err != nil || !activated || handle != 0 {
 		t.Fatalf("claim while held = (%d, %v, %v), want to give up as activated", handle, activated, err)
 	}
 
@@ -73,7 +74,7 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 		exit()
 	}()
-	handle, activated, err := claimInstance(name, noWindow, 5*time.Second)
+	handle, activated, err := claimInstance(name, []string{noWindow}, 5*time.Second)
 	if err != nil || activated || handle == 0 {
 		t.Fatalf("claim after the instance exited = (%d, %v, %v), want the mutex", handle, activated, err)
 	}
@@ -85,6 +86,47 @@ func TestClaimInstanceWaitsForAClosingInstance(t *testing.T) {
 	procCloseHandle.Call(other)
 	if !already {
 		t.Fatal("the claimed mutex was not held")
+	}
+}
+
+// TestClaimInstanceBringsTheUpdateWindowForward covers a launch during the
+// update at the running instance's start, when that instance has its update
+// window and no main window yet: the launch brings the update window forward
+// and exits, rather than wait behind it showing nothing and then exit, or
+// race the version the update starts for the mutex. That version looks for
+// the main window alone, as the update window it would find is the one of
+// the process that started it, which is exiting.
+func TestClaimInstanceBringsTheUpdateWindowForward(t *testing.T) {
+	runtime.LockOSThread()
+	// The window's cleanup runs on this thread, which owns it.
+	t.Cleanup(runtime.UnlockOSThread)
+	if classes := instanceClasses(false); !slices.Equal(classes, []string{shellClassName, updateClassName}) {
+		t.Errorf("a launch looks for the windows of %v", classes)
+	}
+	if classes := instanceClasses(true); !slices.Equal(classes, []string{shellClassName}) {
+		t.Errorf("the version an update starts looks for the windows of %v", classes)
+	}
+	name := fmt.Sprintf(`Local\GameDevTools.TestInstance.%d`, time.Now().UnixNano())
+	running, already, err := acquireInstance(name)
+	if err != nil || already {
+		t.Fatalf("acquireInstance() = %v, %v", already, err)
+	}
+	t.Cleanup(func() { procCloseHandle.Call(running) })
+	// The test window stands in for the update window, the second class.
+	className, hwnd := newInstanceTestWindow(t)
+	const swShowNAInstanceTest = 8
+	procShowWindow.Call(hwnd, swShowNAInstanceTest)
+	brought := recordForeground(t)
+	started := time.Now()
+	handle, activated, err := claimInstance(name, []string{"GameDevToolsNoSuchWindowClass", className}, 5*time.Second)
+	if err != nil || !activated || handle != 0 {
+		t.Fatalf("claim during an update = (%d, %v, %v), want activated", handle, activated, err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Errorf("the claim took %v, so it waited instead of finding the window", elapsed)
+	}
+	if len(*brought) != 1 || (*brought)[0] != hwnd {
+		t.Errorf("the claim brought %v forward, want the window %#x", *brought, hwnd)
 	}
 }
 

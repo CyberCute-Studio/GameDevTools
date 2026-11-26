@@ -23,8 +23,10 @@ import (
 
 const (
 	// updateClassName is the update window's class. It is not the main
-	// window's, so a second launch during an update waits for the main
-	// window rather than taking the update window for it (claimInstance).
+	// window's, so that the version an update starts, which waits for the
+	// process that started it to exit, does not take that process's update
+	// window for a running instance's main window, while a second launch
+	// during the update brings it forward (instanceClasses).
 	updateClassName = "CyberCuteDevTools.Update"
 	// wmAppUpdate tells the update window that the update's status changed.
 	wmAppUpdate = wmApp + 3
@@ -42,8 +44,9 @@ const (
 	// without a wmAppUpdate, so that a message Windows could not post delays
 	// the window rather than stopping it.
 	updateRefreshInterval = 500 * time.Millisecond
-	// updateCleanupWait bounds how long a start waits to remove what an
-	// earlier update left, which the process it replaced holds as it exits.
+	// updateCleanupWait bounds how long the start of the version an update
+	// installed waits to remove what the update left, which the process it
+	// replaced holds as it exits.
 	updateCleanupWait = 2 * time.Second
 
 	updateShowTimer    = 1
@@ -136,12 +139,18 @@ type updateSteps struct {
 // before anything else starts (APP-006 through APP-008). It reports whether it
 // started the version it installed, when this process must exit at once, and
 // the notes for the main window's that an update which could not finish
-// leaves. Anything else, a build run from another folder among it, starts as
-// it is.
-func startupUpdate(logger *diagnostics.Logger) (relaunched bool, warnings []string) {
+// leaves, and returns dismiss, which closes the update window once the main
+// window has appeared, should the update window have appeared at all
+// (runUpdateWindow). Anything else, a build run from another folder among it,
+// starts as it is. updated reports that this process is the version an
+// update has just installed: it removes what that update left and starts as
+// it is, since the process it replaces has just looked for a newer release
+// (update.RelaunchArgument).
+func startupUpdate(logger *diagnostics.Logger, updated bool) (relaunched bool, warnings []string, dismiss func()) {
+	dismiss = func() {}
 	executable, err := os.Executable()
 	if err != nil {
-		return false, nil
+		return false, nil, dismiss
 	}
 	if resolved, err := filepath.EvalSymlinks(executable); err == nil {
 		executable = resolved
@@ -150,9 +159,16 @@ func startupUpdate(logger *diagnostics.Logger) (relaunched bool, warnings []stri
 	current, known := update.Current()
 	machine, supported := update.Machine()
 	if !ok || !known || !supported {
-		return false, nil
+		return false, nil, dismiss
 	}
-	removeLeftovers(folder)
+	if updated {
+		removeLeftovers(folder)
+		return false, nil, dismiss
+	}
+	// What an earlier start could not remove, as a replaced executable that
+	// another session still runs, is tried again without waiting, and what
+	// is still held is left for a later start.
+	_ = update.Cleanup(folder)
 	client := update.NewClient()
 	steps := updateSteps{
 		latest: func(ctx context.Context) (update.Release, bool, error) {
@@ -164,30 +180,40 @@ func startupUpdate(logger *diagnostics.Logger) (relaunched bool, warnings []stri
 		},
 		install: update.Install,
 	}
-	outcome, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
+	outcome, dismiss, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
 		return runUpdateSteps(ctx, steps, executable, folder, report)
 	})
+	// Nothing asks GitHub again, so the connection the check kept for reuse
+	// is closed rather than left open while the application runs.
+	client.HTTP.CloseIdleConnections()
 	if err != nil {
-		return false, nil
+		return false, nil, dismiss
 	}
 	recordUpdate(logger, outcome)
 	if outcome.result != updateInstalled {
 		if warning := outcome.warning(folder); warning != "" {
 			warnings = append(warnings, warning)
 		}
-		return false, warnings
+		return false, warnings, dismiss
 	}
-	if err := update.Relaunch(executable); err != nil {
+	// The new version starts while the update window is still in the
+	// foreground, unless the user has gone on to another program, so that
+	// Windows lets its main window come to the front; this process passes
+	// on its own right to that as well.
+	pid, err := update.Relaunch(executable)
+	if err != nil {
 		if logger != nil {
 			_ = logger.Record(diagnostics.Event{Level: diagnostics.LevelError, Operation: "update.relaunch", Code: "failed"})
 		}
-		return false, []string{fmt.Sprintf(ui.UpdateRelaunchFailed, outcome.version, err, release.Version)}
+		return false, []string{fmt.Sprintf(ui.UpdateRelaunchFailed, outcome.version, err, release.Version)}, dismiss
 	}
-	return true, nil
+	procAllowSetForegroundWindow.Call(uintptr(pid))
+	dismiss()
+	return true, nil, func() {}
 }
 
-// removeLeftovers removes what earlier updates left in folder. Right after an
-// update, the process it replaced may still be exiting, holding its
+// removeLeftovers removes what the update that installed this version left in
+// folder. The process it replaced may still be exiting, holding its
 // executable there, so a failure is retried for a moment and then left for
 // the next start.
 func removeLeftovers(folder string) {
@@ -218,7 +244,10 @@ func runUpdateSteps(ctx context.Context, steps updateSteps, executable, folder s
 		return updateOutcome{result: updateNone}
 	}
 	version := found.Version.String()
-	report(updateStatus{phase: updateDownloading, version: version, total: found.Archive.Size})
+	// The staging folder is created before the download is reported, which
+	// shows the window, so that a folder that cannot be written, as one under
+	// Program Files, does not show a window at every start for a download
+	// that never begins: the main window reports it.
 	staging, err := update.NewStaging(folder)
 	if err != nil {
 		return updateOutcome{result: updateUnwritable, version: version, err: err}
@@ -229,6 +258,7 @@ func runUpdateSteps(ctx context.Context, steps updateSteps, executable, folder s
 			update.Discard(staging)
 		}
 	}()
+	report(updateStatus{phase: updateDownloading, version: version, total: found.Archive.Size})
 	archive, err := steps.download(ctx, found, staging, func(received, total int64) {
 		report(updateStatus{phase: updateDownloading, version: version, received: received, total: total})
 	})
@@ -356,12 +386,14 @@ type updateWindow struct {
 
 	// The rest belongs to the window's thread: the status shown, whether the
 	// window is visible and since when, whether the user skipped the update,
-	// and whether its message loop runs, which its destruction ends.
+	// whether its message loop runs, which its destruction ends, and whether
+	// that loop has ended with the window kept for dismiss (close).
 	shown    updateStatus
 	visible  bool
 	shownAt  time.Time
 	skipping bool
 	looping  bool
+	kept     bool
 }
 
 // updateWindows maps each update window to its state, for its procedure,
@@ -375,14 +407,18 @@ var updateWindowCreated func(hwnd windows.Handle)
 // runUpdateWindow runs work, the update, on another goroutine while its
 // window runs on this thread, which owns no other window yet, and returns
 // what work came to. The window appears once the check takes longer than
-// updateShowDelay, or at once when an update is found, and closes when work
-// returns.
-func runUpdateWindow(work func(ctx context.Context, report func(updateStatus)) updateOutcome) (updateOutcome, error) {
+// updateShowDelay, or at once when an update is found. When work returns, a
+// window that never appeared is destroyed, and one that did is kept, once it
+// has been seen for updateMinimumShow, until dismiss is called: after the
+// main window has appeared, or the version installed has been started.
+// Closed before then, it would hand the foreground to another program's
+// window, behind which the window shown next would open.
+func runUpdateWindow(work func(ctx context.Context, report func(updateStatus)) updateOutcome) (updateOutcome, func(), error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	window, err := newUpdateWindow(cancel)
 	if err != nil {
-		return updateOutcome{}, err
+		return updateOutcome{}, func() {}, err
 	}
 	hwnd := uintptr(window.hwnd)
 	procSetTimer.Call(hwnd, updateShowTimer, uintptr(updateShowDelay/time.Millisecond), 0)
@@ -406,16 +442,24 @@ func runUpdateWindow(work func(ctx context.Context, report func(updateStatus)) u
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&message)))
 	}
-	if updateWindows[window.hwnd] != nil {
+	if !window.kept && updateWindows[window.hwnd] != nil {
 		// GetMessageW failed, which it does only for invalid arguments: stop
 		// the update and close the window without waiting for its loop.
 		cancel()
 		outcome := <-done
 		window.looping = false
 		procDestroyWindow.Call(hwnd)
-		return outcome, nil
+		return outcome, func() {}, nil
 	}
-	return <-done, nil
+	return <-done, window.dismiss, nil
+}
+
+// dismiss closes a window that close kept once its update returned, and does
+// nothing for one already destroyed. It runs on the window's thread.
+func (w *updateWindow) dismiss() {
+	if updateWindows[w.hwnd] == w {
+		procDestroyWindow.Call(uintptr(w.hwnd))
+	}
 }
 
 // newUpdateWindow creates the update window, hidden, sized for its display and
@@ -549,8 +593,9 @@ func (w *updateWindow) refresh() {
 	w.shown = status
 	if !w.skipping {
 		// Download progress changes faster than a screen reader could read
-		// it, so only a new step is announced.
-		if text := updateStatusText(status); phaseChanged {
+		// it, so only a new step is announced, and only while the window is
+		// visible: one that appears announces its text then (show).
+		if text := updateStatusText(status); phaseChanged && w.visible {
 			w.status.SetText(text)
 		} else {
 			w.status.SetTextQuietly(text)
@@ -565,27 +610,41 @@ func (w *updateWindow) refresh() {
 	procInvalidateRect.Call(uintptr(w.hwnd), 0, 1)
 }
 
-// close destroys the window once the update has returned, which ends its
-// message loop, unless the window appeared less than updateMinimumShow ago:
-// then a timer closes it once it has been seen that long.
+// close ends the window's message loop once the update has returned. A
+// window that never appeared is destroyed, which ends the loop. One that did
+// is kept for dismiss, as runUpdateWindow describes, once it has been seen
+// for updateMinimumShow, which a timer waits for: its timers stop, and its
+// loop is asked to end while the window stays up.
 func (w *updateWindow) close() {
-	if w.visible {
-		if remaining := updateMinimumShow - time.Since(w.shownAt); remaining > 0 {
-			procSetTimer.Call(uintptr(w.hwnd), updateCloseTimer, uintptr(remaining/time.Millisecond)+1, 0)
-			return
-		}
+	if w.kept {
+		return
 	}
-	// The live region's marking outlives the window otherwise
-	// (ui.Label.ClearLive).
-	w.status.ClearLive()
-	procDestroyWindow.Call(uintptr(w.hwnd))
+	if !w.visible {
+		procDestroyWindow.Call(uintptr(w.hwnd))
+		return
+	}
+	if remaining := updateMinimumShow - time.Since(w.shownAt); remaining > 0 {
+		procSetTimer.Call(uintptr(w.hwnd), updateCloseTimer, uintptr(remaining/time.Millisecond)+1, 0)
+		return
+	}
+	w.kept = true
+	w.looping = false
+	procKillTimer.Call(uintptr(w.hwnd), updateShowTimer)
+	procKillTimer.Call(uintptr(w.hwnd), updateRefreshTimer)
+	procKillTimer.Call(uintptr(w.hwnd), updateCloseTimer)
+	procPostQuitMessage.Call(0)
 }
 
-// show makes the window visible and gives Skip Update the keyboard focus.
+// show makes the window visible and gives Skip Update the keyboard focus. It
+// is shown by SetWindowPos rather than ShowWindow, as the first ShowWindow of
+// a process applies the show state it was started with, such as a shortcut's
+// Run: Minimized or Maximized, which is meant for the main window: it would
+// hide this window or stretch it across the screen, and the main window,
+// which would then open as it always does, would not get it.
 func (w *updateWindow) show() {
 	w.visible = true
 	w.shownAt = time.Now()
-	procShowWindow.Call(uintptr(w.hwnd), swShow)
+	procSetWindowPos.Call(uintptr(w.hwnd), 0, 0, 0, 0, 0, swpNoMove|swpNoSize|swpShowWindow)
 	procUpdateWindow.Call(uintptr(w.hwnd))
 	if enabled, _, _ := procIsWindowEnabled.Call(uintptr(w.skip.Handle())); enabled != 0 {
 		w.skip.Focus()
@@ -594,12 +653,13 @@ func (w *updateWindow) show() {
 }
 
 // requestSkip stops the update, which then starts the running version, unless
-// it has started to install, which it then finishes.
+// it has started to install, which it then finishes, or has already returned,
+// when the window only waits to close.
 func (w *updateWindow) requestSkip() {
 	if w.skipping {
 		return
 	}
-	if w.shown.phase == updateInstalling {
+	if w.shown.phase == updateInstalling || w.isFinished() {
 		procMessageBeep.Call(0)
 		return
 	}
@@ -736,6 +796,11 @@ func updateWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 			window.layout()
 			return 0
 		case wmDestroy:
+			// The live region's marking outlives the window otherwise
+			// (ui.Label.ClearLive), whichever way it is destroyed.
+			if window.status != nil {
+				window.status.ClearLive()
+			}
 			procKillTimer.Call(uintptr(hwnd), updateShowTimer)
 			procKillTimer.Call(uintptr(hwnd), updateRefreshTimer)
 			procKillTimer.Call(uintptr(hwnd), updateCloseTimer)
