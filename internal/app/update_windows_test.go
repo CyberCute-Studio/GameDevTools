@@ -300,13 +300,23 @@ func TestUpdateWindowAppearsForASlowCheck(t *testing.T) {
 	t.Cleanup(runtime.UnlockOSThread)
 	hwnd, status, _ := watchUpdateWindow(t)
 	var text string
+	var seen time.Time
+	started := time.Now()
 	outcome, err := runUpdateWindow(func(ctx context.Context, report func(updateStatus)) updateOutcome {
 		if !eventually(func() bool { return isVisible(*hwnd) }) {
 			return updateOutcome{result: updateCheckFailed}
 		}
+		seen = time.Now()
 		text = windowText(*status)
 		return updateOutcome{result: updateNone}
 	})
+	if early := seen.Sub(started); early < updateShowDelay-50*time.Millisecond {
+		t.Errorf("the window appeared %v into the check, before %v", early, updateShowDelay)
+	}
+	// A check that ends just after the window appears does not flash it.
+	if stayed := time.Since(seen); stayed < updateMinimumShow-50*time.Millisecond {
+		t.Errorf("the window closed %v after it appeared, before %v", stayed, updateMinimumShow)
+	}
 	if err != nil || outcome.result != updateNone {
 		t.Fatalf("the window did not appear while the check went on: %+v, %v", outcome, err)
 	}

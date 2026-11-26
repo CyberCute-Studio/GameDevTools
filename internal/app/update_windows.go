@@ -31,9 +31,13 @@ const (
 
 	// updateShowDelay is how long the check for an update may take before
 	// the window appears to say what the start waits for. A check that ends
-	// sooner, as one does without a network, shows nothing. The window
+	// sooner, as one that finds nothing newer typically does in about half a
+	// second and one without a network at once, shows nothing. The window
 	// appears at once when an update is found.
-	updateShowDelay = 400 * time.Millisecond
+	updateShowDelay = time.Second
+	// updateMinimumShow is how long the window stays once it has appeared,
+	// so that a check ending just after updateShowDelay does not flash it.
+	updateMinimumShow = 500 * time.Millisecond
 	// updateRefreshInterval is how often the window reads the status even
 	// without a wmAppUpdate, so that a message Windows could not post delays
 	// the window rather than stopping it.
@@ -44,6 +48,7 @@ const (
 
 	updateShowTimer    = 1
 	updateRefreshTimer = 2
+	updateCloseTimer   = 3
 
 	// idOK and idCancel are the commands IsDialogMessageW sends for Enter and
 	// Escape; the Skip Update button sends idCancel too.
@@ -350,10 +355,11 @@ type updateWindow struct {
 	posted   bool
 
 	// The rest belongs to the window's thread: the status shown, whether the
-	// window is visible, whether the user skipped the update, and whether
-	// its message loop runs, which its destruction ends.
+	// window is visible and since when, whether the user skipped the update,
+	// and whether its message loop runs, which its destruction ends.
 	shown    updateStatus
 	visible  bool
+	shownAt  time.Time
 	skipping bool
 	looping  bool
 }
@@ -533,10 +539,7 @@ func (w *updateWindow) refresh() {
 	w.posted = false
 	w.mu.Unlock()
 	if finished {
-		// The live region's marking outlives the window otherwise
-		// (ui.Label.ClearLive).
-		w.status.ClearLive()
-		procDestroyWindow.Call(uintptr(w.hwnd))
+		w.close()
 		return
 	}
 	if status == w.shown {
@@ -562,9 +565,26 @@ func (w *updateWindow) refresh() {
 	procInvalidateRect.Call(uintptr(w.hwnd), 0, 1)
 }
 
+// close destroys the window once the update has returned, which ends its
+// message loop, unless the window appeared less than updateMinimumShow ago:
+// then a timer closes it once it has been seen that long.
+func (w *updateWindow) close() {
+	if w.visible {
+		if remaining := updateMinimumShow - time.Since(w.shownAt); remaining > 0 {
+			procSetTimer.Call(uintptr(w.hwnd), updateCloseTimer, uintptr(remaining/time.Millisecond)+1, 0)
+			return
+		}
+	}
+	// The live region's marking outlives the window otherwise
+	// (ui.Label.ClearLive).
+	w.status.ClearLive()
+	procDestroyWindow.Call(uintptr(w.hwnd))
+}
+
 // show makes the window visible and gives Skip Update the keyboard focus.
 func (w *updateWindow) show() {
 	w.visible = true
+	w.shownAt = time.Now()
 	procShowWindow.Call(uintptr(w.hwnd), swShow)
 	procUpdateWindow.Call(uintptr(w.hwnd))
 	if enabled, _, _ := procIsWindowEnabled.Call(uintptr(w.skip.Handle())); enabled != 0 {
@@ -681,6 +701,9 @@ func updateWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 				}
 			case updateRefreshTimer:
 				window.refresh()
+			case updateCloseTimer:
+				procKillTimer.Call(uintptr(hwnd), updateCloseTimer)
+				window.close()
 			}
 			return 0
 		case wmCommand:
@@ -715,6 +738,7 @@ func updateWindowProc(hwnd windows.Handle, message uint32, wParam uintptr, lPara
 		case wmDestroy:
 			procKillTimer.Call(uintptr(hwnd), updateShowTimer)
 			procKillTimer.Call(uintptr(hwnd), updateRefreshTimer)
+			procKillTimer.Call(uintptr(hwnd), updateCloseTimer)
 			delete(updateWindows, hwnd)
 			if window.font != 0 {
 				procDeleteObject.Call(uintptr(window.font))

@@ -22,7 +22,7 @@ REL-01 decided that the application never checks for updates: users learned of a
 
 ### The start
 
-The check runs in `internal/app` before anything else the start does, in a window of its own class that appears only once the check has taken 400 ms, or at once when an update is found: it shows what the update is doing, a progress bar, and Skip Update, which stops the update until it starts to install. It runs before the settings load because loading can back up and replace a malformed settings file; the process that loaded them would then exit for the new version, whose load would find a sound file and warn of nothing.
+The check runs in `internal/app` before anything else the start does, in a window of its own class that appears only once the check has taken a second, which a check that finds nothing newer typically ends well within, or at once when an update is found, and then stays at least half a second so that it never flashes: it shows what the update is doing, a progress bar, and Skip Update, which stops the update until it starts to install. It runs before the settings load because loading can back up and replace a malformed settings file; the process that loaded them would then exit for the new version, whose load would find a sound file and warn of nothing.
 
 The new version starts while the old process still holds the single-instance mutex. Its claim waits for a holder with no main window (`claimInstance`), so it takes the mutex as the old one exits. That start removes the staging folder the update left, which holds the replaced executable, retrying for two seconds while the exiting process still holds it, and leaves what it cannot remove to the next start.
 
