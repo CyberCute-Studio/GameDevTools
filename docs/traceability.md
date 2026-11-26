@@ -17,12 +17,12 @@ The evidence column names representative checks, not all of them, as `package.Te
 |---|---:|---:|---:|
 | P0 requirements | 127 | 115 | 12 |
 | P1 requirements | 20 | 14 | 6 |
-| Acceptance scenarios | 33 | 28 | 5 |
-| **All** | **180** | **157** | **23** |
+| Acceptance scenarios | 33 | 29 | 4 |
+| **All** | **180** | **158** | **22** |
 
 PRD section 16 makes every P0 item a release blocker. Every P0 requirement and acceptance scenario below marked Partial stays one until the hardware run, manual check, or fix its Open cell names passes or lands:
 
-SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04, AC-A06.
+SCR-020, SCR-026, SCR-042, SCR-043, SCR-054, SCR-062, UX-006, NFR-001, NFR-003, TECH-002, TECH-003, TECH-009, AC-S02, AC-S12, AC-A03, AC-A04.
 
 The Partial P1 requirements are SCR-028, UX-008, NFR-010, NFR-011, NFR-012, NFR-013. Each must pass before release or be deferred with an explicit release note and an update to the PRD, as PRD section 16 requires. UX-008 is deferred by the decision in PRD section 20, which the release notes state. NFR-011 is the one measured target that was missed, under x64 emulation only, in QLT-04's runs; the release candidate's x64 validation met it.
 
@@ -263,4 +263,4 @@ SCR-069 is Pass on the project owner's decision that Open Folder opens File Expl
 | AC-A03 | — | Keyboard access | QLT-01, QLT-04 | `app.TestTabReachesEveryControlInLayoutOrder` | **Partial** | M2: nothing has confirmed that a focus indicator is drawn |
 | AC-A04 | — | Responsive batch UI | QLT-04 | `imageresizer.TestNativeViewStaysResponsiveDuringARealJob` | **Partial** | M12: on the release candidate, under x64 emulation, 1 of 3 drags lagged up to 153 ms, over the 100 ms the scripted run took as following smoothly |
 | AC-A05 | — | Clean exit | QLT-02, QLT-04 | `app.TestExitDuringACaptureSessionLeavesNoOverlayOrShortcut`, `app.TestReleaseExecutableRunsAsStandardUserAndExitsCleanly` | Pass | M4 |
-| AC-A06 | — | Update | REL-05 | `update.TestInstallReplacesARunningExecutable`, `app.TestRunUpdateStepsInstallsANewerRelease`, `app.TestUpdateWindowShowsTheDownloadAndEscapeSkipsIt` | **Partial** | REL-05: no release folder has yet updated itself from a published release, which needs a release newer than 1.1.0, the first with the update, or a build stamped older than it |
+| AC-A06 | — | Update | REL-05 | `update.TestInstallReplacesARunningExecutable`, `app.TestRunUpdateStepsInstallsANewerRelease`, `app.TestUpdateWindowShowsTheDownloadAndEscapeSkipsIt` | Pass |  |

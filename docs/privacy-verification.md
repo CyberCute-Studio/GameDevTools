@@ -135,6 +135,7 @@ There is no other module, no cgo, and no unjustified dependency to remove. The B
 |---|---|
 | Symbol scan of the windows/amd64 build, go1.27.4 with `x/sys` v0.47.0 | No vulnerabilities found |
 | Symbol scan of the windows/arm64 build, go1.27.4 with `x/sys` v0.47.0 | No vulnerabilities found |
+| Binary scan of the published 1.1.0 arm64 executable, with the update check's `net/http` and `crypto/tls`, database updated 2026-11-24 (REL-05) | No vulnerabilities found |
 
 Before this item, the release was built with Go 1.24.0, a release line Go no longer supports, and `x/sys` v0.38.0 carried GO-2026-5024 (CVE-2026-39824), an integer overflow in `windows.NewNTUnicodeString`. The application never called that function and it was not linked, so the application was not affected. The fixed `x/sys` releases need `go 1.25.0` or newer in `go.mod`, so the module moved to `go 1.25.0` with `x/sys` v0.47.0, the newest release that does not need Go 1.26.
 
