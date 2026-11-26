@@ -1,8 +1,8 @@
 # CyberCute Dev Tools — Product Requirements Document
 
 **Document status:** Draft for review\
-**Version:** 1.11\
-**Last updated:** 2026-11-25\
+**Version:** 1.12\
+**Last updated:** 2026-11-26\
 **Product name:** CyberCute Dev Tools\
 **Platform:** Windows desktop\
 **Implementation language:** Go\
@@ -477,7 +477,7 @@ Each Image Resizer preset contains width, height, and one fitting mode. Both ups
 
 **NFR-003 (P0):** Support per-monitor DPI awareness, display scaling from 100% through at least 500%, negative monitor coordinates, and display disconnection/reconnection.
 
-**NFR-004 (P1):** Windows on ARM and 32-bit Windows are not initial targets.
+**NFR-004 (P1):** 32-bit Windows is not a target. Windows on Arm (arm64) and 64-bit Intel/AMD Windows (x64) are, each with its own portable ZIP; the first release ships for Windows on Arm alone (section 20).
 
 ### 13.2 Performance targets
 
@@ -723,7 +723,7 @@ For clarity, the following choices have been made and should not be reopened wit
 - Screenshots copied to the clipboard are marked so that Windows clipboard sync does not upload them (NFR-031). They stay in the local clipboard history (Win+V). An image that cannot be marked is not placed on the clipboard, which is reported as a clipboard failure while the saved file is kept (SCR-060).
 - The initial release supports Windows 11 only (NFR-001). Windows 10, whose general support from Microsoft ended in October 2025, is not supported or tested; the application does not refuse to start there.
 - The product is named **CyberCute Dev Tools**, and its executable `cybercute-dev-tools.exe`. It was called GameDevTools until PRD 1.5. The first launch takes over the settings of a GameDevTools build, leaving its file in place, and output folders already selected stay selected.
-- The initial release ships as a portable ZIP for 64-bit Intel/AMD Windows, with no installer.
+- The initial release ships as a portable ZIP, with no installer, one for each architecture (NFR-004). The project owner decided in REL-04 that the first release, 1.0.0, ships the ZIP for Windows on Arm (arm64) alone, published on GitHub as a pre-release while REL-03's release blockers remain. It has no ZIP for 64-bit Intel/AMD Windows (x64), as no x64 hardware has run it (QLT-04A).
 - The initial release is not code-signed. Each ZIP has a published SHA-256 checksum, and the packaged README explains the Windows SmartScreen warning.
 - The application has no automatic update mechanism and does not check for updates. Users update by replacing the extracted folder's files with those from the new ZIP.
 - The ZIP carries the user documentation, as a user guide and release notes in plain text, so that it is available offline beside the executable. [docs/traceability.md](docs/traceability.md) records each requirement's implementation, evidence, and status.
@@ -745,3 +745,4 @@ For clarity, the following choices have been made and should not be reopened wit
 | 1.9 | 2026-11-25 | REL-02C: recorded the project owner's decisions that the global shortcut captures nothing, and beeps, while the main window is moved or sized or one of its menus is open, and that the application's dialogs are refused with a beep from a capture's start until it has read the screen and during a selection (section 20). No numbered requirement changed. |
 | 1.10 | 2026-11-25 | Closed both open decisions: the project owner confirmed that the global shortcut captures nothing while one of the application's own modal dialogs is open, and decided that Open Folder meets SCR-069 when the first time File Explorer shows a folder it focuses the saved file without highlighting it (sections 19 and 20). No numbered requirement changed. |
 | 1.11 | 2026-11-25 | UX-01: recorded the project owner's decision to give the application one dark theme, kept when Windows apps are set to light, with the contrast themes still followed, replacing the light system-color theme of PRD 1.1 (section 20); a light theme is now the future consideration (section 18). No numbered requirement changed. |
+| 1.12 | 2026-11-26 | REL-04: recorded the project owner's decision to publish the first release, 1.0.0, for Windows on Arm alone, as a GitHub pre-release, and made Windows on Arm (arm64) a target beside x64 (NFR-004, section 20). NFR-004's text changed. |

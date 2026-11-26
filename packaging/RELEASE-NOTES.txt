@@ -4,11 +4,12 @@ CyberCute Dev Tools - Release Notes
 Version 1.0.0 - release candidate
 ---------------------------------
 
-This is the first version. It is a release candidate: the final validation is
-still open, and the checks listed under "Not yet verified" have not been run.
-Checks that drive the application with real mouse and keyboard input were run
-by script on this build, as the x64 executable under emulation on Windows 11 on
-Arm, rather than by a person on x64 hardware.
+This is the first version, published for Windows 11 on Arm only. It is a
+release candidate: the final validation is still open, and the checks listed
+under "Not yet verified" have not been run. Checks that drive the application
+with real mouse and keyboard input were run by script on an earlier build of
+this version, as the x64 executable under emulation on Windows 11 on Arm,
+rather than by a person.
 
 What it does
 
@@ -41,8 +42,10 @@ Across the application
 
 Requirements
 
-64-bit Intel or AMD PC with Windows 11. No administrator rights are needed.
-Windows 10, Windows on Arm, and 32-bit Windows are not supported.
+A Windows 11 PC on Arm, such as one with a Snapdragon processor. No
+administrator rights are needed. This version is published only as the arm64
+ZIP. It has no x64 ZIP for 64-bit Intel or AMD PCs, as no x64 hardware has run
+it yet. Windows 10 and 32-bit Windows are not supported.
 
 Upgrading from GameDevTools
 
@@ -53,8 +56,10 @@ Not yet verified
 
 These have not been run, so this version makes no claim about them:
 
-- x64 Windows 11 on real hardware, including the reference machine. Testing so
-  far ran on Windows 11 on Arm, natively and as the x64 build under emulation.
+- x64 Windows 11 on real hardware, including the reference machine, which is
+  why this version has no x64 ZIP. Testing so far ran on one Windows 11 on Arm
+  PC, natively and as the x64 build under emulation. Other Arm PCs have not
+  been tried.
 - Any Windows 11 release other than build 26300, where the combined run took
   place, and build 26200, where the Screenshot module's own run took place.
 - Display scaling above 100%, mixed scaling, displays with negative coordinates,
@@ -101,7 +106,8 @@ Deferred from the requirements
 
 Distribution
 
-- Portable ZIP with a SHA-256 checksum. There is no installer.
+- Portable ZIP for Windows on Arm (arm64), with a SHA-256 checksum. There is
+  no installer.
 - Not code-signed, so Windows SmartScreen may warn on first run.
 - No automatic updates. To update, replace this folder's files with those from
   the new ZIP, extracting it where README.txt says so that it does not create a

@@ -1,15 +1,21 @@
 <#
 .SYNOPSIS
-Builds the portable x64 ZIP and its SHA-256 checksum file.
+Builds the portable ZIP for one Windows architecture and its SHA-256 checksum file.
 
 .DESCRIPTION
-Builds the release executable for 64-bit Intel/AMD Windows with the toolchain
-go.mod pins, then packages it with the license, README, user guide, release
-notes, and third-party notices. The same commit gives the same bytes, wherever
-it is checked out and whatever the machine's Go configuration.
+Builds the release executable for 64-bit Intel/AMD Windows (amd64, the default)
+or Windows on Arm (arm64) with the toolchain go.mod pins, then packages it with
+the license, README, user guide, release notes, and third-party notices. The
+same commit and architecture give the same bytes, wherever it is checked out
+and whatever the machine's Go configuration.
+
+.PARAMETER Architecture
+The Go architecture to build: amd64 gives the x64 ZIP, arm64 the arm64 ZIP.
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet("amd64", "arm64")]
+    [string]$Architecture = "amd64",
     [string]$OutputDirectory = "bin/release"
 )
 
@@ -35,7 +41,7 @@ $executable = Join-Path $OutputDirectory "cybercute-dev-tools.exe"
 # env file being turned off below.
 $kept = "GOPROXY", "GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOVCS", "GOAUTH", "GOMODCACHE", "GOCACHE", "GOTMPDIR"
 $saved = @{}
-foreach ($name in @("GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140", "GOWORK", "GO111MODULE") + $kept) {
+foreach ($name in @("GOENV", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOAMD64", "GOARM64", "CGO_ENABLED", "GOFLAGS", "GOEXPERIMENT", "GOFIPS140", "GOWORK", "GO111MODULE") + $kept) {
     $saved[$name] = [Environment]::GetEnvironmentVariable($name)
 }
 try {
@@ -68,9 +74,10 @@ try {
     # An emptied variable falls back to the user's `go env -w` file, so that
     # file is turned off: nothing else in this machine's Go configuration can
     # change the bytes or raise the CPU the executable needs above baseline
-    # x64. A go.work file in a parent folder could change the modules linked,
-    # so workspace mode is off too, and module mode is on, as GO111MODULE=off
-    # would build from GOPATH rather than the versions go.sum pins.
+    # x64 or Armv8.0. A go.work file in a parent folder could change the
+    # modules linked, so workspace mode is off too, and module mode is on, as
+    # GO111MODULE=off would build from GOPATH rather than the versions go.sum
+    # pins.
     $env:GOENV = "off"
     $env:GOWORK = "off"
     $env:GO111MODULE = "on"
@@ -79,8 +86,9 @@ try {
     $env:GOEXPERIMENT = ""
     $env:GOFIPS140 = ""
     $env:GOOS = "windows"
-    $env:GOARCH = "amd64"
+    $env:GOARCH = $Architecture
     $env:GOAMD64 = "v1"
+    $env:GOARM64 = "v8.0"
     $env:CGO_ENABLED = "0"
     & (Join-Path $PSScriptRoot "build.ps1") -Configuration Release -OutputPath $executable | Out-Null
 

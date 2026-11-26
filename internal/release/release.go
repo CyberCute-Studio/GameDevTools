@@ -40,6 +40,19 @@ func ArchiveName(architecture string) string {
 	return fmt.Sprintf("%s-%s-windows-%s.zip", ui.AppFileName, Version, architecture)
 }
 
+// ArchitectureLabel returns the Windows architecture label a portable ZIP is
+// named for, x64 or arm64, from its executable's COFF machine type, so that
+// the name cannot disagree with the executable it holds.
+func ArchitectureLabel(machine uint16) (string, error) {
+	switch machine {
+	case machineAMD64:
+		return "x64", nil
+	case machineARM64:
+		return "arm64", nil
+	}
+	return "", fmt.Errorf("unsupported machine type 0x%04X", machine)
+}
+
 // versionNumbers parses a major.minor.patch version.
 func versionNumbers(version string) ([3]uint16, error) {
 	var numbers [3]uint16

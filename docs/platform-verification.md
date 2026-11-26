@@ -45,7 +45,7 @@ Results below were recorded on 2026-11-22 from commit `8c06406`, with a clean wo
 
 | Configuration | Status |
 |---|---|
-| Windows 11 26H2 on ARM64, native `windows/arm64` | **Passed.** The development host; Windows on Arm is not a release target (NFR-004) |
+| Windows 11 26H2 on ARM64, native `windows/arm64` | **Passed.** The development host. The first release ships `windows/arm64` alone (NFR-004, PRD 1.12) |
 | Windows 11 26H2 on ARM64, `windows/amd64` under x64 emulation | **Passed.** The release target's code, but not on x64 hardware |
 | x64 Windows 11, on the reference machine | **Not run** (QLT-04A) |
 | Each other Windows 11 release Microsoft supports | **Not run** (QLT-04A) |
@@ -107,7 +107,7 @@ The rows that waited on a manual check give the result of REL-03's run of it on 
 | NFR-001 — Windows 11, 64-bit | **Partial** | Passed on Windows 11 ARM64, native and x64 under emulation; x64 hardware is QLT-04A |
 | NFR-002 — No administrator rights | Pass | The release executable test, on a standard-user token |
 | NFR-003 — Per-monitor DPI, 100–500%, negative coordinates, disconnect | **Partial** | Mechanism-level tests and live 100%; the rest is QLT-04A |
-| NFR-004 — Arm and 32-bit are not targets | Pass | The release target is `windows/amd64`; Arm is only the development host |
+| NFR-004 — arm64 and x64 are targets, 32-bit is not | Pass | `scripts/package.ps1` builds a ZIP for `windows/amd64` and for `windows/arm64`, and `internal/imageresizer/resize` does not compile where `int` is narrower than 64 bits. The first release ships the arm64 ZIP alone (PRD 1.12) |
 | NFR-010, NFR-012, NFR-013 — Performance | Met here; **reference machine pending** | [Performance](#performance) |
 | NFR-011 — Overlay within 300 ms | **Missed in 2 of 6 x64 batches under emulation**; met natively; reference machine pending | [The missed overlay target](#the-missed-overlay-target) |
 | NFR-014 — Bounded batch memory | Pass | Peak heap 220 MiB, about 7% of the 3,094 MiB that decoding every source at once would take |

@@ -7,6 +7,8 @@
 package main
 
 import (
+	"bytes"
+	"debug/pe"
 	"errors"
 	"flag"
 	"fmt"
@@ -90,7 +92,8 @@ func manifest(args []string) error {
 	return nil
 }
 
-// archive writes the x64 ZIP and its checksum file, and prints the ZIP's path.
+// archive writes the ZIP and its checksum file, and prints the ZIP's path. The
+// ZIP is named for the architecture of the executable it holds, x64 or arm64.
 func archive(args []string) error {
 	flags := flag.NewFlagSet("package", flag.ContinueOnError)
 	executable := flags.String("exe", "", "release executable")
@@ -116,6 +119,15 @@ func archive(args []string) error {
 		}
 		files[name] = data
 	}
+	image, err := pe.NewFile(bytes.NewReader(files[release.ExecutableName()]))
+	if err != nil {
+		return fmt.Errorf("read the executable: %w", err)
+	}
+	architecture, err := release.ArchitectureLabel(image.Machine)
+	image.Close()
+	if err != nil {
+		return fmt.Errorf("the executable: %w", err)
+	}
 	data, err := release.BuildArchive(files)
 	if err != nil {
 		return err
@@ -123,7 +135,7 @@ func archive(args []string) error {
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		return err
 	}
-	name := release.ArchiveName("x64")
+	name := release.ArchiveName(architecture)
 	path := filepath.Join(*out, name)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err

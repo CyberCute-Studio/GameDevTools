@@ -23,8 +23,11 @@ Contents
 1. Getting started
 ------------------
 
-You need a 64-bit Intel or AMD PC running Windows 11. You do not need
-administrator rights, an internet connection, or any other software.
+You need a Windows 11 PC and the ZIP built for its processor: the arm64 ZIP
+for Windows on Arm, or the x64 ZIP for 64-bit Intel or AMD. Settings > System >
+About shows which, under System type. Version 1.0.0 is published as the arm64
+ZIP only. You do not need administrator rights, an internet connection, or any
+other software.
 
 1. Extract the whole ZIP to a folder you can write to, such as Documents.
 2. Open the CyberCute Dev Tools folder it creates.
@@ -388,8 +391,10 @@ Capture toolbar
 
 Platform
 
-- Windows 11 on 64-bit Intel or AMD is the only supported platform. Windows 10,
-  Windows on Arm, and 32-bit Windows are not supported.
+- Windows 11 on Arm and on 64-bit Intel or AMD are the supported platforms,
+  each with its own ZIP. Version 1.0.0 is published for Windows on Arm only, as
+  no x64 hardware has run it yet. Windows 10 and 32-bit Windows are not
+  supported.
 - This version has been tested only with displays at 100% scaling. Scaling
   above 100%, mixed scaling, displays left of or above the main display, and
   unplugging a display during a selection are designed for and covered by
